@@ -123,8 +123,8 @@ use crate::{
     workspace_state::{
         AppUpdateState, CloudController, GlobalSearchDocumentResult, GlobalSearchResults,
         GlobalSearchState, PersistenceController, QuickFindBoundary, QuickFindDirection,
-        QuickFindMatch, QuickFindSource, QuickFindState, QuickFindTarget, ResultMode,
-        RetainedGlobalSearchContext, RowViewportAnchor, SearchController, SearchScope,
+        QuickFindMatch, QuickFindSource, QuickFindSourceVersion, QuickFindState, QuickFindTarget,
+        ResultMode, RetainedGlobalSearchContext, RowViewportAnchor, SearchController, SearchScope,
         SearchTarget, UpdateController, ViewportAnchor,
     },
 };
@@ -9210,7 +9210,7 @@ impl Workspace {
         &self,
         target: QuickFindTarget,
         cx: &App,
-    ) -> Option<(QuickFindSource, usize)> {
+    ) -> Option<(QuickFindSource, usize, QuickFindSourceVersion)> {
         match target {
             QuickFindTarget::Log(document_id) => {
                 let tab = self.documents.iter().find(|tab| tab.id == document_id)?;
@@ -9222,6 +9222,10 @@ impl Workspace {
                         row_count,
                     },
                     row_count,
+                    QuickFindSourceVersion::Document {
+                        document: tab.document.clone(),
+                        rows: None,
+                    },
                 ))
             }
             QuickFindTarget::Results(document_id) => {
@@ -9231,10 +9235,14 @@ impl Workspace {
                 Some((
                     QuickFindSource::Document {
                         document: tab.document.clone(),
-                        rows: Some(rows),
+                        rows: Some(rows.clone()),
                         row_count,
                     },
                     row_count,
+                    QuickFindSourceVersion::Document {
+                        document: tab.document.clone(),
+                        rows: Some(rows),
+                    },
                 ))
             }
             QuickFindTarget::GlobalResults => {
@@ -9243,7 +9251,41 @@ impl Workspace {
                 Some((
                     QuickFindSource::Global(table.delegate().quick_find_groups()),
                     row_count,
+                    QuickFindSourceVersion::Global {
+                        content_revision: table.delegate().content_revision(),
+                        layout_revision: table.delegate().layout_revision(),
+                    },
                 ))
+            }
+        }
+    }
+
+    fn quick_find_source_version(
+        &self,
+        target: QuickFindTarget,
+        cx: &App,
+    ) -> Option<QuickFindSourceVersion> {
+        match target {
+            QuickFindTarget::Log(document_id) => {
+                let tab = self.documents.iter().find(|tab| tab.id == document_id)?;
+                Some(QuickFindSourceVersion::Document {
+                    document: tab.document.clone(),
+                    rows: None,
+                })
+            }
+            QuickFindTarget::Results(document_id) => {
+                let tab = self.documents.iter().find(|tab| tab.id == document_id)?;
+                Some(QuickFindSourceVersion::Document {
+                    document: tab.document.clone(),
+                    rows: Some(tab.result_rows(cx)),
+                })
+            }
+            QuickFindTarget::GlobalResults => {
+                let table = self.global_table.read(cx);
+                Some(QuickFindSourceVersion::Global {
+                    content_revision: table.delegate().content_revision(),
+                    layout_revision: table.delegate().layout_revision(),
+                })
             }
         }
     }
@@ -9296,7 +9338,7 @@ impl Workspace {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((source, row_count)) = self.quick_find_source(target, cx) else {
+        let Some((source, row_count, source_version)) = self.quick_find_source(target, cx) else {
             return;
         };
         if row_count == 0 {
@@ -9366,6 +9408,20 @@ impl Workspace {
                     || this.quick_find.revision != revision
                     || this.quick_find.target != Some(target)
                 {
+                    return;
+                }
+                if this
+                    .quick_find_source_version(target, cx)
+                    .is_none_or(|current| !current.is_same_as(&source_version))
+                {
+                    this.quick_find.busy = false;
+                    this.quick_find.direction = None;
+                    this.quick_find.cancellation = None;
+                    this.quick_find.task = None;
+                    this.quick_find.matched = None;
+                    this.quick_find.no_match = false;
+                    this.quick_find.boundary = None;
+                    cx.notify();
                     return;
                 }
                 this.quick_find.busy = false;

@@ -365,6 +365,46 @@ pub(crate) enum QuickFindSource {
     Global(Vec<GlobalQuickFindGroup>),
 }
 
+pub(crate) enum QuickFindSourceVersion {
+    Document {
+        document: Arc<LogDocument>,
+        rows: Option<CompressedRows>,
+    },
+    Global {
+        content_revision: u64,
+        layout_revision: u64,
+    },
+}
+
+impl QuickFindSourceVersion {
+    pub(crate) fn is_same_as(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Document {
+                    document: left_document,
+                    rows: left_rows,
+                },
+                Self::Document {
+                    document: right_document,
+                    rows: right_rows,
+                },
+            ) => Arc::ptr_eq(left_document, right_document) && left_rows == right_rows,
+            (
+                Self::Global {
+                    content_revision: left_content,
+                    layout_revision: left_layout,
+                },
+                Self::Global {
+                    content_revision: right_content,
+                    layout_revision: right_layout,
+                },
+            ) => left_content == right_content && left_layout == right_layout,
+            (Self::Document { .. }, Self::Global { .. })
+            | (Self::Global { .. }, Self::Document { .. }) => false,
+        }
+    }
+}
+
 pub(crate) struct QuickFindState {
     pub(crate) query: Entity<InputState>,
     pub(crate) open: bool,
@@ -688,6 +728,50 @@ mod state_controller_tests {
             search_result: SearchResult::default(),
             failure: None,
         }
+    }
+
+    #[test]
+    fn quick_find_document_version_tracks_snapshot_and_projection() {
+        let document = Arc::new(LogDocument::placeholder("quick-find.log"));
+        let rows: CompressedRows = [2, 7].into_iter().collect();
+        let version = QuickFindSourceVersion::Document {
+            document: document.clone(),
+            rows: Some(rows.clone()),
+        };
+
+        assert!(version.is_same_as(&QuickFindSourceVersion::Document {
+            document: document.clone(),
+            rows: Some(rows),
+        }));
+        assert!(!version.is_same_as(&QuickFindSourceVersion::Document {
+            document: document.clone(),
+            rows: Some([2, 8].into_iter().collect()),
+        }));
+        assert!(!version.is_same_as(&QuickFindSourceVersion::Document {
+            document: Arc::new(LogDocument::placeholder("quick-find.log")),
+            rows: Some([2, 7].into_iter().collect()),
+        }));
+    }
+
+    #[test]
+    fn quick_find_global_version_tracks_content_and_layout() {
+        let version = QuickFindSourceVersion::Global {
+            content_revision: 3,
+            layout_revision: 5,
+        };
+
+        assert!(version.is_same_as(&QuickFindSourceVersion::Global {
+            content_revision: 3,
+            layout_revision: 5,
+        }));
+        assert!(!version.is_same_as(&QuickFindSourceVersion::Global {
+            content_revision: 4,
+            layout_revision: 5,
+        }));
+        assert!(!version.is_same_as(&QuickFindSourceVersion::Global {
+            content_revision: 3,
+            layout_revision: 6,
+        }));
     }
 
     #[test]

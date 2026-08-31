@@ -93,6 +93,7 @@ struct GlobalSearchProjectionState {
     groups: Vec<GlobalSearchGroup>,
     group_by_document: BTreeMap<u64, usize>,
     content_revision: u64,
+    layout_revision: u64,
     group_starts: Vec<usize>,
     rows_len: usize,
 }
@@ -128,6 +129,7 @@ impl Default for GlobalSearchProjectionState {
             groups: Vec::new(),
             group_by_document: BTreeMap::new(),
             content_revision: 1,
+            layout_revision: 1,
             group_starts: Vec::new(),
             rows_len: 0,
         }
@@ -644,6 +646,10 @@ impl GlobalSearchTableDelegate {
 
     pub(crate) fn content_revision(&self) -> u64 {
         self.projection.content_revision
+    }
+
+    pub(crate) fn layout_revision(&self) -> u64 {
+        self.projection.layout_revision
     }
 
     pub(crate) fn line_number_width(&self) -> u16 {
@@ -1170,6 +1176,7 @@ impl GlobalSearchTableDelegate {
 
     fn rebuild_layout(&mut self) {
         self.visible_lines.invalidate_window();
+        self.projection.layout_revision = self.projection.layout_revision.saturating_add(1);
         self.projection.group_starts.clear();
         self.projection.rows_len = 0;
         for group in &self.projection.groups {
@@ -1639,6 +1646,7 @@ mod tests {
         let group = test_group(document.clone());
         delegate.set_groups(vec![group.clone()]);
         let initial_revision = delegate.content_revision();
+        let initial_layout_revision = delegate.layout_revision();
         delegate.visible_lines.prepare_visible_rows(
             0..1,
             1,
@@ -1657,6 +1665,7 @@ mod tests {
             .insert(1, Bounds::default());
         delegate.set_groups(vec![changed_presentation]);
         assert_eq!(delegate.content_revision(), initial_revision);
+        assert_eq!(delegate.layout_revision(), initial_layout_revision);
         assert!(delegate.interaction.row_bounds.borrow().contains_key(&1));
 
         let reused = delegate
@@ -1681,6 +1690,7 @@ mod tests {
         assert!(!delegate.has_same_virtual_content(std::slice::from_ref(&replacement)));
         delegate.set_groups(vec![replacement]);
         assert!(delegate.content_revision() > initial_revision);
+        assert_eq!(delegate.layout_revision(), initial_layout_revision);
         let reloaded = delegate
             .visible_lines
             .line((1, 0), |_| {
@@ -1723,12 +1733,14 @@ mod tests {
         let mut group = test_group(document);
         group.projection.rows = [2, 5, 9].into_iter().collect();
         delegate.set_groups(vec![group.clone()]);
+        let initial_layout_revision = delegate.layout_revision();
         delegate.settle_table_selection(2);
         delegate.set_active_log_row(Some(2));
 
         group.projection.rows = [1, 2, 5, 10].into_iter().collect();
         delegate.set_groups(vec![group.clone()]);
 
+        assert!(delegate.layout_revision() > initial_layout_revision);
         assert_eq!(delegate.selected_matches(), vec![(1, 5)]);
         assert_eq!(delegate.active_log_row(), Some(3));
         assert_eq!(
