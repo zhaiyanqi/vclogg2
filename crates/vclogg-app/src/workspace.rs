@@ -8593,73 +8593,15 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.search_scope == SearchScope::Directory
-            && self.active_log_region == LogRegion::GlobalResults
-        {
-            window.push_notification(
-                crate::tr!(
-                    "请先打开目录结果所属文件，再应用颜色标签",
-                    "Open the file containing the directory result before applying a color label"
-                ),
-                cx,
-            );
-            return;
-        }
         let selected_text = TextSelection::selected_text(window, cx);
-        let global_rows = (selected_text.trim().is_empty()
-            && self.active_log_region == LogRegion::GlobalResults
-            && self.global_results_visible)
-            .then(|| self.global_table.read(cx).delegate().selected_matches());
-        let active_ix = if let Some(global_rows) = global_rows.as_ref() {
-            let document_ids = global_rows
-                .iter()
-                .map(|(document_id, _)| *document_id)
-                .collect::<BTreeSet<_>>();
-            if document_ids.len() > 1 {
-                window.push_notification(crate::tr!("颜色标签一次只能应用到同一文件的全局结果", "A color label can be applied only to global results from one file at a time"), cx);
-                return;
-            }
-            let Some(document_id) = document_ids.first() else {
-                window.push_notification(
-                    crate::tr!(
-                        "请先选择包含文字的全局结果行",
-                        "Select global result lines containing text first"
-                    ),
-                    cx,
-                );
-                return;
+        let (active_ix, keywords) =
+            match self.context_color_target(Some(selected_text.as_str()), cx) {
+                Ok(target) => target,
+                Err(message) => {
+                    window.push_notification(message, cx);
+                    return;
+                }
             };
-            let Some(tab_ix) = self.documents.iter().position(|tab| tab.id == *document_id) else {
-                window.push_notification(
-                    crate::tr!(
-                        "所选全局结果所属文件已关闭",
-                        "The file containing the selected global results has been closed"
-                    ),
-                    cx,
-                );
-                return;
-            };
-            tab_ix
-        } else {
-            let Some(active_ix) = self.active_ix else {
-                return;
-            };
-            active_ix
-        };
-        let keywords = if selected_text.trim().is_empty() {
-            let selected_rows = global_rows.map_or_else(
-                || self.documents[active_ix].selected_source_rows(cx),
-                |rows| rows.into_iter().map(|(_, source_row)| source_row).collect(),
-            );
-            selected_rows
-                .into_iter()
-                .filter_map(|row| self.documents[active_ix].document.line(row))
-                .map(|line| line.trim().to_string())
-                .filter(|line| !line.is_empty())
-                .collect::<BTreeSet<_>>()
-        } else {
-            std::iter::once(selected_text.trim().to_string()).collect()
-        };
         if keywords.is_empty() {
             window.push_notification(
                 crate::tr!(
@@ -16045,55 +15987,54 @@ impl Workspace {
         selected_text: Option<&str>,
         cx: &App,
     ) -> std::result::Result<(usize, BTreeSet<String>), String> {
-        if self.search_scope == SearchScope::Directory
-            && self.active_log_region == LogRegion::GlobalResults
-        {
-            return Err(crate::tr!(
-                "请先打开目录结果所属文件，再应用颜色标签",
-                "Open the file containing the directory result before applying a color label"
-            )
-            .to_string());
-        }
-        if let Some(text) = selected_text.map(str::trim).filter(|text| !text.is_empty()) {
-            let active_ix = self.active_ix.ok_or_else(|| {
-                crate::tr!("当前没有活动日志文件", "There is no active log file").to_string()
-            })?;
-            return Ok((active_ix, std::iter::once(text.to_string()).collect()));
-        }
         if self.active_log_region == LogRegion::GlobalResults {
             let rows = self.global_table.read(cx).delegate().selected_matches();
             let document_ids = rows
                 .iter()
                 .map(|(document_id, _)| *document_id)
                 .collect::<BTreeSet<_>>();
-            if document_ids.len() != 1 {
+            let Some(&document_id) = document_ids.first() else {
+                return Err(crate::tr!("请先选择日志行", "Select log lines first").to_string());
+            };
+            if document_ids.len() > 1 {
                 return Err(crate::tr!(
                     "颜色标签一次只能应用到同一文件的全局结果",
                     "A color label can be applied only to global results from one file at a time"
                 )
                 .to_string());
             }
-            let document_id = *document_ids.first().ok_or_else(|| {
-                crate::tr!("请先选择日志行", "Select log lines first").to_string()
-            })?;
-            let active_ix = self
-                .documents
-                .iter()
-                .position(|tab| tab.id == document_id)
-                .ok_or_else(|| {
+            let active_ix = self.open_document_ix_for_global_result(document_id).ok_or_else(|| {
+                if self.search_scope == SearchScope::Directory {
+                    crate::tr!(
+                        "请先打开目录结果所属文件，再应用颜色标签",
+                        "Open the file containing the directory result before applying a color label"
+                    )
+                    .to_string()
+                } else {
                     crate::tr!(
                         "所选结果所属文件已关闭",
                         "The file containing the selected results has been closed"
                     )
                     .to_string()
-                })?;
-            let keywords = rows
-                .into_iter()
-                .filter_map(|(_, row)| self.documents[active_ix].document.line(row))
-                .map(|line| line.trim().to_string())
-                .filter(|line| !line.is_empty())
-                .collect();
+                }
+            })?;
+            let keywords =
+                if let Some(text) = selected_text.map(str::trim).filter(|text| !text.is_empty()) {
+                    std::iter::once(text.to_string()).collect()
+                } else {
+                    rows.into_iter()
+                        .filter_map(|(_, row)| self.documents[active_ix].document.line(row))
+                        .map(|line| line.trim().to_string())
+                        .filter(|line| !line.is_empty())
+                        .collect()
+                };
             return Ok((active_ix, keywords));
+        }
+        if let Some(text) = selected_text.map(str::trim).filter(|text| !text.is_empty()) {
+            let active_ix = self.active_ix.ok_or_else(|| {
+                crate::tr!("当前没有活动日志文件", "There is no active log file").to_string()
+            })?;
+            return Ok((active_ix, std::iter::once(text.to_string()).collect()));
         }
         let active_ix = self.active_ix.ok_or_else(|| {
             crate::tr!("当前没有活动日志文件", "There is no active log file").to_string()
@@ -16106,6 +16047,18 @@ impl Workspace {
             .filter(|line| !line.is_empty())
             .collect();
         Ok((active_ix, keywords))
+    }
+
+    fn open_document_ix_for_global_result(&self, document_id: u64) -> Option<usize> {
+        let result_path = self
+            .global_search_results
+            .iter()
+            .find(|result| result.document_id == document_id)
+            .map(|result| result.path.as_path());
+        self.documents.iter().position(|tab| {
+            tab.id == document_id
+                || result_path.is_some_and(|path| paths_match(tab.document.path(), path))
+        })
     }
 
     fn apply_context_color_label(
