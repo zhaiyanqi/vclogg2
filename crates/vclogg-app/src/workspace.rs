@@ -3429,6 +3429,7 @@ impl Workspace {
                             );
                             tab.refresh_search_matcher(app_settings.highlight_matches, cx);
                         }
+                        let global_matcher = this.global_result_matcher();
                         this.global_table.update(cx, |table, cx| {
                             table.delegate_mut().set_appearance(&app_settings);
                             table.delegate_mut().set_word_boundary_characters(
@@ -3437,9 +3438,9 @@ impl Workspace {
                             table
                                 .delegate_mut()
                                 .set_highlight_log_levels(app_settings.highlight_log_levels);
-                            table.refresh(cx);
+                            table.delegate_mut().set_search_matcher(global_matcher);
+                            table.refresh_log_rows(cx);
                         });
-                        this.refresh_global_result_rows(cx);
                         this.history_loading = false;
                         let pending_sessions = std::mem::take(&mut this.persistence.pending_sessions);
                         for (path, base, state) in pending_sessions {
@@ -5637,6 +5638,7 @@ impl Workspace {
         }
         self.global_search.query.max_results = search_result_limit;
         self.global_search.directory_query.max_results = search_result_limit;
+        let global_matcher = self.global_result_matcher();
         self.global_table.update(cx, |table, cx| {
             table.delegate_mut().set_appearance(&settings);
             table
@@ -5645,9 +5647,9 @@ impl Workspace {
             table
                 .delegate_mut()
                 .set_highlight_log_levels(settings.highlight_log_levels);
-            table.refresh(cx);
+            table.delegate_mut().set_search_matcher(global_matcher);
+            table.refresh_log_rows(cx);
         });
-        self.refresh_global_result_rows(cx);
         let source_window = window.window_handle();
         let other_workspaces = cx
             .global::<WorkspaceWindowRegistry>()
@@ -5685,6 +5687,7 @@ impl Workspace {
                 }
                 workspace.global_search.query.max_results = search_result_limit;
                 workspace.global_search.directory_query.max_results = search_result_limit;
+                let global_matcher = workspace.global_result_matcher();
                 workspace.global_table.update(cx, |table, cx| {
                     table.delegate_mut().set_appearance(&shared_settings);
                     table.delegate_mut().set_word_boundary_characters(
@@ -5693,9 +5696,9 @@ impl Workspace {
                     table
                         .delegate_mut()
                         .set_highlight_log_levels(shared_settings.highlight_log_levels);
-                    table.refresh(cx);
+                    table.delegate_mut().set_search_matcher(global_matcher);
+                    table.refresh_log_rows(cx);
                 });
-                workspace.refresh_global_result_rows(cx);
                 cx.notify();
             });
         }
@@ -9791,10 +9794,7 @@ impl Workspace {
             SearchScope::CurrentFile | SearchScope::Directory => Vec::new(),
         };
 
-        let matcher = (self.global_search.result_mode.includes_matches()
-            && self.app_settings.highlight_matches)
-            .then(|| self.global_search.matcher.clone())
-            .flatten();
+        let matcher = self.global_result_matcher();
         let virtual_content_changed = !self
             .global_table
             .read(cx)
@@ -9831,6 +9831,12 @@ impl Workspace {
             self.global_viewport.invalidate_wrapped();
         }
         self.restore_global_viewport_anchor(viewport_anchor, row_height, cx);
+    }
+
+    fn global_result_matcher(&self) -> Option<SearchMatcher> {
+        (self.global_search.result_mode.includes_matches() && self.app_settings.highlight_matches)
+            .then(|| self.global_search.matcher.clone())
+            .flatten()
     }
 
     fn install_global_result_groups(
