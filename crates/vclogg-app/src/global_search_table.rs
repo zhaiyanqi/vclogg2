@@ -689,20 +689,21 @@ impl GlobalSearchTableDelegate {
                     .map(|group| (group.document_id, source_row)),
                 _ => None,
             },
-            |(document_id, source_row)| {
+            |(document_id, source_row), max_bytes| {
                 self.groups
                     .iter()
                     .find(|group| group.document_id == *document_id)
-                    .and_then(|group| group.document.line(*source_row))
+                    .and_then(|group| group.document.line_preview(*source_row, max_bytes))
             },
         );
     }
 
     fn line_text(&self, group_ix: usize, source_row: usize) -> Option<LogText> {
         let group = self.groups.get(group_ix)?;
-        self.line_cache.line((group.document_id, source_row), || {
-            group.document.line(source_row)
-        })
+        self.line_cache
+            .line((group.document_id, source_row), |max_bytes| {
+                group.document.line_preview(source_row, max_bytes)
+            })
     }
 
     fn row_presentation(
@@ -1295,9 +1296,9 @@ impl TableDelegate for GlobalSearchTableDelegate {
             FlatRow::Match {
                 group_ix,
                 source_row,
-            } if col_ix == 2 => self
-                .line_text(group_ix, source_row)
-                .map(|line| line.source().to_string())
+            } if col_ix == 2 => self.groups[group_ix]
+                .document
+                .line(source_row)
                 .unwrap_or_default(),
             _ => String::new(),
         }
@@ -1339,9 +1340,9 @@ mod tests {
         let group = test_group(document.clone());
         delegate.set_groups(vec![group.clone()], None);
         let initial_revision = delegate.content_revision();
-        delegate
-            .line_cache
-            .line((1, 0), || Some("cached global line".to_string()));
+        delegate.line_cache.line((1, 0), |_| {
+            Some(vclogg_core::LinePreview::new("cached global line", false))
+        });
 
         let mut changed_presentation = group.clone();
         changed_presentation.marked_rows = Arc::new(BTreeSet::from([0]));
@@ -1350,7 +1351,9 @@ mod tests {
 
         let reused = delegate
             .line_cache
-            .line((1, 0), || Some("reloaded global line".to_string()))
+            .line((1, 0), |_| {
+                Some(vclogg_core::LinePreview::new("reloaded global line", false))
+            })
             .expect("the cached line should remain available");
         assert_eq!(reused.source().as_ref(), "cached global line");
 
@@ -1359,7 +1362,9 @@ mod tests {
         assert!(delegate.content_revision() > initial_revision);
         let reloaded = delegate
             .line_cache
-            .line((1, 0), || Some("reloaded global line".to_string()))
+            .line((1, 0), |_| {
+                Some(vclogg_core::LinePreview::new("reloaded global line", false))
+            })
             .expect("the replacement document should load a new line");
         assert_eq!(reloaded.source().as_ref(), "reloaded global line");
     }

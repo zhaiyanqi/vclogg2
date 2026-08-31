@@ -21,6 +21,9 @@ use gpui_component::{
 };
 use vclogg_core::{CompressedRows, LogDocument, SearchMatcher};
 
+#[cfg(test)]
+use vclogg_core::LinePreview;
+
 use crate::color_labels::ResolvedColorRule;
 use crate::selectable_log_text::{LogText, SelectableLogText, TextSelectionCache};
 use crate::state_store::{AppSettings, DEFAULT_WORD_BOUNDARY_CHARACTERS, LogFontFamily};
@@ -892,13 +895,14 @@ impl LogTableDelegate {
             visible_range,
             self.row_count(),
             |row_ix| self.source_row(row_ix),
-            |source_row| self.document.line(*source_row),
+            |source_row, max_bytes| self.document.line_preview(*source_row, max_bytes),
         );
     }
 
     fn line_text(&self, source_row: usize) -> Option<LogText> {
-        self.line_cache
-            .line(source_row, || self.document.line(source_row))
+        self.line_cache.line(source_row, |max_bytes| {
+            self.document.line_preview(source_row, max_bytes)
+        })
     }
 
     fn row_presentation(&self, source_row: usize) -> Option<LogRowPresentation> {
@@ -1352,9 +1356,7 @@ impl TableDelegate for LogTableDelegate {
         if self.show_line_numbers && col_ix == 0 {
             (source_row + 1).to_string()
         } else if col_ix == usize::from(self.show_line_numbers) {
-            self.line_text(source_row)
-                .map(|line| line.source().to_string())
-                .unwrap_or_default()
+            self.document.line(source_row).unwrap_or_default()
         } else {
             String::new()
         }
@@ -1371,7 +1373,7 @@ mod tests {
         let mut delegate = LogTableDelegate::all(1, document);
         let cached = delegate
             .line_cache
-            .line(7, || Some("cached line".to_string()))
+            .line(7, |_| Some(LinePreview::new("cached line", false)))
             .expect("the test line should be cached");
         assert!(
             delegate
@@ -1393,7 +1395,7 @@ mod tests {
 
         let reused = delegate
             .line_cache
-            .line(7, || Some("reloaded line".to_string()))
+            .line(7, |_| Some(LinePreview::new("reloaded line", false)))
             .expect("the cached line should remain available");
         assert_eq!(reused.source(), cached.source());
         assert_eq!(reused.source().as_ref(), "cached line");

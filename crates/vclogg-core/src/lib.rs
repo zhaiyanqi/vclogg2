@@ -4,7 +4,9 @@ mod document;
 mod index_cache;
 mod search;
 
-pub use document::{DocumentMetadata, DocumentRefreshKind, LogDocument, PendingIndexCacheWrite};
+pub use document::{
+    DocumentMetadata, DocumentRefreshKind, LinePreview, LogDocument, PendingIndexCacheWrite,
+};
 pub use index_cache::{
     IndexCacheCleanupResult, IndexCacheClearResult, IndexCacheInfo, cleanup_index_cache,
     clear_index_cache, index_cache_info,

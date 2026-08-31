@@ -72,12 +72,32 @@ impl LogText {
         }
     }
 
+    pub(crate) fn preview(mut source: String, truncated: bool) -> Self {
+        if truncated {
+            source.push('…');
+        }
+        Self::new(source.into())
+    }
+
     pub(crate) fn source(&self) -> &SharedString {
         &self.source
     }
 
     pub(crate) fn display(&self) -> &SharedString {
         &self.display
+    }
+
+    pub(crate) fn retained_bytes(&self) -> usize {
+        let text_bytes = if self.display_spans.is_empty() && self.source == self.display {
+            self.source.len()
+        } else {
+            self.source.len().saturating_add(self.display.len())
+        };
+        text_bytes.saturating_add(
+            self.display_spans
+                .len()
+                .saturating_mul(std::mem::size_of::<DisplaySpan>()),
+        )
     }
 
     pub(crate) fn display_range(&self, source_range: Range<usize>) -> Option<Range<usize>> {

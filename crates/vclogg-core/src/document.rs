@@ -1,4 +1,5 @@
 use std::{
+    fmt::Write as _,
     fs::{self, File},
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     ops::{ControlFlow, Deref},
@@ -99,11 +100,29 @@ impl FileEncoding {
             Self::Utf16Le => UTF_16LE.decode_without_bom_handling(bytes).0.into_owned(),
             Self::Utf16Be => UTF_16BE.decode_without_bom_handling(bytes).0.into_owned(),
             Self::Legacy(encoding) => encoding.decode_without_bom_handling(bytes).0.into_owned(),
-            Self::Binary => bytes
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<Vec<_>>()
-                .join(" "),
+            Self::Binary => {
+                let mut decoded = String::with_capacity(bytes.len().saturating_mul(3));
+                for (ix, byte) in bytes.iter().enumerate() {
+                    if ix > 0 {
+                        decoded.push(' ');
+                    }
+                    write!(&mut decoded, "{byte:02x}").expect("writing to String cannot fail");
+                }
+                decoded
+            }
+        }
+    }
+
+    fn decode_preview(self, bytes: &[u8], max_bytes: usize) -> LinePreview {
+        let end = match self {
+            Self::Utf8 | Self::Utf8Bom => utf8_preview_end(bytes, max_bytes),
+            Self::Utf16Le => utf16_preview_end(bytes, max_bytes, true),
+            Self::Utf16Be => utf16_preview_end(bytes, max_bytes, false),
+            Self::Legacy(_) | Self::Binary => bytes.len().min(max_bytes),
+        };
+        LinePreview {
+            text: self.decode(&bytes[..end]),
+            truncated: end < bytes.len(),
         }
     }
 
@@ -127,6 +146,34 @@ impl FileEncoding {
             Self::Binary => bytes,
         }
     }
+}
+
+fn utf8_preview_end(bytes: &[u8], max_bytes: usize) -> usize {
+    let mut end = bytes.len().min(max_bytes);
+    if end == bytes.len() {
+        return end;
+    }
+    while end > 0 && bytes[end] & 0b1100_0000 == 0b1000_0000 {
+        end -= 1;
+    }
+    end
+}
+
+fn utf16_preview_end(bytes: &[u8], max_bytes: usize, little_endian: bool) -> usize {
+    let mut end = bytes.len().min(max_bytes);
+    end -= end % 2;
+    if end < bytes.len() && end >= 2 {
+        let pair = [bytes[end - 2], bytes[end - 1]];
+        let last = if little_endian {
+            u16::from_le_bytes(pair)
+        } else {
+            u16::from_be_bytes(pair)
+        };
+        if (0xD800..=0xDBFF).contains(&last) {
+            end -= 2;
+        }
+    }
+    end
 }
 
 /// How a changed source file produced its replacement snapshot.
@@ -198,6 +245,36 @@ pub struct PendingIndexCacheWrite {
     longest_completed_line_bytes: usize,
     longest_line_columns: usize,
     longest_completed_line_columns: usize,
+}
+
+/// A bounded decoded prefix for interactive display.
+///
+/// Search, export, and explicit copy operations continue to use [`LogDocument::line`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LinePreview {
+    text: String,
+    truncated: bool,
+}
+
+impl LinePreview {
+    pub fn new(text: impl Into<String>, truncated: bool) -> Self {
+        Self {
+            text: text.into(),
+            truncated,
+        }
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn is_truncated(&self) -> bool {
+        self.truncated
+    }
+
+    pub fn into_parts(self) -> (String, bool) {
+        (self.text, self.truncated)
+    }
 }
 
 impl PendingIndexCacheWrite {
@@ -529,6 +606,12 @@ impl LogDocument {
     pub fn line(&self, source_row: usize) -> Option<String> {
         self.line_bytes(source_row)
             .map(|bytes| self.encoding.decode(bytes))
+    }
+
+    /// Decode a bounded prefix of one logical line for interactive display.
+    pub fn line_preview(&self, source_row: usize, max_bytes: usize) -> Option<LinePreview> {
+        self.line_bytes(source_row)
+            .map(|bytes| self.encoding.decode_preview(bytes, max_bytes))
     }
 
     pub(crate) fn line_bytes(&self, source_row: usize) -> Option<&[u8]> {
@@ -1502,6 +1585,52 @@ fn display_columns(bytes: &[u8], first_line: bool) -> usize {
         b'\r' => columns,
         _ => columns.saturating_add(1),
     })
+}
+
+#[cfg(test)]
+mod line_preview_tests {
+    use super::FileEncoding;
+
+    #[test]
+    fn utf8_preview_never_splits_a_codepoint() {
+        let bytes = "a你b".as_bytes();
+
+        let preview = FileEncoding::Utf8.decode_preview(bytes, 2);
+        assert_eq!(preview.text(), "a");
+        assert!(preview.is_truncated());
+
+        let preview = FileEncoding::Utf8.decode_preview(bytes, 4);
+        assert_eq!(preview.text(), "a你");
+        assert!(preview.is_truncated());
+    }
+
+    #[test]
+    fn utf16_preview_never_splits_a_surrogate_pair() {
+        let units = "A😀B".encode_utf16().collect::<Vec<_>>();
+        let bytes = units
+            .iter()
+            .flat_map(|unit| unit.to_le_bytes())
+            .collect::<Vec<_>>();
+
+        let preview = FileEncoding::Utf16Le.decode_preview(&bytes, 4);
+        assert_eq!(preview.text(), "A");
+        assert!(preview.is_truncated());
+
+        let preview = FileEncoding::Utf16Le.decode_preview(&bytes, 6);
+        assert_eq!(preview.text(), "A😀");
+        assert!(preview.is_truncated());
+    }
+
+    #[test]
+    fn binary_preview_decodes_only_the_bounded_prefix() {
+        let preview = FileEncoding::Binary.decode_preview(&[0x00, 0xff, 0x42], 2);
+        assert_eq!(preview.text(), "00 ff");
+        assert!(preview.is_truncated());
+
+        let complete = FileEncoding::Binary.decode_preview(&[0x00, 0xff], usize::MAX);
+        assert_eq!(complete.text(), "00 ff");
+        assert!(!complete.is_truncated());
+    }
 }
 
 #[cfg(test)]

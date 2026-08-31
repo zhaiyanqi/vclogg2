@@ -4,7 +4,7 @@ use std::{
     ops::Range,
 };
 
-use vclogg_core::CompressedRows;
+use vclogg_core::{CompressedRows, LinePreview};
 
 use crate::selectable_log_text::LogText;
 
@@ -15,15 +15,37 @@ pub(crate) enum LogRowProjection {
     SourceRows(CompressedRows),
 }
 
-/// Keeps decoded text for the active virtual-list window.
+const DEFAULT_MAX_LINE_SOURCE_BYTES: usize = 64 * 1024;
+const DEFAULT_MAX_CACHE_RETAINED_BYTES: usize = 32 * 1024 * 1024;
+
+struct CachedLogLine {
+    text: LogText,
+    retained_bytes: usize,
+}
+
+impl CachedLogLine {
+    fn from_preview(preview: LinePreview) -> Self {
+        let (text, truncated) = preview.into_parts();
+        let text = LogText::preview(text, truncated);
+        Self {
+            retained_bytes: text.retained_bytes(),
+            text,
+        }
+    }
+}
+
+/// Keeps byte-bounded decoded previews for the active virtual-list window.
 ///
 /// Highlighting, selection, markers, typography, and wrapping are deliberately excluded so a
 /// presentation-only change never causes the source file to be read again. Direct consumers such
-/// as copy commands may load another row on demand; the next virtual-window update prunes it.
+/// as copy commands read the authoritative document directly. Visible rows are loaded before
+/// overscan rows, and retained preview payloads never exceed the cache byte budget.
 pub(crate) struct VirtualLogLineCache<K> {
-    lines: RefCell<BTreeMap<K, LogText>>,
-    window: Cell<Option<(usize, usize)>>,
+    lines: RefCell<BTreeMap<K, CachedLogLine>>,
+    window: Cell<Option<(usize, usize, usize, usize)>>,
     overscan: Cell<usize>,
+    max_line_source_bytes: Cell<usize>,
+    max_cache_retained_bytes: Cell<usize>,
 }
 
 impl<K> Default for VirtualLogLineCache<K> {
@@ -32,6 +54,8 @@ impl<K> Default for VirtualLogLineCache<K> {
             lines: RefCell::default(),
             window: Cell::default(),
             overscan: Cell::new(12),
+            max_line_source_bytes: Cell::new(DEFAULT_MAX_LINE_SOURCE_BYTES),
+            max_cache_retained_bytes: Cell::new(DEFAULT_MAX_CACHE_RETAINED_BYTES),
         }
     }
 }
@@ -57,13 +81,35 @@ impl<K: Clone + Ord> VirtualLogLineCache<K> {
         self.invalidate_window();
     }
 
-    pub(crate) fn line(&self, key: K, load: impl FnOnce() -> Option<String>) -> Option<LogText> {
-        if let Some(line) = self.lines.borrow().get(&key).cloned() {
-            return Some(line);
+    pub(crate) fn line(
+        &self,
+        key: K,
+        load: impl FnOnce(usize) -> Option<LinePreview>,
+    ) -> Option<LogText> {
+        if let Some(line) = self.lines.borrow().get(&key) {
+            return Some(line.text.clone());
         }
-        let line = LogText::new(load()?.into());
-        self.lines.borrow_mut().insert(key, line.clone());
-        Some(line)
+        let byte_budget = self.max_cache_retained_bytes.get();
+        let source_limit = self.max_line_source_bytes.get().min(byte_budget);
+        let line = CachedLogLine::from_preview(load(source_limit)?);
+        let text = line.text.clone();
+        if line.retained_bytes <= byte_budget {
+            let mut lines = self.lines.borrow_mut();
+            let mut retained_bytes = lines
+                .values()
+                .map(|line| line.retained_bytes)
+                .sum::<usize>();
+            while retained_bytes.saturating_add(line.retained_bytes) > byte_budget {
+                let Some(evicted_key) = lines.keys().next().cloned() else {
+                    break;
+                };
+                if let Some(evicted) = lines.remove(&evicted_key) {
+                    retained_bytes = retained_bytes.saturating_sub(evicted.retained_bytes);
+                }
+            }
+            lines.insert(key, line);
+        }
+        Some(text)
     }
 
     pub(crate) fn prepare_visible_rows(
@@ -71,40 +117,62 @@ impl<K: Clone + Ord> VirtualLogLineCache<K> {
         visible_range: Range<usize>,
         row_count: usize,
         mut key_for_row: impl FnMut(usize) -> Option<K>,
-        mut load: impl FnMut(&K) -> Option<String>,
+        mut load: impl FnMut(&K, usize) -> Option<LinePreview>,
     ) {
-        let start = visible_range.start.saturating_sub(self.overscan.get());
-        let end = visible_range
-            .end
+        let visible_start = visible_range.start.min(row_count);
+        let visible_end = visible_range.end.min(row_count).max(visible_start);
+        let start = visible_start.saturating_sub(self.overscan.get());
+        let end = visible_end
             .saturating_add(self.overscan.get())
             .min(row_count);
-        if self.window.replace(Some((start, end))) == Some((start, end)) {
+        let window = (visible_start, visible_end, start, end);
+        if self.window.replace(Some(window)) == Some(window) {
             return;
         }
 
-        let desired = (start..end)
-            .filter_map(&mut key_for_row)
-            .collect::<BTreeSet<_>>();
-        self.lines
-            .borrow_mut()
-            .retain(|key, _| desired.contains(key));
-        let missing = desired
-            .into_iter()
-            .filter(|key| !self.lines.borrow().contains_key(key))
-            .collect::<Vec<_>>();
-        for key in missing {
-            if let Some(line) = load(&key) {
-                self.lines
-                    .borrow_mut()
-                    .insert(key, LogText::new(line.into()));
+        let mut seen = BTreeSet::new();
+        let mut priority_keys = Vec::new();
+        for row_ix in (visible_start..visible_end)
+            .chain((start..visible_start).rev())
+            .chain(visible_end..end)
+        {
+            if let Some(key) = key_for_row(row_ix)
+                && seen.insert(key.clone())
+            {
+                priority_keys.push(key);
             }
         }
+
+        let byte_budget = self.max_cache_retained_bytes.get();
+        let mut previous = std::mem::take(&mut *self.lines.borrow_mut());
+        let mut next = BTreeMap::new();
+        let mut retained_bytes = 0usize;
+        for key in priority_keys {
+            if retained_bytes >= byte_budget {
+                break;
+            }
+            let remaining = byte_budget - retained_bytes;
+            let line = previous.remove(&key).or_else(|| {
+                let source_limit = self.max_line_source_bytes.get().min(remaining);
+                load(&key, source_limit).map(CachedLogLine::from_preview)
+            });
+            let Some(line) = line else {
+                continue;
+            };
+            if line.retained_bytes <= remaining {
+                retained_bytes = retained_bytes.saturating_add(line.retained_bytes);
+                next.insert(key, line);
+            }
+        }
+        *self.lines.borrow_mut() = next;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+
+    use vclogg_core::LinePreview;
 
     use super::VirtualLogLineCache;
 
@@ -114,19 +182,62 @@ mod tests {
         cache.set_overscan(1);
         let loaded = RefCell::new(Vec::new());
 
-        cache.prepare_visible_rows(10..13, 100, Some, |source_row| {
+        cache.prepare_visible_rows(10..13, 100, Some, |source_row, _| {
             loaded.borrow_mut().push(*source_row);
-            Some(format!("line {source_row}"))
+            Some(LinePreview::new(format!("line {source_row}"), false))
         });
-        assert_eq!(*loaded.borrow(), vec![9, 10, 11, 12, 13]);
+        assert_eq!(*loaded.borrow(), vec![10, 11, 12, 9, 13]);
 
-        cache.prepare_visible_rows(10..13, 100, Some, |_| {
+        cache.prepare_visible_rows(10..13, 100, Some, |_, _| {
             panic!("an unchanged virtual window must not be read twice")
         });
-        cache.prepare_visible_rows(12..14, 100, Some, |source_row| {
+        cache.prepare_visible_rows(12..14, 100, Some, |source_row, _| {
             loaded.borrow_mut().push(*source_row);
-            Some(format!("line {source_row}"))
+            Some(LinePreview::new(format!("line {source_row}"), false))
         });
-        assert_eq!(*loaded.borrow(), vec![9, 10, 11, 12, 13, 14]);
+        assert_eq!(*loaded.borrow(), vec![10, 11, 12, 9, 13, 14]);
+    }
+
+    #[test]
+    fn line_preview_is_bounded_and_visibly_marked() {
+        let cache = VirtualLogLineCache::<usize>::default();
+        cache.max_line_source_bytes.set(4);
+
+        let line = cache
+            .line(0, |limit| {
+                assert_eq!(limit, 4);
+                Some(LinePreview::new("abcd", true))
+            })
+            .expect("the preview should load");
+
+        assert_eq!(line.source().as_ref(), "abcd…");
+        assert!(line.source().ends_with('…'));
+    }
+
+    #[test]
+    fn cache_budget_prioritizes_visible_rows_over_overscan() {
+        let cache = VirtualLogLineCache::<usize>::default();
+        cache.set_overscan(1);
+        cache.max_line_source_bytes.set(4);
+        cache.max_cache_retained_bytes.set(4);
+        let loaded = RefCell::new(Vec::new());
+
+        cache.prepare_visible_rows(1..2, 3, Some, |source_row, limit| {
+            loaded.borrow_mut().push((*source_row, limit));
+            Some(LinePreview::new("line", false))
+        });
+
+        assert_eq!(*loaded.borrow(), vec![(1, 4)]);
+        assert_eq!(cache.lines.borrow().len(), 1);
+        assert!(cache.lines.borrow().contains_key(&1));
+        assert!(
+            cache
+                .lines
+                .borrow()
+                .values()
+                .map(|line| line.retained_bytes)
+                .sum::<usize>()
+                <= 4
+        );
     }
 }
