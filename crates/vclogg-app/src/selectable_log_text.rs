@@ -1,6 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ops::Range,
     rc::Rc,
 };
@@ -122,6 +122,7 @@ impl LogText {
 
 struct CachedSelection {
     selection: LogTextSelection,
+    last_used: u64,
     _refresh: Subscription,
     _activity_subscription: Subscription,
 }
@@ -182,8 +183,15 @@ impl LogTextSelection {
     }
 }
 
+/// Keeps stable selection participants for virtual rows.
+///
+/// Key order is unrelated to viewport recency: global results group keys by document and source
+/// row, so evicting the smallest key can discard a row created earlier in the same render pass.
+/// The separate recency index prevents that churn while keeping the cache bounded.
 pub struct TextSelectionCache<K> {
     entries: BTreeMap<K, CachedSelection>,
+    recency: BTreeSet<(u64, K)>,
+    use_clock: u64,
     activity: Rc<TextSelectionActivity>,
 }
 
@@ -191,12 +199,61 @@ impl<K> Default for TextSelectionCache<K> {
     fn default() -> Self {
         Self {
             entries: BTreeMap::new(),
+            recency: BTreeSet::new(),
+            use_clock: 0,
             activity: Rc::default(),
         }
     }
 }
 
 impl<K: Clone + Ord> TextSelectionCache<K> {
+    fn next_use_order(&mut self) -> u64 {
+        if self.use_clock == u64::MAX {
+            let keys = self
+                .recency
+                .iter()
+                .map(|(_, key)| key.clone())
+                .collect::<Vec<_>>();
+            self.recency.clear();
+            self.use_clock = 0;
+            for key in keys {
+                self.use_clock += 1;
+                if let Some(selection) = self.entries.get_mut(&key) {
+                    selection.last_used = self.use_clock;
+                    self.recency.insert((self.use_clock, key));
+                }
+            }
+        }
+        self.use_clock += 1;
+        self.use_clock
+    }
+
+    fn touch(&mut self, key: &K, use_order: u64) {
+        let Some(selection) = self.entries.get_mut(key) else {
+            return;
+        };
+        self.recency.remove(&(selection.last_used, key.clone()));
+        selection.last_used = use_order;
+        self.recency.insert((use_order, key.clone()));
+    }
+
+    fn evict_oldest_inactive(&mut self, cx: &App) -> bool {
+        let evict = self.recency.iter().find_map(|(_, key)| {
+            let selection = &self.entries[key].selection;
+            (selection.handle.snapshot(cx).is_none() && !selection.handle.has_local_selection(cx))
+                .then(|| key.clone())
+        });
+        let Some(evict) = evict else {
+            return false;
+        };
+        if let Some(selection) = self.entries.remove(&evict) {
+            self.recency.remove(&(selection.last_used, evict));
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn handle(
         &mut self,
         key: K,
@@ -204,18 +261,12 @@ impl<K: Clone + Ord> TextSelectionCache<K> {
         window: &Window,
         cx: &mut App,
     ) -> LogTextSelection {
+        let use_order = self.next_use_order();
         if !self.entries.contains_key(&key) {
-            if self.entries.len() >= CACHE_LIMIT
-                && let Some(evict) = self.entries.iter().find_map(|(key, selection)| {
-                    selection
-                        .selection
-                        .handle
-                        .snapshot(cx)
-                        .is_none()
-                        .then(|| key.clone())
-                })
-            {
-                self.entries.remove(&evict);
+            while self.entries.len() >= CACHE_LIMIT {
+                if !self.evict_oldest_inactive(cx) {
+                    break;
+                }
             }
             let fallback_text = text.source().to_string();
             let handle = TextSelectionHandle::new(fallback_text, cx);
@@ -272,10 +323,14 @@ impl<K: Clone + Ord> TextSelectionCache<K> {
                         activity: self.activity.clone(),
                         active,
                     },
+                    last_used: use_order,
                     _refresh: refresh,
                     _activity_subscription: activity_subscription,
                 },
             );
+            self.recency.insert((use_order, key.clone()));
+        } else {
+            self.touch(&key, use_order);
         }
         let selection = self.entries[&key].selection.clone();
         if selection.state.borrow().text.source().as_ref() != text.source().as_ref() {
@@ -289,6 +344,8 @@ impl<K: Clone + Ord> TextSelectionCache<K> {
 
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.recency.clear();
+        self.use_clock = 0;
     }
 }
 
@@ -622,6 +679,12 @@ mod tests {
         selections: TextSelectionCache<usize>,
     }
 
+    struct CachedRowsTestView {
+        text: LogText,
+        selections: TextSelectionCache<usize>,
+        visible_keys: Vec<usize>,
+    }
+
     impl Render for SelectableLogTextTestView {
         fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let selection = self.selections.handle(0, &self.text, window, cx);
@@ -640,6 +703,33 @@ mod tests {
                         TEST_SELECTION_COLOR,
                     )),
             )
+        }
+    }
+
+    impl Render for CachedRowsTestView {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let rows = self
+                .visible_keys
+                .clone()
+                .into_iter()
+                .enumerate()
+                .map(|(ix, key)| {
+                    let selection = self.selections.handle(key, &self.text, window, cx);
+                    div()
+                        .absolute()
+                        .left(px(10.))
+                        .top(px(10. + ix as f32 * 24.))
+                        .h(px(24.))
+                        .text_size(px(14.))
+                        .child(SelectableLogText::new(
+                            selection,
+                            key as u64,
+                            self.text.clone(),
+                            StyledText::new(self.text.display().clone()),
+                            TEST_SELECTION_COLOR,
+                        ))
+                });
+            div().size_full().child(TextSelectionLayer).children(rows)
         }
     }
 
@@ -703,6 +793,133 @@ mod tests {
                     .iter()
                     .any(|quad| quad.background == TEST_SELECTION_COLOR.into())
             );
+        });
+    }
+
+    #[gpui::test]
+    fn recently_rendered_middle_rows_stay_cached_at_capacity(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, _| SelectableLogTextTestView {
+            text: LogText::new("alpha beta".into()),
+            selections: TextSelectionCache::default(),
+        });
+
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                for key in 10_000..10_000 + CACHE_LIMIT {
+                    view.selections.handle(key, &view.text, window, cx);
+                }
+
+                let first = view.selections.handle(1, &view.text, window, cx);
+                view.selections.handle(2, &view.text, window, cx);
+
+                assert_eq!(
+                    view.selections.entries[&1].selection.handle.entity_id(),
+                    first.handle.entity_id(),
+                    "rendering the next middle row must not evict the row rendered just before it"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn middle_row_selection_survives_the_next_render_at_capacity(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, _| CachedRowsTestView {
+            text: LogText::new("alpha beta".into()),
+            selections: TextSelectionCache::default(),
+            visible_keys: Vec::new(),
+        });
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                for key in 10_000..10_000 + CACHE_LIMIT {
+                    view.selections.handle(key, &view.text, window, cx);
+                }
+                view.visible_keys = vec![1, 2];
+                cx.notify();
+            });
+            let _ = window.draw(cx);
+        });
+
+        cx.simulate_event(MouseDownEvent {
+            position: point(px(20.), px(18.)),
+            modifiers: Modifiers::default(),
+            button: MouseButton::Left,
+            click_count: 2,
+            first_mouse: false,
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            window.simulate_next_frame(cx);
+            let _ = window.draw(cx);
+            assert_eq!(TextSelection::selected_text(window, cx), "alpha");
+            assert!(
+                window
+                    .painted_quads()
+                    .iter()
+                    .any(|quad| quad.background == TEST_SELECTION_COLOR.into())
+            );
+            TextSelection::clear(window, cx);
+        });
+
+        let drag_start = point(px(20.), px(18.));
+        let drag_end = point(px(50.), px(18.));
+        cx.simulate_event(MouseMoveEvent {
+            position: drag_start,
+            pressed_button: None,
+            modifiers: Modifiers::default(),
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.simulate_event(MouseDownEvent {
+            position: drag_start,
+            modifiers: Modifiers::default(),
+            button: MouseButton::Left,
+            click_count: 1,
+            first_mouse: false,
+        });
+        cx.simulate_event(MouseMoveEvent {
+            position: drag_end,
+            pressed_button: Some(MouseButton::Left),
+            modifiers: Modifiers::default(),
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            window.simulate_next_frame(cx);
+            let _ = window.draw(cx);
+            assert!(!TextSelection::selected_text(window, cx).is_empty());
+        });
+        cx.simulate_event(MouseUpEvent {
+            position: drag_end,
+            modifiers: Modifiers::default(),
+            button: MouseButton::Left,
+            click_count: 1,
+        });
+    }
+
+    #[gpui::test]
+    fn local_selection_is_not_evicted_by_later_rows(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, _| SelectableLogTextTestView {
+            text: LogText::new("alpha beta".into()),
+            selections: TextSelectionCache::default(),
+        });
+
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                for key in 10_000..10_000 + CACHE_LIMIT {
+                    view.selections.handle(key, &view.text, window, cx);
+                }
+                let selected = view.selections.handle(1, &view.text, window, cx);
+                selected.handle.set_local_selection(true, cx);
+
+                for key in 2..CACHE_LIMIT + 2 {
+                    view.selections.handle(key, &view.text, window, cx);
+                }
+
+                assert_eq!(
+                    view.selections.entries[&1].selection.handle.entity_id(),
+                    selected.handle.entity_id()
+                );
+            });
         });
     }
 }
