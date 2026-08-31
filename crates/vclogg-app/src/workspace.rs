@@ -9101,34 +9101,19 @@ impl Workspace {
     }
 
     fn refresh_quick_find_highlights(&mut self, cx: &mut Context<Self>) {
-        let target = self.quick_find_target;
         let matcher = self.quick_find_matcher.clone();
         for tab in &self.documents {
-            let document_is_in_scope = match target {
-                Some(QuickFindTarget::Log(document_id))
-                | Some(QuickFindTarget::Results(document_id)) => document_id == tab.id,
-                Some(QuickFindTarget::GlobalResults) => true,
-                None => false,
-            };
-            let document_matcher = document_is_in_scope.then(|| matcher.clone()).flatten();
             tab.log_table.update(cx, |table, cx| {
-                table
-                    .delegate_mut()
-                    .set_quick_find_matcher(document_matcher.clone());
+                table.delegate_mut().set_quick_find_matcher(matcher.clone());
                 table.refresh(cx);
             });
             tab.result_table.update(cx, |table, cx| {
-                table
-                    .delegate_mut()
-                    .set_quick_find_matcher(document_matcher);
+                table.delegate_mut().set_quick_find_matcher(matcher.clone());
                 table.refresh(cx);
             });
         }
-        let global_matcher = (target == Some(QuickFindTarget::GlobalResults))
-            .then_some(matcher)
-            .flatten();
         self.global_table.update(cx, |table, cx| {
-            table.delegate_mut().set_quick_find_matcher(global_matcher);
+            table.delegate_mut().set_quick_find_matcher(matcher);
             table.refresh(cx);
         });
     }
@@ -14028,6 +14013,7 @@ impl Workspace {
 
     fn render_quick_find_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let _performance_scope = crate::ui_performance::scope("Workspace::render_quick_find_bar");
+        let colors = ui_theme::palette(cx);
         let query_empty = self.quick_find_query.read(cx).value().is_empty();
         let invalid_message = self.quick_find_error.as_deref();
         let target_label = match self.quick_find_target {
@@ -14141,7 +14127,7 @@ impl Workspace {
                     } else {
                         cx.theme().border
                     })
-                    .bg(cx.theme().popover)
+                    .bg(colors.surface)
                     .text_color(cx.theme().popover_foreground)
                     .shadow_lg()
                     .occlude()
@@ -14171,6 +14157,7 @@ impl Workspace {
                         div().flex_1().min_w_0().h_8().child(
                             Input::new(&self.quick_find_query)
                                 .size_full()
+                                .bg(colors.control_surface)
                                 .accessibility_id("A150")
                                 .aria_label(input_label)
                                 .prefix(Icon::new(IconName::Search))
