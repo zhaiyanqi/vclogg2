@@ -8960,16 +8960,6 @@ impl Workspace {
     ) {
         if self.active_log_region == LogRegion::GlobalResults && self.global_search.results_visible
         {
-            if self.global_search.scope == SearchScope::Directory {
-                window.push_notification(
-                    crate::tr!(
-                        "请先打开目录结果所属文件，再标记日志行",
-                        "Open the file containing the directory result before marking log lines"
-                    ),
-                    cx,
-                );
-                return;
-            }
             let selected_matches = self.global_table.read(cx).delegate().selected_matches();
             if selected_matches.is_empty() {
                 window.push_notification(
@@ -8981,13 +8971,25 @@ impl Workspace {
                 );
                 return;
             }
-            let mut selected_by_document = BTreeMap::<u64, Vec<usize>>::new();
-            for (document_id, source_row) in selected_matches {
-                selected_by_document
-                    .entry(document_id)
-                    .or_default()
-                    .push(source_row);
-            }
+            let Some(selected_by_document) =
+                self.resolve_global_mark_targets(selected_matches.iter().copied())
+            else {
+                window.push_notification(
+                    if self.global_search.scope == SearchScope::Directory {
+                        crate::tr!(
+                            "请打开所有选中结果对应的文件；若文件内容已改变，请重新搜索",
+                            "Open every file for the selected results. If a file changed, search again."
+                        )
+                    } else {
+                        crate::tr!(
+                            "所选结果所属文件已不可用，请重新搜索",
+                            "A file for the selected results is unavailable. Search again."
+                        )
+                    },
+                    cx,
+                );
+                return;
+            };
             let is_marking = selected_by_document.iter().any(|(document_id, rows)| {
                 self.documents
                     .iter()
@@ -16280,6 +16282,27 @@ impl Workspace {
             .then_some(document_ix)
     }
 
+    fn resolve_global_mark_targets(
+        &self,
+        selected_rows: impl IntoIterator<Item = (u64, usize)>,
+    ) -> Option<BTreeMap<u64, Vec<usize>>> {
+        let directory_results = self.global_search.result_scope == Some(SearchScope::Directory);
+        group_result_rows_by_document(selected_rows, |result_document_id, source_row| {
+            let document_ix = if directory_results {
+                self.presentation_document_ix_for_global_result(result_document_id)?
+            } else {
+                self.documents
+                    .iter()
+                    .position(|tab| tab.id == result_document_id)?
+            };
+            let tab = self.documents.get(document_ix)?;
+            if !tab.document.contains_source_row(source_row) {
+                return None;
+            }
+            Some(tab.id)
+        })
+    }
+
     fn apply_context_color_label(
         &mut self,
         label_id: Option<String>,
@@ -16376,12 +16399,17 @@ impl Workspace {
     fn context_mark_label(&self, cx: &App) -> &'static str {
         if self.active_log_region == LogRegion::GlobalResults {
             let selected = self.global_table.read(cx).delegate().selected_matches();
-            if !selected.is_empty()
-                && selected.iter().all(|(document_id, source_row)| {
+            if let Some(targets) = (!selected.is_empty())
+                .then(|| self.resolve_global_mark_targets(selected))
+                .flatten()
+                && targets.iter().all(|(document_id, rows)| {
                     self.documents
                         .iter()
                         .find(|tab| tab.id == *document_id)
-                        .is_some_and(|tab| tab.marked_rows.contains(source_row))
+                        .is_some_and(|tab| {
+                            rows.iter()
+                                .all(|source_row| tab.marked_rows.contains(source_row))
+                        })
                 })
             {
                 crate::tr!("取消标记", "Unmark")
@@ -18540,6 +18568,18 @@ fn compute_result_rows(
     }
 }
 
+fn group_result_rows_by_document(
+    rows: impl IntoIterator<Item = (u64, usize)>,
+    mut resolve_document_id: impl FnMut(u64, usize) -> Option<u64>,
+) -> Option<BTreeMap<u64, Vec<usize>>> {
+    let mut by_document = BTreeMap::<u64, Vec<usize>>::new();
+    for (result_document_id, source_row) in rows {
+        let document_id = resolve_document_id(result_document_id, source_row)?;
+        by_document.entry(document_id).or_default().push(source_row);
+    }
+    Some(by_document)
+}
+
 fn result_snapshot_matches_document(
     result_path: &Path,
     result_document: &LogDocument,
@@ -18600,6 +18640,25 @@ mod result_snapshot_tests {
         fs::write(&temporary.0, b"after!\n").expect("应能替换测试日志内容");
         let reopened = LogDocument::open(&temporary.0).expect("应能打开替换后的快照");
         assert!(!pending.matches(&reopened));
+    }
+
+    #[test]
+    fn result_row_target_resolution_is_atomic_and_groups_by_open_document() {
+        let grouped = group_result_rows_by_document([(101, 2), (102, 4), (101, 7)], |id, _| {
+            Some(match id {
+                101 => 1,
+                102 => 2,
+                _ => return None,
+            })
+        });
+        assert_eq!(
+            grouped,
+            Some(BTreeMap::from([(1, vec![2, 7]), (2, vec![4])]))
+        );
+
+        let unresolved =
+            group_result_rows_by_document([(101, 2), (999, 4)], |id, _| (id == 101).then_some(1));
+        assert!(unresolved.is_none());
     }
 }
 
