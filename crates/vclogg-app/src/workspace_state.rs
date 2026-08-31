@@ -390,6 +390,99 @@ impl GlobalSearchState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SearchTarget {
+    Document(u64),
+    AllOpenFiles,
+    Directory,
+}
+
+struct ActiveSearch {
+    target: SearchTarget,
+    revision: u64,
+    cancellation: SearchCancellation,
+}
+
+#[derive(Default)]
+pub(crate) struct SearchController {
+    active: Option<ActiveSearch>,
+    task: Option<Task<()>>,
+}
+
+impl SearchController {
+    pub(crate) fn begin(
+        &mut self,
+        target: SearchTarget,
+        revision: u64,
+        cancellation: SearchCancellation,
+    ) {
+        self.cancel();
+        self.active = Some(ActiveSearch {
+            target,
+            revision,
+            cancellation,
+        });
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.active.is_some()
+    }
+
+    pub(crate) fn is_current(&self, target: SearchTarget, revision: u64) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|search| search.target == target && search.revision == revision)
+    }
+
+    pub(crate) fn has_target(&self, target: SearchTarget) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|search| search.target == target)
+    }
+
+    pub(crate) fn targets_any_document(&self, document_ids: &BTreeSet<u64>) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|search| match search.target {
+                SearchTarget::Document(document_id) => document_ids.contains(&document_id),
+                SearchTarget::AllOpenFiles => !document_ids.is_empty(),
+                SearchTarget::Directory => false,
+            })
+    }
+
+    pub(crate) fn cancel_for_document(&mut self, document_id: u64) -> bool {
+        let should_cancel = self.active.as_ref().is_some_and(|search| {
+            matches!(search.target, SearchTarget::Document(id) if id == document_id)
+                || search.target == SearchTarget::AllOpenFiles
+        });
+        should_cancel && self.cancel()
+    }
+
+    pub(crate) fn set_task(&mut self, task: Task<()>) {
+        self.task = Some(task);
+    }
+
+    pub(crate) fn finish(&mut self, target: SearchTarget, revision: u64) -> bool {
+        if !self.is_current(target, revision) {
+            return false;
+        }
+        self.active = None;
+        self.task = None;
+        true
+    }
+
+    pub(crate) fn cancel(&mut self) -> bool {
+        let was_active = if let Some(search) = self.active.take() {
+            search.cancellation.cancel();
+            true
+        } else {
+            false
+        };
+        self.task = None;
+        was_active
+    }
+}
+
 pub(crate) struct PersistenceController {
     pub(crate) state_tasks: Vec<Task<()>>,
     pub(crate) checkpoint_task: Option<Task<()>>,
@@ -429,5 +522,44 @@ impl PersistenceController {
             session_save_task: None,
             _bootstrap_task: bootstrap_task,
         }
+    }
+}
+
+#[cfg(test)]
+mod search_controller_tests {
+    use super::*;
+
+    #[test]
+    fn document_changes_cancel_open_file_searches_but_not_directory_searches() {
+        let mut controller = SearchController::default();
+        let directory_cancellation = SearchCancellation::default();
+        controller.begin(SearchTarget::Directory, 1, directory_cancellation.clone());
+
+        assert!(!controller.cancel_for_document(7));
+        assert!(!directory_cancellation.is_cancelled());
+        assert!(controller.is_current(SearchTarget::Directory, 1));
+
+        let open_files_cancellation = SearchCancellation::default();
+        controller.begin(
+            SearchTarget::AllOpenFiles,
+            2,
+            open_files_cancellation.clone(),
+        );
+
+        assert!(directory_cancellation.is_cancelled());
+        assert!(controller.cancel_for_document(7));
+        assert!(open_files_cancellation.is_cancelled());
+    }
+
+    #[test]
+    fn stale_completion_cannot_replace_the_current_search() {
+        let mut controller = SearchController::default();
+        let target = SearchTarget::Document(7);
+        controller.begin(target, 2, SearchCancellation::default());
+
+        assert!(!controller.finish(target, 1));
+        assert!(controller.is_current(target, 2));
+        assert!(controller.finish(target, 2));
+        assert!(!controller.is_active());
     }
 }

@@ -124,7 +124,8 @@ use crate::{
         AppUpdateState, CloudController, GlobalSearchDocumentResult, GlobalSearchState,
         PersistenceController, QuickFindBoundary, QuickFindDirection, QuickFindMatch,
         QuickFindSource, QuickFindState, QuickFindTarget, ResultMode, RetainedGlobalSearchContext,
-        RowViewportAnchor, SearchScope, UpdateController, ViewportAnchor,
+        RowViewportAnchor, SearchController, SearchScope, SearchTarget, UpdateController,
+        ViewportAnchor,
     },
 };
 
@@ -2265,12 +2266,6 @@ enum ReloadStrategy {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ActiveSearchTarget {
-    Document(u64),
-    Global,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ResultExportOperation {
     OpenInNewTab,
     MergeByTimestamp,
@@ -2348,42 +2343,6 @@ struct SearchPanelResizeGesture {
     initial_height: Pixels,
 }
 
-struct ActiveSearch {
-    target: ActiveSearchTarget,
-    revision: u64,
-    cancellation: SearchCancellation,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct SearchPresentationProgress {
-    scanned_lines: usize,
-    total_lines: usize,
-    matched_lines: usize,
-}
-
-impl SearchPresentationProgress {
-    fn from_progress(progress: &SearchProgress) -> Self {
-        let snapshot = progress.snapshot();
-        Self {
-            scanned_lines: snapshot.scanned_lines,
-            total_lines: snapshot.total_lines,
-            matched_lines: snapshot.matched_lines,
-        }
-    }
-
-    fn combine(progresses: &[SearchProgress]) -> Self {
-        progresses
-            .iter()
-            .fold(Self::default(), |mut total, progress| {
-                let snapshot = progress.snapshot();
-                total.scanned_lines = total.scanned_lines.saturating_add(snapshot.scanned_lines);
-                total.total_lines = total.total_lines.saturating_add(snapshot.total_lines);
-                total.matched_lines = total.matched_lines.saturating_add(snapshot.matched_lines);
-                total
-            })
-    }
-}
-
 pub struct Workspace {
     primary_window: bool,
     focus_handle: FocusHandle,
@@ -2427,8 +2386,7 @@ pub struct Workspace {
     row_drag_frame_scheduled: bool,
     open_task: Option<Task<()>>,
     pending_external_paths: Vec<PathBuf>,
-    search_task: Option<Task<()>>,
-    search_progress_task: Option<Task<()>>,
+    searches: SearchController,
     result_export_task: Option<Task<()>>,
     result_export_operation: Option<ResultExportOperation>,
     file_drop_visible: bool,
@@ -2462,8 +2420,6 @@ pub struct Workspace {
     pending_predefined_filters_save: Option<(u64, Vec<PredefinedFilter>)>,
     settings_saving: bool,
     search_defaults_modified: bool,
-    active_search: Option<ActiveSearch>,
-    search_progress: Option<SearchPresentationProgress>,
     subscriptions: Vec<Subscription>,
     history_dialog_subscription: Option<Subscription>,
     predefined_filters_dialog_subscription: Option<Subscription>,
@@ -3518,8 +3474,7 @@ impl Workspace {
             row_drag_frame_scheduled: false,
             open_task: None,
             pending_external_paths: Vec::new(),
-            search_task: None,
-            search_progress_task: None,
+            searches: SearchController::default(),
             result_export_task: None,
             result_export_operation: None,
             file_drop_visible: false,
@@ -3553,8 +3508,6 @@ impl Workspace {
             pending_predefined_filters_save: None,
             settings_saving: false,
             search_defaults_modified: false,
-            active_search: None,
-            search_progress: None,
             subscriptions,
             history_dialog_subscription: None,
             predefined_filters_dialog_subscription: None,
@@ -7488,14 +7441,7 @@ impl Workspace {
             })
             .collect::<Vec<_>>();
 
-        if self
-            .active_search
-            .as_ref()
-            .is_some_and(|search| match search.target {
-                ActiveSearchTarget::Document(document_id) => document_ids.contains(&document_id),
-                ActiveSearchTarget::Global => !document_ids.is_empty(),
-            })
-        {
+        if self.searches.targets_any_document(&document_ids) {
             self.cancel_search();
         }
         for (path, base, session) in sessions {
@@ -9649,10 +9595,7 @@ impl Workspace {
             return;
         }
         if self.global_search.scope == SearchScope::Directory
-            && self
-                .active_search
-                .as_ref()
-                .is_some_and(|search| search.target == ActiveSearchTarget::Global)
+            && self.searches.has_target(SearchTarget::Directory)
         {
             self.cancel_search();
         }
@@ -9689,11 +9632,7 @@ impl Workspace {
         if self.global_search.selected_documents == selected {
             return;
         }
-        if self
-            .active_search
-            .as_ref()
-            .is_some_and(|search| search.target == ActiveSearchTarget::Global)
-        {
+        if self.searches.has_target(SearchTarget::AllOpenFiles) {
             self.cancel_search();
         }
         self.global_search.revision = self.global_search.revision.saturating_add(1);
@@ -10638,7 +10577,7 @@ impl Workspace {
     }
 
     fn maybe_restore_persisted_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.active_search.is_some() || self.open_task.is_some() {
+        if self.searches.is_active() || self.open_task.is_some() {
             return;
         }
         match self.global_search.scope {
@@ -10783,10 +10722,8 @@ impl Workspace {
         if self.global_search.scope == next_scope {
             return;
         }
-        if self
-            .active_search
-            .as_ref()
-            .is_some_and(|search| search.target == ActiveSearchTarget::Global)
+        if self.searches.has_target(SearchTarget::AllOpenFiles)
+            || self.searches.has_target(SearchTarget::Directory)
         {
             self.cancel_search();
         }
@@ -10985,46 +10922,13 @@ impl Workspace {
         let document_id = tab.id;
         let document = tab.document.clone();
         let progress = SearchProgress::new(document.line_count());
-        self.active_search = Some(ActiveSearch {
-            target: ActiveSearchTarget::Document(document_id),
-            revision,
-            cancellation: cancellation.clone(),
-        });
-        self.search_progress = Some(SearchPresentationProgress::from_progress(&progress));
+        let target = SearchTarget::Document(document_id);
+        self.searches.begin(target, revision, cancellation.clone());
         self.activity = Activity::Searching;
         cx.notify();
 
-        let progress_for_poll = progress.clone();
-        self.search_progress_task = Some(cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(80))
-                    .await;
-                let snapshot = SearchPresentationProgress::from_progress(&progress_for_poll);
-                let keep_polling = this
-                    .update(cx, |this, cx| {
-                        let is_current = this.active_search.as_ref().is_some_and(|search| {
-                            search.target == ActiveSearchTarget::Document(document_id)
-                                && search.revision == revision
-                        });
-                        if !is_current {
-                            return false;
-                        }
-                        if this.search_progress != Some(snapshot) {
-                            this.search_progress = Some(snapshot);
-                            cx.notify();
-                        }
-                        true
-                    })
-                    .unwrap_or(false);
-                if !keep_polling {
-                    break;
-                }
-            }
-        }));
-
         let query_for_search = query.clone();
-        self.search_task = Some(cx.spawn_in(window, async move |this, cx| {
+        let task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
                     let matcher = SearchMatcher::new(&query_for_search)?;
@@ -11040,11 +10944,7 @@ impl Workspace {
                 .await;
 
             _ = this.update_in(cx, |this, window, cx| {
-                let is_current = this.active_search.as_ref().is_some_and(|search| {
-                    search.target == ActiveSearchTarget::Document(document_id)
-                        && search.revision == revision
-                });
-                if !is_current {
+                if !this.searches.is_current(target, revision) {
                     return;
                 }
                 if matches!(&result, Ok((SearchRun::Completed(_), _))) {
@@ -11111,13 +11011,11 @@ impl Workspace {
                         cx,
                     );
                 }
-                this.active_search = None;
-                this.search_progress = None;
-                this.search_progress_task = None;
-                this.search_task = None;
+                this.searches.finish(target, revision);
                 cx.notify();
             });
-        }));
+        });
+        self.searches.set_task(task);
     }
 
     fn start_global_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -11187,51 +11085,13 @@ impl Workspace {
                 )
             })
             .collect::<Vec<_>>();
-        let progresses = targets
-            .iter()
-            .map(|(_, _, _, _, progress)| progress.clone())
-            .collect::<Vec<_>>();
-        self.active_search = Some(ActiveSearch {
-            target: ActiveSearchTarget::Global,
-            revision,
-            cancellation: cancellation.clone(),
-        });
-        self.search_progress = Some(SearchPresentationProgress::combine(&progresses));
+        let target = SearchTarget::AllOpenFiles;
+        self.searches.begin(target, revision, cancellation.clone());
         self.global_search.results_visible = true;
         self.activity = Activity::Searching;
         cx.notify();
-
-        let progress_for_poll = progresses.clone();
-        self.search_progress_task = Some(cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(80))
-                    .await;
-                let snapshot = SearchPresentationProgress::combine(&progress_for_poll);
-                let keep_polling = this
-                    .update(cx, |this, cx| {
-                        let is_current = this.active_search.as_ref().is_some_and(|search| {
-                            search.target == ActiveSearchTarget::Global
-                                && search.revision == revision
-                        });
-                        if !is_current {
-                            return false;
-                        }
-                        if this.search_progress != Some(snapshot) {
-                            this.search_progress = Some(snapshot);
-                            cx.notify();
-                        }
-                        true
-                    })
-                    .unwrap_or(false);
-                if !keep_polling {
-                    break;
-                }
-            }
-        }));
-
         let query_for_search = query.clone();
-        self.search_task = Some(cx.spawn_in(window, async move |this, cx| {
+        let task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
                     let matcher = SearchMatcher::new(&query_for_search)?;
@@ -11256,10 +11116,9 @@ impl Workspace {
                 .await;
 
             _ = this.update_in(cx, |this, window, cx| {
-                let is_current = this.active_search.as_ref().is_some_and(|search| {
-                    search.target == ActiveSearchTarget::Global && search.revision == revision
-                });
-                if !is_current || this.global_search.revision != revision {
+                if !this.searches.is_current(target, revision)
+                    || this.global_search.revision != revision
+                {
                     return;
                 }
 
@@ -11341,13 +11200,11 @@ impl Workspace {
                         this.activity = Activity::Error;
                     }
                 }
-                this.active_search = None;
-                this.search_progress = None;
-                this.search_progress_task = None;
-                this.search_task = None;
+                this.searches.finish(target, revision);
                 cx.notify();
             });
-        }));
+        });
+        self.searches.set_task(task);
     }
 
     fn start_directory_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -11394,52 +11251,14 @@ impl Workspace {
         self.global_search.revision = self.global_search.revision.saturating_add(1);
         let revision = self.global_search.revision;
         let cancellation = SearchCancellation::default();
-        let progresses = Arc::new(Mutex::new(Vec::<SearchProgress>::new()));
-        self.active_search = Some(ActiveSearch {
-            target: ActiveSearchTarget::Global,
-            revision,
-            cancellation: cancellation.clone(),
-        });
-        self.search_progress = Some(SearchPresentationProgress::default());
+        let target = SearchTarget::Directory;
+        self.searches.begin(target, revision, cancellation.clone());
         self.global_search.results_visible = true;
         self.activity = Activity::Searching;
         cx.notify();
-
-        let progresses_for_poll = progresses.clone();
-        self.search_progress_task = Some(cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(80))
-                    .await;
-                let snapshot = progresses_for_poll
-                    .lock()
-                    .map(|progresses| SearchPresentationProgress::combine(&progresses))
-                    .unwrap_or_default();
-                let keep_polling = this
-                    .update(cx, |this, cx| {
-                        let is_current = this.active_search.as_ref().is_some_and(|search| {
-                            search.target == ActiveSearchTarget::Global
-                                && search.revision == revision
-                        });
-                        if !is_current {
-                            return false;
-                        }
-                        if this.search_progress != Some(snapshot) {
-                            this.search_progress = Some(snapshot);
-                            cx.notify();
-                        }
-                        true
-                    })
-                    .unwrap_or(false);
-                if !keep_polling {
-                    break;
-                }
-            }
-        }));
-
         let query_for_search = query.clone();
         let cancellation_for_search = cancellation.clone();
-        self.search_task = Some(cx.spawn_in(window, async move |this, cx| {
+        let task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
                     let matcher = SearchMatcher::new(&query_for_search)?;
@@ -11464,9 +11283,6 @@ impl Workspace {
                             };
                         let document = Arc::new(document);
                         let progress = SearchProgress::new(document.line_count());
-                        if let Ok(mut current) = progresses.lock() {
-                            current.push(progress.clone());
-                        }
                         let run = search_with_compiled_matcher(
                             &document,
                             matcher.as_ref(),
@@ -11536,10 +11352,9 @@ impl Workspace {
                 .await;
 
             _ = this.update_in(cx, |this, window, cx| {
-                let is_current = this.active_search.as_ref().is_some_and(|search| {
-                    search.target == ActiveSearchTarget::Global && search.revision == revision
-                });
-                if !is_current || this.global_search.revision != revision {
+                if !this.searches.is_current(target, revision)
+                    || this.global_search.revision != revision
+                {
                     return;
                 }
 
@@ -11608,13 +11423,11 @@ impl Workspace {
                         this.activity = Activity::Error;
                     }
                 }
-                this.active_search = None;
-                this.search_progress = None;
-                this.search_progress_task = None;
-                this.search_task = None;
+                this.searches.finish(target, revision);
                 cx.notify();
             });
-        }));
+        });
+        self.searches.set_task(task);
     }
 
     fn clear_search_action(
@@ -11729,15 +11542,7 @@ impl Workspace {
     }
 
     fn cancel_search(&mut self) -> bool {
-        let was_active = if let Some(search) = self.active_search.take() {
-            search.cancellation.cancel();
-            true
-        } else {
-            false
-        };
-        self.search_progress = None;
-        self.search_progress_task = None;
-        self.search_task = None;
+        let was_active = self.searches.cancel();
         if was_active && matches!(self.activity, Activity::Searching) {
             self.activity = Activity::Ready;
         }
@@ -11745,11 +11550,10 @@ impl Workspace {
     }
 
     fn cancel_search_for(&mut self, document_id: u64) {
-        if self.active_search.as_ref().is_some_and(|search| {
-            search.target == ActiveSearchTarget::Document(document_id)
-                || search.target == ActiveSearchTarget::Global
-        }) {
-            self.cancel_search();
+        if self.searches.cancel_for_document(document_id)
+            && matches!(self.activity, Activity::Searching)
+        {
+            self.activity = Activity::Ready;
         }
     }
 
@@ -14550,17 +14354,14 @@ impl Workspace {
                     }
                 });
         let active_document_id = self.active_document().map(|tab| tab.id);
-        let searching_current_scope = self.active_search.as_ref().is_some_and(|search| match self
-            .global_search
-            .scope
-        {
+        let searching_current_scope = match self.global_search.scope {
             SearchScope::CurrentFile => active_document_id.is_some_and(|document_id| {
-                search.target == ActiveSearchTarget::Document(document_id)
+                self.searches
+                    .has_target(SearchTarget::Document(document_id))
             }),
-            SearchScope::AllOpenFiles | SearchScope::Directory => {
-                search.target == ActiveSearchTarget::Global
-            }
-        });
+            SearchScope::AllOpenFiles => self.searches.has_target(SearchTarget::AllOpenFiles),
+            SearchScope::Directory => self.searches.has_target(SearchTarget::Directory),
+        };
         let search_scope_control =
             self.render_search_scope_control(has_document, search_scope_tooltip, cx);
 
