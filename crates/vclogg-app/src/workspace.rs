@@ -2383,7 +2383,7 @@ struct CompletedGlobalSearch {
     query: SearchQuery,
     results: GlobalSearchResults,
     matcher: Option<SearchMatcher>,
-    viewport_anchor: Option<RowViewportAnchor<LogRowKey>>,
+    preserve_viewport: bool,
 }
 
 pub struct Workspace {
@@ -11035,20 +11035,6 @@ impl Workspace {
             regex: self.regex,
             max_results: self.app_settings.search_result_limit(),
         };
-        let row_height = self.log_row_height();
-        let viewport_anchor = {
-            let tab = &self.documents[active_ix];
-            tab.results_visible
-                .then(|| {
-                    Self::capture_local_row_viewport_anchor(
-                        tab,
-                        WrappedRegion::Results,
-                        row_height,
-                        cx,
-                    )
-                })
-                .flatten()
-        };
         self.cancel_search();
         let cancellation = SearchCancellation::default();
         let tab = &mut self.documents[active_ix];
@@ -11095,6 +11081,17 @@ impl Workspace {
                 if tab.search_revision != revision {
                     return;
                 }
+                let viewport_anchor = tab
+                    .results_visible
+                    .then(|| {
+                        Self::capture_local_row_viewport_anchor(
+                            tab,
+                            WrappedRegion::Results,
+                            row_height,
+                            cx,
+                        )
+                    })
+                    .flatten();
 
                 let prime_wrapped_results = match result {
                     Ok((SearchRun::Completed(result), search_matcher)) => {
@@ -11157,6 +11154,12 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let word_wrap = self.global_viewport.is_wrapped();
+        let row_height = self.log_row_height();
+        let viewport_anchor = completed
+            .preserve_viewport
+            .then(|| self.capture_global_row_viewport_anchor(row_height, cx))
+            .flatten();
         self.record_search_history(&completed.query.text, window, cx);
         match completed.scope {
             SearchScope::AllOpenFiles => self.global_search.query = completed.query,
@@ -11181,13 +11184,11 @@ impl Workspace {
         self.global_search.matcher = completed.matcher;
         self.global_search.result_scope = Some(completed.scope);
 
-        let word_wrap = self.global_viewport.is_wrapped();
-        let row_height = self.log_row_height();
         self.refresh_global_result_rows(cx);
-        self.position_global_row_viewport_anchor(completed.viewport_anchor, row_height, cx);
+        self.position_global_row_viewport_anchor(viewport_anchor, row_height, cx);
         if word_wrap {
             self.prime_global_wrapped_frame(row_height, false, window, cx);
-            self.position_global_row_viewport_anchor(completed.viewport_anchor, row_height, cx);
+            self.position_global_row_viewport_anchor(viewport_anchor, row_height, cx);
         }
         self.activity = Activity::Ready;
 
@@ -11245,12 +11246,7 @@ impl Workspace {
         {
             self.global_search.pending_all_open_restore = None;
         }
-        let row_height = self.log_row_height();
-        let viewport_anchor = self
-            .global_search
-            .results_visible
-            .then(|| self.capture_global_row_viewport_anchor(row_height, cx))
-            .flatten();
+        let preserve_viewport = self.global_search.results_visible;
         self.cancel_search();
         self.global_search.revision = self.global_search.revision.saturating_add(1);
         let revision = self.global_search.revision;
@@ -11352,7 +11348,7 @@ impl Workspace {
                                     query,
                                     results,
                                     matcher,
-                                    viewport_anchor,
+                                    preserve_viewport,
                                 },
                                 window,
                                 cx,
@@ -11406,12 +11402,7 @@ impl Workspace {
             .iter()
             .map(|tab| path_match_key(tab.document.path()))
             .collect::<BTreeSet<_>>();
-        let row_height = self.log_row_height();
-        let viewport_anchor = self
-            .global_search
-            .results_visible
-            .then(|| self.capture_global_row_viewport_anchor(row_height, cx))
-            .flatten();
+        let preserve_viewport = self.global_search.results_visible;
         self.cancel_search();
         self.global_search.revision = self.global_search.revision.saturating_add(1);
         let revision = self.global_search.revision;
@@ -11552,7 +11543,7 @@ impl Workspace {
                                 query,
                                 results,
                                 matcher,
-                                viewport_anchor,
+                                preserve_viewport,
                             },
                             window,
                             cx,
