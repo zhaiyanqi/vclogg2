@@ -110,7 +110,6 @@ impl SearchScope {
 
 #[derive(Clone)]
 pub(crate) struct GlobalSearchDocumentResult {
-    pub(crate) document_id: u64,
     pub(crate) title: SharedString,
     pub(crate) path: PathBuf,
     pub(crate) document: Arc<LogDocument>,
@@ -118,10 +117,75 @@ pub(crate) struct GlobalSearchDocumentResult {
     pub(crate) failure: Option<SharedString>,
 }
 
+/// Search-result snapshot with stable identity kept separate from presentation order.
+#[derive(Clone, Default)]
+pub(crate) struct GlobalSearchResults {
+    order: Vec<u64>,
+    by_document: BTreeMap<u64, GlobalSearchDocumentResult>,
+}
+
+impl GlobalSearchResults {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
+
+    pub(crate) fn get(&self, document_id: &u64) -> Option<&GlobalSearchDocumentResult> {
+        self.by_document.get(document_id)
+    }
+
+    pub(crate) fn get_mut(&mut self, document_id: &u64) -> Option<&mut GlobalSearchDocumentResult> {
+        self.by_document.get_mut(document_id)
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&u64, &GlobalSearchDocumentResult)> {
+        self.order.iter().filter_map(|document_id| {
+            self.by_document
+                .get(document_id)
+                .map(|result| (document_id, result))
+        })
+    }
+
+    pub(crate) fn values(&self) -> impl Iterator<Item = &GlobalSearchDocumentResult> {
+        self.iter().map(|(_, result)| result)
+    }
+
+    pub(crate) fn retain(
+        &mut self,
+        mut keep: impl FnMut(&u64, &mut GlobalSearchDocumentResult) -> bool,
+    ) {
+        self.by_document
+            .retain(|document_id, result| keep(document_id, result));
+        self.order
+            .retain(|document_id| self.by_document.contains_key(document_id));
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.order.clear();
+        self.by_document.clear();
+    }
+}
+
+impl FromIterator<(u64, GlobalSearchDocumentResult)> for GlobalSearchResults {
+    fn from_iter<T: IntoIterator<Item = (u64, GlobalSearchDocumentResult)>>(iter: T) -> Self {
+        let mut results = Self::default();
+        for (document_id, result) in iter {
+            let previous = results.by_document.insert(document_id, result);
+            if previous.is_none() {
+                results.order.push(document_id);
+            }
+            debug_assert!(
+                previous.is_none(),
+                "duplicate global search document identity"
+            );
+        }
+        results
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct RetainedGlobalSearchContext {
     pub(crate) initialized: bool,
-    pub(crate) results: Vec<GlobalSearchDocumentResult>,
+    pub(crate) results: GlobalSearchResults,
     pub(crate) matcher: Option<SearchMatcher>,
     pub(crate) result_mode: ResultMode,
     pub(crate) results_visible: bool,
@@ -138,7 +202,7 @@ impl Default for RetainedGlobalSearchContext {
     fn default() -> Self {
         Self {
             initialized: false,
-            results: Vec::new(),
+            results: GlobalSearchResults::default(),
             matcher: None,
             result_mode: ResultMode::MatchesAndMarks,
             results_visible: false,
@@ -353,7 +417,7 @@ pub(crate) struct GlobalSearchState {
     pub(crate) result_mode_select: Entity<SelectState<Vec<ResultMode>>>,
     pub(crate) selected_documents: std::collections::BTreeSet<u64>,
     pub(crate) preferences: BTreeMap<PathBuf, bool>,
-    pub(crate) results: Vec<GlobalSearchDocumentResult>,
+    pub(crate) results: GlobalSearchResults,
     pub(crate) matcher: Option<SearchMatcher>,
     pub(crate) result_scope: Option<SearchScope>,
     pub(crate) all_open_context: RetainedGlobalSearchContext,
@@ -408,7 +472,7 @@ impl GlobalSearchState {
             result_mode_select,
             selected_documents: Default::default(),
             preferences: BTreeMap::new(),
-            results: Vec::new(),
+            results: GlobalSearchResults::default(),
             matcher: None,
             result_scope: None,
             all_open_context: RetainedGlobalSearchContext::default(),
@@ -565,6 +629,39 @@ impl PersistenceController {
 #[cfg(test)]
 mod state_controller_tests {
     use super::*;
+
+    fn global_result(path: &str) -> GlobalSearchDocumentResult {
+        GlobalSearchDocumentResult {
+            title: path.to_string().into(),
+            path: PathBuf::from(path),
+            document: Arc::new(LogDocument::placeholder(path)),
+            search_result: SearchResult::default(),
+            failure: None,
+        }
+    }
+
+    #[test]
+    fn global_results_keep_search_order_separate_from_identity_lookup() {
+        let mut results = [
+            (9, global_result("nine.log")),
+            (3, global_result("three.log")),
+        ]
+        .into_iter()
+        .collect::<GlobalSearchResults>();
+
+        assert_eq!(
+            results.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            [9, 3]
+        );
+        assert_eq!(
+            results.get(&3).map(|result| result.path.as_path()),
+            Some(Path::new("three.log"))
+        );
+
+        results.retain(|document_id, _| *document_id != 9);
+        assert_eq!(results.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [3]);
+        assert!(results.get(&9).is_none());
+    }
 
     #[test]
     fn directory_result_identity_is_stable_by_path() {

@@ -121,11 +121,11 @@ use crate::{
     },
     virtual_log_lines::LogRowKey,
     workspace_state::{
-        AppUpdateState, CloudController, GlobalSearchDocumentResult, GlobalSearchState,
-        PersistenceController, QuickFindBoundary, QuickFindDirection, QuickFindMatch,
-        QuickFindSource, QuickFindState, QuickFindTarget, ResultMode, RetainedGlobalSearchContext,
-        RowViewportAnchor, SearchController, SearchScope, SearchTarget, UpdateController,
-        ViewportAnchor,
+        AppUpdateState, CloudController, GlobalSearchDocumentResult, GlobalSearchResults,
+        GlobalSearchState, PersistenceController, QuickFindBoundary, QuickFindDirection,
+        QuickFindMatch, QuickFindSource, QuickFindState, QuickFindTarget, ResultMode,
+        RetainedGlobalSearchContext, RowViewportAnchor, SearchController, SearchScope,
+        SearchTarget, UpdateController, ViewportAnchor,
     },
 };
 
@@ -3611,11 +3611,7 @@ impl Workspace {
                         if tab.load_state != DocumentLoadState::Ready {
                             return None;
                         }
-                        let result = self
-                            .global_search
-                            .results
-                            .iter()
-                            .find(|result| result.document_id == tab.id);
+                        let result = self.global_search.results.get(&tab.id);
                         let rows = compute_result_rows(
                             self.global_search.result_mode,
                             result.map(|result| &result.search_result),
@@ -3643,7 +3639,7 @@ impl Workspace {
                 let groups = self
                     .global_search
                     .results
-                    .iter()
+                    .values()
                     .filter_map(|result| {
                         let rows = compute_result_rows(
                             self.global_search.result_mode,
@@ -7493,7 +7489,7 @@ impl Workspace {
             .retain(|document_id| !document_ids.contains(document_id));
         self.global_search
             .results
-            .retain(|result| !document_ids.contains(&result.document_id));
+            .retain(|document_id, _| !document_ids.contains(document_id));
         self.reorder_documents_to_match_tabs();
         if !document_ids.is_empty() {
             self.global_search.revision = self.global_search.revision.saturating_add(1);
@@ -7526,14 +7522,6 @@ impl Workspace {
         let tab_id = self.tabs.remove(source_ix);
         self.tabs.insert(insert_ix, tab_id);
         self.reorder_documents_to_match_tabs();
-
-        let document_order = self.documents.iter().map(|tab| tab.id).collect::<Vec<_>>();
-        self.global_search.results.sort_by_key(|result| {
-            document_order
-                .iter()
-                .position(|document_id| *document_id == result.document_id)
-                .unwrap_or(usize::MAX)
-        });
         self.refresh_global_result_rows(cx);
         self.persist_workspace_order(window, cx);
         cx.notify();
@@ -7964,12 +7952,7 @@ impl Workspace {
         let display_title: SharedString = title.clone().into();
         tab.title = display_title.clone();
         tab.custom_title = Some(title.clone());
-        if let Some(result) = self
-            .global_search
-            .results
-            .iter_mut()
-            .find(|result| result.document_id == document_id)
-        {
+        if let Some(result) = self.global_search.results.get_mut(&document_id) {
             result.title = display_title;
         }
         self.refresh_global_result_rows(cx);
@@ -7998,12 +7981,7 @@ impl Workspace {
         let display_title: SharedString = original_title.clone().into();
         tab.title = display_title.clone();
         tab.custom_title = None;
-        if let Some(result) = self
-            .global_search
-            .results
-            .iter_mut()
-            .find(|result| result.document_id == document_id)
-        {
+        if let Some(result) = self.global_search.results.get_mut(&document_id) {
             result.title = display_title;
         }
         self.refresh_global_result_rows(cx);
@@ -8423,8 +8401,7 @@ impl Workspace {
                     .or_else(|| {
                         self.global_search
                             .results
-                            .iter()
-                            .find(|result| result.document_id == document_id)
+                            .get(&document_id)
                             .map(|result| result.document.clone())
                     });
                 let Some(document) = document else {
@@ -9719,11 +9696,7 @@ impl Workspace {
                 .iter()
                 .filter(|tab| self.global_search.selected_documents.contains(&tab.id))
                 .map(|tab| {
-                    let result = self
-                        .global_search
-                        .results
-                        .iter()
-                        .find(|result| result.document_id == tab.id);
+                    let result = self.global_search.results.get(&tab.id);
                     let search_result = result.map(|result| &result.search_result);
                     GlobalSearchGroup {
                         source: crate::global_search_table::GlobalSearchGroupSource {
@@ -9764,7 +9737,7 @@ impl Workspace {
                 self.global_search
                     .results
                     .iter()
-                    .filter_map(|result| {
+                    .filter_map(|(document_id, result)| {
                         let open_tab = self
                             .documents
                             .iter()
@@ -9779,7 +9752,7 @@ impl Workspace {
                         );
                         (!rows.is_empty() || result.failure.is_some()).then(|| GlobalSearchGroup {
                             source: crate::global_search_table::GlobalSearchGroupSource {
-                                document_id: result.document_id,
+                                document_id: *document_id,
                                 title: result.title.clone(),
                                 path: result.path.clone(),
                                 document: result.document.clone(),
@@ -10201,8 +10174,7 @@ impl Workspace {
     ) -> Option<&'a std::path::Path> {
         context
             .results
-            .iter()
-            .find(|result| result.document_id == document_id)
+            .get(&document_id)
             .map(|result| result.path.as_path())
             .or_else(|| {
                 self.documents
@@ -10477,8 +10449,9 @@ impl Workspace {
         self.global_search
             .results
             .iter()
-            .find(|result| Self::persisted_path_matches(&result.path, path))
-            .map(|result| result.document_id)
+            .find_map(|(document_id, result)| {
+                Self::persisted_path_matches(&result.path, path).then_some(*document_id)
+            })
             .or_else(|| {
                 self.documents
                     .iter()
@@ -10808,8 +10781,7 @@ impl Workspace {
         let result_path = self
             .global_search
             .results
-            .iter()
-            .find(|result| result.document_id == document_id)
+            .get(&document_id)
             .map(|result| result.path.clone());
         let document_ix = self.documents.iter().position(|tab| {
             tab.id == document_id
@@ -10855,8 +10827,7 @@ impl Workspace {
         let result_path = self
             .global_search
             .results
-            .iter()
-            .find(|result| result.document_id == document_id)
+            .get(&document_id)
             .map(|result| result.path.clone());
         let document_ix = self.documents.iter().position(|tab| {
             tab.id == document_id
@@ -11169,16 +11140,18 @@ impl Workspace {
                                             Some(error.to_string().into()),
                                         ),
                                     };
-                                    Some(GlobalSearchDocumentResult {
+                                    Some((
                                         document_id,
-                                        title,
-                                        path,
-                                        document,
-                                        search_result,
-                                        failure,
-                                    })
+                                        GlobalSearchDocumentResult {
+                                            title,
+                                            path,
+                                            document,
+                                            search_result,
+                                            failure,
+                                        },
+                                    ))
                                 })
-                                .collect::<Vec<_>>();
+                                .collect::<GlobalSearchResults>();
                             this.record_search_history(&query.text, window, cx);
                             this.global_search.query.text = query.text;
                             this.global_search.query.max_results =
@@ -11393,15 +11366,20 @@ impl Workspace {
                         this.global_search.directory_query = query;
                         this.global_search.results = results
                             .into_iter()
-                            .map(|result| GlobalSearchDocumentResult {
-                                document_id: this
+                            .map(|result| {
+                                let document_id = this
                                     .global_search
-                                    .directory_document_id(&result.path),
-                                title: result.title,
-                                path: result.path,
-                                document: result.document,
-                                search_result: result.search_result,
-                                failure: None,
+                                    .directory_document_id(&result.path);
+                                (
+                                    document_id,
+                                    GlobalSearchDocumentResult {
+                                        title: result.title,
+                                        path: result.path,
+                                        document: result.document,
+                                        search_result: result.search_result,
+                                        failure: None,
+                                    },
+                                )
                             })
                             .collect();
                         this.global_search.matcher = matcher;
@@ -15944,8 +15922,7 @@ impl Workspace {
         let result_path = self
             .global_search
             .results
-            .iter()
-            .find(|result| result.document_id == document_id)
+            .get(&document_id)
             .map(|result| result.path.as_path());
         self.documents.iter().position(|tab| {
             tab.id == document_id
