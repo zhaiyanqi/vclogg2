@@ -12460,7 +12460,7 @@ impl Workspace {
         menu.action_context(workspace.read(cx).focus_handle.clone())
     }
 
-    fn render_title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_title_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _performance_scope = crate::ui_performance::scope("Workspace::render_title_bar");
         let workspace = cx.entity();
         let has_document = self.active_document().is_some();
@@ -12676,6 +12676,11 @@ impl Workspace {
             .dropdown_menu(move |menu, window, cx| {
                 let menu =
                     Self::popup_menu_with_workspace_action_context(menu, &view_workspace, cx);
+                let fullscreen_label = if window.is_fullscreen() {
+                    crate::tr!("退出全屏", "Exit full screen")
+                } else {
+                    crate::tr!("进入全屏", "Enter full screen")
+                };
                 let toggle_auto_follow = {
                     let workspace = view_workspace.clone();
                     window.listener_for(&workspace, |this, _, window, cx| {
@@ -12759,7 +12764,7 @@ impl Workspace {
                 )
                 .separator()
                 .item(
-                    PopupMenuItem::new(crate::tr!("切换全屏", "Toggle full screen"))
+                    PopupMenuItem::new(fullscreen_label)
                         .action(Box::new(ToggleFullscreen))
                         .on_click(toggle_fullscreen),
                 )
@@ -13032,6 +13037,9 @@ impl Workspace {
 
         let colors = ui_theme::palette(cx);
         TitleBar::new()
+            .when(cfg!(target_os = "macos") && window.is_fullscreen(), |bar| {
+                bar.pl_0()
+            })
             .h(px(36.))
             .border_b_0()
             .bg(ui_theme::header_material(&colors))
@@ -17365,21 +17373,24 @@ impl Workspace {
         let table_id = table.entity_id();
         let scrollbar_background = *cx.theme().tokens.table;
         let scrollbar_width = Scrollbar::width();
+        // The horizontal track extends beneath the vertical scrollbar gutter. Model the
+        // same extra width as content so its maximum offset still matches the table viewport.
+        let horizontal_scrollbar_content_width = horizontal_content_width + scrollbar_width;
 
-        let element = h_flex()
+        let element = v_flex()
             .size_full()
             .min_w_0()
             .min_h_0()
             .child(
-                v_flex()
-                    .h_full()
+                h_flex()
+                    .w_full()
                     .flex_1()
                     .min_w_0()
                     .min_h_0()
                     .child(
                         div()
                             .relative()
-                            .w_full()
+                            .h_full()
                             .flex_1()
                             .min_w_0()
                             .min_h_0()
@@ -17396,38 +17407,9 @@ impl Workspace {
                     .child(
                         div()
                             .relative()
-                            .w_full()
-                            .h(scrollbar_width)
+                            .h_full()
+                            .w(scrollbar_width)
                             .flex_none()
-                            .border_t_1()
-                            .border_color(cx.theme().border)
-                            .bg(scrollbar_background)
-                            .child(
-                                persistent_log_scrollbar(
-                                    Scrollbar::horizontal(&horizontal_scroll_handle)
-                                        .id(("log-horizontal-scrollbar", table_id))
-                                        .scroll_size(size(
-                                            horizontal_content_width,
-                                            scrollbar_width,
-                                        ))
-                                        .viewport_from_layout(),
-                                    scrollbar_background,
-                                )
-                                .max_fps(60),
-                            ),
-                    ),
-            )
-            .child(
-                v_flex()
-                    .h_full()
-                    .w(scrollbar_width)
-                    .flex_none()
-                    .child(
-                        div()
-                            .relative()
-                            .w_full()
-                            .flex_1()
-                            .min_h_0()
                             .bg(scrollbar_background)
                             .child(
                                 persistent_log_scrollbar(
@@ -17438,13 +17420,27 @@ impl Workspace {
                                 )
                                 .max_fps(60),
                             ),
-                    )
+                    ),
+            )
+            .child(
+                div()
+                    .relative()
+                    .w_full()
+                    .h(scrollbar_width)
+                    .flex_none()
+                    .bg(scrollbar_background)
                     .child(
-                        div()
-                            .w_full()
-                            .h(scrollbar_width)
-                            .flex_none()
-                            .bg(scrollbar_background),
+                        persistent_log_scrollbar(
+                            Scrollbar::horizontal(&horizontal_scroll_handle)
+                                .id(("log-horizontal-scrollbar", table_id))
+                                .scroll_size(size(
+                                    horizontal_scrollbar_content_width,
+                                    scrollbar_width,
+                                ))
+                                .viewport_from_layout(),
+                            scrollbar_background,
+                        )
+                        .max_fps(60),
                     ),
             );
         crate::ui_performance::element(
@@ -18185,7 +18181,7 @@ impl Render for Workspace {
             .bg(ui_theme::ambient_base(&colors))
             .text_color(cx.theme().foreground)
             .children(ui_theme::ambient_glow_layers(&colors))
-            .child(self.render_title_bar(cx))
+            .child(self.render_title_bar(window, cx))
             .child(self.render_file_toolbar(cx))
             .child(self.render_tabs(has_other_window, cx))
             .child(

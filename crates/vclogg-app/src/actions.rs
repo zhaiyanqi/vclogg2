@@ -152,8 +152,15 @@ pub fn init(cx: &mut App) {
             JumpToEnd,
             Some(WORKSPACE_SHORTCUT_CONTEXT),
         ),
-        KeyBinding::new("f11", ToggleFullscreen, Some(WORKSPACE_SHORTCUT_CONTEXT)),
+        KeyBinding::new("f11", ToggleFullscreen, Some(WORKSPACE_CONTEXT)),
     ]);
+
+    #[cfg(target_os = "macos")]
+    cx.bind_keys([KeyBinding::new(
+        "ctrl-cmd-f",
+        ToggleFullscreen,
+        Some(WORKSPACE_CONTEXT),
+    )]);
 }
 
 pub fn shortcut_to_key_binding(shortcut: &str) -> Option<String> {
