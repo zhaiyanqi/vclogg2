@@ -4864,7 +4864,9 @@ impl Workspace {
         self.global_table.update(cx, |table, cx| {
             table.delegate_mut().update_color_rules(|source| {
                 path_match_map_get(&color_rules_by_path, &source.path)
-                    .filter(|(document, _)| source.document.same_source_snapshot(document))
+                    .filter(|(document, _)| {
+                        result_snapshot_matches_document(&source.path, &source.document, document)
+                    })
                     .map(|(_, color_rules)| color_rules.clone())
                     .unwrap_or_default()
             });
@@ -9748,7 +9750,13 @@ impl Workspace {
                     .filter_map(|(document_id, result)| {
                         let open_tab = path_match_map_get(&open_documents_by_path, &result.path)
                             .copied()
-                            .filter(|tab| result.document.same_source_snapshot(&tab.document));
+                            .filter(|tab| {
+                                result_snapshot_matches_document(
+                                    &result.path,
+                                    &result.document,
+                                    &tab.document,
+                                )
+                            });
                         let marked_rows = open_tab
                             .map(|tab| tab.marked_rows.clone())
                             .unwrap_or_default();
@@ -10826,12 +10834,7 @@ impl Workspace {
             .results
             .get(&document_id)
             .map(|result| result.path.clone());
-        let document_ix = self.documents.iter().position(|tab| {
-            tab.id == document_id
-                || result_path
-                    .as_deref()
-                    .is_some_and(|path| tab.document.path() == path)
-        });
+        let document_ix = self.open_document_ix_for_global_result(document_id);
         let Some(document_ix) = document_ix else {
             let Some(path) = result_path else {
                 return;
@@ -10872,12 +10875,7 @@ impl Workspace {
             .results
             .get(&document_id)
             .map(|result| result.path.clone());
-        let document_ix = self.documents.iter().position(|tab| {
-            tab.id == document_id
-                || result_path
-                    .as_deref()
-                    .is_some_and(|path| tab.document.path() == path)
-        });
+        let document_ix = self.open_document_ix_for_global_result(document_id);
         let Some(document_ix) = document_ix else {
             let Some(path) = result_path else {
                 return;
@@ -15920,21 +15918,23 @@ impl Workspace {
                 )
                 .to_string());
             }
-            let active_ix = self.open_document_ix_for_global_result(document_id).ok_or_else(|| {
-                if self.global_search.scope == SearchScope::Directory {
-                    crate::tr!(
-                        "请先打开目录结果所属文件，再应用颜色标签",
-                        "Open the file containing the directory result before applying a color label"
-                    )
-                    .to_string()
-                } else {
-                    crate::tr!(
-                        "所选结果所属文件已关闭",
-                        "The file containing the selected results has been closed"
-                    )
-                    .to_string()
-                }
-            })?;
+            let active_ix = self
+                .presentation_document_ix_for_global_result(document_id)
+                .ok_or_else(|| {
+                    if self.global_search.scope == SearchScope::Directory {
+                        crate::tr!(
+                            "请重新搜索，或打开与该结果内容一致的文件后再应用颜色标签",
+                            "Search again, or open the same file snapshot before applying a color label"
+                        )
+                        .to_string()
+                    } else {
+                        crate::tr!(
+                            "所选结果所属文件已关闭",
+                            "The file containing the selected results has been closed"
+                        )
+                        .to_string()
+                    }
+                })?;
             let keywords =
                 if let Some(text) = selected_text.map(str::trim).filter(|text| !text.is_empty()) {
                     std::iter::once(text.to_string()).collect()
@@ -15976,6 +15976,16 @@ impl Workspace {
             tab.id == document_id
                 || result_path.is_some_and(|path| paths_match(tab.document.path(), path))
         })
+    }
+
+    fn presentation_document_ix_for_global_result(&self, document_id: u64) -> Option<usize> {
+        let document_ix = self.open_document_ix_for_global_result(document_id)?;
+        let Some(result) = self.global_search.results.get(&document_id) else {
+            return Some(document_ix);
+        };
+        let open_document = &self.documents.get(document_ix)?.document;
+        result_snapshot_matches_document(&result.path, &result.document, open_document)
+            .then_some(document_ix)
     }
 
     fn apply_context_color_label(
@@ -18296,6 +18306,15 @@ fn paths_match(left: &Path, right: &Path) -> bool {
     }
 }
 
+fn result_snapshot_matches_document(
+    result_path: &Path,
+    result_document: &LogDocument,
+    open_document: &LogDocument,
+) -> bool {
+    paths_match(result_path, open_document.path())
+        && result_document.same_source_snapshot(open_document)
+}
+
 #[cfg(test)]
 mod path_match_tests {
     use super::*;
@@ -18317,6 +18336,20 @@ mod path_match_tests {
             cfg!(windows)
         );
         assert_eq!(paths_match(stored, differently_cased), cfg!(windows));
+    }
+
+    #[test]
+    fn result_presentation_state_requires_both_path_and_snapshot_identity() {
+        let stored = Path::new("logs/a.log");
+        let result = LogDocument::placeholder(stored);
+        assert!(result_snapshot_matches_document(stored, &result, &result));
+
+        let other_path = LogDocument::placeholder("logs/b.log");
+        assert!(!result_snapshot_matches_document(
+            stored,
+            &result,
+            &other_path
+        ));
     }
 }
 
