@@ -1589,6 +1589,20 @@ mod tests {
         assert_eq!(delegate.source_row(2), Some(27));
         assert_eq!(delegate.source_row(3), None);
         assert_eq!(
+            delegate.row_ix_for_key(LogRowKey::Row {
+                document_id: 1,
+                source_row: 27,
+            }),
+            Some(2)
+        );
+        assert_eq!(
+            delegate.row_ix_for_key(LogRowKey::Row {
+                document_id: 1,
+                source_row: 8,
+            }),
+            None
+        );
+        assert_eq!(
             delegate
                 .projected_rows()
                 .expect("projected delegate must own the visible rows")

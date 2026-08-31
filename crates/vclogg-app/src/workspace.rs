@@ -16492,26 +16492,20 @@ impl Workspace {
         if viewport.is_wrapped() {
             viewport.wrapped_sizes(table.read(cx).delegate().row_count(), row_height);
         }
-        let fallback_ix = {
-            let table = table.read(cx);
-            match region {
-                WrappedRegion::Results => (0..table.delegate().row_count())
-                    .find(|ix| table.delegate().source_row(*ix) == Some(bookmark.anchor_source_row))
-                    .unwrap_or_default(),
-                _ => tab
-                    .document
-                    .local_row(bookmark.anchor_source_row)
-                    .unwrap_or_default(),
-            }
+        let key = LogRowKey::Row {
+            document_id: tab.id,
+            source_row: bookmark.anchor_source_row,
         };
+        let fallback_ix = table
+            .read(cx)
+            .delegate()
+            .row_ix_for_key(key)
+            .unwrap_or_default();
         Self::restore_local_viewport_anchor(
             tab,
             region,
             Some(ViewportAnchor {
-                key: LogRowKey::Row {
-                    document_id: tab.id,
-                    source_row: bookmark.anchor_source_row,
-                },
+                key,
                 viewport_y: px(bookmark.anchor_viewport_y()),
                 at_end: bookmark.at_end,
                 fallback_ix,
@@ -16573,22 +16567,16 @@ impl Workspace {
         } else {
             (&tab.log_table, &tab.log_viewport)
         };
-        let source_row = match anchor.key {
-            LogRowKey::Row { source_row, .. } => source_row,
-            LogRowKey::FileGroup { .. } => return,
-        };
         let row_ix = {
             let table = table.read(cx);
-            match region {
-                WrappedRegion::Results => (0..table.delegate().row_count())
-                    .find(|ix| table.delegate().source_row(*ix) == Some(source_row)),
-                _ => tab.document.local_row(source_row),
-            }
-            .unwrap_or_else(|| {
-                anchor
-                    .fallback_ix
-                    .min(table.delegate().row_count().saturating_sub(1))
-            })
+            table
+                .delegate()
+                .row_ix_for_key(anchor.key)
+                .unwrap_or_else(|| {
+                    anchor
+                        .fallback_ix
+                        .min(table.delegate().row_count().saturating_sub(1))
+                })
         };
         viewport.restore_viewport(row_ix, anchor.viewport_y, false, row_height);
     }
