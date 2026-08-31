@@ -589,7 +589,7 @@ struct DocumentTab {
     search_revision: u64,
     results_visible: bool,
     restoring_result_selection: bool,
-    marked_rows: BTreeSet<usize>,
+    marked_rows: Arc<BTreeSet<usize>>,
     pending_restore_marked_rows: BTreeSet<usize>,
     keyword_color_rules: Vec<KeywordColorRule>,
     resolved_color_rules: Arc<[ResolvedColorRule]>,
@@ -6378,7 +6378,8 @@ impl Workspace {
                 .collect::<BTreeSet<_>>();
             let result_rows =
                 compute_result_rows(result_mode, Some(&prepared.search_result), &marked_rows);
-            let marked_rows_snapshot = Arc::new(marked_rows.clone());
+            let marked_rows = Arc::new(marked_rows);
+            let marked_rows_snapshot = marked_rows.clone();
             let keyword_color_rules = session.keyword_color_rules.clone();
             let resolved_color_rules =
                 resolve_color_rules(&keyword_color_rules, &self.color_labels);
@@ -6970,23 +6971,23 @@ impl Workspace {
         tab.search_result = prepared.search_result;
         tab.search_matcher = prepared.search_matcher;
         if prepared.load_state == DocumentLoadState::Ready {
-            tab.marked_rows
-                .extend(std::mem::take(&mut tab.pending_restore_marked_rows));
-            tab.marked_rows
-                .retain(|row| *row < tab.document.source_line_count());
+            let marked_rows = Arc::make_mut(&mut tab.marked_rows);
+            marked_rows.extend(std::mem::take(&mut tab.pending_restore_marked_rows));
+            marked_rows.retain(|row| *row < tab.document.source_line_count());
         } else {
-            tab.marked_rows = tab
-                .pending_restore_marked_rows
-                .iter()
-                .copied()
-                .filter(|row| tab.document.contains_source_row(*row))
-                .collect();
+            tab.marked_rows = Arc::new(
+                tab.pending_restore_marked_rows
+                    .iter()
+                    .copied()
+                    .filter(|row| tab.document.contains_source_row(*row))
+                    .collect(),
+            );
         }
         let result_rows = tab.compute_result_rows();
         tab.log_viewport.invalidate_wrapped();
         tab.result_viewport.invalidate_wrapped();
 
-        let marked_rows = Arc::new(tab.marked_rows.clone());
+        let marked_rows = tab.marked_rows.clone();
         tab.log_table.update(cx, |table, cx| {
             table.delegate_mut().replace_with_all(tab.document.clone());
             table.delegate_mut().set_marked_rows(marked_rows.clone());
@@ -7135,14 +7136,13 @@ impl Workspace {
                         tab.search_query.max_results = search_result_limit;
                         tab.search_result = search_result;
                         tab.search_matcher = search_matcher;
-                        tab.marked_rows
-                            .extend(std::mem::take(&mut tab.pending_restore_marked_rows));
-                        tab.marked_rows
-                            .retain(|row| *row < tab.document.line_count());
+                        let marked_rows = Arc::make_mut(&mut tab.marked_rows);
+                        marked_rows.extend(std::mem::take(&mut tab.pending_restore_marked_rows));
+                        marked_rows.retain(|row| *row < tab.document.line_count());
                         let result_rows = tab.compute_result_rows();
                         tab.log_viewport.invalidate_wrapped();
                         tab.result_viewport.invalidate_wrapped();
-                        let marked_rows = Arc::new(tab.marked_rows.clone());
+                        let marked_rows = tab.marked_rows.clone();
                         let selected_result_row = (!follow_end)
                             .then(|| {
                                 selected_source_row
@@ -8876,16 +8876,17 @@ impl Workspace {
                     continue;
                 }
                 if is_marking {
-                    tab.marked_rows.extend(rows.iter().copied());
+                    Arc::make_mut(&mut tab.marked_rows).extend(rows.iter().copied());
                     tab.pending_restore_marked_rows.extend(rows.iter().copied());
                 } else {
+                    let marked_rows = Arc::make_mut(&mut tab.marked_rows);
                     for source_row in &rows {
-                        tab.marked_rows.remove(source_row);
+                        marked_rows.remove(source_row);
                         tab.pending_restore_marked_rows.remove(source_row);
                     }
                 }
                 changed_rows = changed_rows.saturating_add(rows.len());
-                let marked_rows = Arc::new(tab.marked_rows.clone());
+                let marked_rows = tab.marked_rows.clone();
                 tab.log_table.update(cx, |table, cx| {
                     table.delegate_mut().set_marked_rows(marked_rows.clone());
                     table.refresh(cx);
@@ -8951,16 +8952,17 @@ impl Workspace {
                 .iter()
                 .all(|source_row| tab.marked_rows.contains(source_row));
             if is_marking {
-                tab.marked_rows.extend(selected_rows.iter().copied());
+                Arc::make_mut(&mut tab.marked_rows).extend(selected_rows.iter().copied());
                 tab.pending_restore_marked_rows
                     .extend(selected_rows.iter().copied());
             } else {
+                let marked_rows = Arc::make_mut(&mut tab.marked_rows);
                 for source_row in &selected_rows {
-                    tab.marked_rows.remove(source_row);
+                    marked_rows.remove(source_row);
                     tab.pending_restore_marked_rows.remove(source_row);
                 }
             }
-            let marked_rows = Arc::new(tab.marked_rows.clone());
+            let marked_rows = tab.marked_rows.clone();
             tab.log_table.update(cx, |table, cx| {
                 table.delegate_mut().set_marked_rows(marked_rows.clone());
                 table.refresh(cx);
@@ -9747,7 +9749,7 @@ impl Workspace {
                             matched_rows: search_result
                                 .map(|result| result.line_indices.clone())
                                 .unwrap_or_default(),
-                            marked_rows: Arc::new(tab.marked_rows.clone()),
+                            marked_rows: tab.marked_rows.clone(),
                             truncated: search_result.is_some_and(|result| result.truncated)
                                 && self.global_search.result_mode.includes_matches(),
                             failure: result.and_then(|result| result.failure.clone()),
@@ -9788,7 +9790,7 @@ impl Workspace {
                             presentation:
                                 crate::global_search_table::GlobalSearchGroupPresentation {
                                     matched_rows: result.search_result.line_indices.clone(),
-                                    marked_rows: Arc::new(marked_rows),
+                                    marked_rows,
                                     truncated: result.search_result.truncated
                                         && self.global_search.result_mode.includes_matches(),
                                     failure: result.failure.clone(),
