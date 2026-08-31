@@ -17360,7 +17360,6 @@ impl Workspace {
         };
         let table_id = table.entity_id();
         let scrollbar_background = *cx.theme().tokens.table;
-        let horizontal_scrollbar_background = cx.theme().muted;
         let scrollbar_width = Scrollbar::width();
 
         let element = h_flex()
@@ -17398,7 +17397,7 @@ impl Workspace {
                             .flex_none()
                             .border_t_1()
                             .border_color(cx.theme().border)
-                            .bg(horizontal_scrollbar_background)
+                            .bg(scrollbar_background)
                             .child(
                                 persistent_log_scrollbar(
                                     Scrollbar::horizontal(&horizontal_scroll_handle)
@@ -17408,7 +17407,7 @@ impl Workspace {
                                             scrollbar_width,
                                         ))
                                         .viewport_from_layout(),
-                                    horizontal_scrollbar_background,
+                                    scrollbar_background,
                                 )
                                 .max_fps(60),
                             ),
