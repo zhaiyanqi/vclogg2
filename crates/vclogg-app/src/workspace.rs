@@ -1563,7 +1563,7 @@ fn apply_uniform_wheel_line_scroll(
     let current = base_handle.offset();
     let max_y = base_handle.max_offset().y.max(px(0.));
     let current_top = (-current.y).clamp(px(0.), max_y);
-    let current_row = (current_top / row_height).floor().max(0.) as usize;
+    let current_row = row_for_absolute_y(row_count, row_height, &[], current_top);
     let target_row = if delta_y < px(0.) {
         current_row.saturating_add(line_count)
     } else {
