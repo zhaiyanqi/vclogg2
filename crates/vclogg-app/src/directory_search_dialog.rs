@@ -165,15 +165,20 @@ pub fn enumerate_directory_search_paths(
             }
         }
     }
-    paths.sort_by(|left, right| {
-        left.to_string_lossy()
-            .to_lowercase()
-            .cmp(&right.to_string_lossy().to_lowercase())
-    });
+    sort_directory_search_paths(&mut paths);
     Ok(DirectorySearchEnumeration {
         paths,
         unreadable_directory_count,
     })
+}
+
+fn sort_directory_search_paths(paths: &mut [PathBuf]) {
+    paths.sort_by(|left, right| {
+        left.to_string_lossy()
+            .to_lowercase()
+            .cmp(&right.to_string_lossy().to_lowercase())
+            .then_with(|| left.cmp(right))
+    });
 }
 
 fn is_hidden_directory(entry: &std::fs::DirEntry) -> bool {
@@ -448,5 +453,29 @@ impl Render for DirectorySearchDialog {
                     .text_color(cx.theme().muted_foreground)
                     .child(crate::tr!("目录结果按文件分组显示；打开某条结果时才会创建对应日志标签。", "Directory results are grouped by file. A log tab is created only when a result is opened.")),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sort_directory_search_paths;
+    use std::path::PathBuf;
+
+    #[test]
+    fn directory_paths_have_a_deterministic_case_insensitive_order() {
+        let mut paths = ["logs/b.log", "logs/A.log", "logs/a.log", "logs/B.log"]
+            .into_iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>();
+
+        sort_directory_search_paths(&mut paths);
+
+        assert_eq!(
+            paths,
+            ["logs/A.log", "logs/a.log", "logs/B.log", "logs/b.log"]
+                .into_iter()
+                .map(PathBuf::from)
+                .collect::<Vec<_>>()
+        );
     }
 }
