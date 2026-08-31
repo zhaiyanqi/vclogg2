@@ -459,6 +459,14 @@ impl DirectoryDocumentIds {
         self.by_path.insert(path.to_path_buf(), id);
         id
     }
+
+    fn retain_paths(&mut self, paths: &BTreeSet<PathBuf>) {
+        self.by_path.retain(|path, _| paths.contains(path));
+    }
+
+    fn clear(&mut self) {
+        self.by_path.clear();
+    }
 }
 
 impl GlobalSearchState {
@@ -488,6 +496,14 @@ impl GlobalSearchState {
 
     pub(crate) fn directory_document_id(&mut self, path: &Path) -> u64 {
         self.directory_document_ids.id_for_path(path)
+    }
+
+    pub(crate) fn retain_directory_document_paths(&mut self, paths: &BTreeSet<PathBuf>) {
+        self.directory_document_ids.retain_paths(paths);
+    }
+
+    pub(crate) fn clear_directory_document_ids(&mut self) {
+        self.directory_document_ids.clear();
     }
 }
 
@@ -673,6 +689,11 @@ mod state_controller_tests {
         assert_eq!(identities.id_for_path(Path::new("logs/a.log")), first);
         assert_eq!(identities.id_for_path(Path::new("logs/b.log")), second);
         assert!(first >= DIRECTORY_DOCUMENT_ID_BASE);
+
+        identities.retain_paths(&BTreeSet::from([PathBuf::from("logs/b.log")]));
+        assert_eq!(identities.by_path.len(), 1);
+        assert_eq!(identities.id_for_path(Path::new("logs/b.log")), second);
+        assert_ne!(identities.id_for_path(Path::new("logs/a.log")), first);
     }
 
     #[test]

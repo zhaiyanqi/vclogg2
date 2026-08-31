@@ -9625,6 +9625,7 @@ impl Workspace {
         self.global_search.directory_options = options;
         self.global_search.pending_directory_restore = None;
         self.global_search.directory_context = RetainedGlobalSearchContext::default();
+        self.global_search.clear_directory_document_ids();
         if self.global_search.result_scope == Some(SearchScope::Directory) {
             self.global_search.revision = self.global_search.revision.saturating_add(1);
             self.global_search.results_visible = false;
@@ -11042,7 +11043,15 @@ impl Workspace {
         self.record_search_history(&completed.query.text, window, cx);
         match completed.scope {
             SearchScope::AllOpenFiles => self.global_search.query = completed.query,
-            SearchScope::Directory => self.global_search.directory_query = completed.query,
+            SearchScope::Directory => {
+                self.global_search.directory_query = completed.query;
+                let paths = completed
+                    .results
+                    .values()
+                    .map(|result| result.path.clone())
+                    .collect::<BTreeSet<_>>();
+                self.global_search.retain_directory_document_paths(&paths);
+            }
             SearchScope::CurrentFile => {
                 debug_assert!(
                     false,
@@ -11554,6 +11563,7 @@ impl Workspace {
         self.global_search.result_scope = None;
         self.global_search.pending_directory_restore = None;
         self.global_search.directory_context = RetainedGlobalSearchContext::default();
+        self.global_search.clear_directory_document_ids();
         self.refresh_global_result_rows(cx);
         self.reset_search_history_navigation();
         self.close_search_autocomplete();
