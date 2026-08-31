@@ -1,0 +1,67 @@
+[workspace]
+members = [
+    "crates/vclogg-app",
+    "crates/vclogg-core",
+]
+resolver = "2"
+
+[workspace.package]
+authors = ["zhaiyanqi"]
+edition = "2024"
+license = "Apache-2.0"
+version = "2.0.0"
+
+[workspace.dependencies]
+anyhow = "1"
+async-channel = "2"
+chrono = "0.4"
+dirs = "6"
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui-base = { git = "https://github.com/longbridge/gpui-component", rev = "c27f5d5c8f70d534978c2f0739ad9e10d4e41eb4" }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "c27f5d5c8f70d534978c2f0739ad9e10d4e41eb4" }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "c27f5d5c8f70d534978c2f0739ad9e10d4e41eb4" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "runtime_shaders"] }
+keyring = "4.1"
+log = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+rayon = "1.11"
+roaring = "0.11.4"
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+semver = "1"
+sha2 = "0.10"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_System_Pipes",
+    "Win32_UI_Shell",
+] }
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+
+[profile.dev]
+codegen-units = 16
+debug = "limited"
+
+[profile.dev.package]
+gpui = { opt-level = 3 }
+gpui_platform = { opt-level = 3 }
+vclogg-core = { opt-level = 3 }
+taffy = { opt-level = 3 }
+rustybuzz = { opt-level = 3 }
+ttf-parser = { opt-level = 3 }
+
+[profile.release]
+lto = true
+codegen-units = 1
+debug = false
+strip = true

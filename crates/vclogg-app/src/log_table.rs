@@ -1,0 +1,1411 @@
+use std::{
+    cell::{Cell, RefCell},
+    collections::{BTreeMap, BTreeSet},
+    ops::Range,
+    rc::Rc,
+    sync::Arc,
+};
+
+use gpui::{
+    AnyElement, App, Bounds, Context, Div, HighlightStyle, Hsla, InteractiveElement as _,
+    IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Pixels, Point, SharedString,
+    Stateful, Styled as _, StyledText, Window, div, linear_color_stop, linear_gradient, point,
+    prelude::FluentBuilder as _, px,
+};
+use gpui_base::{GlobalState, TextSelection};
+use gpui_component::{
+    ActiveTheme as _, ElementExt as _, h_flex,
+    table::{Column, TableDelegate, TableState},
+    theme::try_parse_color,
+    v_flex,
+};
+use vclogg_core::{CompressedRows, LogDocument, SearchMatcher};
+
+use crate::color_labels::ResolvedColorRule;
+use crate::selectable_log_text::{LogText, SelectableLogText, TextSelectionCache};
+use crate::state_store::{AppSettings, DEFAULT_WORD_BOUNDARY_CHARACTERS, LogFontFamily};
+use crate::ui_theme;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LogSeverity {
+    Error,
+    Warning,
+    Info,
+    Debug,
+}
+
+pub(crate) fn log_cell_horizontal_padding(cx: &App) -> Pixels {
+    cx.theme().spacing_tokens().sm
+}
+
+pub(crate) fn log_line_height(font_size: u16, line_spacing: u16) -> Pixels {
+    px(font_size.saturating_add(line_spacing) as f32)
+}
+
+/// 行号字号按 `clamp(8px, log-font-size - 2px, 18px)` 计算，避免小字号下看不清，
+/// 也避免大字号下喧宾夺主。
+pub(crate) fn line_number_font_size(log_font_size: u16) -> Pixels {
+    px(log_font_size.saturating_sub(2).clamp(8, 18) as f32)
+}
+
+pub(crate) fn log_row_selection_color(cx: &App) -> Hsla {
+    cx.theme().table_active
+}
+
+/// 分隔线使用行内绝对定位的 1px 覆盖层，不参与布局。自动换行时不会把内容撑高，
+/// 固定行高和自动换行也可以复用完全相同的单元格绘制规则。
+pub(crate) fn log_row_separator_overlay(at_top: bool, cx: &App) -> Div {
+    div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .h(px(1.))
+        .bg(cx.theme().border)
+        .map(|line| {
+            if at_top {
+                line.top_0()
+            } else {
+                line.bottom_0()
+            }
+        })
+}
+
+pub(crate) fn log_line_number_cell(
+    source_row: usize,
+    log_font_size: u16,
+    line_height: Pixels,
+    text_color: Hsla,
+    background_color: Hsla,
+    show_separator: bool,
+    cx: &App,
+) -> Div {
+    h_flex()
+        .relative()
+        .justify_end()
+        .px(log_cell_horizontal_padding(cx))
+        .bg(background_color)
+        .text_right()
+        .text_size(line_number_font_size(log_font_size))
+        .line_height(line_height)
+        .text_color(text_color)
+        .when(show_separator, |cell| {
+            cell.child(log_row_separator_overlay(false, cx))
+        })
+        .child((source_row + 1).to_string())
+}
+
+/// 固定行高模式下 `DataTable` 会在固定列组右边缘画一条 1px 竖线，且画在固定列组内部的最后
+/// 1px 上。自动换行模式自己拼行，需要在同一位置补一条一样的线，两种模式才看起来一致。
+pub(crate) fn log_fixed_column_divider_overlay(fixed_columns_width: Pixels, cx: &App) -> Div {
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left(fixed_columns_width - px(1.))
+        .w(px(1.))
+        .bg(cx.theme().border)
+}
+
+pub(crate) fn log_row_selection_overlay(
+    show_top_border: bool,
+    show_bottom_border: bool,
+    cx: &App,
+) -> Div {
+    div()
+        .absolute()
+        .inset_0()
+        .when(show_top_border, |overlay| overlay.border_t_1())
+        .when(show_bottom_border, |overlay| overlay.border_b_1())
+        .border_color(cx.theme().table_active_border)
+}
+
+pub(crate) fn detect_log_severity(text: &str) -> Option<LogSeverity> {
+    let contains_any = |candidates: &[&str]| {
+        text.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+            .any(|word| {
+                candidates
+                    .iter()
+                    .any(|candidate| word.eq_ignore_ascii_case(candidate))
+            })
+    };
+    if contains_any(&["FATAL", "ERROR", "CRITICAL", "SEVERE"]) {
+        Some(LogSeverity::Error)
+    } else if contains_any(&["WARN", "WARNING"]) {
+        Some(LogSeverity::Warning)
+    } else if contains_any(&["INFO", "NOTICE"]) {
+        Some(LogSeverity::Info)
+    } else if contains_any(&["DEBUG", "TRACE", "VERBOSE"]) {
+        Some(LogSeverity::Debug)
+    } else {
+        None
+    }
+}
+
+/// 级别着色使用「整行实色底 + 最左侧 3px 色条」。
+#[derive(Clone, Copy)]
+pub(crate) struct SeverityStyle {
+    pub(crate) background: Hsla,
+    pub(crate) accent: Hsla,
+}
+
+pub(crate) fn severity_style(text: &str, cx: &App) -> Option<SeverityStyle> {
+    let colors = ui_theme::palette(cx);
+    detect_log_severity(text).map(|severity| match severity {
+        LogSeverity::Error => SeverityStyle {
+            background: colors.severity_error_background,
+            accent: colors.severity_error_accent,
+        },
+        LogSeverity::Warning => SeverityStyle {
+            background: colors.severity_warning_background,
+            accent: colors.severity_warning_accent,
+        },
+        LogSeverity::Info => SeverityStyle {
+            background: colors.severity_info_background,
+            accent: colors.severity_info_accent,
+        },
+        LogSeverity::Debug => SeverityStyle {
+            background: colors.severity_debug_background,
+            accent: colors.severity_debug_accent,
+        },
+    })
+}
+
+/// 级别色条使用不占布局的绝对定位覆盖层，挂在标记列上即可贴住行的左缘。
+pub(crate) fn severity_accent_overlay(accent: Hsla) -> Div {
+    div()
+        .absolute()
+        .left_0()
+        .top_0()
+        .bottom_0()
+        .w(px(3.))
+        .bg(accent)
+}
+
+pub(crate) fn message_column_width(
+    max_columns: usize,
+    font_family: SharedString,
+    font_size: u16,
+    cx: &App,
+) -> gpui::Pixels {
+    let em = px(font_size as f32);
+    let font_id = cx.text_system().resolve_font(&gpui::font(font_family));
+    let column_advance = cx
+        .text_system()
+        .ch_advance(font_id, em)
+        .unwrap_or(em * 0.62);
+    (column_advance * max_columns as f32 + em * 4.).max(em * 24.)
+}
+
+pub(crate) fn line_marker_column_width() -> Pixels {
+    // Keep the marker gutter fixed instead of scaling it with the configurable log font.
+    px(22.)
+}
+
+pub(crate) fn line_marker(marked: bool, matched: bool, cx: &App) -> AnyElement {
+    let colors = ui_theme::palette(cx);
+    let dot_border = if marked {
+        colors.marker_marked_border
+    } else if matched {
+        colors.marker_matched_border
+    } else {
+        colors.marker_border
+    };
+    let dot = h_flex()
+        .size(px(8.))
+        .overflow_hidden()
+        .rounded_full()
+        .border_1()
+        .border_color(dot_border)
+        .when(!marked && !matched, |dot| dot.bg(colors.surface))
+        .when(marked && !matched, |dot| dot.bg(colors.marker_marked))
+        .when(matched && !marked, |dot| dot.bg(colors.marker_matched))
+        .when(marked && matched, |dot| {
+            dot.bg(linear_gradient(
+                135.,
+                linear_color_stop(colors.marker_matched, 0.5),
+                linear_color_stop(colors.marker_marked, 0.5),
+            ))
+        });
+    h_flex()
+        .size(px(12.))
+        .justify_center()
+        .rounded_full()
+        .when(matched && !marked, |halo| {
+            halo.bg(colors.marker_matched.opacity(0.10))
+        })
+        .when(marked, |halo| halo.bg(colors.marker_marked.opacity(0.18)))
+        .child(dot)
+        .into_any_element()
+}
+
+/// 命中与标记的正文高亮使用实色底配深色文字，背景与前景必须成对给出，
+/// 避免深色主题下出现浅底浅字。
+pub(crate) fn text_highlight_style(highlight: TextHighlight, cx: &App) -> HighlightStyle {
+    let colors = ui_theme::palette(cx);
+    let (background, foreground) = match highlight {
+        // 颜色标签由用户挑选，统一使用近黑文字保证可读。
+        TextHighlight::Color(color) => (color, gpui::rgb(0x141414).into()),
+        TextHighlight::Search => (colors.search_match, colors.search_match_foreground),
+        TextHighlight::QuickFind => (colors.quick_find, colors.quick_find_foreground),
+    };
+    HighlightStyle {
+        background_color: Some(background),
+        color: Some(foreground),
+        ..Default::default()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum TextHighlight {
+    Color(gpui::Hsla),
+    Search,
+    QuickFind,
+}
+
+#[derive(Clone)]
+pub enum VisibleRows {
+    All,
+    Matches(CompressedRows),
+}
+
+#[derive(Default)]
+pub(crate) struct RowSelection {
+    ranges: Vec<(usize, usize)>,
+    anchor: Option<usize>,
+    pending_pointer_row: Option<usize>,
+    pointer_drag_anchor: Option<usize>,
+    pointer_drag_additive: bool,
+    pointer_drag_base_ranges: Vec<(usize, usize)>,
+    pointer_restore_ranges: Vec<(usize, usize)>,
+    pointer_restore_anchor: Option<usize>,
+    pointer_text_selection_allowed: bool,
+}
+
+pub(crate) trait LogTableCursor {
+    fn active_log_row(&self) -> Option<usize>;
+    fn set_active_log_row(&self, row_ix: Option<usize>);
+    fn suppress_next_table_clear(&self);
+    fn take_suppressed_table_clear(&self) -> bool;
+}
+
+pub(crate) trait LogTableStateExt {
+    fn active_log_row(&self) -> Option<usize>;
+    fn set_active_log_row(&mut self, row_ix: usize, cx: &mut Context<Self>)
+    where
+        Self: Sized;
+    fn log_row_viewport_y(&self, row_ix: usize, row_height: Pixels) -> Pixels;
+    fn scroll_log_row_to_viewport_y(&self, row_ix: usize, viewport_y: Pixels, row_height: Pixels);
+}
+
+fn uniform_log_row_viewport_y(
+    handle: &gpui::UniformListScrollHandle,
+    row_ix: usize,
+    row_height: Pixels,
+) -> Pixels {
+    row_height * row_ix as f32 + handle.0.borrow().base_handle.offset().y
+}
+
+fn scroll_uniform_log_row_to_viewport_y(
+    handle: &gpui::UniformListScrollHandle,
+    row_ix: usize,
+    viewport_y: Pixels,
+    row_height: Pixels,
+) {
+    let base_handle = {
+        let mut state = handle.0.borrow_mut();
+        state.deferred_scroll_to_item = None;
+        state.base_handle.clone()
+    };
+    let top = (row_height * row_ix as f32 - viewport_y).max(px(0.));
+    base_handle.set_offset(point(base_handle.offset().x, -top));
+}
+
+impl<D> LogTableStateExt for TableState<D>
+where
+    D: TableDelegate + LogTableCursor,
+{
+    fn active_log_row(&self) -> Option<usize> {
+        self.delegate().active_log_row()
+    }
+
+    fn set_active_log_row(&mut self, row_ix: usize, cx: &mut Context<Self>) {
+        self.delegate().set_active_log_row(Some(row_ix));
+        self.delegate().suppress_next_table_clear();
+        self.set_selected_row(row_ix, cx);
+        self.clear_selection(cx);
+    }
+
+    fn log_row_viewport_y(&self, row_ix: usize, row_height: Pixels) -> Pixels {
+        uniform_log_row_viewport_y(&self.vertical_scroll_handle, row_ix, row_height)
+    }
+
+    fn scroll_log_row_to_viewport_y(&self, row_ix: usize, viewport_y: Pixels, row_height: Pixels) {
+        scroll_uniform_log_row_to_viewport_y(
+            &self.vertical_scroll_handle,
+            row_ix,
+            viewport_y,
+            row_height,
+        );
+    }
+}
+
+impl RowSelection {
+    pub(crate) fn contains(&self, row_ix: usize) -> bool {
+        self.ranges
+            .iter()
+            .any(|(start, end)| *start <= row_ix && row_ix <= *end)
+    }
+
+    pub(crate) fn count(&self) -> usize {
+        self.ranges.iter().fold(0_usize, |count, (start, end)| {
+            count.saturating_add(end.saturating_sub(*start).saturating_add(1))
+        })
+    }
+
+    fn replace_with(&mut self, start: usize, end: usize) {
+        self.ranges.clear();
+        self.ranges.push(ordered_range(start, end));
+    }
+
+    fn add_range(&mut self, start: usize, end: usize) {
+        let (mut start, mut end) = ordered_range(start, end);
+        let mut merged = Vec::with_capacity(self.ranges.len().saturating_add(1));
+        let mut inserted = false;
+
+        for (range_start, range_end) in self.ranges.drain(..) {
+            if range_end.saturating_add(1) < start {
+                merged.push((range_start, range_end));
+            } else if end.saturating_add(1) < range_start {
+                if !inserted {
+                    merged.push((start, end));
+                    inserted = true;
+                }
+                merged.push((range_start, range_end));
+            } else {
+                start = start.min(range_start);
+                end = end.max(range_end);
+            }
+        }
+        if !inserted {
+            merged.push((start, end));
+        }
+        self.ranges = merged;
+    }
+
+    fn toggle(&mut self, row_ix: usize) {
+        let Some(range_ix) = self
+            .ranges
+            .iter()
+            .position(|(start, end)| *start <= row_ix && row_ix <= *end)
+        else {
+            self.add_range(row_ix, row_ix);
+            return;
+        };
+        let (start, end) = self.ranges.remove(range_ix);
+        if start < row_ix {
+            self.ranges.insert(range_ix, (start, row_ix - 1));
+        }
+        if row_ix < end {
+            let insert_ix = range_ix + usize::from(start < row_ix);
+            self.ranges.insert(insert_ix, (row_ix + 1, end));
+        }
+    }
+
+    pub(crate) fn begin_pointer_selection(
+        &mut self,
+        row_ix: usize,
+        control: bool,
+        shift: bool,
+        click_count: usize,
+    ) {
+        let allow_drag = click_count == 1;
+        self.pending_pointer_row = Some(row_ix);
+        let drag_anchor = if shift {
+            self.anchor.unwrap_or(row_ix)
+        } else {
+            row_ix
+        };
+        if click_count >= 3 && !control && !shift {
+            self.replace_with(row_ix, row_ix);
+            self.anchor = Some(row_ix);
+        } else if shift {
+            let anchor = self.anchor.unwrap_or(row_ix);
+            if control {
+                self.add_range(anchor, row_ix);
+            } else {
+                self.replace_with(anchor, row_ix);
+            }
+        } else if control {
+            self.toggle(row_ix);
+            self.anchor = Some(row_ix);
+        } else {
+            self.replace_with(row_ix, row_ix);
+            self.anchor = Some(row_ix);
+        }
+        self.pointer_drag_anchor = allow_drag.then_some(drag_anchor);
+        self.pointer_drag_additive = allow_drag && control;
+        self.pointer_drag_base_ranges = self.ranges.clone();
+        self.pointer_restore_ranges = self.ranges.clone();
+        self.pointer_restore_anchor = self.anchor;
+        self.pointer_text_selection_allowed = allow_drag && !control && !shift;
+    }
+
+    pub(crate) fn extend_pointer_selection(&mut self, row_ix: usize) {
+        let Some(anchor) = self.pointer_drag_anchor else {
+            return;
+        };
+        self.pending_pointer_row = Some(row_ix);
+        if self.pointer_drag_additive {
+            self.ranges.clone_from(&self.pointer_drag_base_ranges);
+            self.add_range(anchor, row_ix);
+        } else {
+            self.replace_with(anchor, row_ix);
+        }
+    }
+
+    pub(crate) fn restore_pointer_selection(&mut self) {
+        if self.pointer_drag_anchor.is_none() {
+            return;
+        }
+        self.ranges.clone_from(&self.pointer_restore_ranges);
+        self.anchor = self.pointer_restore_anchor;
+        self.pending_pointer_row = self.pointer_drag_anchor;
+    }
+
+    pub(crate) fn end_pointer_selection(&mut self) {
+        self.pending_pointer_row = None;
+        self.pointer_drag_anchor = None;
+        self.pointer_drag_additive = false;
+        self.pointer_drag_base_ranges.clear();
+        self.pointer_restore_ranges.clear();
+        self.pointer_restore_anchor = None;
+        self.pointer_text_selection_allowed = false;
+    }
+
+    pub(crate) fn settle_table_selection(&mut self, row_ix: usize) {
+        if self.pending_pointer_row.take() != Some(row_ix) {
+            self.replace_with(row_ix, row_ix);
+            self.anchor = Some(row_ix);
+        }
+    }
+
+    pub(crate) fn prepare_context_selection(&mut self, row_ix: usize) {
+        if !self.contains(row_ix) {
+            self.replace_with(row_ix, row_ix);
+            self.anchor = Some(row_ix);
+        }
+        self.pending_pointer_row = Some(row_ix);
+    }
+
+    pub(crate) fn extend_keyboard_selection(&mut self, row_ix: usize) {
+        let anchor = self.anchor.unwrap_or(row_ix);
+        self.replace_with(anchor, row_ix);
+        self.pending_pointer_row = Some(row_ix);
+    }
+
+    pub(crate) fn is_pointer_selecting(&self) -> bool {
+        self.pointer_drag_anchor.is_some()
+    }
+
+    pub(crate) fn pointer_drag_anchor(&self) -> Option<usize> {
+        self.pointer_drag_anchor
+    }
+
+    pub(crate) fn is_text_selection_allowed(&self) -> bool {
+        self.pointer_text_selection_allowed
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.ranges.clear();
+        self.anchor = None;
+        self.pending_pointer_row = None;
+        self.pointer_drag_anchor = None;
+        self.pointer_drag_additive = false;
+        self.pointer_drag_base_ranges.clear();
+        self.pointer_restore_ranges.clear();
+        self.pointer_restore_anchor = None;
+        self.pointer_text_selection_allowed = false;
+    }
+
+    pub(crate) fn select_all(&mut self, row_count: usize) {
+        if row_count == 0 {
+            self.clear();
+        } else {
+            self.replace_with(0, row_count - 1);
+            self.anchor = Some(0);
+        }
+    }
+
+    pub(crate) fn selected_indices(&self, row_count: usize) -> impl Iterator<Item = usize> + '_ {
+        self.ranges
+            .iter()
+            .flat_map(move |(start, end)| *start..=(*end).min(row_count.saturating_sub(1)))
+    }
+
+    pub(crate) fn selected_ranges(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.ranges.iter().copied()
+    }
+
+    pub(crate) fn replace_indices(&mut self, indices: impl IntoIterator<Item = usize>) {
+        self.clear();
+        for row_ix in indices {
+            match self.ranges.last_mut() {
+                Some((_, end)) if end.saturating_add(1) == row_ix => *end = row_ix,
+                _ => self.ranges.push((row_ix, row_ix)),
+            }
+        }
+        self.anchor = self.ranges.first().map(|(start, _)| *start);
+    }
+}
+
+fn ordered_range(first: usize, second: usize) -> (usize, usize) {
+    (first.min(second), first.max(second))
+}
+
+pub(crate) fn combined_match_ranges(
+    text: &str,
+    color_rules: &[ResolvedColorRule],
+    search_matcher: Option<&SearchMatcher>,
+    quick_find_matcher: Option<&SearchMatcher>,
+) -> Vec<(Range<usize>, TextHighlight)> {
+    #[derive(Clone, Copy)]
+    struct Candidate {
+        start: usize,
+        end: usize,
+        priority: usize,
+        highlight: TextHighlight,
+    }
+
+    let mut color_matches = color_rules
+        .iter()
+        .enumerate()
+        .flat_map(|(order, rule)| {
+            rule.ranges(text)
+                .into_iter()
+                .map(move |range| (range, rule.color(), order))
+        })
+        .collect::<Vec<_>>();
+    color_matches.sort_by(|(left, _, left_order), (right, _, right_order)| {
+        left.start
+            .cmp(&right.start)
+            .then_with(|| right.len().cmp(&left.len()))
+            .then_with(|| right_order.cmp(left_order))
+    });
+
+    let quick_ranges = quick_find_matcher
+        .map(|matcher| matcher.matching_ranges(text))
+        .unwrap_or_default();
+    let mut candidates = quick_ranges
+        .into_iter()
+        .map(|range| Candidate {
+            start: range.start,
+            end: range.end,
+            priority: 0,
+            highlight: TextHighlight::QuickFind,
+        })
+        .collect::<Vec<_>>();
+    candidates.extend(color_matches.into_iter().enumerate().map(
+        |(priority, (range, color, _))| Candidate {
+            start: range.start,
+            end: range.end,
+            priority: priority + 1,
+            highlight: TextHighlight::Color(color),
+        },
+    ));
+    let search_priority = candidates.len().saturating_add(1);
+    let search_ranges = search_matcher
+        .map(|matcher| matcher.matching_ranges(text))
+        .unwrap_or_default();
+    candidates.extend(search_ranges.into_iter().map(|range| Candidate {
+        start: range.start,
+        end: range.end,
+        priority: search_priority,
+        highlight: TextHighlight::Search,
+    }));
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    let mut boundaries = candidates
+        .iter()
+        .flat_map(|candidate| [candidate.start, candidate.end])
+        .collect::<Vec<_>>();
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    let mut ranges: Vec<(Range<usize>, TextHighlight)> = Vec::new();
+    for boundary in boundaries.windows(2) {
+        let start = boundary[0];
+        let end = boundary[1];
+        let Some(owner) = candidates
+            .iter()
+            .filter(|candidate| candidate.start <= start && candidate.end >= end)
+            .min_by_key(|candidate| candidate.priority)
+        else {
+            continue;
+        };
+        if let Some((previous, highlight)) = ranges.last_mut()
+            && previous.end == start
+            && *highlight == owner.highlight
+        {
+            previous.end = end;
+        } else {
+            ranges.push((start..end, owner.highlight));
+        }
+    }
+    ranges
+}
+
+pub struct LogTableDelegate {
+    document_id: u64,
+    document: Arc<LogDocument>,
+    rows: VisibleRows,
+    marked_rows: Arc<BTreeSet<usize>>,
+    empty_message: SharedString,
+    show_line_numbers: bool,
+    show_row_separators: bool,
+    highlight_log_levels: bool,
+    log_font_family: LogFontFamily,
+    log_font_size: u16,
+    log_line_spacing: u16,
+    line_number_width: u16,
+    line_number_text_color: Option<Hsla>,
+    line_number_background_color: Option<Hsla>,
+    show_line_number_row_separators: bool,
+    search_matcher: Option<SearchMatcher>,
+    matched_rows: CompressedRows,
+    quick_find_matcher: Option<SearchMatcher>,
+    color_rules: Arc<[ResolvedColorRule]>,
+    text_selections: TextSelectionCache<usize>,
+    suppress_text_selection: bool,
+    word_boundary_characters: SharedString,
+    overscan: usize,
+    row_cache: RefCell<BTreeMap<usize, CachedLogRowPresentation>>,
+    row_cache_window: Cell<Option<(usize, usize)>>,
+    row_selection: Rc<RefCell<RowSelection>>,
+    active_row: Cell<Option<usize>>,
+    suppress_table_clear: Cell<bool>,
+    row_bounds: Rc<RefCell<BTreeMap<usize, Bounds<Pixels>>>>,
+}
+
+#[derive(Clone)]
+struct CachedLogRowPresentation {
+    text: LogText,
+    highlights: Arc<[(Range<usize>, TextHighlight)]>,
+}
+
+pub(crate) struct WrappedLogRow {
+    pub source_row: usize,
+    pub text: LogText,
+    pub selected: bool,
+    pub marked: bool,
+    pub matched: bool,
+    pub highlight_severity: bool,
+    pub highlights: Arc<[(Range<usize>, TextHighlight)]>,
+}
+
+impl LogTableDelegate {
+    pub fn all(document_id: u64, document: Arc<LogDocument>) -> Self {
+        Self {
+            document_id,
+            document,
+            rows: VisibleRows::All,
+            marked_rows: Arc::default(),
+            empty_message: crate::tr!("文件中没有日志行", "The file has no log lines").into(),
+            show_line_numbers: true,
+            show_row_separators: false,
+            highlight_log_levels: false,
+            log_font_family: LogFontFamily::default(),
+            log_font_size: 13,
+            log_line_spacing: 6,
+            line_number_width: 60,
+            line_number_text_color: None,
+            line_number_background_color: None,
+            show_line_number_row_separators: false,
+            search_matcher: None,
+            matched_rows: CompressedRows::default(),
+            quick_find_matcher: None,
+            color_rules: Arc::default(),
+            text_selections: TextSelectionCache::default(),
+            suppress_text_selection: false,
+            word_boundary_characters: DEFAULT_WORD_BOUNDARY_CHARACTERS.into(),
+            overscan: 12,
+            row_cache: RefCell::default(),
+            row_cache_window: Cell::default(),
+            row_selection: Rc::default(),
+            active_row: Cell::default(),
+            suppress_table_clear: Cell::default(),
+            row_bounds: Rc::default(),
+        }
+    }
+
+    pub fn matches(
+        document_id: u64,
+        document: Arc<LogDocument>,
+        line_indices: CompressedRows,
+    ) -> Self {
+        Self {
+            document_id,
+            document,
+            rows: VisibleRows::Matches(line_indices),
+            marked_rows: Arc::default(),
+            empty_message: crate::tr!("没有匹配的日志行", "No log lines match").into(),
+            show_line_numbers: true,
+            show_row_separators: false,
+            highlight_log_levels: false,
+            log_font_family: LogFontFamily::default(),
+            log_font_size: 13,
+            log_line_spacing: 6,
+            line_number_width: 60,
+            line_number_text_color: None,
+            line_number_background_color: None,
+            show_line_number_row_separators: false,
+            search_matcher: None,
+            matched_rows: CompressedRows::default(),
+            quick_find_matcher: None,
+            color_rules: Arc::default(),
+            text_selections: TextSelectionCache::default(),
+            suppress_text_selection: false,
+            word_boundary_characters: DEFAULT_WORD_BOUNDARY_CHARACTERS.into(),
+            overscan: 12,
+            row_cache: RefCell::default(),
+            row_cache_window: Cell::default(),
+            row_selection: Rc::default(),
+            active_row: Cell::default(),
+            suppress_table_clear: Cell::default(),
+            row_bounds: Rc::default(),
+        }
+    }
+
+    pub fn set_matches(&mut self, line_indices: CompressedRows) {
+        self.rows = VisibleRows::Matches(line_indices);
+        self.row_cache.get_mut().clear();
+        self.row_cache_window.set(None);
+        self.row_bounds.borrow_mut().clear();
+        self.row_selection.borrow_mut().clear();
+        self.active_row.set(None);
+    }
+
+    pub fn set_marked_rows(&mut self, marked_rows: Arc<BTreeSet<usize>>) {
+        self.marked_rows = marked_rows;
+    }
+
+    pub fn set_view_options(&mut self, show_line_numbers: bool, show_row_separators: bool) {
+        self.show_line_numbers = show_line_numbers;
+        self.show_row_separators = show_row_separators;
+    }
+
+    pub fn set_highlight_log_levels(&mut self, enabled: bool) {
+        self.highlight_log_levels = enabled;
+    }
+
+    pub fn set_appearance(&mut self, settings: &AppSettings) {
+        self.log_font_family = settings.log_font_family;
+        self.log_font_size = settings.log_font_size.clamp(8, 32);
+        self.log_line_spacing = settings.log_line_spacing.clamp(1, 40);
+        self.line_number_width = settings.line_number_width.clamp(40, 160);
+        self.line_number_text_color = settings
+            .line_number_text_color
+            .as_deref()
+            .and_then(|value| try_parse_color(value).ok());
+        self.line_number_background_color = settings
+            .line_number_background_color
+            .as_deref()
+            .and_then(|value| try_parse_color(value).ok());
+        self.show_line_number_row_separators = settings.show_line_number_row_separators;
+        self.overscan = usize::from(settings.viewer_overscan.clamp(4, 40));
+        self.row_cache_window.set(None);
+    }
+
+    pub fn set_word_boundary_characters(&mut self, characters: impl Into<SharedString>) {
+        self.word_boundary_characters = characters.into();
+    }
+
+    pub(crate) fn resolved_font_family(&self, cx: &App) -> SharedString {
+        match self.log_font_family {
+            LogFontFamily::CascadiaMono => "Cascadia Mono".into(),
+            LogFontFamily::JetBrainsMono => "JetBrains Mono".into(),
+            LogFontFamily::Consolas => "Consolas".into(),
+            LogFontFamily::SystemMonospace => cx.theme().mono_font_family.clone(),
+        }
+    }
+
+    pub fn set_search_matcher(&mut self, search_matcher: Option<SearchMatcher>) {
+        self.search_matcher = search_matcher;
+        self.row_cache.get_mut().clear();
+        self.row_cache_window.set(None);
+    }
+
+    pub fn set_matched_rows(&mut self, matched_rows: CompressedRows) {
+        self.matched_rows = matched_rows;
+    }
+
+    pub fn set_quick_find_matcher(&mut self, quick_find_matcher: Option<SearchMatcher>) {
+        self.quick_find_matcher = quick_find_matcher;
+        self.row_cache.get_mut().clear();
+        self.row_cache_window.set(None);
+    }
+
+    pub fn set_color_rules(&mut self, color_rules: Arc<[ResolvedColorRule]>) {
+        self.color_rules = color_rules;
+        self.row_cache.get_mut().clear();
+        self.row_cache_window.set(None);
+    }
+
+    pub fn replace_with_all(&mut self, document: Arc<LogDocument>) {
+        self.document = document;
+        self.rows = VisibleRows::All;
+        self.row_cache.get_mut().clear();
+        self.row_cache_window.set(None);
+        self.text_selections.clear();
+        self.row_selection.borrow_mut().clear();
+    }
+
+    pub fn replace_with_matches(
+        &mut self,
+        document: Arc<LogDocument>,
+        line_indices: CompressedRows,
+    ) {
+        self.document = document;
+        self.rows = VisibleRows::Matches(line_indices);
+        self.row_cache.get_mut().clear();
+        self.row_cache_window.set(None);
+        self.text_selections.clear();
+        self.row_selection.borrow_mut().clear();
+    }
+
+    pub fn source_row(&self, row_ix: usize) -> Option<usize> {
+        match &self.rows {
+            VisibleRows::All => self.document.source_row(row_ix),
+            VisibleRows::Matches(line_indices) => line_indices.get(row_ix),
+        }
+    }
+
+    pub(crate) fn wrapped_row(&self, row_ix: usize) -> Option<WrappedLogRow> {
+        let source_row = self.source_row(row_ix)?;
+        let presentation = self.cached_presentation(source_row)?;
+        Some(WrappedLogRow {
+            source_row,
+            selected: self.row_selection.borrow().contains(row_ix),
+            marked: self.marked_rows.contains(&source_row),
+            matched: self.matched_rows.contains(source_row),
+            highlight_severity: self.highlight_log_levels,
+            highlights: presentation.highlights,
+            text: presentation.text,
+        })
+    }
+
+    pub(crate) fn prefetch_rows(&self, visible_range: Range<usize>) {
+        let row_count = self.row_count();
+        let start = visible_range.start.saturating_sub(self.overscan);
+        let end = visible_range
+            .end
+            .saturating_add(self.overscan)
+            .min(row_count);
+        if self.row_cache_window.replace(Some((start, end))) == Some((start, end)) {
+            return;
+        }
+        let desired_rows = (start..end)
+            .filter_map(|row_ix| self.source_row(row_ix))
+            .collect::<BTreeSet<_>>();
+        self.row_cache
+            .borrow_mut()
+            .retain(|source_row, _| desired_rows.contains(source_row));
+        for source_row in desired_rows {
+            if !self.row_cache.borrow().contains_key(&source_row) {
+                _ = self.cached_presentation(source_row);
+            }
+        }
+    }
+
+    fn cached_line(&self, source_row: usize) -> Option<SharedString> {
+        self.cached_presentation(source_row)
+            .map(|presentation| presentation.text.source().clone())
+    }
+
+    fn cached_presentation(&self, source_row: usize) -> Option<CachedLogRowPresentation> {
+        if let Some(presentation) = self.row_cache.borrow().get(&source_row).cloned() {
+            return Some(presentation);
+        }
+        let line: SharedString = self.document.line(source_row)?.into();
+        let source_highlights = combined_match_ranges(
+            &line,
+            &self.color_rules,
+            self.search_matcher.as_ref(),
+            self.quick_find_matcher.as_ref(),
+        );
+        let text = LogText::new(line);
+        let presentation = CachedLogRowPresentation {
+            highlights: source_highlights
+                .into_iter()
+                .filter_map(|(range, highlight)| {
+                    text.display_range(range).map(|range| (range, highlight))
+                })
+                .collect(),
+            text,
+        };
+        self.row_cache
+            .borrow_mut()
+            .insert(source_row, presentation.clone());
+        Some(presentation)
+    }
+
+    pub(crate) fn begin_pointer_selection(
+        &self,
+        row_ix: usize,
+        control: bool,
+        shift: bool,
+        click_count: usize,
+    ) {
+        self.row_selection.borrow_mut().begin_pointer_selection(
+            row_ix,
+            control,
+            shift,
+            click_count,
+        );
+    }
+
+    pub(crate) fn prepare_context_selection(&self, row_ix: usize) {
+        self.row_selection
+            .borrow_mut()
+            .prepare_context_selection(row_ix);
+    }
+
+    pub(crate) fn extend_keyboard_selection(&self, row_ix: usize) {
+        self.row_selection
+            .borrow_mut()
+            .extend_keyboard_selection(row_ix);
+    }
+
+    pub(crate) fn extend_pointer_selection(&self, row_ix: usize) {
+        self.row_selection
+            .borrow_mut()
+            .extend_pointer_selection(row_ix);
+    }
+
+    pub(crate) fn restore_pointer_selection(&self) {
+        self.row_selection.borrow_mut().restore_pointer_selection();
+    }
+
+    pub(crate) fn end_pointer_selection(&self) {
+        self.row_selection.borrow_mut().end_pointer_selection();
+    }
+
+    pub(crate) fn is_pointer_selecting(&self) -> bool {
+        self.row_selection.borrow().pointer_drag_anchor.is_some()
+    }
+
+    pub(crate) fn pointer_drag_anchor(&self) -> Option<usize> {
+        self.row_selection.borrow().pointer_drag_anchor
+    }
+
+    pub(crate) fn pointer_text_selection_allowed(&self) -> bool {
+        self.row_selection.borrow().pointer_text_selection_allowed
+    }
+
+    pub(crate) fn row_at_position(&self, position: Point<Pixels>) -> Option<usize> {
+        self.row_bounds
+            .borrow()
+            .iter()
+            .find_map(|(row_ix, bounds)| bounds.contains(&position).then_some(*row_ix))
+    }
+
+    pub(crate) fn visible_row_edge(&self, after: bool) -> Option<usize> {
+        let bounds = self.row_bounds.borrow();
+        if after {
+            bounds.keys().next_back().copied()
+        } else {
+            bounds.keys().next().copied()
+        }
+    }
+
+    pub(crate) fn set_text_selection_suppressed(&mut self, suppressed: bool) {
+        self.suppress_text_selection = suppressed;
+    }
+
+    pub(crate) fn show_line_numbers(&self) -> bool {
+        self.show_line_numbers
+    }
+
+    pub(crate) fn show_row_separators(&self) -> bool {
+        self.show_row_separators
+    }
+
+    pub(crate) fn line_number_width(&self) -> u16 {
+        self.line_number_width
+    }
+
+    pub(crate) fn line_number_text_color(&self, cx: &App) -> Hsla {
+        self.line_number_text_color
+            .unwrap_or_else(|| ui_theme::palette(cx).line_number)
+    }
+
+    pub(crate) fn line_number_background_color(&self, cx: &App) -> Hsla {
+        self.line_number_background_color
+            .unwrap_or_else(|| ui_theme::palette(cx).line_number_background)
+    }
+
+    pub(crate) fn show_line_number_row_separators(&self) -> bool {
+        self.show_line_number_row_separators
+    }
+
+    pub(crate) fn log_font_size(&self) -> u16 {
+        self.log_font_size
+    }
+
+    pub fn settle_table_selection(&self, row_ix: usize) -> Option<usize> {
+        self.row_selection
+            .borrow_mut()
+            .settle_table_selection(row_ix);
+        self.source_row(row_ix)
+    }
+
+    pub fn clear_row_selection(&self) {
+        self.row_selection.borrow_mut().clear();
+    }
+
+    pub fn selected_source_rows(&self) -> Vec<usize> {
+        let selection = self.row_selection.borrow();
+        selection
+            .ranges
+            .iter()
+            .flat_map(|(start, end)| *start..=(*end).min(self.row_count().saturating_sub(1)))
+            .filter_map(|row_ix| self.source_row(row_ix))
+            .collect()
+    }
+
+    pub fn selected_rows_count(&self) -> usize {
+        self.row_selection.borrow().count().min(self.row_count())
+    }
+
+    pub(crate) fn is_row_selected(&self, row_ix: usize) -> bool {
+        self.row_selection.borrow().contains(row_ix)
+    }
+
+    pub fn select_all_rows(&self) {
+        let row_count = self.row_count();
+        if row_count == 0 {
+            self.row_selection.borrow_mut().clear();
+        } else {
+            let mut selection = self.row_selection.borrow_mut();
+            selection.replace_with(0, row_count - 1);
+            selection.anchor = Some(0);
+        }
+    }
+
+    pub fn restore_selected_source_rows(&self, source_rows: &[usize]) {
+        let mut selection = self.row_selection.borrow_mut();
+        selection.clear();
+        for source_row in source_rows {
+            let row_ix = match &self.rows {
+                VisibleRows::All => self.document.local_row(*source_row),
+                VisibleRows::Matches(line_indices) => line_indices.position(*source_row),
+            };
+            if let Some(row_ix) = row_ix {
+                selection.add_range(row_ix, row_ix);
+            }
+        }
+        selection.anchor = selection.ranges.first().map(|(start, _)| *start);
+    }
+
+    pub(crate) fn row_count(&self) -> usize {
+        match &self.rows {
+            VisibleRows::All => self.document.line_count(),
+            VisibleRows::Matches(line_indices) => line_indices.len(),
+        }
+    }
+}
+
+impl LogTableCursor for LogTableDelegate {
+    fn active_log_row(&self) -> Option<usize> {
+        self.active_row.get()
+    }
+
+    fn set_active_log_row(&self, row_ix: Option<usize>) {
+        self.active_row.set(row_ix);
+    }
+
+    fn suppress_next_table_clear(&self) {
+        self.suppress_table_clear.set(true);
+    }
+
+    fn take_suppressed_table_clear(&self) -> bool {
+        self.suppress_table_clear.replace(false)
+    }
+}
+
+impl TableDelegate for LogTableDelegate {
+    fn columns_count(&self, _: &App) -> usize {
+        if self.show_line_numbers { 3 } else { 2 }
+    }
+
+    fn rows_count(&self, _: &App) -> usize {
+        self.row_count()
+    }
+
+    fn column(&self, col_ix: usize, cx: &App) -> Column {
+        let base = px(self.log_font_size as f32);
+        if col_ix == 0 {
+            let width = line_marker_column_width();
+            Column::new("marker", crate::tr!("标记", "Mark"))
+                .p_0()
+                .width(width)
+                .min_width(width)
+                .max_width(width)
+                .resizable(false)
+                .fixed_left()
+                .movable(false)
+        } else if self.show_line_numbers && col_ix == 1 {
+            let width = px(self.line_number_width as f32);
+            Column::new("line-number", crate::tr!("行", "Line"))
+                .p_0()
+                .width(width)
+                .min_width(width)
+                .max_width(width)
+                .resizable(false)
+                .fixed_left()
+                .movable(false)
+                .text_right()
+        } else if col_ix == 1 + usize::from(self.show_line_numbers) {
+            Column::new("message", crate::tr!("日志", "Log"))
+                .p_0()
+                .width(message_column_width(
+                    self.document.metadata().longest_line_columns,
+                    self.resolved_font_family(cx),
+                    self.log_font_size,
+                    cx,
+                ))
+                .min_width(base * 24.)
+                .movable(false)
+        } else {
+            unreachable!("log table exposes marker, message, and optional line-number columns")
+        }
+    }
+
+    fn render_header(
+        &mut self,
+        _: &mut Window,
+        _: &mut Context<TableState<Self>>,
+    ) -> Stateful<Div> {
+        div().id("header").hidden()
+    }
+
+    fn render_tr(
+        &mut self,
+        row_ix: usize,
+        _: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> Stateful<Div> {
+        let _performance_scope = crate::ui_performance::scope("LogTableDelegate::render_tr");
+        let source_row = self.source_row(row_ix);
+        let source_row_ix = source_row.unwrap_or(row_ix);
+        let severity = source_row
+            .filter(|_| self.highlight_log_levels)
+            .and_then(|source_row| self.cached_line(source_row))
+            .and_then(|line| severity_style(&line, cx));
+        let row_bounds = self.row_bounds.clone();
+        div()
+            .id(format!("document-{}-row-{source_row_ix}", self.document_id))
+            .border_0()
+            .on_prepaint(move |bounds, _, _| {
+                row_bounds.borrow_mut().insert(row_ix, bounds);
+            })
+            .when_some(severity, |row, style| row.bg(style.background))
+            .when(source_row.is_some(), |row| {
+                row.on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |table, event: &MouseDownEvent, window, cx| {
+                        if event.modifiers.control
+                            || event.modifiers.shift
+                            || event.click_count >= 3
+                        {
+                            GlobalState::suppress_text_selection(cx);
+                            TextSelection::clear(window, cx);
+                        }
+                        table.delegate().begin_pointer_selection(
+                            row_ix,
+                            event.modifiers.control,
+                            event.modifiers.shift,
+                            event.click_count,
+                        );
+                        let table = cx.entity();
+                        window.defer(cx, move |_, cx| {
+                            table.update(cx, |table, cx| {
+                                table.set_active_log_row(row_ix, cx);
+                            });
+                        });
+                        cx.notify();
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |table, _: &MouseDownEvent, _, cx| {
+                        table.delegate().prepare_context_selection(row_ix);
+                        table.set_active_log_row(row_ix, cx);
+                        cx.notify();
+                    }),
+                )
+            })
+    }
+
+    fn render_td(
+        &mut self,
+        row_ix: usize,
+        col_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let _performance_scope = crate::ui_performance::scope("LogTableDelegate::render_td");
+        let source_row = self.source_row(row_ix).unwrap_or(row_ix);
+        let selected = self.row_selection.borrow().contains(row_ix);
+        let line_height = log_line_height(self.log_font_size, self.log_line_spacing);
+        if col_ix == 0 {
+            let marked = self.marked_rows.contains(&source_row);
+            let matched = self.matched_rows.contains(source_row);
+            let severity_accent = self
+                .highlight_log_levels
+                .then(|| self.cached_line(source_row))
+                .flatten()
+                .and_then(|line| severity_style(&line, cx))
+                .map(|style| style.accent);
+            h_flex()
+                .relative()
+                .size_full()
+                .justify_center()
+                .when_some(severity_accent, |cell, accent| {
+                    cell.child(severity_accent_overlay(accent))
+                })
+                .child(line_marker(marked, matched, cx))
+                .into_any_element()
+        } else if self.show_line_numbers && col_ix == 1 {
+            log_line_number_cell(
+                source_row,
+                self.log_font_size,
+                line_height,
+                self.line_number_text_color(cx),
+                self.line_number_background_color(cx),
+                self.show_line_number_row_separators,
+                cx,
+            )
+            .size_full()
+            .into_any_element()
+        } else if col_ix == 1 + usize::from(self.show_line_numbers) {
+            let presentation =
+                self.cached_presentation(source_row)
+                    .unwrap_or_else(|| CachedLogRowPresentation {
+                        text: LogText::default(),
+                        highlights: Arc::default(),
+                    });
+            let text = presentation.text;
+            let highlights = presentation
+                .highlights
+                .iter()
+                .cloned()
+                .map(|(range, highlight)| (range, text_highlight_style(highlight, cx)))
+                .collect::<Vec<_>>();
+            let styled_text = StyledText::new(text.display().clone()).with_highlights(highlights);
+            let selection = self.text_selections.handle(source_row, &text, window, cx);
+            h_flex()
+                .relative()
+                .size_full()
+                .overflow_hidden()
+                .px(log_cell_horizontal_padding(cx))
+                .when(selected, |cell| {
+                    cell.bg(log_row_selection_color(cx))
+                        .child(log_row_selection_overlay(
+                            row_ix == 0 || !self.row_selection.borrow().contains(row_ix - 1),
+                            row_ix + 1 >= self.row_count()
+                                || !self.row_selection.borrow().contains(row_ix + 1),
+                            cx,
+                        ))
+                })
+                .text_size(px(self.log_font_size as f32))
+                .line_height(line_height)
+                .font_family(self.resolved_font_family(cx))
+                .when(self.show_row_separators && !selected, |cell| {
+                    cell.border_b_1().border_color(cx.theme().border)
+                })
+                .child(
+                    SelectableLogText::new(
+                        selection,
+                        source_row as u64,
+                        text,
+                        styled_text,
+                        ui_theme::text_selection_highlight(cx),
+                    )
+                    .suppress_selection(self.suppress_text_selection)
+                    .word_boundary_characters(self.word_boundary_characters.clone()),
+                )
+                .into_any_element()
+        } else {
+            unreachable!("log table exposes marker, message, and optional line-number columns")
+        }
+    }
+
+    fn render_empty(
+        &mut self,
+        _: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .text_color(cx.theme().muted_foreground)
+            .child(self.empty_message.clone())
+    }
+
+    fn visible_rows_changed(
+        &mut self,
+        visible_range: Range<usize>,
+        _: &mut Window,
+        _: &mut Context<TableState<Self>>,
+    ) {
+        self.row_bounds
+            .borrow_mut()
+            .retain(|row_ix, _| visible_range.contains(row_ix));
+        self.prefetch_rows(visible_range);
+    }
+
+    fn cell_text(&self, row_ix: usize, col_ix: usize, _: &App) -> String {
+        let Some(source_row) = self.source_row(row_ix) else {
+            return String::new();
+        };
+        if self.show_line_numbers && col_ix == 0 {
+            (source_row + 1).to_string()
+        } else if col_ix == usize::from(self.show_line_numbers) {
+            self.cached_line(source_row).unwrap_or_default().to_string()
+        } else {
+            String::new()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_line_height_includes_configured_spacing() {
+        assert_eq!(log_line_height(13, 14), px(27.));
+        assert_eq!(log_line_height(u16::MAX, 1), px(u16::MAX as f32));
+    }
+
+    #[test]
+    fn line_numbers_track_log_text_within_the_reference_clamp() {
+        assert_eq!(line_number_font_size(13), px(11.));
+        assert_eq!(line_number_font_size(8), px(8.));
+        assert_eq!(line_number_font_size(40), px(18.));
+    }
+
+    #[test]
+    fn exact_row_position_replaces_a_deferred_table_scroll() {
+        let handle = gpui::UniformListScrollHandle::new();
+        handle.scroll_to_item(80, gpui::ScrollStrategy::Center);
+
+        scroll_uniform_log_row_to_viewport_y(&handle, 40, px(7.), px(20.));
+
+        assert!(handle.0.borrow().deferred_scroll_to_item.is_none());
+        assert_eq!(uniform_log_row_viewport_y(&handle, 40, px(20.)), px(7.));
+    }
+}
