@@ -17,6 +17,7 @@ use crate::{
     cloud_filters::{CloudClient, CloudConnectionProfile},
     directory_search_dialog::DirectorySearchOptions,
     global_search_table::{GlobalQuickFindGroup, GlobalSearchRow},
+    path_identity::{PathMatchKey, path_match_key},
     search_context::{PersistedGlobalSearchContext, WorkspaceSearchState},
     state_store::{CloudSettings, FileSessionState, StateStore},
     updater::{AvailableUpdate, DownloadedUpdate, UpdateClient},
@@ -514,7 +515,7 @@ pub(crate) struct GlobalSearchState {
 const DIRECTORY_DOCUMENT_ID_BASE: u64 = 1 << 63;
 
 struct DirectoryDocumentIds {
-    by_path: BTreeMap<PathBuf, u64>,
+    by_path: BTreeMap<PathMatchKey, u64>,
     next: u64,
 }
 
@@ -529,7 +530,8 @@ impl Default for DirectoryDocumentIds {
 
 impl DirectoryDocumentIds {
     fn id_for_path(&mut self, path: &Path) -> u64 {
-        if let Some(id) = self.by_path.get(path) {
+        let key = path_match_key(path);
+        if let Some(id) = self.by_path.get(&key) {
             return *id;
         }
         let id = self.next;
@@ -537,12 +539,16 @@ impl DirectoryDocumentIds {
             .next
             .checked_add(1)
             .expect("directory result identity space exhausted");
-        self.by_path.insert(path.to_path_buf(), id);
+        self.by_path.insert(key, id);
         id
     }
 
     fn retain_paths(&mut self, paths: &BTreeSet<PathBuf>) {
-        self.by_path.retain(|path, _| paths.contains(path));
+        let keys = paths
+            .iter()
+            .map(|path| path_match_key(path))
+            .collect::<BTreeSet<_>>();
+        self.by_path.retain(|path, _| keys.contains(path));
     }
 
     fn clear(&mut self) {
@@ -893,6 +899,10 @@ mod state_controller_tests {
         assert_eq!(identities.id_for_path(Path::new("logs/a.log")), first);
         assert_eq!(identities.id_for_path(Path::new("logs/b.log")), second);
         assert!(first >= DIRECTORY_DOCUMENT_ID_BASE);
+        assert_eq!(
+            identities.id_for_path(Path::new("LOGS/A.LOG")) == first,
+            cfg!(windows)
+        );
 
         identities.retain_paths(&BTreeSet::from([PathBuf::from("logs/b.log")]));
         assert_eq!(identities.by_path.len(), 1);

@@ -18,6 +18,7 @@ mod i18n;
 mod log_table;
 mod modal_event_layer;
 mod open_directory;
+mod path_identity;
 mod predefined_filters;
 mod predefined_filters_dialog;
 mod rename_tab_dialog;

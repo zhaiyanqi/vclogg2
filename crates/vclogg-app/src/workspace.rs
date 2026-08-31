@@ -93,6 +93,7 @@ use crate::{
         log_row_separator_overlay, scroll_uniform_log_row_to_viewport_y, severity_accent_overlay,
         severity_style, text_highlight_style,
     },
+    path_identity::{path_match_key, path_match_map_get, path_match_set_contains, paths_match},
     predefined_filters::{PredefinedFilter, query_includes_filter, toggle_filter_in_query},
     predefined_filters_dialog::{PredefinedFiltersDialog, PredefinedFiltersDialogEvent},
     rename_tab_dialog::RenameTabDialog,
@@ -18363,52 +18364,6 @@ fn compute_result_rows(
     }
 }
 
-#[cfg(not(windows))]
-type PathMatchKey = PathBuf;
-#[cfg(windows)]
-type PathMatchKey = String;
-
-#[cfg(not(windows))]
-fn path_match_key(path: &Path) -> PathMatchKey {
-    path.to_path_buf()
-}
-
-#[cfg(windows)]
-fn path_match_key(path: &Path) -> PathMatchKey {
-    path.to_string_lossy().to_ascii_lowercase()
-}
-
-#[cfg(not(windows))]
-fn path_match_set_contains(paths: &BTreeSet<PathMatchKey>, path: &Path) -> bool {
-    paths.contains(path)
-}
-
-#[cfg(windows)]
-fn path_match_set_contains(paths: &BTreeSet<PathMatchKey>, path: &Path) -> bool {
-    paths.contains(&path_match_key(path))
-}
-
-#[cfg(not(windows))]
-fn path_match_map_get<'a, V>(paths: &'a BTreeMap<PathMatchKey, V>, path: &Path) -> Option<&'a V> {
-    paths.get(path)
-}
-
-#[cfg(windows)]
-fn path_match_map_get<'a, V>(paths: &'a BTreeMap<PathMatchKey, V>, path: &Path) -> Option<&'a V> {
-    paths.get(&path_match_key(path))
-}
-
-fn paths_match(left: &Path, right: &Path) -> bool {
-    #[cfg(not(windows))]
-    {
-        left == right
-    }
-    #[cfg(windows)]
-    {
-        path_match_key(left) == path_match_key(right)
-    }
-}
-
 fn result_snapshot_matches_document(
     result_path: &Path,
     result_document: &LogDocument,
@@ -18419,27 +18374,8 @@ fn result_snapshot_matches_document(
 }
 
 #[cfg(test)]
-mod path_match_tests {
+mod result_snapshot_tests {
     use super::*;
-
-    #[test]
-    fn path_indexes_use_the_same_identity_as_direct_matching() {
-        let stored = Path::new("logs/a.log");
-        let key = path_match_key(stored);
-        let set = BTreeSet::from([key.clone()]);
-        let map = BTreeMap::from([(key, 7)]);
-
-        assert!(path_match_set_contains(&set, stored));
-        assert_eq!(path_match_map_get(&map, stored), Some(&7));
-        assert!(paths_match(stored, stored));
-
-        let differently_cased = Path::new("LOGS/A.LOG");
-        assert_eq!(
-            path_match_set_contains(&set, differently_cased),
-            cfg!(windows)
-        );
-        assert_eq!(paths_match(stored, differently_cased), cfg!(windows));
-    }
 
     #[test]
     fn result_presentation_state_requires_both_path_and_snapshot_identity() {
