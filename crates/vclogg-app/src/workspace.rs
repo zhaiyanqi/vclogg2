@@ -118,6 +118,7 @@ use crate::{
     updater::{
         AvailableUpdate, DownloadedUpdate, UpdateClient, UpdateDownloadProgress, launch_installer,
     },
+    virtual_log_lines::LogRowKey,
 };
 
 const WRAPPED_HEIGHT_CACHE_LIMIT: usize = 4096;
@@ -552,12 +553,6 @@ enum LogRegion {
     Body,
     CurrentResults,
     GlobalResults,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LogRowKey {
-    Row { document_id: u64, source_row: usize },
-    FileGroup { document_id: u64 },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1758,52 +1753,43 @@ impl DocumentTab {
             row_height,
             cx,
         );
-        let selected_source_rows = self.result_table.read(cx).delegate().selected_source_rows();
-        let selected_source_row = (!self.auto_follow)
-            .then(|| {
-                self.result_table
-                    .read(cx)
-                    .active_log_row()
-                    .and_then(|row_ix| self.result_table.read(cx).delegate().source_row(row_ix))
-            })
-            .flatten();
         let measured_heights = if self.word_wrap {
+            let table = self.result_table.read(cx);
             self.wrapped_results
-                .measured_heights_by_key(|row_ix| self.result_rows.get(row_ix))
+                .measured_heights_by_key(|row_ix| table.delegate().row_key(row_ix))
         } else {
             BTreeMap::new()
         };
         let next_result_rows = self.compute_result_rows();
-        if self.word_wrap {
-            self.wrapped_results.reset_with_remapped_heights(
-                next_result_rows.len(),
-                row_height,
-                measured_heights,
-                |source_row| next_result_rows.position(*source_row),
-            );
-        } else {
-            self.wrapped_results.invalidate();
-        }
         self.result_rows = next_result_rows;
         let result_rows = self.result_rows.clone();
-        let selected_result_row =
-            selected_source_row.and_then(|source_row| result_rows.position(source_row));
-        self.restoring_result_selection = selected_result_row.is_some();
-        self.result_table.update(cx, |table, cx| {
+        self.restoring_result_selection = true;
+        let active_restored = self.result_table.update(cx, |table, cx| {
+            if self.auto_follow {
+                table.delegate().set_active_log_row(None);
+            }
             table
                 .delegate_mut()
                 .set_matched_rows(self.search_result.line_indices.clone());
             table.delegate_mut().set_row_projection(result_rows);
-            if let Some(row_ix) = selected_result_row {
-                table.set_active_log_row(row_ix, cx);
-            } else {
-                table.clear_selection(cx);
-            }
-            table
-                .delegate()
-                .restore_selected_source_rows(&selected_source_rows);
+            let active_restored = table.sync_active_log_row(cx);
             table.refresh(cx);
+            active_restored
         });
+        if !active_restored {
+            self.restoring_result_selection = false;
+        }
+        if self.word_wrap {
+            let table = self.result_table.read(cx);
+            self.wrapped_results.reset_with_remapped_heights(
+                table.delegate().row_count(),
+                row_height,
+                measured_heights,
+                |key| table.delegate().row_ix_for_key(*key),
+            );
+        } else {
+            self.wrapped_results.invalidate();
+        }
         Workspace::restore_local_viewport_anchor(
             self,
             WrappedRegion::Results,
@@ -9692,29 +9678,15 @@ impl Workspace {
         let word_wrap = self.global_word_wrap;
         let row_height = self.log_row_height();
         let viewport_anchor = self.capture_global_viewport_anchor(word_wrap, row_height, cx);
-        let (collapsed_document_ids, selection_snapshot, selected_row, measured_heights) = {
+        let (collapsed_document_ids, measured_heights) = {
             let table = self.global_table.read(cx);
-            let selected_row = table
-                .active_log_row()
-                .and_then(|row_ix| table.delegate().row(row_ix));
             let measured_heights = if word_wrap {
                 self.wrapped_global_results
-                    .measured_heights_by_key(|row_ix| match table.delegate().row(row_ix) {
-                        Some(GlobalSearchRow::Match {
-                            document_id,
-                            source_row,
-                        }) => Some((document_id, source_row)),
-                        Some(GlobalSearchRow::Group { .. }) | None => None,
-                    })
+                    .measured_heights_by_key(|row_ix| table.delegate().row_key(row_ix))
             } else {
                 BTreeMap::new()
             };
-            (
-                table.delegate().collapsed_document_ids(),
-                table.delegate().selection_snapshot(),
-                selected_row,
-                measured_heights,
-            )
+            (table.delegate().collapsed_document_ids(), measured_heights)
         };
 
         let groups = match self.search_scope {
@@ -9809,35 +9781,16 @@ impl Workspace {
             SearchScope::CurrentFile | SearchScope::Directory => Vec::new(),
         };
 
-        let selected_will_restore = selected_row.is_some_and(|selected| {
-            groups.iter().any(|group| match selected {
-                GlobalSearchRow::Group { document_id } => group.source.document_id == document_id,
-                GlobalSearchRow::Match {
-                    document_id,
-                    source_row,
-                } => {
-                    group.source.document_id == document_id
-                        && !group.projection.collapsed
-                        && group.projection.rows.contains(source_row)
-                }
-            })
-        });
-        self.restoring_global_selection = selected_will_restore;
         let matcher = (self.global_result_mode.includes_matches()
             && self.app_settings.highlight_matches)
             .then(|| self.global_search_matcher.clone())
             .flatten();
-        self.global_table.update(cx, |table, cx| {
+        self.restoring_global_selection = true;
+        let active_restored = self.global_table.update(cx, |table, cx| {
             table.delegate_mut().set_groups(groups, matcher);
-            table.delegate().restore_selection(&selection_snapshot);
-            let selected_ix = selected_row.and_then(|row| table.delegate().row_ix(row));
-            if let Some(selected_ix) = selected_ix {
-                table.set_active_log_row(selected_ix, cx);
-            } else {
-                table.clear_selection(cx);
-            }
-
+            let active_restored = table.sync_active_log_row(cx);
             table.refresh(cx);
+            active_restored
         });
         if word_wrap {
             let table = self.global_table.read(cx);
@@ -9845,18 +9798,13 @@ impl Workspace {
                 table.delegate().rows_len(),
                 row_height,
                 measured_heights,
-                |(document_id, source_row)| {
-                    table.delegate().row_ix(GlobalSearchRow::Match {
-                        document_id: *document_id,
-                        source_row: *source_row,
-                    })
-                },
+                |key| table.delegate().row_ix_for_key(*key),
             );
         } else {
             self.wrapped_global_results.invalidate();
         }
         self.restore_global_viewport_anchor(word_wrap, viewport_anchor, row_height, cx);
-        if !selected_will_restore {
+        if !active_restored {
             self.restoring_global_selection = false;
         }
     }

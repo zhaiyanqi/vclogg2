@@ -32,7 +32,7 @@ use crate::log_table::{
 use crate::selectable_log_text::{LogText, SelectableLogText, TextSelectionCache};
 use crate::state_store::{AppSettings, DEFAULT_WORD_BOUNDARY_CHARACTERS, LogFontFamily};
 use crate::ui_theme;
-use crate::virtual_log_lines::VisibleLineStore;
+use crate::virtual_log_lines::{LogRowKey, VisibleLineStore};
 
 #[derive(Clone)]
 pub struct GlobalSearchGroup {
@@ -502,6 +502,7 @@ impl GlobalSearchTableDelegate {
     }
 
     pub fn set_groups(&mut self, groups: Vec<GlobalSearchGroup>, matcher: Option<SearchMatcher>) {
+        let (selected_rows, active_row, selection_anchor) = self.stable_interaction_rows();
         let documents_changed = groups.len() != self.projection.groups.len()
             || groups.iter().any(|next| {
                 !self.projection.groups.iter().any(|current| {
@@ -527,9 +528,8 @@ impl GlobalSearchTableDelegate {
         self.projection.groups = groups;
         self.presenter.matcher = matcher;
         self.interaction.row_bounds.borrow_mut().clear();
-        self.interaction.row_selection.borrow_mut().clear();
-        self.interaction.active_row.set(None);
         self.rebuild_layout();
+        self.restore_stable_interaction_rows(selected_rows, active_row, selection_anchor);
     }
 
     pub fn set_quick_find_matcher(&mut self, matcher: Option<SearchMatcher>) {
@@ -601,32 +601,57 @@ impl GlobalSearchTableDelegate {
     }
 
     pub fn row(&self, row_ix: usize) -> Option<GlobalSearchRow> {
-        match self.flat_row(row_ix)? {
-            FlatRow::Group { group_ix } => Some(GlobalSearchRow::Group {
-                document_id: self.projection.groups.get(group_ix)?.source.document_id,
-            }),
-            FlatRow::Match {
-                group_ix,
+        match self.row_key(row_ix)? {
+            LogRowKey::FileGroup { document_id } => Some(GlobalSearchRow::Group { document_id }),
+            LogRowKey::Row {
+                document_id,
                 source_row,
             } => Some(GlobalSearchRow::Match {
-                document_id: self.projection.groups.get(group_ix)?.source.document_id,
+                document_id,
                 source_row,
             }),
         }
     }
 
     pub fn row_ix(&self, target: GlobalSearchRow) -> Option<usize> {
+        let key = match target {
+            GlobalSearchRow::Group { document_id } => LogRowKey::FileGroup { document_id },
+            GlobalSearchRow::Match {
+                document_id,
+                source_row,
+            } => LogRowKey::Row {
+                document_id,
+                source_row,
+            },
+        };
+        self.row_ix_for_key(key)
+    }
+
+    pub(crate) fn row_key(&self, row_ix: usize) -> Option<LogRowKey> {
+        match self.flat_row(row_ix)? {
+            FlatRow::Group { group_ix } => Some(LogRowKey::FileGroup {
+                document_id: self.projection.groups.get(group_ix)?.source.document_id,
+            }),
+            FlatRow::Match {
+                group_ix,
+                source_row,
+            } => Some(LogRowKey::Row {
+                document_id: self.projection.groups.get(group_ix)?.source.document_id,
+                source_row,
+            }),
+        }
+    }
+
+    pub(crate) fn row_ix_for_key(&self, key: LogRowKey) -> Option<usize> {
         self.projection
             .groups
             .iter()
             .enumerate()
-            .find_map(|(group_ix, group)| match target {
-                GlobalSearchRow::Group { document_id }
-                    if document_id == group.source.document_id =>
-                {
+            .find_map(|(group_ix, group)| match key {
+                LogRowKey::FileGroup { document_id } if document_id == group.source.document_id => {
                     self.projection.group_starts.get(group_ix).copied()
                 }
-                GlobalSearchRow::Match {
+                LogRowKey::Row {
                     document_id,
                     source_row,
                 } if document_id == group.source.document_id && !group.projection.collapsed => {
@@ -644,6 +669,40 @@ impl GlobalSearchTableDelegate {
                 }
                 _ => None,
             })
+    }
+
+    fn stable_interaction_rows(&self) -> (Vec<LogRowKey>, Option<LogRowKey>, Option<LogRowKey>) {
+        let selection = self.interaction.row_selection.borrow();
+        let selected_rows = selection
+            .selected_indices(self.projection.rows_len)
+            .filter_map(|row_ix| self.row_key(row_ix))
+            .collect();
+        let selection_anchor = selection.anchor().and_then(|row_ix| self.row_key(row_ix));
+        let active_row = self
+            .interaction
+            .active_row
+            .get()
+            .and_then(|row_ix| self.row_key(row_ix));
+        (selected_rows, active_row, selection_anchor)
+    }
+
+    fn restore_stable_interaction_rows(
+        &self,
+        selected_rows: Vec<LogRowKey>,
+        active_row: Option<LogRowKey>,
+        selection_anchor: Option<LogRowKey>,
+    ) {
+        let selected_indices = selected_rows
+            .into_iter()
+            .filter_map(|key| self.row_ix_for_key(key));
+        let anchor = selection_anchor.and_then(|key| self.row_ix_for_key(key));
+        self.interaction
+            .row_selection
+            .borrow_mut()
+            .replace_indices_with_anchor(selected_indices, anchor);
+        self.interaction
+            .active_row
+            .set(active_row.and_then(|key| self.row_ix_for_key(key)));
     }
 
     pub fn collapsed_document_ids(&self) -> BTreeSet<u64> {
@@ -1445,6 +1504,8 @@ mod tests {
 
     use vclogg_core::LogDocument;
 
+    use crate::log_table::LogTableCursor;
+
     use super::{
         GlobalSearchGroup, GlobalSearchGroupIcon, GlobalSearchGroupPresentation,
         GlobalSearchGroupProjection, GlobalSearchGroupSource, GlobalSearchTableDelegate,
@@ -1508,6 +1569,33 @@ mod tests {
             })
             .expect("the replacement document should load a new line");
         assert_eq!(reloaded.source().as_ref(), "reloaded global line");
+    }
+
+    #[test]
+    fn group_projection_updates_migrate_selection_by_stable_row_key() {
+        let document = Arc::new(LogDocument::placeholder("stable-global-projection.log"));
+        let mut delegate = GlobalSearchTableDelegate::new();
+        let mut group = test_group(document);
+        group.projection.rows = [2, 5, 9].into_iter().collect();
+        delegate.set_groups(vec![group.clone()], None);
+        delegate.settle_table_selection(2);
+        delegate.set_active_log_row(Some(2));
+
+        group.projection.rows = [1, 2, 5, 10].into_iter().collect();
+        delegate.set_groups(vec![group.clone()], None);
+
+        assert_eq!(delegate.selected_matches(), vec![(1, 5)]);
+        assert_eq!(delegate.active_log_row(), Some(3));
+        assert_eq!(
+            delegate.interaction.row_selection.borrow().anchor(),
+            Some(3)
+        );
+
+        group.projection.rows = [1, 10].into_iter().collect();
+        delegate.set_groups(vec![group], None);
+
+        assert!(delegate.selected_matches().is_empty());
+        assert_eq!(delegate.active_log_row(), None);
     }
 
     #[test]

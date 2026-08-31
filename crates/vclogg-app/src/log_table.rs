@@ -28,7 +28,7 @@ use crate::color_labels::ResolvedColorRule;
 use crate::selectable_log_text::{LogText, SelectableLogText, TextSelectionCache};
 use crate::state_store::{AppSettings, DEFAULT_WORD_BOUNDARY_CHARACTERS, LogFontFamily};
 use crate::ui_theme;
-use crate::virtual_log_lines::{LogRowProjection, VisibleLineStore};
+use crate::virtual_log_lines::{LogRowKey, LogRowProjection, VisibleLineStore};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LogSeverity {
@@ -291,6 +291,9 @@ pub(crate) trait LogTableStateExt {
     fn set_active_log_row(&mut self, row_ix: usize, cx: &mut Context<Self>)
     where
         Self: Sized;
+    fn sync_active_log_row(&mut self, cx: &mut Context<Self>) -> bool
+    where
+        Self: Sized;
     fn log_row_viewport_y(&self, row_ix: usize, row_height: Pixels) -> Pixels;
     fn scroll_log_row_to_viewport_y(&self, row_ix: usize, viewport_y: Pixels, row_height: Pixels);
 }
@@ -331,6 +334,17 @@ where
         self.delegate().suppress_next_table_clear();
         self.set_selected_row(row_ix, cx);
         self.clear_selection(cx);
+    }
+
+    fn sync_active_log_row(&mut self, cx: &mut Context<Self>) -> bool {
+        if let Some(row_ix) = self.delegate().active_log_row() {
+            self.set_active_log_row(row_ix, cx);
+            true
+        } else {
+            self.delegate().suppress_next_table_clear();
+            self.clear_selection(cx);
+            false
+        }
     }
 
     fn log_row_viewport_y(&self, row_ix: usize, row_height: Pixels) -> Pixels {
@@ -544,6 +558,10 @@ impl RowSelection {
         self.ranges.iter().copied()
     }
 
+    pub(crate) fn anchor(&self) -> Option<usize> {
+        self.anchor
+    }
+
     pub(crate) fn replace_indices(&mut self, indices: impl IntoIterator<Item = usize>) {
         self.clear();
         for row_ix in indices {
@@ -553,6 +571,17 @@ impl RowSelection {
             }
         }
         self.anchor = self.ranges.first().map(|(start, _)| *start);
+    }
+
+    pub(crate) fn replace_indices_with_anchor(
+        &mut self,
+        indices: impl IntoIterator<Item = usize>,
+        anchor: Option<usize>,
+    ) {
+        self.replace_indices(indices);
+        if anchor.is_some() {
+            self.anchor = anchor;
+        }
     }
 }
 
@@ -725,6 +754,30 @@ impl LogRowSource {
         }
     }
 
+    fn row_key(&self, row_ix: usize) -> Option<LogRowKey> {
+        Some(LogRowKey::Row {
+            document_id: self.document_id,
+            source_row: self.source_row(row_ix)?,
+        })
+    }
+
+    fn row_ix(&self, key: LogRowKey) -> Option<usize> {
+        let LogRowKey::Row {
+            document_id,
+            source_row,
+        } = key
+        else {
+            return None;
+        };
+        if document_id != self.document_id {
+            return None;
+        }
+        match &self.row_projection {
+            LogRowProjection::All => self.document.local_row(source_row),
+            LogRowProjection::SourceRows(source_rows) => source_rows.position(source_row),
+        }
+    }
+
     fn row_count(&self) -> usize {
         match &self.row_projection {
             LogRowProjection::All => self.document.line_count(),
@@ -849,11 +902,11 @@ impl LogTableDelegate {
     }
 
     pub fn set_row_projection(&mut self, source_rows: CompressedRows) {
+        let (selected_rows, active_row, selection_anchor) = self.stable_interaction_rows();
         self.source.row_projection = LogRowProjection::SourceRows(source_rows);
         self.source.visible_lines.invalidate_window();
         self.interaction.row_bounds.borrow_mut().clear();
-        self.interaction.row_selection.borrow_mut().clear();
-        self.interaction.active_row.set(None);
+        self.restore_stable_interaction_rows(selected_rows, active_row, selection_anchor);
     }
 
     pub fn set_marked_rows(&mut self, marked_rows: Arc<BTreeSet<usize>>) {
@@ -922,20 +975,66 @@ impl LogTableDelegate {
     }
 
     pub fn replace_with_all(&mut self, document: Arc<LogDocument>) {
+        let (selected_rows, active_row, selection_anchor) = self.stable_interaction_rows();
         self.source.replace(document, LogRowProjection::All);
         self.interaction.text_selections.clear();
-        self.interaction.row_selection.borrow_mut().clear();
+        self.restore_stable_interaction_rows(selected_rows, active_row, selection_anchor);
     }
 
     pub fn replace_with_rows(&mut self, document: Arc<LogDocument>, source_rows: CompressedRows) {
+        let (selected_rows, active_row, selection_anchor) = self.stable_interaction_rows();
         self.source
             .replace(document, LogRowProjection::SourceRows(source_rows));
         self.interaction.text_selections.clear();
-        self.interaction.row_selection.borrow_mut().clear();
+        self.restore_stable_interaction_rows(selected_rows, active_row, selection_anchor);
+    }
+
+    fn stable_interaction_rows(&self) -> (Vec<LogRowKey>, Option<LogRowKey>, Option<LogRowKey>) {
+        let selection = self.interaction.row_selection.borrow();
+        let selected_rows = selection
+            .selected_indices(self.source.row_count())
+            .filter_map(|row_ix| self.source.row_key(row_ix))
+            .collect();
+        let selection_anchor = selection
+            .anchor()
+            .and_then(|row_ix| self.source.row_key(row_ix));
+        let active_row = self
+            .interaction
+            .active_row
+            .get()
+            .and_then(|row_ix| self.source.row_key(row_ix));
+        (selected_rows, active_row, selection_anchor)
+    }
+
+    fn restore_stable_interaction_rows(
+        &self,
+        selected_rows: Vec<LogRowKey>,
+        active_row: Option<LogRowKey>,
+        selection_anchor: Option<LogRowKey>,
+    ) {
+        let selected_indices = selected_rows
+            .into_iter()
+            .filter_map(|key| self.source.row_ix(key));
+        let anchor = selection_anchor.and_then(|key| self.source.row_ix(key));
+        self.interaction
+            .row_selection
+            .borrow_mut()
+            .replace_indices_with_anchor(selected_indices, anchor);
+        self.interaction
+            .active_row
+            .set(active_row.and_then(|key| self.source.row_ix(key)));
     }
 
     pub fn source_row(&self, row_ix: usize) -> Option<usize> {
         self.source.source_row(row_ix)
+    }
+
+    pub(crate) fn row_key(&self, row_ix: usize) -> Option<LogRowKey> {
+        self.source.row_key(row_ix)
+    }
+
+    pub(crate) fn row_ix_for_key(&self, key: LogRowKey) -> Option<usize> {
+        self.source.row_ix(key)
     }
 
     pub(crate) fn wrapped_row(&self, row_ix: usize) -> Option<WrappedLogRow> {
@@ -1134,21 +1233,6 @@ impl LogTableDelegate {
             selection.replace_with(0, row_count - 1);
             selection.anchor = Some(0);
         }
-    }
-
-    pub fn restore_selected_source_rows(&self, source_rows: &[usize]) {
-        let mut selection = self.interaction.row_selection.borrow_mut();
-        selection.clear();
-        for source_row in source_rows {
-            let row_ix = match &self.source.row_projection {
-                LogRowProjection::All => self.source.document.local_row(*source_row),
-                LogRowProjection::SourceRows(source_rows) => source_rows.position(*source_row),
-            };
-            if let Some(row_ix) = row_ix {
-                selection.add_range(row_ix, row_ix);
-            }
-        }
-        selection.anchor = selection.ranges.first().map(|(start, _)| *start);
     }
 
     pub(crate) fn row_count(&self) -> usize {
@@ -1496,6 +1580,29 @@ mod tests {
         assert_eq!(delegate.source_row(1), Some(9));
         assert_eq!(delegate.source_row(2), Some(27));
         assert_eq!(delegate.source_row(3), None);
+    }
+
+    #[test]
+    fn projection_updates_migrate_selection_by_stable_row_key() {
+        let document = Arc::new(LogDocument::placeholder("stable-projection.log"));
+        let mut delegate =
+            LogTableDelegate::projected(7, document, [3, 9, 27].into_iter().collect());
+        assert_eq!(delegate.settle_table_selection(1), Some(9));
+        delegate.set_active_log_row(Some(1));
+
+        delegate.set_row_projection([1, 3, 9, 30].into_iter().collect());
+
+        assert_eq!(delegate.selected_source_rows(), vec![9]);
+        assert_eq!(delegate.active_log_row(), Some(2));
+        assert_eq!(
+            delegate.interaction.row_selection.borrow().anchor(),
+            Some(2)
+        );
+
+        delegate.set_row_projection([1, 30].into_iter().collect());
+
+        assert!(delegate.selected_source_rows().is_empty());
+        assert_eq!(delegate.active_log_row(), None);
     }
 
     #[test]

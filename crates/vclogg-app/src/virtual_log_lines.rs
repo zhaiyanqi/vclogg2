@@ -8,6 +8,13 @@ use vclogg_core::{CompressedRows, LinePreview};
 
 use crate::selectable_log_text::LogText;
 
+/// Stable identity shared by local logs, projected results, and global result groups.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum LogRowKey {
+    Row { document_id: u64, source_row: usize },
+    FileGroup { document_id: u64 },
+}
+
 /// Maps virtual-list coordinates to source-file rows without owning presentation state.
 #[derive(Clone)]
 pub(crate) enum LogRowProjection {
