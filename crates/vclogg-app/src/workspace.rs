@@ -9841,7 +9841,8 @@ impl Workspace {
     ) {
         self.global_search.restoring_selection = true;
         let active_restored = self.global_table.update(cx, |table, cx| {
-            table.delegate_mut().set_groups(groups, matcher);
+            table.delegate_mut().set_groups(groups);
+            table.delegate_mut().set_search_matcher(matcher);
             let active_restored = table.sync_active_log_row(cx);
             table.refresh_log_rows(cx);
             active_restored

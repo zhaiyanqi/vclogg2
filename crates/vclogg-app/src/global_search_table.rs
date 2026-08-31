@@ -516,7 +516,7 @@ impl GlobalSearchTableDelegate {
                 })
     }
 
-    pub fn set_groups(&mut self, groups: Vec<GlobalSearchGroup>, matcher: Option<SearchMatcher>) {
+    pub fn set_groups(&mut self, groups: Vec<GlobalSearchGroup>) {
         self.interaction
             .row_selection
             .borrow_mut()
@@ -575,12 +575,15 @@ impl GlobalSearchTableDelegate {
             debug_assert_eq!(self.projection.group_by_document.len(), groups.len());
         }
         self.projection.groups = groups;
-        self.presenter.matcher = matcher;
         if let Some((selected_rows, active_row, selection_anchor)) = stable_interaction {
             self.interaction.row_bounds.borrow_mut().clear();
             self.rebuild_layout();
             self.restore_stable_interaction_rows(selected_rows, active_row, selection_anchor);
         }
+    }
+
+    pub fn set_search_matcher(&mut self, matcher: Option<SearchMatcher>) {
+        self.presenter.matcher = matcher;
     }
 
     pub fn set_quick_find_matcher(&mut self, matcher: Option<SearchMatcher>) {
@@ -1604,7 +1607,7 @@ mod tests {
         let document = Arc::new(LogDocument::placeholder("global-presentation.log"));
         let mut delegate = GlobalSearchTableDelegate::new();
         let group = test_group(document.clone());
-        delegate.set_groups(vec![group.clone()], None);
+        delegate.set_groups(vec![group.clone()]);
         let initial_revision = delegate.content_revision();
         delegate.visible_lines.prepare_visible_rows(
             0..1,
@@ -1622,7 +1625,7 @@ mod tests {
             .row_bounds
             .borrow_mut()
             .insert(1, Bounds::default());
-        delegate.set_groups(vec![changed_presentation], None);
+        delegate.set_groups(vec![changed_presentation]);
         assert_eq!(delegate.content_revision(), initial_revision);
         assert!(delegate.interaction.row_bounds.borrow().contains_key(&1));
 
@@ -1636,7 +1639,7 @@ mod tests {
 
         let replacement = test_group(Arc::new(LogDocument::placeholder("replacement.log")));
         assert!(!delegate.has_same_virtual_content(std::slice::from_ref(&replacement)));
-        delegate.set_groups(vec![replacement], None);
+        delegate.set_groups(vec![replacement]);
         assert!(delegate.content_revision() > initial_revision);
         let reloaded = delegate
             .visible_lines
@@ -1653,16 +1656,16 @@ mod tests {
         let mut delegate = GlobalSearchTableDelegate::new();
         let mut group = test_group(document);
         group.projection.rows = [2, 5].into_iter().collect();
-        delegate.set_groups(vec![group.clone()], None);
+        delegate.set_groups(vec![group.clone()]);
         delegate.toggle_group(1);
 
         group.presentation.marked_rows = Arc::new(BTreeSet::from([5]));
-        delegate.set_groups(vec![group], None);
+        delegate.set_groups(vec![group]);
 
         assert_eq!(delegate.collapsed_document_ids(), BTreeSet::from([1]));
         assert_eq!(delegate.rows_len(), 1);
 
-        delegate.set_groups(Vec::new(), None);
+        delegate.set_groups(Vec::new());
         assert!(delegate.collapsed_document_ids().is_empty());
     }
 
@@ -1672,12 +1675,12 @@ mod tests {
         let mut delegate = GlobalSearchTableDelegate::new();
         let mut group = test_group(document);
         group.projection.rows = [2, 5, 9].into_iter().collect();
-        delegate.set_groups(vec![group.clone()], None);
+        delegate.set_groups(vec![group.clone()]);
         delegate.settle_table_selection(2);
         delegate.set_active_log_row(Some(2));
 
         group.projection.rows = [1, 2, 5, 10].into_iter().collect();
-        delegate.set_groups(vec![group.clone()], None);
+        delegate.set_groups(vec![group.clone()]);
 
         assert_eq!(delegate.selected_matches(), vec![(1, 5)]);
         assert_eq!(delegate.active_log_row(), Some(3));
@@ -1687,7 +1690,7 @@ mod tests {
         );
 
         group.projection.rows = [1, 10].into_iter().collect();
-        delegate.set_groups(vec![group], None);
+        delegate.set_groups(vec![group]);
 
         assert!(delegate.selected_matches().is_empty());
         assert_eq!(delegate.active_log_row(), None);
@@ -1701,13 +1704,13 @@ mod tests {
         second.source.document_id = 22;
         let mut delegate = GlobalSearchTableDelegate::new();
 
-        delegate.set_groups(vec![first.clone(), second.clone()], None);
+        delegate.set_groups(vec![first.clone(), second.clone()]);
         assert_eq!(
             delegate.row_ix_for_key(LogRowKey::FileGroup { document_id: 22 }),
             Some(2)
         );
 
-        delegate.set_groups(vec![second, first], None);
+        delegate.set_groups(vec![second, first]);
         assert_eq!(
             delegate.row_ix_for_key(LogRowKey::FileGroup { document_id: 22 }),
             Some(0)
@@ -1730,7 +1733,7 @@ mod tests {
         second.source.document_id = 10;
         second.projection.rows = [2, 4].into_iter().collect();
         let mut delegate = GlobalSearchTableDelegate::new();
-        delegate.set_groups(vec![first, second], None);
+        delegate.set_groups(vec![first, second]);
 
         delegate.restore_selection(&BTreeMap::from([
             (10, [4].into_iter().collect()),
@@ -1747,7 +1750,7 @@ mod tests {
         delegate.begin_pointer_selection(0, false, false, 1);
         delegate.set_text_selection_suppressed(true);
 
-        delegate.set_groups(Vec::new(), None);
+        delegate.set_groups(Vec::new());
 
         assert!(!delegate.is_pointer_selecting());
         assert!(delegate.is_text_selection_suppressed());
