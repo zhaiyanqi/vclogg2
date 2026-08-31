@@ -10611,10 +10611,7 @@ impl Workspace {
     }
 
     fn persisted_path_matches(actual: &std::path::Path, persisted: &str) -> bool {
-        if actual == std::path::Path::new(persisted) {
-            return true;
-        }
-        cfg!(windows) && actual.to_string_lossy().eq_ignore_ascii_case(persisted)
+        paths_match(actual, std::path::Path::new(persisted))
     }
 
     fn restore_persisted_global_presentation(
