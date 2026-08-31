@@ -676,7 +676,7 @@ pub struct LogTableDelegate {
     quick_find_matcher: Option<SearchMatcher>,
     color_rules: Arc<[ResolvedColorRule]>,
     text_selections: TextSelectionCache<usize>,
-    suppress_text_selection: bool,
+    suppress_text_selection: Cell<bool>,
     word_boundary_characters: SharedString,
     overscan: usize,
     row_cache: RefCell<BTreeMap<usize, CachedLogRowPresentation>>,
@@ -726,7 +726,7 @@ impl LogTableDelegate {
             quick_find_matcher: None,
             color_rules: Arc::default(),
             text_selections: TextSelectionCache::default(),
-            suppress_text_selection: false,
+            suppress_text_selection: Cell::default(),
             word_boundary_characters: DEFAULT_WORD_BOUNDARY_CHARACTERS.into(),
             overscan: 12,
             row_cache: RefCell::default(),
@@ -764,7 +764,7 @@ impl LogTableDelegate {
             quick_find_matcher: None,
             color_rules: Arc::default(),
             text_selections: TextSelectionCache::default(),
-            suppress_text_selection: false,
+            suppress_text_selection: Cell::default(),
             word_boundary_characters: DEFAULT_WORD_BOUNDARY_CHARACTERS.into(),
             overscan: 12,
             row_cache: RefCell::default(),
@@ -956,6 +956,8 @@ impl LogTableDelegate {
         shift: bool,
         click_count: usize,
     ) {
+        // A new gesture must not inherit line-drag suppression after a lost MouseUp.
+        self.suppress_text_selection.set(false);
         self.row_selection.borrow_mut().begin_pointer_selection(
             row_ix,
             control,
@@ -988,6 +990,7 @@ impl LogTableDelegate {
 
     pub(crate) fn end_pointer_selection(&self) {
         self.row_selection.borrow_mut().end_pointer_selection();
+        self.suppress_text_selection.set(false);
     }
 
     pub(crate) fn is_pointer_selecting(&self) -> bool {
@@ -1018,8 +1021,12 @@ impl LogTableDelegate {
         }
     }
 
-    pub(crate) fn set_text_selection_suppressed(&mut self, suppressed: bool) {
-        self.suppress_text_selection = suppressed;
+    pub(crate) fn set_text_selection_suppressed(&self, suppressed: bool) {
+        self.suppress_text_selection.set(suppressed);
+    }
+
+    pub(crate) fn is_text_selection_suppressed(&self) -> bool {
+        self.suppress_text_selection.get()
     }
 
     pub(crate) fn show_line_numbers(&self) -> bool {
@@ -1332,7 +1339,7 @@ impl TableDelegate for LogTableDelegate {
                         styled_text,
                         ui_theme::text_selection_highlight(cx),
                     )
-                    .suppress_selection(self.suppress_text_selection)
+                    .suppress_selection(self.is_text_selection_suppressed())
                     .word_boundary_characters(self.word_boundary_characters.clone()),
                 )
                 .into_any_element()
@@ -1407,5 +1414,35 @@ mod tests {
 
         assert!(handle.0.borrow().deferred_scroll_to_item.is_none());
         assert_eq!(uniform_log_row_viewport_y(&handle, 40, px(20.)), px(7.));
+    }
+
+    #[test]
+    fn refreshing_result_rows_preserves_drag_cleanup_state() {
+        let document = Arc::new(LogDocument::placeholder("selection-refresh.log"));
+        let mut delegate = LogTableDelegate::matches(1, document, Default::default());
+        delegate.begin_pointer_selection(0, false, false, 1);
+        delegate.set_text_selection_suppressed(true);
+
+        delegate.set_matches(Default::default());
+
+        assert!(!delegate.is_pointer_selecting());
+        assert!(delegate.is_text_selection_suppressed());
+
+        delegate.end_pointer_selection();
+        assert!(!delegate.is_text_selection_suppressed());
+    }
+
+    #[test]
+    fn ending_or_restarting_pointer_selection_restores_text_selection() {
+        let document = Arc::new(LogDocument::placeholder("selection-recovery.log"));
+        let delegate = LogTableDelegate::matches(1, document, Default::default());
+        delegate.set_text_selection_suppressed(true);
+
+        delegate.end_pointer_selection();
+        assert!(!delegate.is_text_selection_suppressed());
+
+        delegate.set_text_selection_suppressed(true);
+        delegate.begin_pointer_selection(0, false, false, 2);
+        assert!(!delegate.is_text_selection_suppressed());
     }
 }

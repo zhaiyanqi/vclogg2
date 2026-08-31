@@ -84,7 +84,7 @@ pub struct GlobalSearchTableDelegate {
     highlight_log_levels: bool,
     word_boundary_characters: SharedString,
     text_selections: TextSelectionCache<(u64, usize)>,
-    suppress_text_selection: bool,
+    suppress_text_selection: Cell<bool>,
     row_selection: Rc<RefCell<RowSelection>>,
     active_row: Cell<Option<usize>>,
     suppress_table_clear: Cell<bool>,
@@ -420,7 +420,7 @@ impl GlobalSearchTableDelegate {
             highlight_log_levels: false,
             word_boundary_characters: DEFAULT_WORD_BOUNDARY_CHARACTERS.into(),
             text_selections: TextSelectionCache::default(),
-            suppress_text_selection: false,
+            suppress_text_selection: Cell::default(),
             row_selection: Rc::default(),
             active_row: Cell::default(),
             suppress_table_clear: Cell::default(),
@@ -746,6 +746,8 @@ impl GlobalSearchTableDelegate {
         shift: bool,
         click_count: usize,
     ) {
+        // A new gesture must not inherit line-drag suppression after a lost MouseUp.
+        self.suppress_text_selection.set(false);
         self.row_selection.borrow_mut().begin_pointer_selection(
             row_ix,
             control,
@@ -772,6 +774,7 @@ impl GlobalSearchTableDelegate {
 
     pub(crate) fn end_pointer_selection(&self) {
         self.row_selection.borrow_mut().end_pointer_selection();
+        self.suppress_text_selection.set(false);
     }
 
     pub(crate) fn is_pointer_selecting(&self) -> bool {
@@ -802,8 +805,12 @@ impl GlobalSearchTableDelegate {
         }
     }
 
-    pub(crate) fn set_text_selection_suppressed(&mut self, suppressed: bool) {
-        self.suppress_text_selection = suppressed;
+    pub(crate) fn set_text_selection_suppressed(&self, suppressed: bool) {
+        self.suppress_text_selection.set(suppressed);
+    }
+
+    pub(crate) fn is_text_selection_suppressed(&self) -> bool {
+        self.suppress_text_selection.get()
     }
 
     pub(crate) fn nearest_match_row(&self, row_ix: usize, prefer_after: bool) -> Option<usize> {
@@ -1249,7 +1256,7 @@ impl TableDelegate for GlobalSearchTableDelegate {
                                 ui_theme::text_selection_highlight(cx),
                             )
                             .word_boundary_characters(self.word_boundary_characters.clone())
-                            .suppress_selection(self.suppress_text_selection),
+                            .suppress_selection(self.is_text_selection_suppressed()),
                         )
                         .into_any_element()
                 } else {
@@ -1309,9 +1316,24 @@ impl TableDelegate for GlobalSearchTableDelegate {
 #[cfg(test)]
 mod tests {
     use super::{
-        GlobalSearchGroupIcon, format_group_result_count, global_search_group_header_presentation,
-        global_search_group_title,
+        GlobalSearchGroupIcon, GlobalSearchTableDelegate, format_group_result_count,
+        global_search_group_header_presentation, global_search_group_title,
     };
+
+    #[test]
+    fn refreshing_global_results_preserves_drag_cleanup_state() {
+        let mut delegate = GlobalSearchTableDelegate::new();
+        delegate.begin_pointer_selection(0, false, false, 1);
+        delegate.set_text_selection_suppressed(true);
+
+        delegate.set_groups(Vec::new(), None);
+
+        assert!(!delegate.is_pointer_selecting());
+        assert!(delegate.is_text_selection_suppressed());
+
+        delegate.end_pointer_selection();
+        assert!(!delegate.is_text_selection_suppressed());
+    }
 
     #[test]
     fn group_header_uses_document_dismiss_for_zero_results() {

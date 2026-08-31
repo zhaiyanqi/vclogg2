@@ -2310,6 +2310,8 @@ impl Workspace {
                         workspace.start_file_watch(window, cx);
                         cx.notify();
                     } else {
+                        TextSelection::end(window, cx);
+                        workspace.end_all_row_drag_selection(window, cx);
                         workspace.release_input_focus(window, cx);
                         workspace.file_watch_task = None;
                     }
@@ -15125,8 +15127,10 @@ impl Workspace {
         let active_drag = self
             .row_drag_selection
             .is_some_and(|drag| drag.document_id == document_id && drag.region == region);
-        let pointer_selecting = if region == WrappedRegion::GlobalResults {
-            self.global_table.read(cx).delegate().is_pointer_selecting()
+        let pointer_state_active = if region == WrappedRegion::GlobalResults {
+            let table = self.global_table.read(cx);
+            let delegate = table.delegate();
+            delegate.is_pointer_selecting() || delegate.is_text_selection_suppressed()
         } else {
             self.documents
                 .iter()
@@ -15137,10 +15141,12 @@ impl Workspace {
                     } else {
                         &tab.log_table
                     };
-                    table.read(cx).delegate().is_pointer_selecting()
+                    let table = table.read(cx);
+                    let delegate = table.delegate();
+                    delegate.is_pointer_selecting() || delegate.is_text_selection_suppressed()
                 })
         };
-        if !active_drag && !pointer_selecting {
+        if !active_drag && !pointer_state_active {
             return;
         }
         if active_drag {
@@ -15157,7 +15163,6 @@ impl Workspace {
         }
         if region == WrappedRegion::GlobalResults {
             self.global_table.update(cx, |table, cx| {
-                table.delegate_mut().set_text_selection_suppressed(false);
                 table.delegate().end_pointer_selection();
                 cx.notify();
             });
@@ -15173,7 +15178,6 @@ impl Workspace {
             &tab.log_table
         };
         table.update(cx, |table, cx| {
-            table.delegate_mut().set_text_selection_suppressed(false);
             table.delegate().end_pointer_selection();
             cx.notify();
         });
@@ -15184,6 +15188,9 @@ impl Workspace {
         if self.row_drag_selection.is_some() {
             self.advance_row_drag_selection(cx);
         }
+        // Result replacement clears the delegate's pointer anchor before MouseUp. Keep the
+        // workspace-owned drag target so its text-selection suppression is still released.
+        let active_drag = self.row_drag_selection;
         let clear_text_selection = self
             .row_drag_selection
             .is_some_and(|drag| drag.mode == RowDragMode::Lines);
@@ -15193,23 +15200,39 @@ impl Workspace {
         }
         let mut ended_selection = false;
         for tab in &self.documents {
-            for table in [&tab.log_table, &tab.result_table] {
-                if !table.read(cx).delegate().is_pointer_selecting() {
+            for (region, table) in [
+                (WrappedRegion::Log, &tab.log_table),
+                (WrappedRegion::Results, &tab.result_table),
+            ] {
+                let active_drag_targets_table = active_drag
+                    .is_some_and(|drag| drag.document_id == tab.id && drag.region == region);
+                let needs_cleanup = {
+                    let table = table.read(cx);
+                    let delegate = table.delegate();
+                    active_drag_targets_table
+                        || delegate.is_pointer_selecting()
+                        || delegate.is_text_selection_suppressed()
+                };
+                if !needs_cleanup {
                     continue;
                 }
                 ended_selection = true;
                 table.update(cx, |table, cx| {
-                    table.delegate_mut().set_text_selection_suppressed(false);
                     table.delegate().end_pointer_selection();
                     cx.notify();
                 });
             }
         }
-        let ended_global_selection = self.global_table.read(cx).delegate().is_pointer_selecting();
+        let ended_global_selection = {
+            let table = self.global_table.read(cx);
+            let delegate = table.delegate();
+            active_drag.is_some_and(|drag| drag.region == WrappedRegion::GlobalResults)
+                || delegate.is_pointer_selecting()
+                || delegate.is_text_selection_suppressed()
+        };
         if ended_global_selection {
             ended_selection = true;
             self.global_table.update(cx, |table, cx| {
-                table.delegate_mut().set_text_selection_suppressed(false);
                 table.delegate().end_pointer_selection();
                 cx.notify();
             });
@@ -15386,7 +15409,7 @@ impl Workspace {
         }
         table.update(cx, |table, cx| {
             table
-                .delegate_mut()
+                .delegate()
                 .set_text_selection_suppressed(next_mode == RowDragMode::Lines);
             if next_mode == RowDragMode::Text || target == drag.start_row {
                 table.delegate().restore_pointer_selection();
@@ -15593,7 +15616,7 @@ impl Workspace {
         }
         self.global_table.update(cx, |table, cx| {
             table
-                .delegate_mut()
+                .delegate()
                 .set_text_selection_suppressed(next_mode == RowDragMode::Lines);
             if next_mode == RowDragMode::Text || target == drag.start_row {
                 table.delegate().restore_pointer_selection();
@@ -17941,6 +17964,7 @@ impl Workspace {
             crate::ui_performance::scope("Workspace::render_file_drop_observer");
         let workspace = cx.weak_entity();
         let row_drag_workspace = workspace.clone();
+        let row_drag_mouse_down_workspace = workspace.clone();
         canvas(
             |_, _, _| (),
             move |_, _, window, _cx| {
@@ -17974,6 +17998,17 @@ impl Workspace {
                         workspace.end_all_row_drag_selection(window, cx);
                     });
                     Workspace::finish_cross_window_tab_drag(event, window, cx);
+                });
+                window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
+                    if !phase.capture() {
+                        return;
+                    }
+                    _ = row_drag_mouse_down_workspace.update(cx, |workspace, cx| {
+                        if workspace.row_drag_selection.is_some() {
+                            TextSelection::end(window, cx);
+                            workspace.end_all_row_drag_selection(window, cx);
+                        }
+                    });
                 });
             },
         )

@@ -610,10 +610,12 @@ impl Element for SelectableLogText {
 mod tests {
     use super::*;
     use gpui::{
-        Context, Modifiers, MouseMoveEvent, MouseUpEvent, ParentElement as _, Render, Styled as _,
-        TestAppContext, div, point, px,
+        Context, Hsla, Modifiers, MouseMoveEvent, MouseUpEvent, ParentElement as _, Render,
+        Styled as _, TestAppContext, div, hsla, point, px,
     };
     use gpui_base::TextSelectionLayer;
+
+    const TEST_SELECTION_COLOR: Hsla = hsla(0.37, 0.91, 0.43, 1.);
 
     struct SelectableLogTextTestView {
         text: LogText,
@@ -635,7 +637,7 @@ mod tests {
                         0,
                         self.text.clone(),
                         styled_text,
-                        gpui::Hsla::default(),
+                        TEST_SELECTION_COLOR,
                     )),
             )
         }
@@ -670,6 +672,12 @@ mod tests {
                     .has_local_selection(cx)
             );
             assert_eq!(TextSelection::selected_text(window, cx), "alpha");
+            assert!(
+                window
+                    .painted_quads()
+                    .iter()
+                    .any(|quad| quad.background == TEST_SELECTION_COLOR.into())
+            );
         });
 
         let outside_position = point(px(200.), px(80.));
@@ -689,6 +697,12 @@ mod tests {
             window.simulate_next_frame(cx);
             let _ = window.draw(cx);
             assert_eq!(TextSelection::selected_text(window, cx), "alpha");
+            assert!(
+                window
+                    .painted_quads()
+                    .iter()
+                    .any(|quad| quad.background == TEST_SELECTION_COLOR.into())
+            );
         });
     }
 }
