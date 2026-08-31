@@ -1689,6 +1689,31 @@ mod source_snapshot_tests {
         assert!(!first.same_source_snapshot(&second));
         _ = fs::remove_dir_all(directory);
     }
+
+    #[test]
+    fn cached_preview_maps_source_rows_to_local_virtual_rows() {
+        let directory = test_directory("row-coordinates");
+        let path = directory.join("source.log");
+        let cache_directory = directory.join("cache");
+        fs::write(&path, b"zero\none\ntwo\nthree").expect("应能写入测试日志");
+        let (_, pending_cache) = LogDocument::open_with_index_cache(&path, &cache_directory)
+            .expect("应能为测试日志建立索引缓存");
+        pending_cache
+            .expect("首次打开应生成待写入的索引缓存")
+            .persist()
+            .expect("应能写入测试索引缓存");
+
+        let preview = LogDocument::open_cached_preview(&path, &cache_directory, 2, 1)
+            .expect("应能读取缓存预览")
+            .expect("缓存预览应存在");
+
+        assert_eq!(preview.segment_start_row(), 2);
+        assert_eq!(preview.source_row(0), Some(2));
+        assert_eq!(preview.local_row(2), Some(0));
+        assert_eq!(preview.local_row(1), None);
+        assert_eq!(preview.local_row(3), None);
+        _ = fs::remove_dir_all(directory);
+    }
 }
 
 #[cfg(test)]

@@ -2090,11 +2090,15 @@ impl DocumentTab {
         )
     }
 
-    fn select_and_center_log_row(&mut self, row_ix: usize, cx: &mut App) {
+    fn select_and_center_log_source_row(&mut self, source_row: usize, cx: &mut App) -> bool {
+        let Some(row_ix) = self.document.local_row(source_row) else {
+            return false;
+        };
         self.log_table.update(cx, |table, cx| {
             table.set_active_log_row(row_ix, cx);
         });
         self.log_viewport.center_row(row_ix);
+        true
     }
 
     fn install_result_rows(&mut self, result_rows: CompressedRows, cx: &mut App) {
@@ -6526,7 +6530,9 @@ impl Workspace {
                         return;
                     };
                     tab.auto_follow = false;
-                    tab.select_and_center_log_row(source_row, cx);
+                    if !tab.select_and_center_log_source_row(source_row, cx) {
+                        return;
+                    }
                     if !keep_quick_find_focus {
                         tab.result_focus_handle.focus(window, cx);
                     }
@@ -6886,7 +6892,7 @@ impl Workspace {
             return;
         };
         let Some(document_ix) = self.documents.iter().position(|tab| {
-            tab.document.path() == path && tab.load_state == DocumentLoadState::Ready
+            paths_match(tab.document.path(), &path) && tab.load_state == DocumentLoadState::Ready
         }) else {
             self.pending_directory_result_jump = None;
             return;
@@ -6898,7 +6904,16 @@ impl Workspace {
         };
         tab.auto_follow = false;
         tab.selection_table = SelectionTable::Log;
-        tab.select_and_center_log_row(source_row, cx);
+        if !tab.select_and_center_log_source_row(source_row, cx) {
+            window.push_notification(
+                crate::tr!(
+                    "该目录结果行在当前文件中已不存在，请重新搜索",
+                    "That directory result line no longer exists in the current file. Search again."
+                ),
+                cx,
+            );
+            return;
+        }
         self.selected_source_row = Some(source_row);
         cx.notify();
     }
@@ -10854,13 +10869,32 @@ impl Workspace {
             return;
         };
         self.activate_tab(document_ix, window, cx);
-        let Some(tab) = self.documents.get_mut(document_ix) else {
-            return;
+        let (selected, still_loading) = {
+            let Some(tab) = self.documents.get_mut(document_ix) else {
+                return;
+            };
+            tab.auto_follow = false;
+            tab.selection_table = SelectionTable::Log;
+            (
+                tab.select_and_center_log_source_row(source_row, cx),
+                tab.load_state != DocumentLoadState::Ready,
+            )
         };
-        tab.auto_follow = false;
-        tab.selection_table = SelectionTable::Log;
-        tab.select_and_center_log_row(source_row, cx);
-        self.selected_source_row = Some(source_row);
+        if selected {
+            self.selected_source_row = Some(source_row);
+        } else if still_loading {
+            if let Some(path) = result_path {
+                self.pending_directory_result_jump = Some((path, source_row));
+            }
+        } else {
+            window.push_notification(
+                crate::tr!(
+                    "该结果行在当前文件中已不存在，请重新搜索",
+                    "That result line no longer exists in the current file. Search again."
+                ),
+                cx,
+            );
+        }
         cx.notify();
     }
 
