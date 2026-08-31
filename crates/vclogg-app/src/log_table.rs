@@ -1479,7 +1479,9 @@ impl TableDelegate for LogTableDelegate {
         if self.presenter.show_line_numbers && col_ix == 0 {
             (source_row + 1).to_string()
         } else if col_ix == usize::from(self.presenter.show_line_numbers) {
-            self.source.document.line(source_row).unwrap_or_default()
+            self.line_text(source_row)
+                .map(|text| text.display().to_string())
+                .unwrap_or_default()
         } else {
             String::new()
         }

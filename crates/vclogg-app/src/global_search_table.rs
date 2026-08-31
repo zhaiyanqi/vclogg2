@@ -1475,10 +1475,9 @@ impl TableDelegate for GlobalSearchTableDelegate {
             FlatRow::Match {
                 group_ix,
                 source_row,
-            } if col_ix == 2 => self.projection.groups[group_ix]
-                .source
-                .document
-                .line(source_row)
+            } if col_ix == 2 => self
+                .line_text(group_ix, source_row)
+                .map(|text| text.display().to_string())
                 .unwrap_or_default(),
             _ => String::new(),
         }
