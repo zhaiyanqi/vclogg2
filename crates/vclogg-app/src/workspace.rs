@@ -639,8 +639,31 @@ struct WrappedListState<K> {
     text_selections: RefCell<TextSelectionCache<K>>,
     measurement_anchor: Rc<Cell<Option<RowViewportPosition>>>,
     scrollbar_measurement_pending: Rc<Cell<bool>>,
-    layout_width: Cell<Pixels>,
+    layout_key: RefCell<Option<WrappedLayoutKey>>,
     row_bounds: Rc<RefCell<BTreeMap<usize, Bounds<Pixels>>>>,
+}
+
+#[derive(Clone, Debug)]
+struct WrappedLayoutKey {
+    content_revision: u64,
+    width: Pixels,
+    rem_size: Pixels,
+    font_family: SharedString,
+    font_size: u16,
+    base_height: Pixels,
+    horizontal_padding: Pixels,
+}
+
+impl WrappedLayoutKey {
+    fn is_equivalent_to(&self, other: &Self) -> bool {
+        self.content_revision == other.content_revision
+            && (self.width - other.width).abs() < px(0.5)
+            && self.rem_size == other.rem_size
+            && self.font_family == other.font_family
+            && self.font_size == other.font_size
+            && self.base_height == other.base_height
+            && self.horizontal_padding == other.horizontal_padding
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -890,6 +913,31 @@ fn wrapped_viewport_measurement_range(
 mod scroll_position_tests {
     use super::*;
 
+    fn wrapped_layout_key_for_test() -> WrappedLayoutKey {
+        WrappedLayoutKey {
+            content_revision: 1,
+            width: px(640.),
+            rem_size: px(16.),
+            font_family: "Consolas".into(),
+            font_size: 13,
+            base_height: px(19.),
+            horizontal_padding: px(8.),
+        }
+    }
+
+    fn assert_wrapped_layout_change_invalidates(update: impl FnOnce(&mut WrappedLayoutKey)) {
+        let state = WrappedListState::<usize>::default();
+        let current = wrapped_layout_key_for_test();
+        assert!(state.invalidate_for_layout(current.clone()));
+        state.prime_measured_heights(2, current.base_height, [(0, px(57.))]);
+        assert_eq!(state.item_sizes.borrow()[0].height, px(57.));
+
+        let mut next = current;
+        update(&mut next);
+        assert!(state.invalidate_for_layout(next));
+        assert!(state.item_sizes.borrow().is_empty());
+    }
+
     #[test]
     fn centers_a_row_when_the_viewport_has_room_on_both_sides() {
         assert_eq!(
@@ -1008,6 +1056,30 @@ mod scroll_position_tests {
             wrapped_viewport_measurement_range(0, px(0.), px(20.), 2),
             0..2
         );
+    }
+
+    #[test]
+    fn wrapped_measurements_are_invalidated_by_every_layout_dependency() {
+        assert_wrapped_layout_change_invalidates(|key| key.content_revision += 1);
+        assert_wrapped_layout_change_invalidates(|key| key.width += px(1.));
+        assert_wrapped_layout_change_invalidates(|key| key.rem_size += px(1.));
+        assert_wrapped_layout_change_invalidates(|key| key.font_family = "JetBrains Mono".into());
+        assert_wrapped_layout_change_invalidates(|key| key.font_size += 1);
+        assert_wrapped_layout_change_invalidates(|key| key.base_height += px(1.));
+        assert_wrapped_layout_change_invalidates(|key| key.horizontal_padding += px(1.));
+    }
+
+    #[test]
+    fn subpixel_width_noise_keeps_wrapped_measurements() {
+        let state = WrappedListState::<usize>::default();
+        let current = wrapped_layout_key_for_test();
+        assert!(state.invalidate_for_layout(current.clone()));
+        state.prime_measured_heights(1, current.base_height, [(0, px(57.))]);
+
+        let mut next = current;
+        next.width += px(0.25);
+        assert!(!state.invalidate_for_layout(next));
+        assert_eq!(state.item_sizes.borrow()[0].height, px(57.));
     }
 
     #[test]
@@ -1178,7 +1250,7 @@ impl<K> Default for WrappedListState<K> {
             text_selections: RefCell::default(),
             measurement_anchor: Rc::new(Cell::new(None)),
             scrollbar_measurement_pending: Rc::new(Cell::new(false)),
-            layout_width: Cell::new(px(0.)),
+            layout_key: RefCell::new(None),
             row_bounds: Rc::default(),
         }
     }
@@ -1350,31 +1422,38 @@ impl<K: Clone + Ord> WrappedListState<K> {
         self.pending_heights.borrow_mut().clear();
         self.measured_rows.borrow_mut().clear();
         self.height_corrections.borrow_mut().clear();
-        self.text_selections.get_mut().clear();
+        self.text_selections.borrow_mut().clear();
         self.row_bounds.borrow_mut().clear();
         self.scrollbar_measurement_pending.set(false);
     }
 
-    fn invalidate_for_width(&mut self, width: Pixels) -> bool {
-        if !self.needs_width_invalidation(width) {
+    fn invalidate_for_layout(&self, key: WrappedLayoutKey) -> bool {
+        if !self.needs_layout_invalidation(&key) {
             return false;
         }
-        self.layout_width.set(width);
+        self.layout_key.replace(Some(key));
         *self.item_sizes.borrow_mut() = Rc::new(Vec::new());
         self.base_height.set(px(0.));
         self.pending_heights.borrow_mut().clear();
         self.measured_rows.borrow_mut().clear();
         self.height_corrections.borrow_mut().clear();
-        self.text_selections.get_mut().clear();
+        self.text_selections.borrow_mut().clear();
         self.row_bounds.borrow_mut().clear();
         self.scrollbar_measurement_pending.set(false);
         true
     }
 
-    fn needs_width_invalidation(&self, width: Pixels) -> bool {
-        width > px(0.)
-            && (self.layout_width.get() == px(0.)
-                || (self.layout_width.get() - width).abs() >= px(0.5))
+    fn needs_layout_invalidation(&self, key: &WrappedLayoutKey) -> bool {
+        key.width > px(0.)
+            && !self
+                .layout_key
+                .borrow()
+                .as_ref()
+                .is_some_and(|current| current.is_equivalent_to(key))
+    }
+
+    fn layout_width(&self) -> Option<Pixels> {
+        self.layout_key.borrow().as_ref().map(|key| key.width)
     }
 
     fn capture_row_viewport_position(
@@ -11831,6 +11910,26 @@ impl Workspace {
             .unwrap_or(base_height)
     }
 
+    fn wrapped_layout_key(
+        content_revision: u64,
+        width: Pixels,
+        font_size: u16,
+        font_family: SharedString,
+        base_height: Pixels,
+        rem_size: Pixels,
+        horizontal_padding: Pixels,
+    ) -> WrappedLayoutKey {
+        WrappedLayoutKey {
+            content_revision,
+            width,
+            rem_size,
+            font_family,
+            font_size,
+            base_height,
+            horizontal_padding,
+        }
+    }
+
     fn prime_local_wrapped_frame(
         &mut self,
         tab_ix: usize,
@@ -11873,7 +11972,7 @@ impl Workspace {
                 table.read(cx).delegate().row_count(),
             )
         });
-        let (count, outer_width, font_size, font_family, rows) = {
+        let (count, content_revision, outer_width, font_size, font_family, rows) = {
             let table = table.read(cx);
             let delegate = table.delegate();
             let count = delegate.row_count();
@@ -11899,13 +11998,15 @@ impl Workspace {
                 .collect::<Vec<_>>();
             (
                 count,
+                delegate.content_revision(),
                 outer_width,
                 font_size,
                 delegate.resolved_font_family(cx),
                 rows,
             )
         };
-        let text_width = (outer_width - log_cell_horizontal_padding(cx) * 2.).max(px(0.));
+        let horizontal_padding = log_cell_horizontal_padding(cx);
+        let text_width = (outer_width - horizontal_padding * 2.).max(px(0.));
         let heights = rows.into_iter().map(|(row_ix, line)| {
             (
                 row_ix,
@@ -11926,8 +12027,16 @@ impl Workspace {
         };
         if reset_for_mode_switch {
             wrapped.reset_scroll_for_mode_switch();
-            wrapped.invalidate_for_width(outer_width);
         }
+        wrapped.invalidate_for_layout(Self::wrapped_layout_key(
+            content_revision,
+            outer_width,
+            font_size,
+            font_family.clone(),
+            base_height,
+            window.rem_size(),
+            horizontal_padding,
+        ));
         wrapped.prime_measured_heights(count, base_height, heights);
     }
 
@@ -11964,7 +12073,7 @@ impl Workspace {
                 self.global_table.read(cx).delegate().rows_len(),
             )
         });
-        let (count, outer_width, font_size, font_family, rows) = {
+        let (count, content_revision, outer_width, font_size, font_family, rows) = {
             let table = self.global_table.read(cx);
             let delegate = table.delegate();
             let count = delegate.rows_len();
@@ -11987,13 +12096,15 @@ impl Workspace {
                 .collect::<Vec<_>>();
             (
                 count,
+                delegate.content_revision(),
                 outer_width,
                 font_size,
                 delegate.resolved_font_family(cx),
                 rows,
             )
         };
-        let text_width = (outer_width - log_cell_horizontal_padding(cx) * 2.).max(px(0.));
+        let horizontal_padding = log_cell_horizontal_padding(cx);
+        let text_width = (outer_width - horizontal_padding * 2.).max(px(0.));
         let heights = rows.into_iter().map(|(row_ix, line)| {
             (
                 row_ix,
@@ -12009,9 +12120,17 @@ impl Workspace {
         });
         if reset_for_mode_switch {
             self.wrapped_global_results.reset_scroll_for_mode_switch();
-            self.wrapped_global_results
-                .invalidate_for_width(outer_width);
         }
+        self.wrapped_global_results
+            .invalidate_for_layout(Self::wrapped_layout_key(
+                content_revision,
+                outer_width,
+                font_size,
+                font_family.clone(),
+                base_height,
+                window.rem_size(),
+                horizontal_padding,
+            ));
         self.wrapped_global_results
             .prime_measured_heights(count, base_height, heights);
     }
@@ -12047,8 +12166,8 @@ impl Workspace {
             let delegate = table.delegate();
             delegate.prepare_visible_rows(visible_range.clone());
             let font_size = delegate.log_font_size();
-            let outer_width = if self.wrapped_global_results.layout_width.get() > px(0.) {
-                self.wrapped_global_results.layout_width.get()
+            let outer_width = if let Some(width) = self.wrapped_global_results.layout_width() {
+                width
             } else {
                 self.row_drag_bounds
                     .get(&(0, WrappedRegion::GlobalResults))
@@ -15387,27 +15506,49 @@ impl Workspace {
         keep_scrolling && scroll_changed
     }
 
-    fn update_wrapped_layout_width(
+    fn update_wrapped_layout(
         &mut self,
         document_id: u64,
         region: WrappedRegion,
         width: Pixels,
+        rem_size: Pixels,
         cx: &mut Context<Self>,
     ) {
+        let base_height = self.log_row_height();
+        let horizontal_padding = log_cell_horizontal_padding(cx);
         let changed = match region {
             WrappedRegion::Log | WrappedRegion::Results => {
-                let Some(tab) = self.documents.iter_mut().find(|tab| tab.id == document_id) else {
+                let Some(tab_ix) = self.documents.iter().position(|tab| tab.id == document_id)
+                else {
                     return;
                 };
-                if !tab.word_wrap {
+                if !self.documents[tab_ix].word_wrap {
                     return;
                 }
-                let (table, wrapped) = if region == WrappedRegion::Results {
-                    (&tab.result_table, &mut tab.wrapped_results)
+                let table = if region == WrappedRegion::Results {
+                    self.documents[tab_ix].result_table.clone()
                 } else {
-                    (&tab.log_table, &mut tab.wrapped_log)
+                    self.documents[tab_ix].log_table.clone()
                 };
-                if !wrapped.needs_width_invalidation(width) {
+                let key = {
+                    let table = table.read(cx);
+                    let delegate = table.delegate();
+                    Self::wrapped_layout_key(
+                        delegate.content_revision(),
+                        width,
+                        delegate.log_font_size(),
+                        delegate.resolved_font_family(cx),
+                        base_height,
+                        rem_size,
+                        horizontal_padding,
+                    )
+                };
+                let wrapped = if region == WrappedRegion::Results {
+                    &mut self.documents[tab_ix].wrapped_results
+                } else {
+                    &mut self.documents[tab_ix].wrapped_log
+                };
+                if !wrapped.needs_layout_invalidation(&key) {
                     return;
                 }
                 let preferred = table.read(cx).active_log_row();
@@ -15416,13 +15557,26 @@ impl Workspace {
                 {
                     wrapped.measurement_anchor.set(Some(anchor));
                 }
-                wrapped.invalidate_for_width(width)
+                wrapped.invalidate_for_layout(key)
             }
             WrappedRegion::GlobalResults => {
                 if !self.global_word_wrap {
                     return;
                 }
-                if !self.wrapped_global_results.needs_width_invalidation(width) {
+                let key = {
+                    let table = self.global_table.read(cx);
+                    let delegate = table.delegate();
+                    Self::wrapped_layout_key(
+                        delegate.content_revision(),
+                        width,
+                        delegate.log_font_size(),
+                        delegate.resolved_font_family(cx),
+                        base_height,
+                        rem_size,
+                        horizontal_padding,
+                    )
+                };
+                if !self.wrapped_global_results.needs_layout_invalidation(&key) {
                     return;
                 }
                 let preferred = self.global_table.read(cx).active_log_row();
@@ -15439,7 +15593,7 @@ impl Workspace {
                         .measurement_anchor
                         .set(Some(anchor));
                 }
-                self.wrapped_global_results.invalidate_for_width(width)
+                self.wrapped_global_results.invalidate_for_layout(key)
             }
         };
         if changed && let Some(surface) = self.log_region_surface(document_id, region) {
@@ -17592,16 +17746,17 @@ impl Workspace {
                                 this.remember_user_log_region(LogRegion::CurrentResults);
                             }),
                         )
-                        .on_prepaint(move |bounds, _, cx| {
+                        .on_prepaint(move |bounds, window, cx| {
                             result_drag_workspace.update(cx, |workspace, cx| {
                                 workspace
                                     .row_drag_bounds
                                     .insert((document_id, WrappedRegion::Results), bounds);
-                                workspace.update_wrapped_layout_width(
+                                workspace.update_wrapped_layout(
                                     document_id,
                                     WrappedRegion::Results,
                                     (bounds.size.width - marker_width - local_line_number_width)
                                         .max(px(0.)),
+                                    window.rem_size(),
                                     cx,
                                 );
                             });
@@ -17672,16 +17827,17 @@ impl Workspace {
                                 this.remember_user_log_region(LogRegion::GlobalResults);
                             }),
                         )
-                        .on_prepaint(move |bounds, _, cx| {
+                        .on_prepaint(move |bounds, window, cx| {
                             global_drag_workspace.update(cx, |workspace, cx| {
                                 workspace
                                     .row_drag_bounds
                                     .insert((0, WrappedRegion::GlobalResults), bounds);
-                                workspace.update_wrapped_layout_width(
+                                workspace.update_wrapped_layout(
                                     document_id,
                                     WrappedRegion::GlobalResults,
                                     (bounds.size.width - marker_width - global_line_number_width)
                                         .max(px(0.)),
+                                    window.rem_size(),
                                     cx,
                                 );
                             });
@@ -17810,18 +17966,19 @@ impl Workspace {
                                         this.remember_user_log_region(LogRegion::Body);
                                     }),
                                 )
-                                .on_prepaint(move |bounds, _, cx| {
+                                .on_prepaint(move |bounds, window, cx| {
                                     log_drag_workspace.update(cx, |workspace, cx| {
                                         workspace
                                             .row_drag_bounds
                                             .insert((document_id, WrappedRegion::Log), bounds);
-                                        workspace.update_wrapped_layout_width(
+                                        workspace.update_wrapped_layout(
                                             document_id,
                                             WrappedRegion::Log,
                                             (bounds.size.width
                                                 - marker_width
                                                 - local_line_number_width)
                                                 .max(px(0.)),
+                                            window.rem_size(),
                                             cx,
                                         );
                                     });

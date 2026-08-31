@@ -653,6 +653,7 @@ pub(crate) fn combined_match_ranges(
 pub struct LogTableDelegate {
     document_id: u64,
     document: Arc<LogDocument>,
+    content_revision: u64,
     row_projection: LogRowProjection,
     marked_rows: Arc<BTreeSet<usize>>,
     empty_message: SharedString,
@@ -701,6 +702,7 @@ impl LogTableDelegate {
         Self {
             document_id,
             document,
+            content_revision: 1,
             row_projection: LogRowProjection::All,
             marked_rows: Arc::default(),
             empty_message: crate::tr!("文件中没有日志行", "The file has no log lines").into(),
@@ -737,6 +739,7 @@ impl LogTableDelegate {
         Self {
             document_id,
             document,
+            content_revision: 1,
             row_projection: LogRowProjection::SourceRows(source_rows),
             marked_rows: Arc::default(),
             empty_message: crate::tr!("没有匹配的日志行", "No log lines match").into(),
@@ -817,6 +820,10 @@ impl LogTableDelegate {
         }
     }
 
+    pub(crate) fn content_revision(&self) -> u64 {
+        self.content_revision
+    }
+
     pub fn set_search_matcher(&mut self, search_matcher: Option<SearchMatcher>) {
         self.search_matcher = search_matcher;
     }
@@ -836,6 +843,7 @@ impl LogTableDelegate {
     pub fn replace_with_all(&mut self, document: Arc<LogDocument>) {
         if !Arc::ptr_eq(&self.document, &document) {
             self.line_cache.clear();
+            self.content_revision = self.content_revision.saturating_add(1);
         } else {
             self.line_cache.invalidate_window();
         }
@@ -848,6 +856,7 @@ impl LogTableDelegate {
     pub fn replace_with_rows(&mut self, document: Arc<LogDocument>, source_rows: CompressedRows) {
         if !Arc::ptr_eq(&self.document, &document) {
             self.line_cache.clear();
+            self.content_revision = self.content_revision.saturating_add(1);
         } else {
             self.line_cache.invalidate_window();
         }
@@ -1408,6 +1417,19 @@ mod tests {
         assert_eq!(delegate.source_row(1), Some(9));
         assert_eq!(delegate.source_row(2), Some(27));
         assert_eq!(delegate.source_row(3), None);
+    }
+
+    #[test]
+    fn document_replacement_advances_content_revision() {
+        let document = Arc::new(LogDocument::placeholder("first.log"));
+        let mut delegate = LogTableDelegate::all(1, document.clone());
+        let initial_revision = delegate.content_revision();
+
+        delegate.replace_with_all(document);
+        assert_eq!(delegate.content_revision(), initial_revision);
+
+        delegate.replace_with_all(Arc::new(LogDocument::placeholder("second.log")));
+        assert!(delegate.content_revision() > initial_revision);
     }
 
     #[test]

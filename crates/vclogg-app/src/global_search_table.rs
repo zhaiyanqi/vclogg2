@@ -70,6 +70,7 @@ enum FlatRow {
 
 pub struct GlobalSearchTableDelegate {
     groups: Vec<GlobalSearchGroup>,
+    content_revision: u64,
     group_starts: Vec<usize>,
     rows_len: usize,
     matcher: Option<SearchMatcher>,
@@ -404,6 +405,7 @@ impl GlobalSearchTableDelegate {
     pub fn new() -> Self {
         Self {
             groups: Vec::new(),
+            content_revision: 1,
             group_starts: Vec::new(),
             rows_len: 0,
             matcher: None,
@@ -429,6 +431,13 @@ impl GlobalSearchTableDelegate {
     }
 
     pub fn set_groups(&mut self, groups: Vec<GlobalSearchGroup>, matcher: Option<SearchMatcher>) {
+        let documents_changed = groups.len() != self.groups.len()
+            || groups.iter().any(|next| {
+                !self.groups.iter().any(|current| {
+                    current.document_id == next.document_id
+                        && Arc::ptr_eq(&current.document, &next.document)
+                })
+            });
         let reusable_documents = groups
             .iter()
             .filter(|next| {
@@ -441,6 +450,9 @@ impl GlobalSearchTableDelegate {
             .collect::<BTreeSet<_>>();
         self.line_cache
             .retain(|(document_id, _)| reusable_documents.contains(document_id));
+        if documents_changed {
+            self.content_revision = self.content_revision.saturating_add(1);
+        }
         self.groups = groups;
         self.matcher = matcher;
         self.row_bounds.borrow_mut().clear();
@@ -487,6 +499,10 @@ impl GlobalSearchTableDelegate {
             LogFontFamily::Consolas => "Consolas".into(),
             LogFontFamily::SystemMonospace => cx.theme().mono_font_family.clone(),
         }
+    }
+
+    pub(crate) fn content_revision(&self) -> u64 {
+        self.content_revision
     }
 
     pub(crate) fn line_number_width(&self) -> u16 {
@@ -1322,6 +1338,7 @@ mod tests {
         let mut delegate = GlobalSearchTableDelegate::new();
         let group = test_group(document.clone());
         delegate.set_groups(vec![group.clone()], None);
+        let initial_revision = delegate.content_revision();
         delegate
             .line_cache
             .line((1, 0), || Some("cached global line".to_string()));
@@ -1329,6 +1346,7 @@ mod tests {
         let mut changed_presentation = group.clone();
         changed_presentation.marked_rows = Arc::new(BTreeSet::from([0]));
         delegate.set_groups(vec![changed_presentation], None);
+        assert_eq!(delegate.content_revision(), initial_revision);
 
         let reused = delegate
             .line_cache
@@ -1338,6 +1356,7 @@ mod tests {
 
         let replacement = test_group(Arc::new(LogDocument::placeholder("replacement.log")));
         delegate.set_groups(vec![replacement], None);
+        assert!(delegate.content_revision() > initial_revision);
         let reloaded = delegate
             .line_cache
             .line((1, 0), || Some("reloaded global line".to_string()))
