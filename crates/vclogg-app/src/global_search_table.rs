@@ -10,7 +10,7 @@ use std::{
 use gpui::{
     AnyElement, App, Bounds, Context, Div, Element, GlobalElementId, Hsla, InspectorElementId,
     InteractiveElement as _, IntoElement, LayoutId, MouseButton, MouseDownEvent,
-    ParentElement as _, Pixels, Point, RenderOnce, SharedString, Stateful, Styled as _, StyledText,
+    ParentElement as _, Pixels, RenderOnce, SharedString, Stateful, Styled as _, StyledText,
     Window, div, prelude::FluentBuilder as _, px, svg,
 };
 use gpui_base::{GlobalState, TextSelection};
@@ -671,6 +671,10 @@ impl GlobalSearchTableDelegate {
             })
     }
 
+    pub(crate) fn row_bounds_handle(&self) -> Rc<RefCell<BTreeMap<usize, Bounds<Pixels>>>> {
+        self.interaction.row_bounds.clone()
+    }
+
     fn stable_interaction_rows(&self) -> (Vec<LogRowKey>, Option<LogRowKey>, Option<LogRowKey>) {
         let selection = self.interaction.row_selection.borrow();
         let selected_rows = selection
@@ -936,23 +940,6 @@ impl GlobalSearchTableDelegate {
             .row_selection
             .borrow()
             .is_text_selection_allowed()
-    }
-
-    pub(crate) fn row_at_position(&self, position: Point<Pixels>) -> Option<usize> {
-        self.interaction
-            .row_bounds
-            .borrow()
-            .iter()
-            .find_map(|(row_ix, bounds)| bounds.contains(&position).then_some(*row_ix))
-    }
-
-    pub(crate) fn visible_row_edge(&self, after: bool) -> Option<usize> {
-        let bounds = self.interaction.row_bounds.borrow();
-        if after {
-            bounds.keys().next_back().copied()
-        } else {
-            bounds.keys().next().copied()
-        }
     }
 
     pub(crate) fn set_text_selection_suppressed(&self, suppressed: bool) {

@@ -8,8 +8,8 @@ use std::{
 
 use gpui::{
     AnyElement, App, Bounds, Context, Div, HighlightStyle, Hsla, InteractiveElement as _,
-    IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Pixels, Point, SharedString,
-    Stateful, Styled as _, StyledText, Window, div, linear_color_stop, linear_gradient, point,
+    IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Pixels, SharedString, Stateful,
+    Styled as _, StyledText, Window, div, linear_color_stop, linear_gradient, point,
     prelude::FluentBuilder as _, px,
 };
 use gpui_base::{GlobalState, TextSelection};
@@ -294,19 +294,9 @@ pub(crate) trait LogTableStateExt {
     fn sync_active_log_row(&mut self, cx: &mut Context<Self>) -> bool
     where
         Self: Sized;
-    fn log_row_viewport_y(&self, row_ix: usize, row_height: Pixels) -> Pixels;
-    fn scroll_log_row_to_viewport_y(&self, row_ix: usize, viewport_y: Pixels, row_height: Pixels);
 }
 
-fn uniform_log_row_viewport_y(
-    handle: &gpui::UniformListScrollHandle,
-    row_ix: usize,
-    row_height: Pixels,
-) -> Pixels {
-    row_height * row_ix as f32 + handle.0.borrow().base_handle.offset().y
-}
-
-fn scroll_uniform_log_row_to_viewport_y(
+pub(crate) fn scroll_uniform_log_row_to_viewport_y(
     handle: &gpui::UniformListScrollHandle,
     row_ix: usize,
     viewport_y: Pixels,
@@ -345,19 +335,6 @@ where
             self.clear_selection(cx);
             false
         }
-    }
-
-    fn log_row_viewport_y(&self, row_ix: usize, row_height: Pixels) -> Pixels {
-        uniform_log_row_viewport_y(&self.vertical_scroll_handle, row_ix, row_height)
-    }
-
-    fn scroll_log_row_to_viewport_y(&self, row_ix: usize, viewport_y: Pixels, row_height: Pixels) {
-        scroll_uniform_log_row_to_viewport_y(
-            &self.vertical_scroll_handle,
-            row_ix,
-            viewport_y,
-            row_height,
-        );
     }
 }
 
@@ -1037,6 +1014,10 @@ impl LogTableDelegate {
         self.source.row_ix(key)
     }
 
+    pub(crate) fn row_bounds_handle(&self) -> Rc<RefCell<BTreeMap<usize, Bounds<Pixels>>>> {
+        self.interaction.row_bounds.clone()
+    }
+
     pub(crate) fn wrapped_row(&self, row_ix: usize) -> Option<WrappedLogRow> {
         let source_row = self.source_row(row_ix)?;
         let presentation = self.row_presentation(source_row)?;
@@ -1131,23 +1112,6 @@ impl LogTableDelegate {
             .row_selection
             .borrow()
             .pointer_text_selection_allowed
-    }
-
-    pub(crate) fn row_at_position(&self, position: Point<Pixels>) -> Option<usize> {
-        self.interaction
-            .row_bounds
-            .borrow()
-            .iter()
-            .find_map(|(row_ix, bounds)| bounds.contains(&position).then_some(*row_ix))
-    }
-
-    pub(crate) fn visible_row_edge(&self, after: bool) -> Option<usize> {
-        let bounds = self.interaction.row_bounds.borrow();
-        if after {
-            bounds.keys().next_back().copied()
-        } else {
-            bounds.keys().next().copied()
-        }
     }
 
     pub(crate) fn set_text_selection_suppressed(&self, suppressed: bool) {
@@ -1639,7 +1603,10 @@ mod tests {
         scroll_uniform_log_row_to_viewport_y(&handle, 40, px(7.), px(20.));
 
         assert!(handle.0.borrow().deferred_scroll_to_item.is_none());
-        assert_eq!(uniform_log_row_viewport_y(&handle, 40, px(20.)), px(7.));
+        assert_eq!(
+            px(20.) * 40. + handle.0.borrow().base_handle.offset().y,
+            px(7.)
+        );
     }
 
     #[test]
