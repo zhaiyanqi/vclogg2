@@ -49,6 +49,11 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Pipes",
 ] }
 
+[patch.crates-io]
+# block 0.1.6 models an extern static with an uninhabited type. Keep its
+# public API while applying the rustc future-incompatibility fix locally.
+block = { path = "vendor/block" }
+
 [workspace.lints.clippy]
 dbg_macro = "deny"
 todo = "deny"
