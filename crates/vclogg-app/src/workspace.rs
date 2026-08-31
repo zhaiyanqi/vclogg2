@@ -2097,7 +2097,33 @@ impl DocumentTab {
         self.log_viewport.center_row(row_ix);
     }
 
+    fn install_result_rows(&mut self, result_rows: CompressedRows, cx: &mut App) {
+        self.restoring_result_selection = true;
+        let active_restored = self.result_table.update(cx, |table, cx| {
+            if self.auto_follow {
+                table.delegate().set_active_log_row(None);
+            }
+            table
+                .delegate_mut()
+                .set_matched_rows(self.search_result.line_indices.clone());
+            table.delegate_mut().set_row_projection(result_rows);
+            let active_restored = table.sync_active_log_row(cx);
+            table.refresh_log_rows(cx);
+            active_restored
+        });
+        if !active_restored {
+            self.restoring_result_selection = false;
+        }
+    }
+
     fn refresh_result_rows(&mut self, cx: &mut App) {
+        let result_rows = self.compute_result_rows();
+        let projection_changed =
+            self.result_table.read(cx).delegate().projected_rows() != Some(&result_rows);
+        if !projection_changed {
+            self.install_result_rows(result_rows, cx);
+            return;
+        }
         let word_wrap = self.result_viewport.is_wrapped();
         let row_height = if word_wrap && self.result_viewport.wrapped_base_height() > px(0.) {
             self.result_viewport.wrapped_base_height()
@@ -2120,23 +2146,7 @@ impl DocumentTab {
         } else {
             BTreeMap::new()
         };
-        let result_rows = self.compute_result_rows();
-        self.restoring_result_selection = true;
-        let active_restored = self.result_table.update(cx, |table, cx| {
-            if self.auto_follow {
-                table.delegate().set_active_log_row(None);
-            }
-            table
-                .delegate_mut()
-                .set_matched_rows(self.search_result.line_indices.clone());
-            table.delegate_mut().set_row_projection(result_rows);
-            let active_restored = table.sync_active_log_row(cx);
-            table.refresh_log_rows(cx);
-            active_restored
-        });
-        if !active_restored {
-            self.restoring_result_selection = false;
-        }
+        self.install_result_rows(result_rows, cx);
         if word_wrap {
             let table = self.result_table.read(cx);
             self.result_viewport.reset_wrapped_with_remapped_heights(
