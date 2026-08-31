@@ -133,7 +133,6 @@ const WRAPPED_HEIGHT_CACHE_LIMIT: usize = 4096;
 const PREVIEW_BYTE_LIMIT: usize = 1024 * 1024;
 const PREVIEW_LINE_LIMIT: usize = 200;
 const MAX_DOCUMENT_PREPARE_WORKERS: usize = 4;
-const DIRECTORY_SEARCH_DOCUMENT_ID_BASE: u64 = 1 << 63;
 const SEARCH_SUGGESTION_ROW_HEIGHT_REMS: f32 = 3.25;
 const SEARCH_SUGGESTION_MAX_VISIBLE_ROWS: usize = 5;
 const SEARCH_CONTROL_HEIGHT: Pixels = px(34.);
@@ -2341,6 +2340,13 @@ impl Render for DraggedTab {
 struct SearchPanelResizeGesture {
     start_y: Pixels,
     initial_height: Pixels,
+}
+
+struct DirectorySearchResult {
+    title: SharedString,
+    path: PathBuf,
+    document: Arc<LogDocument>,
+    search_result: SearchResult,
 }
 
 pub struct Workspace {
@@ -11318,7 +11324,7 @@ impl Workspace {
                     }
                     let mut open_error_count = 0;
                     let mut results = Vec::new();
-                    for (file_ix, (path, outcome)) in outcomes.into_iter().enumerate() {
+                    for (path, outcome) in outcomes {
                         match outcome {
                             Ok(Some((document, search_result))) => {
                                 let title: SharedString = path
@@ -11326,14 +11332,11 @@ impl Workspace {
                                     .map(|name| name.to_string_lossy().into_owned())
                                     .unwrap_or_else(|| path.display().to_string())
                                     .into();
-                                results.push(GlobalSearchDocumentResult {
-                                    document_id: DIRECTORY_SEARCH_DOCUMENT_ID_BASE
-                                        .saturating_add(file_ix as u64),
+                                results.push(DirectorySearchResult {
                                     title,
                                     path,
                                     document,
                                     search_result,
-                                    failure: None,
                                 });
                             }
                             Ok(None) => {}
@@ -11370,7 +11373,19 @@ impl Workspace {
                     )) => {
                         this.record_search_history(&query.text, window, cx);
                         this.global_search.directory_query = query;
-                        this.global_search.results = results;
+                        this.global_search.results = results
+                            .into_iter()
+                            .map(|result| GlobalSearchDocumentResult {
+                                document_id: this
+                                    .global_search
+                                    .directory_document_id(&result.path),
+                                title: result.title,
+                                path: result.path,
+                                document: result.document,
+                                search_result: result.search_result,
+                                failure: None,
+                            })
+                            .collect();
                         this.global_search.matcher = matcher;
                         this.global_search.result_scope = Some(SearchScope::Directory);
                         let word_wrap = this.global_viewport.is_wrapped();

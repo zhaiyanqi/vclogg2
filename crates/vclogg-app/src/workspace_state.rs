@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -363,6 +363,38 @@ pub(crate) struct GlobalSearchState {
     pub(crate) restoring_selection: bool,
     pub(crate) revision: u64,
     pub(crate) results_visible: bool,
+    directory_document_ids: DirectoryDocumentIds,
+}
+
+const DIRECTORY_DOCUMENT_ID_BASE: u64 = 1 << 63;
+
+struct DirectoryDocumentIds {
+    by_path: BTreeMap<PathBuf, u64>,
+    next: u64,
+}
+
+impl Default for DirectoryDocumentIds {
+    fn default() -> Self {
+        Self {
+            by_path: BTreeMap::new(),
+            next: DIRECTORY_DOCUMENT_ID_BASE,
+        }
+    }
+}
+
+impl DirectoryDocumentIds {
+    fn id_for_path(&mut self, path: &Path) -> u64 {
+        if let Some(id) = self.by_path.get(path) {
+            return *id;
+        }
+        let id = self.next;
+        self.next = self
+            .next
+            .checked_add(1)
+            .expect("directory result identity space exhausted");
+        self.by_path.insert(path.to_path_buf(), id);
+        id
+    }
 }
 
 impl GlobalSearchState {
@@ -386,7 +418,12 @@ impl GlobalSearchState {
             restoring_selection: false,
             revision: 0,
             results_visible: false,
+            directory_document_ids: DirectoryDocumentIds::default(),
         }
+    }
+
+    pub(crate) fn directory_document_id(&mut self, path: &Path) -> u64 {
+        self.directory_document_ids.id_for_path(path)
     }
 }
 
@@ -526,8 +563,20 @@ impl PersistenceController {
 }
 
 #[cfg(test)]
-mod search_controller_tests {
+mod state_controller_tests {
     use super::*;
+
+    #[test]
+    fn directory_result_identity_is_stable_by_path() {
+        let mut identities = DirectoryDocumentIds::default();
+        let first = identities.id_for_path(Path::new("logs/a.log"));
+        let second = identities.id_for_path(Path::new("logs/b.log"));
+
+        assert_ne!(first, second);
+        assert_eq!(identities.id_for_path(Path::new("logs/a.log")), first);
+        assert_eq!(identities.id_for_path(Path::new("logs/b.log")), second);
+        assert!(first >= DIRECTORY_DOCUMENT_ID_BASE);
+    }
 
     #[test]
     fn document_changes_cancel_open_file_searches_but_not_directory_searches() {
