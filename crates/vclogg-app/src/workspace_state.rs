@@ -133,10 +133,6 @@ impl GlobalSearchResults {
         self.by_document.get(document_id)
     }
 
-    pub(crate) fn get_mut(&mut self, document_id: &u64) -> Option<&mut GlobalSearchDocumentResult> {
-        Arc::make_mut(&mut self.by_document).get_mut(document_id)
-    }
-
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&u64, &GlobalSearchDocumentResult)> {
         self.order.iter().map(|document_id| {
             let result = self
@@ -725,18 +721,10 @@ mod state_controller_tests {
         assert!(Arc::ptr_eq(&results.order, &snapshot.order));
         assert!(Arc::ptr_eq(&results.by_document, &snapshot.by_document));
 
-        results.get_mut(&3).expect("result should exist").title = "renamed.log".into();
-
-        assert!(Arc::ptr_eq(&results.order, &snapshot.order));
-        assert!(!Arc::ptr_eq(&results.by_document, &snapshot.by_document));
-        assert_eq!(
-            snapshot.get(&3).expect("snapshot should stay intact").title,
-            "three.log"
-        );
-
-        results.retain(|_, _| false);
+        results.retain(|document_id, _| *document_id != 3);
 
         assert!(!Arc::ptr_eq(&results.order, &snapshot.order));
+        assert!(!Arc::ptr_eq(&results.by_document, &snapshot.by_document));
         assert!(results.is_empty());
         assert!(snapshot.get(&3).is_some());
     }

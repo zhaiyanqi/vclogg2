@@ -7981,12 +7981,8 @@ impl Workspace {
         if tab.title.as_ref() == title {
             return;
         }
-        let display_title: SharedString = title.clone().into();
-        tab.title = display_title.clone();
+        tab.title = title.clone().into();
         tab.custom_title = Some(title.clone());
-        if let Some(result) = self.global_search.results.get_mut(&document_id) {
-            result.title = display_title;
-        }
         self.refresh_global_result_rows(cx);
         if self
             .active_document()
@@ -8010,12 +8006,8 @@ impl Workspace {
             return;
         }
         let original_title = tab.document.file_name();
-        let display_title: SharedString = original_title.clone().into();
-        tab.title = display_title.clone();
+        tab.title = original_title.clone().into();
         tab.custom_title = None;
-        if let Some(result) = self.global_search.results.get_mut(&document_id) {
-            result.title = display_title;
-        }
         self.refresh_global_result_rows(cx);
         if self
             .active_document()
@@ -9721,9 +9713,7 @@ impl Workspace {
                     GlobalSearchGroup {
                         source: crate::global_search_table::GlobalSearchGroupSource {
                             document_id: tab.id,
-                            title: result
-                                .map(|result| result.title.clone())
-                                .unwrap_or_else(|| tab.title.clone()),
+                            title: tab.title.clone(),
                             path: result
                                 .map(|result| result.path.clone())
                                 .unwrap_or_else(|| tab.document.path().to_path_buf()),
