@@ -2,7 +2,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
     future::Future,
-    ops::{Deref, DerefMut, Range},
+    ops::Range,
     path::{Path, PathBuf},
     rc::Rc,
     sync::{
@@ -106,7 +106,7 @@ use crate::{
         PersistedSearchQuery, PersistedSearchRowKey, PersistedSearchScope, PersistedSearchViewport,
         WorkspaceSearchState, compress_rows,
     },
-    selectable_log_text::{SelectableLogText, TextSelectionCache},
+    selectable_log_text::{LogText, LogTextSelection, SelectableLogText, TextSelectionCache},
     settings_dialog::{
         SettingsCategory, SettingsDialog, SettingsDialogEvent, SettingsNetworkSnapshot,
     },
@@ -876,19 +876,135 @@ impl<K: Clone + Ord> LogViewportState<K> {
         let base = self.fixed.scroll_handle.0.borrow().base_handle.clone();
         base.set_offset(point(-offset, base.offset().y));
     }
-}
 
-impl<K> Deref for LogViewportState<K> {
-    type Target = WrappedListState<K>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.wrapped
+    fn wrapped_base_height(&self) -> Pixels {
+        self.wrapped.base_height.get()
     }
-}
 
-impl<K> DerefMut for LogViewportState<K> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.wrapped
+    fn wrapped_viewport_height(&self) -> Pixels {
+        self.wrapped.scroll_handle.bounds().size.height
+    }
+
+    fn wrapped_scroll_handle(&self) -> VirtualListScrollHandle {
+        self.wrapped.scroll_handle.clone()
+    }
+
+    fn wrapped_row_bounds(&self) -> Rc<RefCell<BTreeMap<usize, Bounds<Pixels>>>> {
+        self.wrapped.row_bounds.clone()
+    }
+
+    fn wrapped_selection(
+        &self,
+        key: K,
+        text: &LogText,
+        window: &Window,
+        cx: &mut App,
+    ) -> LogTextSelection {
+        self.wrapped
+            .text_selections
+            .borrow_mut()
+            .handle(key, text, window, cx)
+    }
+
+    fn wrapped_sizes(&self, count: usize, base_height: Pixels) -> Rc<Vec<Size<Pixels>>> {
+        self.wrapped.sizes(count, base_height)
+    }
+
+    fn wrapped_logical_scroll_handle(
+        &self,
+        item_count: usize,
+        slot_height: Pixels,
+    ) -> LogicalVirtualScrollHandle {
+        self.wrapped.logical_scroll_handle(item_count, slot_height)
+    }
+
+    fn queue_wrapped_measured_height(
+        &self,
+        row_ix: usize,
+        height: Pixels,
+        base_height: Pixels,
+    ) -> bool {
+        self.wrapped
+            .queue_measured_height(row_ix, height, base_height)
+    }
+
+    fn prime_wrapped_measured_heights(
+        &self,
+        count: usize,
+        base_height: Pixels,
+        heights: impl IntoIterator<Item = (usize, Pixels)>,
+    ) {
+        self.wrapped
+            .prime_measured_heights(count, base_height, heights);
+    }
+
+    fn wrapped_measured_heights_by_key<T: Ord>(
+        &self,
+        key_for_row: impl Fn(usize) -> Option<T>,
+    ) -> BTreeMap<T, Pixels> {
+        self.wrapped.measured_heights_by_key(key_for_row)
+    }
+
+    fn reset_wrapped_with_remapped_heights<T: Ord>(
+        &mut self,
+        count: usize,
+        base_height: Pixels,
+        measured_heights: BTreeMap<T, Pixels>,
+        row_for_key: impl Fn(&T) -> Option<usize>,
+    ) {
+        self.wrapped
+            .reset_with_remapped_heights(count, base_height, measured_heights, row_for_key);
+    }
+
+    fn invalidate_wrapped(&mut self) {
+        self.wrapped.invalidate();
+    }
+
+    fn reset_wrapped_scroll_for_mode_switch(&mut self) {
+        self.wrapped.reset_scroll_for_mode_switch();
+    }
+
+    fn wrapped_layout_width(&self) -> Option<Pixels> {
+        self.wrapped.layout_width()
+    }
+
+    fn capture_wrapped_viewport_position(
+        &self,
+        preferred_row: Option<usize>,
+    ) -> Option<RowViewportPosition> {
+        self.wrapped.capture_row_viewport_position(preferred_row)
+    }
+
+    fn ensure_wrapped_measurement_anchor(&self, preferred_row: Option<usize>) {
+        if self.wrapped.measurement_anchor.get().is_none()
+            && let Some(anchor) = self.capture_wrapped_viewport_position(preferred_row)
+        {
+            self.wrapped.measurement_anchor.set(Some(anchor));
+        }
+    }
+
+    fn invalidate_wrapped_layout_preserving_position(
+        &self,
+        key: WrappedLayoutKey,
+        preferred_row: Option<usize>,
+    ) -> bool {
+        if !self.wrapped.needs_layout_invalidation(&key) {
+            return false;
+        }
+        self.ensure_wrapped_measurement_anchor(preferred_row);
+        self.wrapped.invalidate_for_layout(key)
+    }
+
+    fn retain_wrapped_visible_rows(&self, visible_range: &Range<usize>) {
+        self.wrapped.retain_visible_rows(visible_range);
+    }
+
+    fn wrapped_first_visible_row(&self) -> usize {
+        self.wrapped.first_visible_row()
+    }
+
+    fn take_wrapped_scrollbar_measurement_request(&self) -> bool {
+        self.wrapped.take_scrollbar_measurement_request()
     }
 }
 
@@ -1400,7 +1516,7 @@ mod scroll_position_tests {
         ])));
         let viewport =
             LogViewportState::<usize>::new(false, UniformListScrollHandle::new(), fixed_bounds);
-        viewport.row_bounds.borrow_mut().insert(
+        viewport.wrapped_row_bounds().borrow_mut().insert(
             7,
             Bounds::new(point(px(0.), px(0.)), size(px(100.), px(20.))),
         );
@@ -1412,6 +1528,27 @@ mod scroll_position_tests {
 
         assert_eq!(viewport.row_at_position(point(px(4.), px(4.))), Some(7));
         assert_eq!(viewport.visible_row_edge(false), Some(7));
+    }
+
+    #[test]
+    fn viewport_layout_invalidation_preserves_the_visible_row_position() {
+        let viewport =
+            LogViewportState::<usize>::new(true, UniformListScrollHandle::new(), Rc::default());
+        viewport.wrapped_sizes(100, px(20.));
+        viewport
+            .wrapped_scroll_handle()
+            .set_offset(point(px(0.), px(-793.)));
+
+        assert!(viewport.invalidate_wrapped_layout_preserving_position(
+            wrapped_layout_key_for_test(),
+            Some(40),
+        ));
+        viewport.wrapped_sizes(100, px(20.));
+
+        assert_eq!(
+            px(20.) * 40. + viewport.wrapped_scroll_handle().offset().y,
+            px(7.)
+        );
     }
 
     #[test]
@@ -1940,8 +2077,8 @@ impl DocumentTab {
 
     fn refresh_result_rows(&mut self, cx: &mut App) {
         let word_wrap = self.result_viewport.is_wrapped();
-        let row_height = if word_wrap && self.result_viewport.base_height.get() > px(0.) {
-            self.result_viewport.base_height.get()
+        let row_height = if word_wrap && self.result_viewport.wrapped_base_height() > px(0.) {
+            self.result_viewport.wrapped_base_height()
         } else {
             self.result_table
                 .read(cx)
@@ -1957,7 +2094,7 @@ impl DocumentTab {
         let measured_heights = if word_wrap {
             let table = self.result_table.read(cx);
             self.result_viewport
-                .measured_heights_by_key(|row_ix| table.delegate().row_key(row_ix))
+                .wrapped_measured_heights_by_key(|row_ix| table.delegate().row_key(row_ix))
         } else {
             BTreeMap::new()
         };
@@ -1982,14 +2119,14 @@ impl DocumentTab {
         }
         if word_wrap {
             let table = self.result_table.read(cx);
-            self.result_viewport.reset_with_remapped_heights(
+            self.result_viewport.reset_wrapped_with_remapped_heights(
                 table.delegate().row_count(),
                 row_height,
                 measured_heights,
                 |key| table.delegate().row_ix_for_key(*key),
             );
         } else {
-            self.result_viewport.invalidate();
+            self.result_viewport.invalidate_wrapped();
         }
         Workspace::restore_local_viewport_anchor(
             self,
@@ -2995,7 +3132,7 @@ impl Workspace {
                     match row {
                         GlobalSearchRow::Group { document_id } => this
                             .global_viewport
-                            .capture_row_viewport_position(Some(*row_ix))
+                            .capture_wrapped_viewport_position(Some(*row_ix))
                             .map(|position| RowViewportAnchor {
                                 key: LogRowKey::FileGroup { document_id },
                                 viewport_y: position.viewport_y,
@@ -6867,8 +7004,8 @@ impl Workspace {
                 .collect();
         }
         tab.result_rows = tab.compute_result_rows();
-        tab.log_viewport.invalidate();
-        tab.result_viewport.invalidate();
+        tab.log_viewport.invalidate_wrapped();
+        tab.result_viewport.invalidate_wrapped();
 
         let marked_rows = Arc::new(tab.marked_rows.clone());
         let result_rows = tab.result_rows.clone();
@@ -7025,8 +7162,8 @@ impl Workspace {
                         tab.marked_rows
                             .retain(|row| *row < tab.document.line_count());
                         tab.result_rows = tab.compute_result_rows();
-                        tab.log_viewport.invalidate();
-                        tab.result_viewport.invalidate();
+                        tab.log_viewport.invalidate_wrapped();
+                        tab.result_viewport.invalidate_wrapped();
                         let marked_rows = Arc::new(tab.marked_rows.clone());
                         let result_rows = tab.result_rows.clone();
                         let selected_result_row = (!follow_end)
@@ -9604,7 +9741,7 @@ impl Workspace {
             let table = self.global_table.read(cx);
             let measured_heights = if word_wrap {
                 self.global_viewport
-                    .measured_heights_by_key(|row_ix| table.delegate().row_key(row_ix))
+                    .wrapped_measured_heights_by_key(|row_ix| table.delegate().row_key(row_ix))
             } else {
                 BTreeMap::new()
             };
@@ -9720,14 +9857,14 @@ impl Workspace {
         });
         if word_wrap {
             let table = self.global_table.read(cx);
-            self.global_viewport.reset_with_remapped_heights(
+            self.global_viewport.reset_wrapped_with_remapped_heights(
                 table.delegate().rows_len(),
                 row_height,
                 measured_heights,
                 |key| table.delegate().row_ix_for_key(*key),
             );
         } else {
-            self.global_viewport.invalidate();
+            self.global_viewport.invalidate_wrapped();
         }
         self.restore_global_viewport_anchor(viewport_anchor, row_height, cx);
         if !active_restored {
@@ -10621,7 +10758,7 @@ impl Workspace {
         if !selected_restored {
             self.global_search.restoring_selection = false;
         }
-        self.global_viewport.invalidate();
+        self.global_viewport.invalidate_wrapped();
         let word_wrap = self.global_viewport.is_wrapped();
         self.restore_global_viewport_anchor(context.viewport, self.log_row_height(), cx);
         if !word_wrap {
@@ -11856,9 +11993,9 @@ impl Workspace {
             } else {
                 &self.documents[tab_ix].log_viewport
             };
-            let viewport_height = wrapped.scroll_handle.bounds().size.height;
+            let viewport_height = wrapped.wrapped_viewport_height();
             wrapped_viewport_measurement_range(
-                wrapped.first_visible_row(),
+                wrapped.wrapped_first_visible_row(),
                 if viewport_height > px(0.) {
                     viewport_height
                 } else {
@@ -11922,18 +12059,21 @@ impl Workspace {
             &mut self.documents[tab_ix].log_viewport
         };
         if reset_for_mode_switch {
-            wrapped.reset_scroll_for_mode_switch();
+            wrapped.reset_wrapped_scroll_for_mode_switch();
         }
-        wrapped.invalidate_for_layout(Self::wrapped_layout_key(
-            content_revision,
-            outer_width,
-            font_size,
-            font_family.clone(),
-            base_height,
-            window.rem_size(),
-            horizontal_padding,
-        ));
-        wrapped.prime_measured_heights(count, base_height, heights);
+        wrapped.invalidate_wrapped_layout_preserving_position(
+            Self::wrapped_layout_key(
+                content_revision,
+                outer_width,
+                font_size,
+                font_family.clone(),
+                base_height,
+                window.rem_size(),
+                horizontal_padding,
+            ),
+            table.read(cx).active_log_row(),
+        );
+        wrapped.prime_wrapped_measured_heights(count, base_height, heights);
     }
 
     fn prime_global_wrapped_frame(
@@ -11952,9 +12092,9 @@ impl Workspace {
             })
             .copied();
         let wrapped_range = (!reset_for_mode_switch).then(|| {
-            let viewport_height = self.global_viewport.scroll_handle.bounds().size.height;
+            let viewport_height = self.global_viewport.wrapped_viewport_height();
             wrapped_viewport_measurement_range(
-                self.global_viewport.first_visible_row(),
+                self.global_viewport.wrapped_first_visible_row(),
                 if viewport_height > px(0.) {
                     viewport_height
                 } else {
@@ -12010,20 +12150,23 @@ impl Workspace {
             )
         });
         if reset_for_mode_switch {
-            self.global_viewport.reset_scroll_for_mode_switch();
+            self.global_viewport.reset_wrapped_scroll_for_mode_switch();
         }
         self.global_viewport
-            .invalidate_for_layout(Self::wrapped_layout_key(
-                content_revision,
-                outer_width,
-                font_size,
-                font_family.clone(),
-                base_height,
-                window.rem_size(),
-                horizontal_padding,
-            ));
+            .invalidate_wrapped_layout_preserving_position(
+                Self::wrapped_layout_key(
+                    content_revision,
+                    outer_width,
+                    font_size,
+                    font_family.clone(),
+                    base_height,
+                    window.rem_size(),
+                    horizontal_padding,
+                ),
+                self.global_table.read(cx).active_log_row(),
+            );
         self.global_viewport
-            .prime_measured_heights(count, base_height, heights);
+            .prime_wrapped_measured_heights(count, base_height, heights);
     }
 
     fn prime_global_wrapped_group_toggle(
@@ -12038,13 +12181,13 @@ impl Workspace {
             return;
         }
 
-        self.global_viewport.sizes(count, base_height);
+        self.global_viewport.wrapped_sizes(count, base_height);
         self.position_global_row_viewport_anchor(anchor, base_height, cx);
 
-        let first_visible = self.global_viewport.first_visible_row();
+        let first_visible = self.global_viewport.wrapped_first_visible_row();
         let visible_range = wrapped_viewport_measurement_range(
             first_visible,
-            self.global_viewport.scroll_handle.bounds().size.height,
+            self.global_viewport.wrapped_viewport_height(),
             base_height,
             count,
         );
@@ -12053,7 +12196,7 @@ impl Workspace {
             let delegate = table.delegate();
             delegate.prepare_visible_rows(visible_range.clone());
             let font_size = delegate.log_font_size();
-            let outer_width = if let Some(width) = self.global_viewport.layout_width() {
+            let outer_width = if let Some(width) = self.global_viewport.wrapped_layout_width() {
                 width
             } else {
                 self.row_drag_bounds
@@ -12093,7 +12236,7 @@ impl Workspace {
             )
         });
         self.global_viewport
-            .prime_measured_heights(count, base_height, heights);
+            .prime_wrapped_measured_heights(count, base_height, heights);
     }
 
     fn prime_wrapped_first_frame(
@@ -14921,11 +15064,11 @@ impl Workspace {
                     } else {
                         &self.documents[tab_ix].result_viewport
                     };
-                    state.queue_measured_height(row_ix, height, base_height)
+                    state.queue_wrapped_measured_height(row_ix, height, base_height)
                 }),
             WrappedRegion::GlobalResults => {
                 self.global_viewport
-                    .queue_measured_height(row_ix, height, base_height)
+                    .queue_wrapped_measured_height(row_ix, height, base_height)
             }
         };
         if changed && let Some(surface) = self.log_region_surface(document_id, region) {
@@ -15369,16 +15512,8 @@ impl Workspace {
                 } else {
                     &mut self.documents[tab_ix].log_viewport
                 };
-                if !wrapped.needs_layout_invalidation(&key) {
-                    return;
-                }
                 let preferred = table.read(cx).active_log_row();
-                if wrapped.measurement_anchor.get().is_none()
-                    && let Some(anchor) = wrapped.capture_row_viewport_position(preferred)
-                {
-                    wrapped.measurement_anchor.set(Some(anchor));
-                }
-                wrapped.invalidate_for_layout(key)
+                wrapped.invalidate_wrapped_layout_preserving_position(key, preferred)
             }
             WrappedRegion::GlobalResults => {
                 if !self.global_viewport.is_wrapped() {
@@ -15397,18 +15532,9 @@ impl Workspace {
                         horizontal_padding,
                     )
                 };
-                if !self.global_viewport.needs_layout_invalidation(&key) {
-                    return;
-                }
                 let preferred = self.global_table.read(cx).active_log_row();
-                if self.global_viewport.measurement_anchor.get().is_none()
-                    && let Some(anchor) = self
-                        .global_viewport
-                        .capture_row_viewport_position(preferred)
-                {
-                    self.global_viewport.measurement_anchor.set(Some(anchor));
-                }
-                self.global_viewport.invalidate_for_layout(key)
+                self.global_viewport
+                    .invalidate_wrapped_layout_preserving_position(key, preferred)
             }
         };
         if changed && let Some(surface) = self.log_region_surface(document_id, region) {
@@ -15587,8 +15713,8 @@ impl Workspace {
             } else {
                 &self.documents[tab_ix].log_viewport
             };
-            wrapped.retain_visible_rows(&visible_range);
-            wrapped.row_bounds.clone()
+            wrapped.retain_wrapped_visible_rows(&visible_range);
+            wrapped.wrapped_row_bounds()
         };
 
         visible_range
@@ -15600,15 +15726,12 @@ impl Workspace {
                     && table.read(cx).delegate().is_row_selected(row_ix + 1);
                 let source_row = row.source_row;
                 let selection = {
-                    let wrapped = if region == WrappedRegion::Results {
-                        &mut self.documents[tab_ix].result_viewport
+                    let viewport = if region == WrappedRegion::Results {
+                        &self.documents[tab_ix].result_viewport
                     } else {
-                        &mut self.documents[tab_ix].log_viewport
+                        &self.documents[tab_ix].log_viewport
                     };
-                    wrapped
-                        .text_selections
-                        .borrow_mut()
-                        .handle(source_row, &row.text, window, cx)
+                    viewport.wrapped_selection(source_row, &row.text, window, cx)
                 };
                 let styled_text = StyledText::new(row.text.display().clone())
                     .with_highlights(Self::highlight_styles(&row.highlights, cx));
@@ -15764,17 +15887,13 @@ impl Workspace {
         } else {
             &tab.log_viewport
         };
-        if wrapped.base_height.get() != base_height
-            && wrapped.measurement_anchor.get().is_none()
-            && let Some(anchor) =
-                wrapped.capture_row_viewport_position(table.read(cx).active_log_row())
-        {
-            wrapped.measurement_anchor.set(Some(anchor));
+        if wrapped.wrapped_base_height() != base_height {
+            wrapped.ensure_wrapped_measurement_anchor(table.read(cx).active_log_row());
         }
-        let sizes = wrapped.sizes(count, base_height);
-        let scroll_handle = wrapped.scroll_handle.clone();
+        let sizes = wrapped.wrapped_sizes(count, base_height);
+        let scroll_handle = wrapped.wrapped_scroll_handle();
         let list_scroll = scroll_handle.clone();
-        let logical_scroll = wrapped.logical_scroll_handle(count, base_height);
+        let logical_scroll = wrapped.wrapped_logical_scroll_handle(count, base_height);
         let list_id = format!("wrapped-{}-{}", document_id, region as u8);
         let scrollbar_background = *cx.theme().tokens.table;
 
@@ -16387,7 +16506,7 @@ impl Workspace {
             (&tab.log_table, &tab.log_viewport)
         };
         if viewport.is_wrapped() {
-            viewport.sizes(table.read(cx).delegate().row_count(), row_height);
+            viewport.wrapped_sizes(table.read(cx).delegate().row_count(), row_height);
         }
         let fallback_ix = {
             let table = table.read(cx);
@@ -16792,8 +16911,9 @@ impl Workspace {
         let suppress_text_selection = self.row_drag_selection.is_some_and(|drag| {
             drag.region == WrappedRegion::GlobalResults && drag.mode == RowDragMode::Lines
         });
-        self.global_viewport.retain_visible_rows(&visible_range);
-        let rendered_row_bounds = self.global_viewport.row_bounds.clone();
+        self.global_viewport
+            .retain_wrapped_visible_rows(&visible_range);
+        let rendered_row_bounds = self.global_viewport.wrapped_row_bounds();
 
         visible_range
             .filter_map(|row_ix| {
@@ -16870,7 +16990,7 @@ impl Workspace {
                                 .read(cx)
                                 .delegate()
                                 .is_row_selected(row_ix + 1);
-                        let selection = self.global_viewport.text_selections.borrow_mut().handle(
+                        let selection = self.global_viewport.wrapped_selection(
                             (document_id, source_row),
                             &text,
                             window,
@@ -17000,20 +17120,16 @@ impl Workspace {
         let delegate = self.global_table.read(cx).delegate();
         let count = delegate.rows_len();
         let base_height = self.log_row_height();
-        if self.global_viewport.base_height.get() != base_height
-            && self.global_viewport.measurement_anchor.get().is_none()
-            && let Some(anchor) = self
-                .global_viewport
-                .capture_row_viewport_position(self.global_table.read(cx).active_log_row())
-        {
-            self.global_viewport.measurement_anchor.set(Some(anchor));
+        if self.global_viewport.wrapped_base_height() != base_height {
+            self.global_viewport
+                .ensure_wrapped_measurement_anchor(self.global_table.read(cx).active_log_row());
         }
-        let sizes = self.global_viewport.sizes(count, base_height);
-        let scroll_handle = self.global_viewport.scroll_handle.clone();
+        let sizes = self.global_viewport.wrapped_sizes(count, base_height);
+        let scroll_handle = self.global_viewport.wrapped_scroll_handle();
         let list_scroll = scroll_handle.clone();
         let logical_scroll = self
             .global_viewport
-            .logical_scroll_handle(count, base_height);
+            .wrapped_logical_scroll_handle(count, base_height);
         let scrollbar_background = *cx.theme().tokens.table;
 
         v_flex()
@@ -17181,7 +17297,10 @@ impl Workspace {
         let row_height = self.log_row_height();
         if region == WrappedRegion::GlobalResults {
             if self.global_viewport.is_wrapped() {
-                if self.global_viewport.take_scrollbar_measurement_request() {
+                if self
+                    .global_viewport
+                    .take_wrapped_scrollbar_measurement_request()
+                {
                     self.prime_global_wrapped_frame(row_height, false, window, cx);
                 }
                 return self.render_wrapped_global_table(surface, cx.weak_entity(), cx);
@@ -17204,9 +17323,11 @@ impl Workspace {
         };
         if viewport.is_wrapped() {
             let measurement_pending = if region == WrappedRegion::Results {
-                tab.result_viewport.take_scrollbar_measurement_request()
+                tab.result_viewport
+                    .take_wrapped_scrollbar_measurement_request()
             } else {
-                tab.log_viewport.take_scrollbar_measurement_request()
+                tab.log_viewport
+                    .take_wrapped_scrollbar_measurement_request()
             };
             if measurement_pending {
                 self.prime_local_wrapped_frame(tab_ix, region, row_height, false, window, cx);
