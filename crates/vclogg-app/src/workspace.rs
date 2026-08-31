@@ -2430,6 +2430,19 @@ struct DirectorySearchResult {
     search_result: SearchResult,
 }
 
+#[derive(Clone)]
+struct PendingDirectoryResultJump {
+    path: PathBuf,
+    source_row: usize,
+    expected_document: Arc<LogDocument>,
+}
+
+impl PendingDirectoryResultJump {
+    fn matches(&self, document: &LogDocument) -> bool {
+        result_snapshot_matches_document(&self.path, &self.expected_document, document)
+    }
+}
+
 struct CompletedGlobalSearch {
     scope: SearchScope,
     query: SearchQuery,
@@ -2469,7 +2482,7 @@ pub struct Workspace {
     active_ix: Option<usize>,
     document_tab_scroll: ScrollHandle,
     pending_document_tab_reveal: Cell<Option<u64>>,
-    pending_directory_result_jump: Option<(PathBuf, usize)>,
+    pending_directory_result_jump: Option<PendingDirectoryResultJump>,
     next_document_id: u64,
     next_new_tab_id: u64,
     case_sensitive: bool,
@@ -6976,23 +6989,28 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((path, source_row)) = self.pending_directory_result_jump.clone() else {
+        let Some(pending) = self.pending_directory_result_jump.clone() else {
             return;
         };
         let Some(document_ix) = self.documents.iter().position(|tab| {
-            paths_match(tab.document.path(), &path) && tab.load_state == DocumentLoadState::Ready
+            paths_match(tab.document.path(), &pending.path)
+                && tab.load_state == DocumentLoadState::Ready
         }) else {
             self.pending_directory_result_jump = None;
             return;
         };
         self.pending_directory_result_jump = None;
+        if !pending.matches(&self.documents[document_ix].document) {
+            Self::notify_stale_directory_result(window, cx);
+            return;
+        }
         self.activate_tab(document_ix, window, cx);
         let Some(tab) = self.documents.get_mut(document_ix) else {
             return;
         };
         tab.auto_follow = false;
         tab.selection_table = SelectionTable::Log;
-        if !tab.select_and_center_log_source_row(source_row, cx) {
+        if !tab.select_and_center_log_source_row(pending.source_row, cx) {
             window.push_notification(
                 crate::tr!(
                     "该目录结果行在当前文件中已不存在，请重新搜索",
@@ -7002,7 +7020,7 @@ impl Workspace {
             );
             return;
         }
-        self.selected_source_row = Some(source_row);
+        self.selected_source_row = Some(pending.source_row);
         cx.notify();
     }
 
@@ -11016,14 +11034,19 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let result_path = self
-            .global_search
-            .results
-            .get(&document_id)
-            .map(|result| result.path.clone());
+        let result = self.global_search.results.get(&document_id);
+        let directory_jump = (self.global_search.result_scope == Some(SearchScope::Directory))
+            .then(|| {
+                result.map(|result| PendingDirectoryResultJump {
+                    path: result.path.clone(),
+                    source_row,
+                    expected_document: result.document.clone(),
+                })
+            })
+            .flatten();
         let document_ix = self.open_document_ix_for_global_result(document_id);
         let Some(document_ix) = document_ix else {
-            let Some(path) = result_path else {
+            let Some(pending) = directory_jump else {
                 return;
             };
             if self.open_task.is_some() {
@@ -11036,28 +11059,33 @@ impl Workspace {
                 );
                 return;
             }
-            self.pending_directory_result_jump = Some((path.clone(), source_row));
+            let path = pending.path.clone();
+            self.pending_directory_result_jump = Some(pending);
             self.begin_open_paths(vec![path], window, cx);
             return;
         };
+        if let Some(pending) = directory_jump {
+            if self.documents[document_ix].load_state != DocumentLoadState::Ready {
+                self.pending_directory_result_jump = Some(pending);
+                self.activate_tab(document_ix, window, cx);
+                return;
+            }
+            if !pending.matches(&self.documents[document_ix].document) {
+                Self::notify_stale_directory_result(window, cx);
+                return;
+            }
+        }
         self.activate_tab(document_ix, window, cx);
-        let (selected, still_loading) = {
+        let selected = {
             let Some(tab) = self.documents.get_mut(document_ix) else {
                 return;
             };
             tab.auto_follow = false;
             tab.selection_table = SelectionTable::Log;
-            (
-                tab.select_and_center_log_source_row(source_row, cx),
-                tab.load_state != DocumentLoadState::Ready,
-            )
+            tab.select_and_center_log_source_row(source_row, cx)
         };
         if selected {
             self.selected_source_row = Some(source_row);
-        } else if still_loading {
-            if let Some(path) = result_path {
-                self.pending_directory_result_jump = Some((path, source_row));
-            }
         } else {
             window.push_notification(
                 crate::tr!(
@@ -11068,6 +11096,16 @@ impl Workspace {
             );
         }
         cx.notify();
+    }
+
+    fn notify_stale_directory_result(window: &mut Window, cx: &mut App) {
+        window.push_notification(
+            crate::tr!(
+                "该目录结果对应的文件内容已改变，请重新搜索",
+                "The file for that directory result has changed. Search again."
+            ),
+            cx,
+        );
     }
 
     fn activate_global_group(
@@ -18513,7 +18551,17 @@ fn result_snapshot_matches_document(
 
 #[cfg(test)]
 mod result_snapshot_tests {
+    use std::{fs, time::SystemTime};
+
     use super::*;
+
+    struct TemporaryFile(PathBuf);
+
+    impl Drop for TemporaryFile {
+        fn drop(&mut self) {
+            _ = fs::remove_file(&self.0);
+        }
+    }
 
     #[test]
     fn result_presentation_state_requires_both_path_and_snapshot_identity() {
@@ -18527,6 +18575,31 @@ mod result_snapshot_tests {
             &result,
             &other_path
         ));
+    }
+
+    #[test]
+    fn pending_directory_jump_rejects_a_reopened_snapshot_at_the_same_path() {
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("测试时间应晚于 Unix epoch")
+            .as_nanos();
+        let temporary = TemporaryFile(std::env::temp_dir().join(format!(
+            "vclogg2-directory-jump-{}-{nonce}.log",
+            std::process::id()
+        )));
+        fs::write(&temporary.0, b"before\n").expect("应能创建测试日志");
+        let expected_document =
+            Arc::new(LogDocument::open(&temporary.0).expect("应能打开原始快照"));
+        let pending = PendingDirectoryResultJump {
+            path: temporary.0.clone(),
+            source_row: 7,
+            expected_document: expected_document.clone(),
+        };
+
+        assert!(pending.matches(&expected_document));
+        fs::write(&temporary.0, b"after!\n").expect("应能替换测试日志内容");
+        let reopened = LogDocument::open(&temporary.0).expect("应能打开替换后的快照");
+        assert!(!pending.matches(&reopened));
     }
 }
 
