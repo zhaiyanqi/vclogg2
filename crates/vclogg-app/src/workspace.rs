@@ -7304,20 +7304,21 @@ impl Workspace {
                         false
                     }
                 };
-                if reloaded
-                    && let Some(visible_results_invalidated) =
-                        this.invalidate_all_open_results_for_reload(document_id, cx)
-                {
-                    if visible_results_invalidated {
-                        window.push_notification(
-                            crate::tr!(
-                                "文件已更新，请重新执行全部打开文件搜索",
-                                "The file changed. Run the all-open-files search again."
-                            ),
-                            cx,
-                        );
+                if reloaded {
+                    let invalidated = this.invalidate_all_open_results_for_reload(document_id);
+                    this.refresh_global_result_rows(cx);
+                    if let Some(visible_results_invalidated) = invalidated {
+                        if visible_results_invalidated {
+                            window.push_notification(
+                                crate::tr!(
+                                    "文件已更新，请重新执行全部打开文件搜索",
+                                    "The file changed. Run the all-open-files search again."
+                                ),
+                                cx,
+                            );
+                        }
+                        this.schedule_workspace_search_state_save(window, cx);
                     }
-                    this.schedule_workspace_search_state_save(window, cx);
                 }
                 this.open_task = None;
                 this.open_queued_external_paths_if_idle(window, cx);
@@ -11718,11 +11719,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn invalidate_all_open_results_for_reload(
-        &mut self,
-        document_id: u64,
-        cx: &mut Context<Self>,
-    ) -> Option<bool> {
+    fn invalidate_all_open_results_for_reload(&mut self, document_id: u64) -> Option<bool> {
         let installed = self.global_search.result_scope == Some(SearchScope::AllOpenFiles)
             && self.global_search.results.get(&document_id).is_some();
         let retained = self
@@ -11748,7 +11745,6 @@ impl Workspace {
         self.global_search.all_open_context.invalidate_results();
         self.global_search.pending_all_open_restore = None;
         self.fallback_from_hidden_global_results();
-        self.refresh_global_result_rows(cx);
         Some(visible)
     }
 
