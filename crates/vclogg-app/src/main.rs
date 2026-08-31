@@ -16,6 +16,7 @@ mod global_search_table;
 mod history_dialog;
 mod i18n;
 mod log_table;
+mod modal_event_layer;
 mod open_directory;
 mod predefined_filters;
 mod predefined_filters_dialog;

@@ -4462,7 +4462,10 @@ impl Workspace {
                     let resize_bounds = resize_bounds.clone();
                     let workspace = workspace.clone();
                     move |event: &MouseDownEvent, phase, window, cx| {
-                        if phase.bubble() || event.button != MouseButton::Left {
+                        if phase.bubble()
+                            || event.button != MouseButton::Left
+                            || !event_hitbox.is_hovered(window)
+                        {
                             return;
                         }
                         let Some(bounds) = resize_bounds.get() else {
@@ -17811,109 +17814,114 @@ impl Workspace {
             .on_prepaint(move |bounds, _, _| resize_bounds.set(Some(bounds)));
         let search_panel_resize_event_layer = self.render_search_panel_resize_event_layer(cx);
         let search_panel_workspace = cx.weak_entity();
-        div().id("document-split").size_full().min_h_0().child(
-            v_resizable("log-and-search-results")
-                .with_state(&self.search_panel_state)
-                .on_resize(move |state, window, cx| {
-                    let height = state.read(cx).sizes().get(1).copied();
-                    let Some(height) = height else {
-                        return;
-                    };
-                    _ = search_panel_workspace.update(cx, |workspace, cx| {
-                        workspace.remember_search_panel_height(height, window, cx);
-                    });
-                })
-                .child(
-                    resizable_panel().child(
-                        div()
-                            .relative()
-                            .size_full()
-                            .min_h_0()
-                            .key_context(LOG_TABLE_CONTEXT)
-                            .track_focus(&tab.log_focus_handle)
-                            .tab_index(0)
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                                    if let Some(tab) = this.active_document() {
-                                        tab.log_focus_handle.focus(window, cx);
-                                    }
-                                    this.remember_user_log_region(LogRegion::Body);
-                                }),
-                            )
-                            .on_mouse_down(
-                                MouseButton::Right,
-                                cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                                    if let Some(tab) = this.active_document() {
-                                        tab.log_focus_handle.focus(window, cx);
-                                    }
-                                    this.remember_user_log_region(LogRegion::Body);
-                                }),
-                            )
-                            .on_prepaint(move |bounds, _, cx| {
-                                log_drag_workspace.update(cx, |workspace, cx| {
-                                    workspace
-                                        .row_drag_bounds
-                                        .insert((document_id, WrappedRegion::Log), bounds);
-                                    workspace.update_wrapped_layout_width(
+        div()
+            .id("document-split")
+            .relative()
+            .size_full()
+            .min_h_0()
+            .child(
+                v_resizable("log-and-search-results")
+                    .with_state(&self.search_panel_state)
+                    .on_resize(move |state, window, cx| {
+                        let height = state.read(cx).sizes().get(1).copied();
+                        let Some(height) = height else {
+                            return;
+                        };
+                        _ = search_panel_workspace.update(cx, |workspace, cx| {
+                            workspace.remember_search_panel_height(height, window, cx);
+                        });
+                    })
+                    .child(
+                        resizable_panel().child(
+                            div()
+                                .relative()
+                                .size_full()
+                                .min_h_0()
+                                .key_context(LOG_TABLE_CONTEXT)
+                                .track_focus(&tab.log_focus_handle)
+                                .tab_index(0)
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                                        if let Some(tab) = this.active_document() {
+                                            tab.log_focus_handle.focus(window, cx);
+                                        }
+                                        this.remember_user_log_region(LogRegion::Body);
+                                    }),
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Right,
+                                    cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                                        if let Some(tab) = this.active_document() {
+                                            tab.log_focus_handle.focus(window, cx);
+                                        }
+                                        this.remember_user_log_region(LogRegion::Body);
+                                    }),
+                                )
+                                .on_prepaint(move |bounds, _, cx| {
+                                    log_drag_workspace.update(cx, |workspace, cx| {
+                                        workspace
+                                            .row_drag_bounds
+                                            .insert((document_id, WrappedRegion::Log), bounds);
+                                        workspace.update_wrapped_layout_width(
+                                            document_id,
+                                            WrappedRegion::Log,
+                                            (bounds.size.width
+                                                - marker_width
+                                                - local_line_number_width)
+                                                .max(px(0.)),
+                                            cx,
+                                        );
+                                    });
+                                })
+                                .on_mouse_move(cx.listener(move |this, event, window, cx| {
+                                    this.handle_row_drag_move(
                                         document_id,
                                         WrappedRegion::Log,
-                                        (bounds.size.width
-                                            - marker_width
-                                            - local_line_number_width)
-                                            .max(px(0.)),
+                                        event,
+                                        window,
                                         cx,
                                     );
-                                });
-                            })
-                            .on_mouse_move(cx.listener(move |this, event, window, cx| {
-                                this.handle_row_drag_move(
+                                }))
+                                .child(Self::capture_log_wheel(
+                                    log_wheel_workspace,
                                     document_id,
                                     WrappedRegion::Log,
-                                    event,
-                                    window,
-                                    cx,
-                                );
-                            }))
-                            .child(search_panel_resize_event_layer)
-                            .child(Self::capture_log_wheel(
-                                log_wheel_workspace,
-                                document_id,
-                                WrappedRegion::Log,
-                            ))
-                            .child(tab.log_surface.clone())
-                            .when(
-                                self.quick_find_open
-                                    && self.quick_find_target
-                                        == Some(QuickFindTarget::Log(document_id)),
-                                |region| region.child(self.render_quick_find_bar(cx)),
-                            )
-                            .context_menu(move |menu, window, cx| {
-                                Self::build_log_context_menu(
-                                    menu,
-                                    log_context_workspace.clone(),
-                                    LogContextMenuContext {
-                                        selected_text: TextSelection::selected_text(window, cx),
-                                        include_results: false,
-                                        include_global_merge: false,
-                                        export_disabled: false,
-                                    },
-                                    window,
-                                    cx,
+                                ))
+                                .child(tab.log_surface.clone())
+                                .when(
+                                    self.quick_find_open
+                                        && self.quick_find_target
+                                            == Some(QuickFindTarget::Log(document_id)),
+                                    |region| region.child(self.render_quick_find_bar(cx)),
                                 )
-                            })
-                            .text_selection_scope(tab.log_text_selection_scope),
+                                .context_menu(move |menu, window, cx| {
+                                    Self::build_log_context_menu(
+                                        menu,
+                                        log_context_workspace.clone(),
+                                        LogContextMenuContext {
+                                            selected_text: TextSelection::selected_text(window, cx),
+                                            include_results: false,
+                                            include_global_merge: false,
+                                            export_disabled: false,
+                                        },
+                                        window,
+                                        cx,
+                                    )
+                                })
+                                .text_selection_scope(tab.log_text_selection_scope),
+                        ),
+                    )
+                    .child(
+                        resizable_panel()
+                            .size(search_panel_height)
+                            // 搜索面板折叠高 50px，展开下限为 197px（50px 工具栏 + 147px 结果区）。
+                            .size_range(px(197.)..Pixels::MAX)
+                            .child(search_panel)
+                            .child(search_panel_resize_hit_area),
                     ),
-                )
-                .child(
-                    resizable_panel()
-                        .size(search_panel_height)
-                        // 搜索面板折叠高 50px，展开下限为 197px（50px 工具栏 + 147px 结果区）。
-                        .size_range(px(197.)..Pixels::MAX)
-                        .child(search_panel)
-                        .child(search_panel_resize_hit_area),
-                ),
-        )
+            )
+            .child(search_panel_resize_event_layer)
     }
 
     fn render_status_bar(&self, cx: &App) -> impl IntoElement {
@@ -18276,6 +18284,7 @@ impl Render for Workspace {
                     )
                 },
             )
+            .child(crate::modal_event_layer::render_foreground_pointer_barrier())
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_sheet_layer(window, cx))
             .children(Root::render_notification_layer(window, cx));
