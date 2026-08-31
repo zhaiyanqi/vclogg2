@@ -1135,7 +1135,7 @@ mod scroll_position_tests {
     fn restored_current_result_reapplies_the_domain_selection() {
         let rows = [4, 10, 42].into_iter().collect();
         let document = Arc::new(LogDocument::placeholder("restore-selection.log"));
-        let delegate = LogTableDelegate::matches(1, document, rows);
+        let delegate = LogTableDelegate::projected(1, document, rows);
 
         assert_eq!(delegate.settle_table_selection(1), Some(10));
         assert_eq!(delegate.selected_source_rows(), vec![10]);
@@ -1714,7 +1714,7 @@ impl DocumentTab {
             table
                 .delegate_mut()
                 .set_matched_rows(self.search_result.line_indices.clone());
-            table.delegate_mut().set_matches(result_rows);
+            table.delegate_mut().set_row_projection(result_rows);
             if let Some(row_ix) = selected_result_row {
                 table.set_active_log_row(row_ix, cx);
             } else {
@@ -6321,7 +6321,7 @@ impl Workspace {
             });
             let result_table = cx.new(|cx| {
                 let mut delegate =
-                    LogTableDelegate::matches(document_id, document.clone(), result_rows.clone());
+                    LogTableDelegate::projected(document_id, document.clone(), result_rows.clone());
                 delegate.set_marked_rows(marked_rows_snapshot);
                 delegate.set_view_options(session.show_line_numbers, session.show_row_separators);
                 delegate.set_appearance(&self.app_settings);
@@ -6889,7 +6889,7 @@ impl Workspace {
         tab.result_table.update(cx, |table, cx| {
             table
                 .delegate_mut()
-                .replace_with_matches(tab.document.clone(), result_rows);
+                .replace_with_rows(tab.document.clone(), result_rows);
             table.delegate_mut().set_marked_rows(marked_rows);
             table
                 .delegate_mut()
@@ -7052,7 +7052,7 @@ impl Workspace {
                         tab.result_table.update(cx, |table, cx| {
                             table
                                 .delegate_mut()
-                                .replace_with_matches(tab.document.clone(), result_rows);
+                                .replace_with_rows(tab.document.clone(), result_rows);
                             table.delegate_mut().set_marked_rows(marked_rows);
                             table
                                 .delegate_mut()
@@ -11880,7 +11880,7 @@ impl Workspace {
             let range = wrapped_range.unwrap_or_else(|| {
                 Self::first_wrapped_frame_range(table.visible_range().rows().clone(), count)
             });
-            delegate.prefetch_rows(range.clone());
+            delegate.prepare_visible_rows(range.clone());
             let font_size = delegate.log_font_size();
             let line_number_width = if delegate.show_line_numbers() {
                 px(delegate.line_number_width() as f32)
@@ -11971,7 +11971,7 @@ impl Workspace {
             let range = wrapped_range.unwrap_or_else(|| {
                 Self::first_wrapped_frame_range(table.visible_range().rows().clone(), count)
             });
-            delegate.prefetch_rows(range.clone());
+            delegate.prepare_visible_rows(range.clone());
             let font_size = delegate.log_font_size();
             let outer_width = bounds.map_or(px(0.), |bounds| {
                 (bounds.size.width
@@ -12045,7 +12045,7 @@ impl Workspace {
         let (outer_width, font_size, font_family, rows) = {
             let table = self.global_table.read(cx);
             let delegate = table.delegate();
-            delegate.prefetch_rows(visible_range.clone());
+            delegate.prepare_visible_rows(visible_range.clone());
             let font_size = delegate.log_font_size();
             let outer_width = if self.wrapped_global_results.layout_width.get() > px(0.) {
                 self.wrapped_global_results.layout_width.get()
@@ -15605,7 +15605,7 @@ impl Workspace {
         table
             .read(cx)
             .delegate()
-            .prefetch_rows(visible_range.clone());
+            .prepare_visible_rows(visible_range.clone());
         let (
             show_line_numbers,
             show_row_separators,
@@ -16995,7 +16995,7 @@ impl Workspace {
         self.global_table
             .read(cx)
             .delegate()
-            .prefetch_rows(visible_range.clone());
+            .prepare_visible_rows(visible_range.clone());
         let (
             font_size,
             font_family,

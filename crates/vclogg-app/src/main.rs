@@ -33,6 +33,7 @@ mod trash;
 mod ui_performance;
 mod ui_theme;
 mod updater;
+mod virtual_log_lines;
 mod workspace;
 
 use std::path::PathBuf;

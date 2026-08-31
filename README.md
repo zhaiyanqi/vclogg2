@@ -266,7 +266,7 @@ powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 发布新版本时，先修改 `Cargo.toml` 的 workspace 版本、同步 `Cargo.lock`，提交并推送干净的 `main`。标签由发布者创建，再交给脚本校验并推送：
 
 ```bash
-VERSION=2.0.3
+VERSION=2.0.4
 git tag -a "v${VERSION}" -m "VCLogg2 v${VERSION}"
 ./scripts/publish-github-release.sh "v${VERSION}"
 ```

@@ -32,6 +32,7 @@ use crate::log_table::{
 use crate::selectable_log_text::{LogText, SelectableLogText, TextSelectionCache};
 use crate::state_store::{AppSettings, DEFAULT_WORD_BOUNDARY_CHARACTERS, LogFontFamily};
 use crate::ui_theme;
+use crate::virtual_log_lines::VirtualLogLineCache;
 
 #[derive(Clone)]
 pub struct GlobalSearchGroup {
@@ -88,14 +89,12 @@ pub struct GlobalSearchTableDelegate {
     row_selection: Rc<RefCell<RowSelection>>,
     active_row: Cell<Option<usize>>,
     suppress_table_clear: Cell<bool>,
-    overscan: usize,
-    row_cache: RefCell<BTreeMap<(u64, usize), CachedGlobalRowPresentation>>,
-    row_cache_window: Cell<Option<(usize, usize)>>,
+    line_cache: VirtualLogLineCache<(u64, usize)>,
     row_bounds: Rc<RefCell<BTreeMap<usize, Bounds<Pixels>>>>,
 }
 
 #[derive(Clone)]
-struct CachedGlobalRowPresentation {
+struct GlobalRowPresentation {
     text: LogText,
     highlights: Arc<[(Range<usize>, crate::log_table::TextHighlight)]>,
 }
@@ -424,18 +423,26 @@ impl GlobalSearchTableDelegate {
             row_selection: Rc::default(),
             active_row: Cell::default(),
             suppress_table_clear: Cell::default(),
-            overscan: 12,
-            row_cache: RefCell::default(),
-            row_cache_window: Cell::default(),
+            line_cache: VirtualLogLineCache::default(),
             row_bounds: Rc::default(),
         }
     }
 
     pub fn set_groups(&mut self, groups: Vec<GlobalSearchGroup>, matcher: Option<SearchMatcher>) {
+        let reusable_documents = groups
+            .iter()
+            .filter(|next| {
+                self.groups.iter().any(|current| {
+                    current.document_id == next.document_id
+                        && Arc::ptr_eq(&current.document, &next.document)
+                })
+            })
+            .map(|group| group.document_id)
+            .collect::<BTreeSet<_>>();
+        self.line_cache
+            .retain(|(document_id, _)| reusable_documents.contains(document_id));
         self.groups = groups;
         self.matcher = matcher;
-        self.row_cache.get_mut().clear();
-        self.row_cache_window.set(None);
         self.row_bounds.borrow_mut().clear();
         self.row_selection.borrow_mut().clear();
         self.active_row.set(None);
@@ -444,8 +451,6 @@ impl GlobalSearchTableDelegate {
 
     pub fn set_quick_find_matcher(&mut self, matcher: Option<SearchMatcher>) {
         self.quick_find_matcher = matcher;
-        self.row_cache.get_mut().clear();
-        self.row_cache_window.set(None);
     }
 
     pub fn set_appearance(&mut self, settings: &AppSettings) {
@@ -463,8 +468,8 @@ impl GlobalSearchTableDelegate {
             .and_then(|value| try_parse_color(value).ok());
         self.show_line_number_row_separators = settings.show_line_number_row_separators;
         self.show_row_separators = settings.default_show_row_separators;
-        self.overscan = usize::from(settings.viewer_overscan.clamp(4, 40));
-        self.row_cache_window.set(None);
+        self.line_cache
+            .set_overscan(usize::from(settings.viewer_overscan.clamp(4, 40)));
     }
 
     pub fn set_word_boundary_characters(&mut self, characters: impl Into<SharedString>) {
@@ -639,7 +644,7 @@ impl GlobalSearchTableDelegate {
                 source_row,
             } => {
                 let group = self.groups.get(group_ix)?;
-                let presentation = self.cached_presentation(group_ix, source_row)?;
+                let presentation = self.row_presentation(group_ix, source_row)?;
                 Some(WrappedGlobalRow::Match {
                     document_id: group.document_id,
                     source_row,
@@ -654,77 +659,50 @@ impl GlobalSearchTableDelegate {
         }
     }
 
-    pub(crate) fn prefetch_rows(&self, visible_range: Range<usize>) {
-        let start = visible_range.start.saturating_sub(self.overscan);
-        let end = visible_range
-            .end
-            .saturating_add(self.overscan)
-            .min(self.rows_len);
-        if self.row_cache_window.replace(Some((start, end))) == Some((start, end)) {
-            return;
-        }
-        let desired_rows = (start..end)
-            .filter_map(|row_ix| match self.flat_row(row_ix) {
+    pub(crate) fn prepare_visible_rows(&self, visible_range: Range<usize>) {
+        self.line_cache.prepare_visible_rows(
+            visible_range,
+            self.rows_len,
+            |row_ix| match self.flat_row(row_ix) {
                 Some(FlatRow::Match {
                     group_ix,
                     source_row,
-                }) => Some((group_ix, source_row)),
+                }) => self
+                    .groups
+                    .get(group_ix)
+                    .map(|group| (group.document_id, source_row)),
                 _ => None,
-            })
-            .collect::<Vec<_>>();
-        let desired_keys = desired_rows
-            .iter()
-            .filter_map(|(group_ix, source_row)| {
+            },
+            |(document_id, source_row)| {
                 self.groups
-                    .get(*group_ix)
-                    .map(|group| (group.document_id, *source_row))
-            })
-            .collect::<BTreeSet<_>>();
-        self.row_cache
-            .borrow_mut()
-            .retain(|key, _| desired_keys.contains(key));
-        for (group_ix, source_row) in desired_rows {
-            let Some(group) = self.groups.get(group_ix) else {
-                continue;
-            };
-            if !self
-                .row_cache
-                .borrow()
-                .contains_key(&(group.document_id, source_row))
-            {
-                _ = self.cached_presentation(group_ix, source_row);
-            }
-        }
+                    .iter()
+                    .find(|group| group.document_id == *document_id)
+                    .and_then(|group| group.document.line(*source_row))
+            },
+        );
     }
 
-    fn cached_line(&self, group_ix: usize, source_row: usize) -> Option<SharedString> {
-        self.cached_presentation(group_ix, source_row)
-            .map(|presentation| presentation.text.source().clone())
+    fn line_text(&self, group_ix: usize, source_row: usize) -> Option<LogText> {
+        let group = self.groups.get(group_ix)?;
+        self.line_cache.line((group.document_id, source_row), || {
+            group.document.line(source_row)
+        })
     }
 
-    fn cached_presentation(
+    fn row_presentation(
         &self,
         group_ix: usize,
         source_row: usize,
-    ) -> Option<CachedGlobalRowPresentation> {
+    ) -> Option<GlobalRowPresentation> {
         let group = self.groups.get(group_ix)?;
-        if let Some(presentation) = self
-            .row_cache
-            .borrow()
-            .get(&(group.document_id, source_row))
-            .cloned()
-        {
-            return Some(presentation);
-        }
-        let line: SharedString = group.document.line(source_row)?.into();
+        let text = self.line_text(group_ix, source_row)?;
         let source_highlights = combined_match_ranges(
-            &line,
+            text.source(),
             &group.color_rules,
             self.matcher.as_ref(),
             self.quick_find_matcher.as_ref(),
         );
-        let text = LogText::new(line);
-        let presentation = CachedGlobalRowPresentation {
+        Some(GlobalRowPresentation {
             highlights: source_highlights
                 .into_iter()
                 .filter_map(|(range, highlight)| {
@@ -732,11 +710,7 @@ impl GlobalSearchTableDelegate {
                 })
                 .collect(),
             text,
-        };
-        self.row_cache
-            .borrow_mut()
-            .insert((group.document_id, source_row), presentation.clone());
-        Some(presentation)
+        })
     }
 
     pub(crate) fn begin_pointer_selection(
@@ -924,6 +898,7 @@ impl GlobalSearchTableDelegate {
     }
 
     fn rebuild_layout(&mut self) {
+        self.line_cache.invalidate_window();
         self.group_starts.clear();
         self.rows_len = 0;
         for group in &self.groups {
@@ -1095,9 +1070,9 @@ impl TableDelegate for GlobalSearchTableDelegate {
                 let group = &self.groups[group_ix];
                 let severity = self
                     .highlight_log_levels
-                    .then(|| self.cached_line(group_ix, source_row))
+                    .then(|| self.line_text(group_ix, source_row))
                     .flatten()
-                    .and_then(|line| severity_style(&line, cx));
+                    .and_then(|line| severity_style(line.source(), cx));
                 div()
                     .id(format!(
                         "global-search-result-{}-{source_row}",
@@ -1178,9 +1153,9 @@ impl TableDelegate for GlobalSearchTableDelegate {
                     let matched = group.matched_rows.contains(source_row);
                     let severity_accent = self
                         .highlight_log_levels
-                        .then(|| self.cached_line(group_ix, source_row))
+                        .then(|| self.line_text(group_ix, source_row))
                         .flatten()
-                        .and_then(|line| severity_style(&line, cx))
+                        .and_then(|line| severity_style(line.source(), cx))
                         .map(|style| style.accent);
                     h_flex()
                         .relative()
@@ -1204,12 +1179,12 @@ impl TableDelegate for GlobalSearchTableDelegate {
                     .size_full()
                     .into_any_element()
                 } else if col_ix == 2 {
-                    let presentation = self
-                        .cached_presentation(group_ix, source_row)
-                        .unwrap_or_else(|| CachedGlobalRowPresentation {
-                            text: LogText::default(),
-                            highlights: Arc::default(),
-                        });
+                    let presentation =
+                        self.row_presentation(group_ix, source_row)
+                            .unwrap_or_else(|| GlobalRowPresentation {
+                                text: LogText::default(),
+                                highlights: Arc::default(),
+                            });
                     let text = presentation.text;
                     let highlights = presentation
                         .highlights
@@ -1289,7 +1264,7 @@ impl TableDelegate for GlobalSearchTableDelegate {
         self.row_bounds
             .borrow_mut()
             .retain(|row_ix, _| visible_range.contains(row_ix));
-        self.prefetch_rows(visible_range);
+        self.prepare_visible_rows(visible_range);
     }
 
     fn cell_text(&self, row_ix: usize, col_ix: usize, _: &App) -> String {
@@ -1305,9 +1280,9 @@ impl TableDelegate for GlobalSearchTableDelegate {
                 group_ix,
                 source_row,
             } if col_ix == 2 => self
-                .cached_line(group_ix, source_row)
-                .unwrap_or_default()
-                .to_string(),
+                .line_text(group_ix, source_row)
+                .map(|line| line.source().to_string())
+                .unwrap_or_default(),
             _ => String::new(),
         }
     }
@@ -1315,10 +1290,60 @@ impl TableDelegate for GlobalSearchTableDelegate {
 
 #[cfg(test)]
 mod tests {
+    use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
+
+    use vclogg_core::LogDocument;
+
     use super::{
-        GlobalSearchGroupIcon, GlobalSearchTableDelegate, format_group_result_count,
-        global_search_group_header_presentation, global_search_group_title,
+        GlobalSearchGroup, GlobalSearchGroupIcon, GlobalSearchTableDelegate,
+        format_group_result_count, global_search_group_header_presentation,
+        global_search_group_title,
     };
+
+    fn test_group(document: Arc<LogDocument>) -> GlobalSearchGroup {
+        GlobalSearchGroup {
+            document_id: 1,
+            title: "test.log".into(),
+            path: PathBuf::from("test.log"),
+            document,
+            rows: [0].into_iter().collect(),
+            matched_rows: [0].into_iter().collect(),
+            marked_rows: Arc::new(BTreeSet::new()),
+            truncated: false,
+            failure: None,
+            collapsed: false,
+            color_rules: Arc::default(),
+        }
+    }
+
+    #[test]
+    fn presentation_only_group_updates_reuse_decoded_lines() {
+        let document = Arc::new(LogDocument::placeholder("global-presentation.log"));
+        let mut delegate = GlobalSearchTableDelegate::new();
+        let group = test_group(document.clone());
+        delegate.set_groups(vec![group.clone()], None);
+        delegate
+            .line_cache
+            .line((1, 0), || Some("cached global line".to_string()));
+
+        let mut changed_presentation = group.clone();
+        changed_presentation.marked_rows = Arc::new(BTreeSet::from([0]));
+        delegate.set_groups(vec![changed_presentation], None);
+
+        let reused = delegate
+            .line_cache
+            .line((1, 0), || Some("reloaded global line".to_string()))
+            .expect("the cached line should remain available");
+        assert_eq!(reused.source().as_ref(), "cached global line");
+
+        let replacement = test_group(Arc::new(LogDocument::placeholder("replacement.log")));
+        delegate.set_groups(vec![replacement], None);
+        let reloaded = delegate
+            .line_cache
+            .line((1, 0), || Some("reloaded global line".to_string()))
+            .expect("the replacement document should load a new line");
+        assert_eq!(reloaded.source().as_ref(), "reloaded global line");
+    }
 
     #[test]
     fn refreshing_global_results_preserves_drag_cleanup_state() {
