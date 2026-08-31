@@ -5452,6 +5452,9 @@ impl Workspace {
     }
 
     fn apply_search_defaults(&mut self, case_sensitive: bool, regex: bool) {
+        if self.case_sensitive != case_sensitive || self.regex != regex {
+            self.cancel_search();
+        }
         self.case_sensitive = case_sensitive;
         self.regex = regex;
         self.app_settings.default_case_sensitive = case_sensitive;
@@ -5582,6 +5585,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.app_settings.search_result_limit() != settings.search_result_limit() {
+            self.cancel_search();
+        }
         crate::actions::apply_shortcuts(&self.app_settings.shortcuts, &settings.shortcuts, cx);
         cx.set_reduce_motion(settings.reduce_motion);
         crate::i18n::set_language(settings.language);
@@ -5635,6 +5641,11 @@ impl Workspace {
         for workspace in other_workspaces {
             let shared_settings = settings.clone();
             workspace.update(cx, |workspace, cx| {
+                if workspace.app_settings.search_result_limit()
+                    != shared_settings.search_result_limit()
+                {
+                    workspace.cancel_search();
+                }
                 workspace.app_settings = shared_settings.clone();
                 workspace.refresh_localized_input_copy(window, cx);
                 if commit_defaults {
@@ -10946,7 +10957,6 @@ impl Workspace {
                     this.record_search_history(&query.text, window, cx);
                 }
                 let highlight_matches = this.app_settings.highlight_matches;
-                let search_result_limit = this.app_settings.search_result_limit();
                 let row_height = this.log_row_height();
                 let Some(tab_ix) = this.documents.iter().position(|tab| tab.id == document_id)
                 else {
@@ -10959,8 +10969,7 @@ impl Workspace {
 
                 let prime_wrapped_results = match result {
                     Ok((SearchRun::Completed(result), search_matcher)) => {
-                        tab.search_query.text = query.text;
-                        tab.search_query.max_results = search_result_limit;
+                        tab.search_query = query;
                         tab.search_result = result;
                         tab.search_matcher = search_matcher;
                         tab.refresh_result_rows(cx);
@@ -11153,9 +11162,7 @@ impl Workspace {
                                 })
                                 .collect::<GlobalSearchResults>();
                             this.record_search_history(&query.text, window, cx);
-                            this.global_search.query.text = query.text;
-                            this.global_search.query.max_results =
-                                this.app_settings.search_result_limit();
+                            this.global_search.query = query;
                             this.global_search.results = results;
                             this.global_search.matcher = matcher;
                             this.global_search.result_scope = Some(SearchScope::AllOpenFiles);
