@@ -648,6 +648,15 @@ impl SearchController {
             })
     }
 
+    pub(crate) fn is_affected_by_added_documents(&self) -> bool {
+        self.active.as_ref().is_some_and(|search| {
+            matches!(
+                search.target,
+                SearchTarget::AllOpenFiles | SearchTarget::Directory
+            )
+        })
+    }
+
     pub(crate) fn cancel_for_document(&mut self, document_id: u64) -> bool {
         let should_cancel = self.active.as_ref().is_some_and(|search| {
             matches!(search.target, SearchTarget::Document(id) if id == document_id)
@@ -928,6 +937,20 @@ mod state_controller_tests {
         assert!(!controller.is_affected_by_removed_documents(&removed));
         controller.begin(SearchTarget::Document(7), 4, SearchCancellation::default());
         assert!(controller.is_affected_by_removed_documents(&removed));
+    }
+
+    #[test]
+    fn adding_documents_only_affects_workspace_wide_searches() {
+        let mut controller = SearchController::default();
+
+        controller.begin(SearchTarget::Directory, 1, SearchCancellation::default());
+        assert!(controller.is_affected_by_added_documents());
+
+        controller.begin(SearchTarget::AllOpenFiles, 2, SearchCancellation::default());
+        assert!(controller.is_affected_by_added_documents());
+
+        controller.begin(SearchTarget::Document(7), 3, SearchCancellation::default());
+        assert!(!controller.is_affected_by_added_documents());
     }
 
     #[test]

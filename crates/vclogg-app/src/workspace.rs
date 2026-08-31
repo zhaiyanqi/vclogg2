@@ -4074,7 +4074,8 @@ impl Workspace {
                 self.documents
                     .iter()
                     .find(|tab| {
-                        tab.document.path() == path && tab.load_state == DocumentLoadState::Opening
+                        paths_match(tab.document.path(), path)
+                            && tab.load_state == DocumentLoadState::Opening
                     })
                     .map(|tab| (path.clone(), tab.id))
             })
@@ -4134,7 +4135,7 @@ impl Workspace {
                         opening_ids.get(path).is_some_and(|expected_id| {
                             this.documents.iter().any(|tab| {
                                 tab.id == *expected_id
-                                    && tab.document.path() == path
+                                    && paths_match(tab.document.path(), path)
                                     && tab.load_state == DocumentLoadState::Opening
                             })
                         })
@@ -4179,7 +4180,8 @@ impl Workspace {
                 this.maybe_restore_persisted_search(window, cx);
                 for (path, completion) in move_completions {
                     let installed = this.documents.iter().any(|tab| {
-                        tab.document.path() == path && tab.load_state == DocumentLoadState::Ready
+                        paths_match(tab.document.path(), &path)
+                            && tab.load_state == DocumentLoadState::Ready
                     });
                     completion.finish(installed, cx);
                 }
@@ -4231,7 +4233,7 @@ impl Workspace {
         self.active_document().is_some_and(|tab| {
             self.pinned_files
                 .iter()
-                .any(|file| file.path == tab.document.path())
+                .any(|file| paths_match(&file.path, tab.document.path()))
         })
     }
 
@@ -6092,7 +6094,7 @@ impl Workspace {
                     if let Some(tab) = this
                         .documents
                         .iter_mut()
-                        .find(|tab| tab.document.path() == saved_path)
+                        .find(|tab| paths_match(tab.document.path(), &saved_path))
                         && result.state.revision > tab.session_base.revision
                     {
                         tab.session_base = result.state;
@@ -6302,12 +6304,27 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let adds_document = opened.iter().any(|(path, result)| {
+            result.is_ok()
+                && !self
+                    .documents
+                    .iter()
+                    .any(|tab| paths_match(tab.document.path(), path))
+        });
+        if adds_document && self.searches.is_affected_by_added_documents() {
+            self.cancel_search();
+        }
+        if adds_document {
+            self.global_search.revision = self.global_search.revision.saturating_add(1);
+        }
+
         let previous_active_id = self.active_document().map(|tab| tab.id);
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
         let mut recorded_paths = Vec::new();
         let mut cache_writes = Vec::new();
         let mut installed_document_ids = BTreeSet::new();
+        let mut global_sources_changed = false;
 
         for (path, result) in opened {
             let mut prepared = match result {
@@ -6326,7 +6343,7 @@ impl Workspace {
             if let Some(existing_ix) = self
                 .documents
                 .iter()
-                .position(|tab| tab.document.path() == path)
+                .position(|tab| paths_match(tab.document.path(), &path))
             {
                 if let Some(new_tab_id) = replacement_new_tab_id.take() {
                     self.tabs
@@ -6343,6 +6360,7 @@ impl Workspace {
                 if should_upgrade {
                     let ready = prepared.load_state == DocumentLoadState::Ready;
                     self.upgrade_loading_document(existing_ix, prepared, window, cx);
+                    global_sources_changed = true;
                     if ready && !self.transient_paths.contains(&path) {
                         recorded_paths.push(path.clone());
                     }
@@ -6687,6 +6705,7 @@ impl Workspace {
                     .flatten(),
                 pending_resume,
             });
+            global_sources_changed = true;
             installed_document_ids.insert(document_id);
             let workspace_tab_id = WorkspaceTabId::Document(document_id);
             if let Some(new_tab_id) = replacement_new_tab_id.take() {
@@ -6709,11 +6728,14 @@ impl Workspace {
             self.active_tab_id = workspace_tab_id;
         }
         self.reorder_documents_to_match_tabs();
+        if global_sources_changed {
+            self.refresh_global_result_rows(cx);
+        }
         if let Some(active_path) = active_path
             && let Some(document_id) = self
                 .documents
                 .iter()
-                .find(|tab| tab.document.path() == active_path)
+                .find(|tab| paths_match(tab.document.path(), active_path))
                 .map(|tab| tab.id)
         {
             self.active_tab_id = WorkspaceTabId::Document(document_id);
@@ -6785,7 +6807,7 @@ impl Workspace {
             if let Some(expected_id) = opening_ids.get(&path).copied() {
                 let still_open = self.documents.iter().any(|tab| {
                     tab.id == expected_id
-                        && tab.document.path() == path
+                        && paths_match(tab.document.path(), &path)
                         && matches!(
                             tab.load_state,
                             DocumentLoadState::Opening | DocumentLoadState::Preview
@@ -7759,7 +7781,7 @@ impl Workspace {
         if let Some(existing_ix) = self
             .documents
             .iter()
-            .position(|tab| tab.document.path() == initial.path)
+            .position(|tab| paths_match(tab.document.path(), &initial.path))
         {
             self.activate_tab(existing_ix, window, cx);
             if let Some(completion) = initial.move_completion {
