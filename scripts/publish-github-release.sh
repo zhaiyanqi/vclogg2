@@ -6,11 +6,12 @@ script_directory="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 repository_root="$(CDPATH= cd -- "$script_directory/.." && pwd -P)"
 remote_name="origin"
 assume_yes=false
+tag_name=""
 
 print_usage() {
-  echo "Usage: ./scripts/publish-github-release.sh [--remote NAME] [--yes]"
+  echo "Usage: ./scripts/publish-github-release.sh <TAG> [--remote NAME] [--yes]"
   echo
-  echo "Create and push v<Cargo version>; GitHub Actions builds and publishes the Release."
+  echo "Validate and push an existing v<Cargo version> tag; GitHub Actions publishes the Release."
 }
 
 while (($# > 0)); do
@@ -31,13 +32,28 @@ while (($# > 0)); do
       print_usage
       exit 0
       ;;
-    *)
+    -*)
       echo "Unknown argument: $1" >&2
       print_usage >&2
       exit 2
       ;;
+    *)
+      if [[ -n "$tag_name" ]]; then
+        echo "Only one release tag may be specified." >&2
+        print_usage >&2
+        exit 2
+      fi
+      tag_name="$1"
+      shift
+      ;;
   esac
 done
+
+if [[ -z "$tag_name" ]]; then
+  echo "A release tag is required." >&2
+  print_usage >&2
+  exit 2
+fi
 
 for command_name in cargo git python3; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
@@ -87,10 +103,25 @@ metadata = json.load(sys.stdin)
 package = next(item for item in metadata["packages"] if item["name"] == "vclogg2")
 print(package["version"])
 ')"
-tag_name="v$version"
+expected_tag="v$version"
+if [[ "$tag_name" != "$expected_tag" ]]; then
+  echo "Release tag must match the Cargo version: $expected_tag" >&2
+  echo "Received: $tag_name" >&2
+  exit 1
+fi
 
-echo "Fetching $remote_name/main and existing tags..."
-git fetch "$remote_name" main --tags
+if ! git check-ref-format "refs/tags/$tag_name" >/dev/null 2>&1; then
+  echo "Invalid release tag: $tag_name" >&2
+  exit 1
+fi
+if ! git show-ref --verify --quiet "refs/tags/$tag_name"; then
+  echo "Release tag does not exist locally: $tag_name" >&2
+  echo "Create it first, then rerun this script." >&2
+  exit 1
+fi
+
+echo "Fetching $remote_name/main..."
+git fetch "$remote_name" main
 
 local_commit="$(git rev-parse HEAD)"
 remote_commit="$(git rev-parse "refs/remotes/$remote_name/main")"
@@ -101,8 +132,11 @@ if [[ "$local_commit" != "$remote_commit" ]]; then
   exit 1
 fi
 
-if git show-ref --verify --quiet "refs/tags/$tag_name"; then
-  echo "Tag already exists locally: $tag_name" >&2
+tag_commit="$(git rev-list -n 1 "$tag_name")"
+if [[ "$tag_commit" != "$local_commit" ]]; then
+  echo "Release tag must point to the current main commit." >&2
+  echo "Tag:  $tag_commit" >&2
+  echo "HEAD: $local_commit" >&2
   exit 1
 fi
 if git ls-remote --exit-code --tags "$remote_name" "refs/tags/$tag_name" >/dev/null 2>&1; then
@@ -118,10 +152,11 @@ fi
 
 echo "Release version: $version"
 echo "Release commit:  $local_commit"
+echo "Existing tag:    $tag_name"
 echo "Push target:     $remote_url"
 
 if [[ "$assume_yes" != true ]]; then
-  read -r -p "Run static checks, create $tag_name, and push it? [y/N] " confirmation
+  read -r -p "Run static checks and push existing tag $tag_name? [y/N] " confirmation
   case "$confirmation" in
     y | Y | yes | YES) ;;
     *)
@@ -132,9 +167,8 @@ if [[ "$assume_yes" != true ]]; then
 fi
 
 "$script_directory/check.sh"
-git tag --annotate "$tag_name" --message "VCLogg2 $version"
-if ! git push "$remote_name" "$tag_name"; then
-  echo "The push failed. Local tag $tag_name was kept; inspect it before retrying or deleting it." >&2
+if ! git push "$remote_name" "refs/tags/$tag_name"; then
+  echo "The push failed. No local tags were changed." >&2
   exit 1
 fi
 
