@@ -4551,7 +4551,11 @@ impl Workspace {
                 });
             },
         )
+        // This is the second child of a block container. Explicitly anchor it so
+        // Taffy does not place the full-size event layer at its post-content static position.
         .absolute()
+        .top_0()
+        .left_0()
         .size_full()
         .into_any_element()
     }
