@@ -1561,9 +1561,12 @@ mod tests {
         let group = test_group(document.clone());
         delegate.set_groups(vec![group.clone()], None);
         let initial_revision = delegate.content_revision();
-        delegate.visible_lines.line((1, 0), |_| {
-            Some(vclogg_core::LinePreview::new("cached global line", false))
-        });
+        delegate.visible_lines.prepare_visible_rows(
+            0..1,
+            1,
+            |_| Some((1, 0)),
+            |_, _| Some(vclogg_core::LinePreview::new("cached global line", false)),
+        );
 
         let mut changed_presentation = group.clone();
         changed_presentation.presentation.marked_rows = Arc::new(BTreeSet::from([0]));

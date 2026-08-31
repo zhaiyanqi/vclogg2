@@ -1503,10 +1503,16 @@ mod tests {
     fn presentation_changes_do_not_invalidate_decoded_lines() {
         let document = Arc::new(LogDocument::placeholder("presentation-state.log"));
         let mut delegate = LogTableDelegate::all(1, document);
+        delegate.source.visible_lines.prepare_visible_rows(
+            0..1,
+            1,
+            |_| Some(7),
+            |_, _| Some(LinePreview::new("cached line", false)),
+        );
         let cached = delegate
             .source
             .visible_lines
-            .line(7, |_| Some(LinePreview::new("cached line", false)))
+            .line(7, |_| panic!("the prepared line should be cached"))
             .expect("the test line should be cached");
         assert!(
             delegate

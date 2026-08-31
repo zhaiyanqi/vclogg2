@@ -46,7 +46,9 @@ impl CachedLogLine {
 /// Highlighting, selection, markers, typography, and wrapping are deliberately excluded so a
 /// presentation-only change never causes the source file to be read again. Direct consumers such
 /// as copy commands read the authoritative document directly. Visible rows are loaded before
-/// overscan rows, and retained preview payloads never exceed the cache byte budget.
+/// overscan rows, and retained preview payloads never exceed the cache byte budget. The prepared
+/// window is the only cache writer: incidental reads outside that window return a bounded preview
+/// without displacing visible rows.
 pub(crate) struct VisibleLineStore<K> {
     lines: RefCell<BTreeMap<K, CachedLogLine>>,
     window: Cell<Option<(usize, usize, usize, usize)>>,
@@ -98,25 +100,7 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
         }
         let byte_budget = self.max_cache_retained_bytes.get();
         let source_limit = self.max_line_source_bytes.get().min(byte_budget);
-        let line = CachedLogLine::from_preview(load(source_limit)?);
-        let text = line.text.clone();
-        if line.retained_bytes <= byte_budget {
-            let mut lines = self.lines.borrow_mut();
-            let mut retained_bytes = lines
-                .values()
-                .map(|line| line.retained_bytes)
-                .sum::<usize>();
-            while retained_bytes.saturating_add(line.retained_bytes) > byte_budget {
-                let Some(evicted_key) = lines.keys().next().cloned() else {
-                    break;
-                };
-                if let Some(evicted) = lines.remove(&evicted_key) {
-                    retained_bytes = retained_bytes.saturating_sub(evicted.retained_bytes);
-                }
-            }
-            lines.insert(key, line);
-        }
-        Some(text)
+        Some(CachedLogLine::from_preview(load(source_limit)?).text)
     }
 
     pub(crate) fn prepare_visible_rows(
@@ -219,6 +203,35 @@ mod tests {
 
         assert_eq!(line.source().as_ref(), "abcd…");
         assert!(line.source().ends_with('…'));
+    }
+
+    #[test]
+    fn incidental_reads_do_not_displace_the_prepared_window() {
+        let cache = VisibleLineStore::<usize>::default();
+        cache.set_overscan(0);
+        cache.max_line_source_bytes.set(4);
+        cache.max_cache_retained_bytes.set(8);
+        let loaded = RefCell::new(Vec::new());
+
+        cache.prepare_visible_rows(10..12, 100, Some, |source_row, _| {
+            loaded.borrow_mut().push(*source_row);
+            Some(LinePreview::new("line", false))
+        });
+        assert_eq!(*loaded.borrow(), vec![10, 11]);
+
+        cache
+            .line(0, |_| Some(LinePreview::new("away", false)))
+            .expect("an incidental read should still return a preview");
+        assert_eq!(
+            cache.lines.borrow().keys().copied().collect::<Vec<_>>(),
+            [10, 11]
+        );
+
+        for key in [10, 11] {
+            cache
+                .line(key, |_| panic!("prepared rows must remain cached"))
+                .expect("the prepared row should remain available");
+        }
     }
 
     #[test]
