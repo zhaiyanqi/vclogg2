@@ -498,7 +498,7 @@ pub(crate) struct GlobalSearchState {
     pub(crate) result_mode: ResultMode,
     pub(crate) result_mode_select: Entity<SelectState<Vec<ResultMode>>>,
     pub(crate) selected_documents: std::collections::BTreeSet<u64>,
-    pub(crate) preferences: BTreeMap<PathBuf, bool>,
+    preferences: PathPreferences,
     pub(crate) results: GlobalSearchResults,
     pub(crate) matcher: Option<SearchMatcher>,
     pub(crate) result_scope: Option<SearchScope>,
@@ -513,6 +513,30 @@ pub(crate) struct GlobalSearchState {
 }
 
 const DIRECTORY_DOCUMENT_ID_BASE: u64 = 1 << 63;
+
+#[derive(Default)]
+struct PathPreferences {
+    by_path: BTreeMap<PathMatchKey, (PathBuf, bool)>,
+}
+
+impl PathPreferences {
+    fn replace(&mut self, preferences: BTreeMap<PathBuf, bool>) {
+        self.by_path = preferences
+            .into_iter()
+            .map(|(path, selected)| (path_match_key(&path), (path, selected)))
+            .collect();
+    }
+
+    fn get(&self, path: &Path) -> Option<bool> {
+        self.by_path
+            .get(&path_match_key(path))
+            .map(|(_, selected)| *selected)
+    }
+
+    fn insert(&mut self, path: PathBuf, selected: bool) {
+        self.by_path.insert(path_match_key(&path), (path, selected));
+    }
+}
 
 struct DirectoryDocumentIds {
     by_path: BTreeMap<PathMatchKey, u64>,
@@ -566,7 +590,7 @@ impl GlobalSearchState {
             result_mode: ResultMode::MatchesAndMarks,
             result_mode_select,
             selected_documents: Default::default(),
-            preferences: BTreeMap::new(),
+            preferences: PathPreferences::default(),
             results: GlobalSearchResults::default(),
             matcher: None,
             result_scope: None,
@@ -583,6 +607,18 @@ impl GlobalSearchState {
 
     pub(crate) fn directory_document_id(&mut self, path: &Path) -> u64 {
         self.directory_document_ids.id_for_path(path)
+    }
+
+    pub(crate) fn replace_preferences(&mut self, preferences: BTreeMap<PathBuf, bool>) {
+        self.preferences.replace(preferences);
+    }
+
+    pub(crate) fn preference_for(&self, path: &Path) -> Option<bool> {
+        self.preferences.get(path)
+    }
+
+    pub(crate) fn set_preference(&mut self, path: PathBuf, selected: bool) {
+        self.preferences.insert(path, selected);
     }
 
     pub(crate) fn retain_directory_document_paths(&mut self, paths: &BTreeSet<PathBuf>) {
@@ -908,6 +944,18 @@ mod state_controller_tests {
         assert_eq!(identities.by_path.len(), 1);
         assert_eq!(identities.id_for_path(Path::new("logs/b.log")), second);
         assert_ne!(identities.id_for_path(Path::new("logs/a.log")), first);
+    }
+
+    #[test]
+    fn global_search_preferences_use_platform_path_identity() {
+        let mut preferences = PathPreferences::default();
+        preferences.replace(BTreeMap::from([(PathBuf::from("logs/a.log"), false)]));
+
+        assert_eq!(preferences.get(Path::new("logs/a.log")), Some(false));
+        assert_eq!(
+            preferences.get(Path::new("LOGS/A.LOG")),
+            cfg!(windows).then_some(false)
+        );
     }
 
     #[test]

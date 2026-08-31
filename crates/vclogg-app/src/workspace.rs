@@ -3392,7 +3392,8 @@ impl Workspace {
                                 cx,
                             );
                         }
-                        this.global_search.preferences = global_search_preferences;
+                        this.global_search
+                            .replace_preferences(global_search_preferences);
                         this.search_history = search_history;
                         this.predefined_filters =
                             cx.update_global::<WorkspaceWindowRegistry, _>(|registry, _| {
@@ -6415,13 +6416,7 @@ impl Workspace {
                 resolve_color_rules(&keyword_color_rules, &self.color_labels);
             let document_id = self.next_document_id;
             self.next_document_id += 1;
-            if self
-                .global_search
-                .preferences
-                .get(&path)
-                .copied()
-                .unwrap_or(true)
-            {
+            if self.global_search.preference_for(&path).unwrap_or(true) {
                 self.global_search.selected_documents.insert(document_id);
             }
             let log_table = cx.new(|cx| {
@@ -9773,9 +9768,7 @@ impl Workspace {
             .map(|tab| {
                 let selected = self.global_search.selected_documents.contains(&tab.id);
                 let path = tab.document.path().to_path_buf();
-                self.global_search
-                    .preferences
-                    .insert(path.clone(), selected);
+                self.global_search.set_preference(path.clone(), selected);
                 (path, selected)
             })
             .collect::<Vec<_>>();
