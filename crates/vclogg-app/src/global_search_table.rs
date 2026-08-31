@@ -91,6 +91,7 @@ pub struct GlobalSearchTableDelegate {
 
 struct GlobalSearchProjectionState {
     groups: Vec<GlobalSearchGroup>,
+    group_by_document: BTreeMap<u64, usize>,
     content_revision: u64,
     group_starts: Vec<usize>,
     rows_len: usize,
@@ -125,6 +126,7 @@ impl Default for GlobalSearchProjectionState {
     fn default() -> Self {
         Self {
             groups: Vec::new(),
+            group_by_document: BTreeMap::new(),
             content_revision: 1,
             group_starts: Vec::new(),
             rows_len: 0,
@@ -506,18 +508,24 @@ impl GlobalSearchTableDelegate {
         let (selected_rows, active_row, selection_anchor) = self.stable_interaction_rows();
         let documents_changed = groups.len() != self.projection.groups.len()
             || groups.iter().any(|next| {
-                !self.projection.groups.iter().any(|current| {
-                    current.source.document_id == next.source.document_id
-                        && Arc::ptr_eq(&current.source.document, &next.source.document)
-                })
+                self.projection
+                    .group_by_document
+                    .get(&next.source.document_id)
+                    .and_then(|group_ix| self.projection.groups.get(*group_ix))
+                    .is_none_or(|current| {
+                        !Arc::ptr_eq(&current.source.document, &next.source.document)
+                    })
             });
         let reusable_documents = groups
             .iter()
             .filter(|next| {
-                self.projection.groups.iter().any(|current| {
-                    current.source.document_id == next.source.document_id
-                        && Arc::ptr_eq(&current.source.document, &next.source.document)
-                })
+                self.projection
+                    .group_by_document
+                    .get(&next.source.document_id)
+                    .and_then(|group_ix| self.projection.groups.get(*group_ix))
+                    .is_some_and(|current| {
+                        Arc::ptr_eq(&current.source.document, &next.source.document)
+                    })
             })
             .map(|group| group.source.document_id)
             .collect::<BTreeSet<_>>();
@@ -533,6 +541,12 @@ impl GlobalSearchTableDelegate {
         self.interaction
             .collapsed_documents
             .retain(|document_id| document_ids.contains(document_id));
+        self.projection.group_by_document = groups
+            .iter()
+            .enumerate()
+            .map(|(group_ix, group)| (group.source.document_id, group_ix))
+            .collect();
+        debug_assert_eq!(self.projection.group_by_document.len(), groups.len());
         self.projection.groups = groups;
         self.presenter.matcher = matcher;
         self.interaction.row_bounds.borrow_mut().clear();
@@ -651,34 +665,31 @@ impl GlobalSearchTableDelegate {
     }
 
     pub(crate) fn row_ix_for_key(&self, key: LogRowKey) -> Option<usize> {
-        self.projection
-            .groups
-            .iter()
-            .enumerate()
-            .find_map(|(group_ix, group)| match key {
-                LogRowKey::FileGroup { document_id } if document_id == group.source.document_id => {
-                    self.projection.group_starts.get(group_ix).copied()
-                }
-                LogRowKey::Row {
-                    document_id,
-                    source_row,
-                } if document_id == group.source.document_id
-                    && !self.interaction.collapsed_documents.contains(&document_id) =>
-                {
-                    group
-                        .projection
-                        .rows
-                        .position(source_row)
-                        .and_then(|position| {
-                            self.projection
-                                .group_starts
-                                .get(group_ix)
-                                .copied()
-                                .and_then(|start| start.checked_add(position.saturating_add(1)))
-                        })
-                }
-                _ => None,
-            })
+        let document_id = match key {
+            LogRowKey::FileGroup { document_id } | LogRowKey::Row { document_id, .. } => {
+                document_id
+            }
+        };
+        let group_ix = *self.projection.group_by_document.get(&document_id)?;
+        match key {
+            LogRowKey::FileGroup { .. } => self.projection.group_starts.get(group_ix).copied(),
+            LogRowKey::Row { source_row, .. }
+                if !self.interaction.collapsed_documents.contains(&document_id) =>
+            {
+                self.projection.groups[group_ix]
+                    .projection
+                    .rows
+                    .position(source_row)
+                    .and_then(|position| {
+                        self.projection
+                            .group_starts
+                            .get(group_ix)
+                            .copied()
+                            .and_then(|start| start.checked_add(position.saturating_add(1)))
+                    })
+            }
+            LogRowKey::Row { .. } => None,
+        }
     }
 
     pub(crate) fn row_bounds_handle(&self) -> Rc<RefCell<BTreeMap<usize, Bounds<Pixels>>>> {
@@ -735,15 +746,10 @@ impl GlobalSearchTableDelegate {
     }
 
     pub fn toggle_group(&mut self, document_id: u64) {
-        let Some(group) = self
-            .projection
-            .groups
-            .iter_mut()
-            .find(|group| group.source.document_id == document_id)
-        else {
+        let Some(group_ix) = self.projection.group_by_document.get(&document_id).copied() else {
             return;
         };
-        if group.projection.rows.is_empty() {
+        if self.projection.groups[group_ix].projection.rows.is_empty() {
             return;
         }
         if !self.interaction.collapsed_documents.remove(&document_id) {
@@ -754,9 +760,9 @@ impl GlobalSearchTableDelegate {
 
     pub fn group_has_results(&self, document_id: u64) -> bool {
         self.projection
-            .groups
-            .iter()
-            .find(|group| group.source.document_id == document_id)
+            .group_by_document
+            .get(&document_id)
+            .and_then(|group_ix| self.projection.groups.get(*group_ix))
             .is_some_and(|group| !group.projection.rows.is_empty())
     }
 
@@ -868,9 +874,9 @@ impl GlobalSearchTableDelegate {
             },
             |(document_id, source_row), max_bytes| {
                 self.projection
-                    .groups
-                    .iter()
-                    .find(|group| group.source.document_id == *document_id)
+                    .group_by_document
+                    .get(document_id)
+                    .and_then(|group_ix| self.projection.groups.get(*group_ix))
                     .and_then(|group| group.source.document.line_preview(*source_row, max_bytes))
             },
         );
@@ -1522,7 +1528,7 @@ mod tests {
 
     use super::{
         GlobalSearchGroup, GlobalSearchGroupIcon, GlobalSearchGroupPresentation,
-        GlobalSearchGroupProjection, GlobalSearchGroupSource, GlobalSearchTableDelegate,
+        GlobalSearchGroupProjection, GlobalSearchGroupSource, GlobalSearchTableDelegate, LogRowKey,
         format_group_result_count, global_search_group_header_presentation,
         global_search_group_title,
     };
@@ -1628,6 +1634,34 @@ mod tests {
 
         assert!(delegate.selected_matches().is_empty());
         assert_eq!(delegate.active_log_row(), None);
+    }
+
+    #[test]
+    fn document_index_tracks_reordered_groups() {
+        let mut first = test_group(Arc::new(LogDocument::placeholder("first.log")));
+        first.source.document_id = 11;
+        let mut second = test_group(Arc::new(LogDocument::placeholder("second.log")));
+        second.source.document_id = 22;
+        let mut delegate = GlobalSearchTableDelegate::new();
+
+        delegate.set_groups(vec![first.clone(), second.clone()], None);
+        assert_eq!(
+            delegate.row_ix_for_key(LogRowKey::FileGroup { document_id: 22 }),
+            Some(2)
+        );
+
+        delegate.set_groups(vec![second, first], None);
+        assert_eq!(
+            delegate.row_ix_for_key(LogRowKey::FileGroup { document_id: 22 }),
+            Some(0)
+        );
+        assert_eq!(
+            delegate.row_ix_for_key(LogRowKey::Row {
+                document_id: 11,
+                source_row: 0,
+            }),
+            Some(3)
+        );
     }
 
     #[test]
