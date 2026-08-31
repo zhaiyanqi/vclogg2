@@ -29,7 +29,7 @@ pub struct SearchQuery {
 }
 
 /// Ordered source rows backed by a compressed roaring treemap.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CompressedRows {
     rows: Arc<RoaringTreemap>,
 }

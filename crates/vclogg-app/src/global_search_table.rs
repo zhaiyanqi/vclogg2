@@ -505,7 +505,19 @@ impl GlobalSearchTableDelegate {
     }
 
     pub fn set_groups(&mut self, groups: Vec<GlobalSearchGroup>, matcher: Option<SearchMatcher>) {
-        let (selected_rows, active_row, selection_anchor) = self.stable_interaction_rows();
+        self.interaction
+            .row_selection
+            .borrow_mut()
+            .end_pointer_selection();
+        let projection_changed = groups.len() != self.projection.groups.len()
+            || groups
+                .iter()
+                .zip(&self.projection.groups)
+                .any(|(next, current)| {
+                    next.source.document_id != current.source.document_id
+                        || next.projection.rows != current.projection.rows
+                });
+        let stable_interaction = projection_changed.then(|| self.stable_interaction_rows());
         let documents_changed = groups.len() != self.projection.groups.len()
             || groups.iter().any(|next| {
                 self.projection
@@ -516,42 +528,47 @@ impl GlobalSearchTableDelegate {
                         !Arc::ptr_eq(&current.source.document, &next.source.document)
                     })
             });
-        let reusable_documents = groups
-            .iter()
-            .filter(|next| {
-                self.projection
-                    .group_by_document
-                    .get(&next.source.document_id)
-                    .and_then(|group_ix| self.projection.groups.get(*group_ix))
-                    .is_some_and(|current| {
-                        Arc::ptr_eq(&current.source.document, &next.source.document)
-                    })
-            })
-            .map(|group| group.source.document_id)
-            .collect::<BTreeSet<_>>();
-        self.visible_lines
-            .retain(|(document_id, _)| reusable_documents.contains(document_id));
         if documents_changed {
+            let reusable_documents = groups
+                .iter()
+                .filter(|next| {
+                    self.projection
+                        .group_by_document
+                        .get(&next.source.document_id)
+                        .and_then(|group_ix| self.projection.groups.get(*group_ix))
+                        .is_some_and(|current| {
+                            Arc::ptr_eq(&current.source.document, &next.source.document)
+                        })
+                })
+                .map(|group| group.source.document_id)
+                .collect::<BTreeSet<_>>();
+            self.visible_lines
+                .retain(|(document_id, _)| reusable_documents.contains(document_id));
+            self.interaction.text_selections.clear();
             self.projection.content_revision = self.projection.content_revision.saturating_add(1);
         }
-        let document_ids = groups
-            .iter()
-            .map(|group| group.source.document_id)
-            .collect::<BTreeSet<_>>();
-        self.interaction
-            .collapsed_documents
-            .retain(|document_id| document_ids.contains(document_id));
-        self.projection.group_by_document = groups
-            .iter()
-            .enumerate()
-            .map(|(group_ix, group)| (group.source.document_id, group_ix))
-            .collect();
-        debug_assert_eq!(self.projection.group_by_document.len(), groups.len());
+        if projection_changed {
+            let document_ids = groups
+                .iter()
+                .map(|group| group.source.document_id)
+                .collect::<BTreeSet<_>>();
+            self.interaction
+                .collapsed_documents
+                .retain(|document_id| document_ids.contains(document_id));
+            self.projection.group_by_document = groups
+                .iter()
+                .enumerate()
+                .map(|(group_ix, group)| (group.source.document_id, group_ix))
+                .collect();
+            debug_assert_eq!(self.projection.group_by_document.len(), groups.len());
+        }
         self.projection.groups = groups;
         self.presenter.matcher = matcher;
-        self.interaction.row_bounds.borrow_mut().clear();
-        self.rebuild_layout();
-        self.restore_stable_interaction_rows(selected_rows, active_row, selection_anchor);
+        if let Some((selected_rows, active_row, selection_anchor)) = stable_interaction {
+            self.interaction.row_bounds.borrow_mut().clear();
+            self.rebuild_layout();
+            self.restore_stable_interaction_rows(selected_rows, active_row, selection_anchor);
+        }
     }
 
     pub fn set_quick_find_matcher(&mut self, matcher: Option<SearchMatcher>) {
@@ -1528,6 +1545,7 @@ impl TableDelegate for GlobalSearchTableDelegate {
 mod tests {
     use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
 
+    use gpui::Bounds;
     use vclogg_core::LogDocument;
 
     use crate::log_table::LogTableCursor;
@@ -1575,9 +1593,16 @@ mod tests {
         );
 
         let mut changed_presentation = group.clone();
+        changed_presentation.projection.rows = [0].into_iter().collect();
         changed_presentation.presentation.marked_rows = Arc::new(BTreeSet::from([0]));
+        delegate
+            .interaction
+            .row_bounds
+            .borrow_mut()
+            .insert(1, Bounds::default());
         delegate.set_groups(vec![changed_presentation], None);
         assert_eq!(delegate.content_revision(), initial_revision);
+        assert!(delegate.interaction.row_bounds.borrow().contains_key(&1));
 
         let reused = delegate
             .visible_lines
