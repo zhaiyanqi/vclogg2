@@ -4892,7 +4892,24 @@ impl Workspace {
                 });
             }
         }
-        self.refresh_global_result_rows(cx);
+        let color_rules_by_path = self
+            .documents
+            .iter()
+            .map(|tab| {
+                (
+                    path_match_key(tab.document.path()),
+                    tab.resolved_color_rules.clone(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        self.global_table.update(cx, |table, cx| {
+            table.delegate_mut().update_color_rules(|source| {
+                path_match_map_get(&color_rules_by_path, &source.path)
+                    .cloned()
+                    .unwrap_or_default()
+            });
+            table.refresh(cx);
+        });
         cx.notify();
     }
 

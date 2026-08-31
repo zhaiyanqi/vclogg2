@@ -586,6 +586,15 @@ impl GlobalSearchTableDelegate {
         self.presenter.matcher = matcher;
     }
 
+    pub fn update_color_rules(
+        &mut self,
+        mut rules_for: impl FnMut(&GlobalSearchGroupSource) -> Arc<[ResolvedColorRule]>,
+    ) {
+        for group in &mut self.projection.groups {
+            group.presentation.color_rules = rules_for(&group.source);
+        }
+    }
+
     pub fn set_quick_find_matcher(&mut self, matcher: Option<SearchMatcher>) {
         self.presenter.quick_find_matcher = matcher;
     }
