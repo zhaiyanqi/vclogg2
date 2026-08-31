@@ -9839,7 +9839,10 @@ impl Workspace {
         if self.searches.has_target(SearchTarget::AllOpenFiles) {
             self.cancel_search();
         }
-        self.global_search.revision = self.global_search.revision.saturating_add(1);
+        let invalidated_all_open_results = self.invalidate_all_open_results();
+        if invalidated_all_open_results.is_none() {
+            self.global_search.revision = self.global_search.revision.saturating_add(1);
+        }
         self.global_search.selected_documents = selected;
         let preferences = self
             .documents
@@ -9869,6 +9872,15 @@ impl Workspace {
                 }));
         }
         self.refresh_global_result_rows(cx);
+        if invalidated_all_open_results == Some(true) {
+            window.push_notification(
+                crate::tr!(
+                    "参与搜索的文件已改变，请重新执行全部打开文件搜索",
+                    "The searched files changed. Run the all-open-files search again."
+                ),
+                cx,
+            );
+        }
         self.maybe_restore_persisted_search(window, cx);
         self.schedule_workspace_search_state_save(window, cx);
         cx.notify();
