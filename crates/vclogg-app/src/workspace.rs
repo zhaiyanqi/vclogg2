@@ -2099,6 +2099,7 @@ impl DocumentTab {
 
     fn install_result_rows(&mut self, result_rows: CompressedRows, cx: &mut App) {
         self.restoring_result_selection = true;
+        let marked_rows = self.marked_rows.clone();
         let active_restored = self.result_table.update(cx, |table, cx| {
             if self.auto_follow {
                 table.delegate().set_active_log_row(None);
@@ -2106,6 +2107,7 @@ impl DocumentTab {
             table
                 .delegate_mut()
                 .set_matched_rows(self.search_result.line_indices.clone());
+            table.delegate_mut().set_marked_rows(marked_rows);
             table.delegate_mut().set_row_projection(result_rows);
             let active_restored = table.sync_active_log_row(cx);
             table.refresh_log_rows(cx);
@@ -8917,17 +8919,13 @@ impl Workspace {
                 changed_rows = changed_rows.saturating_add(rows.len());
                 let marked_rows = tab.marked_rows.clone();
                 tab.log_table.update(cx, |table, cx| {
-                    table.delegate_mut().set_marked_rows(marked_rows.clone());
+                    table.delegate_mut().set_marked_rows(marked_rows);
                     table.refresh(cx);
                 });
                 tab.refresh_result_rows(cx);
                 if is_marking && tab.result_mode.includes_marks() {
                     tab.results_visible = true;
                 }
-                tab.result_table.update(cx, |table, cx| {
-                    table.delegate_mut().set_marked_rows(marked_rows);
-                    table.refresh(cx);
-                });
                 changed_documents.push(document_id);
             }
             self.refresh_global_result_rows(cx);
@@ -8993,17 +8991,13 @@ impl Workspace {
             }
             let marked_rows = tab.marked_rows.clone();
             tab.log_table.update(cx, |table, cx| {
-                table.delegate_mut().set_marked_rows(marked_rows.clone());
+                table.delegate_mut().set_marked_rows(marked_rows);
                 table.refresh(cx);
             });
             tab.refresh_result_rows(cx);
             if is_marking && tab.result_mode.includes_marks() {
                 tab.results_visible = true;
             }
-            tab.result_table.update(cx, |table, cx| {
-                table.delegate_mut().set_marked_rows(marked_rows);
-                table.refresh(cx);
-            });
             (tab.id, is_marking)
         };
         if is_marking
