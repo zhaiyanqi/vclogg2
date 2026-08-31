@@ -147,12 +147,15 @@ impl GlobalSearchResults {
         self.iter().map(|(_, result)| result)
     }
 
-    pub(crate) fn retain(
-        &mut self,
-        mut keep: impl FnMut(&u64, &mut GlobalSearchDocumentResult) -> bool,
-    ) {
+    pub(crate) fn remove_documents(&mut self, document_ids: &BTreeSet<u64>) {
+        if !document_ids
+            .iter()
+            .any(|document_id| self.by_document.contains_key(document_id))
+        {
+            return;
+        }
         Arc::make_mut(&mut self.by_document)
-            .retain(|document_id, result| keep(document_id, result));
+            .retain(|document_id, _| !document_ids.contains(document_id));
         let by_document = &self.by_document;
         Arc::make_mut(&mut self.order).retain(|document_id| by_document.contains_key(document_id));
     }
@@ -221,8 +224,7 @@ impl Default for RetainedGlobalSearchContext {
 
 impl RetainedGlobalSearchContext {
     pub(crate) fn remove_documents(&mut self, document_ids: &BTreeSet<u64>) {
-        self.results
-            .retain(|document_id, _| !document_ids.contains(document_id));
+        self.results.remove_documents(document_ids);
         self.collapsed_document_ids
             .retain(|document_id| !document_ids.contains(document_id));
         self.selection
@@ -706,7 +708,7 @@ mod state_controller_tests {
             Some(Path::new("three.log"))
         );
 
-        results.retain(|document_id, _| *document_id != 9);
+        results.remove_documents(&BTreeSet::from([9]));
         assert_eq!(results.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [3]);
         assert!(results.get(&9).is_none());
     }
@@ -721,7 +723,12 @@ mod state_controller_tests {
         assert!(Arc::ptr_eq(&results.order, &snapshot.order));
         assert!(Arc::ptr_eq(&results.by_document, &snapshot.by_document));
 
-        results.retain(|document_id, _| *document_id != 3);
+        results.remove_documents(&BTreeSet::from([99]));
+
+        assert!(Arc::ptr_eq(&results.order, &snapshot.order));
+        assert!(Arc::ptr_eq(&results.by_document, &snapshot.by_document));
+
+        results.remove_documents(&BTreeSet::from([3]));
 
         assert!(!Arc::ptr_eq(&results.order, &snapshot.order));
         assert!(!Arc::ptr_eq(&results.by_document, &snapshot.by_document));

@@ -7516,9 +7516,7 @@ impl Workspace {
         self.global_search
             .selected_documents
             .retain(|document_id| !document_ids.contains(document_id));
-        self.global_search
-            .results
-            .retain(|document_id, _| !document_ids.contains(document_id));
+        self.global_search.results.remove_documents(&document_ids);
         self.global_search
             .all_open_context
             .remove_documents(&document_ids);
