@@ -9184,7 +9184,7 @@ impl Workspace {
             return;
         }
         self.cancel_quick_find_work();
-        self.quick_find.matched = None;
+        self.quick_find.clear_match();
         self.quick_find.no_match = false;
         self.quick_find.boundary = None;
         self.update_quick_find_matcher(window, cx);
@@ -9303,7 +9303,7 @@ impl Workspace {
         let query = self.quick_find.query.read(cx).value().to_string();
         if query.is_empty() {
             self.cancel_quick_find_work();
-            self.quick_find.matched = None;
+            self.quick_find.clear_match();
             self.quick_find.no_match = false;
             self.quick_find.boundary = None;
             cx.notify();
@@ -9363,6 +9363,14 @@ impl Workspace {
             return;
         }
 
+        let matched_source_is_current = self
+            .quick_find
+            .matched_source_version
+            .as_ref()
+            .is_some_and(|version| version.is_same_as(&source_version));
+        if self.quick_find.matched.is_some() && !matched_source_is_current {
+            self.quick_find.clear_match();
+        }
         let current_match = (!incremental)
             .then_some(self.quick_find.matched)
             .flatten()
@@ -9418,7 +9426,7 @@ impl Workspace {
                     this.quick_find.direction = None;
                     this.quick_find.cancellation = None;
                     this.quick_find.task = None;
-                    this.quick_find.matched = None;
+                    this.quick_find.clear_match();
                     this.quick_find.no_match = false;
                     this.quick_find.boundary = None;
                     cx.notify();
@@ -9431,6 +9439,7 @@ impl Workspace {
                 match matched {
                     Some(matched) => {
                         this.quick_find.matched = Some(matched);
+                        this.quick_find.matched_source_version = Some(source_version);
                         this.quick_find.no_match = false;
                         this.quick_find.boundary = None;
                         this.apply_quick_find_match(matched, cx);

@@ -411,6 +411,7 @@ pub(crate) struct QuickFindState {
     pub(crate) target: Option<QuickFindTarget>,
     pub(crate) anchor: usize,
     pub(crate) matched: Option<QuickFindMatch>,
+    pub(crate) matched_source_version: Option<QuickFindSourceVersion>,
     pub(crate) matcher: Option<SearchMatcher>,
     pub(crate) case_sensitive: bool,
     pub(crate) whole_word: bool,
@@ -433,6 +434,7 @@ impl QuickFindState {
             target: None,
             anchor: 0,
             matched: None,
+            matched_source_version: None,
             matcher: None,
             case_sensitive: false,
             whole_word: false,
@@ -463,7 +465,7 @@ impl QuickFindState {
         self.open = true;
         self.target = Some(target);
         self.anchor = anchor;
-        self.matched = None;
+        self.clear_match();
         self.no_match = false;
         self.boundary = None;
     }
@@ -473,12 +475,17 @@ impl QuickFindState {
         self.cancel_work();
         self.open = false;
         self.target = None;
-        self.matched = None;
+        self.clear_match();
         self.matcher = None;
         self.error = None;
         self.no_match = false;
         self.boundary = None;
         target
+    }
+
+    pub(crate) fn clear_match(&mut self) {
+        self.matched = None;
+        self.matched_source_version = None;
     }
 }
 
