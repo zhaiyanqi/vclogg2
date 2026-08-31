@@ -6378,6 +6378,7 @@ impl Workspace {
         let mut cache_writes = Vec::new();
         let mut installed_document_ids = BTreeSet::new();
         let mut global_sources_changed = false;
+        let mut added_selected_document = false;
 
         for (path, result) in opened {
             let mut prepared = match result {
@@ -6469,6 +6470,7 @@ impl Workspace {
             self.next_document_id += 1;
             if self.global_search.preference_for(&path).unwrap_or(true) {
                 self.global_search.selected_documents.insert(document_id);
+                added_selected_document = true;
             }
             let log_table = cx.new(|cx| {
                 let mut delegate = LogTableDelegate::all(document_id, document.clone());
@@ -6778,8 +6780,23 @@ impl Workspace {
             self.active_tab_id = workspace_tab_id;
         }
         self.reorder_documents_to_match_tabs();
+        let invalidated_all_open_results = added_selected_document
+            .then(|| self.invalidate_all_open_results())
+            .flatten();
         if global_sources_changed {
             self.refresh_global_result_rows(cx);
+        }
+        if let Some(visible_results_invalidated) = invalidated_all_open_results {
+            if visible_results_invalidated {
+                window.push_notification(
+                    crate::tr!(
+                        "参与搜索的文件已增加，请重新执行全部打开文件搜索",
+                        "A searched file was added. Run the all-open-files search again."
+                    ),
+                    cx,
+                );
+            }
+            self.schedule_workspace_search_state_save(window, cx);
         }
         if let Some(active_path) = active_path
             && let Some(document_id) = self
@@ -11728,6 +11745,16 @@ impl Workspace {
             .results
             .get(&document_id)
             .is_some();
+        if !installed && !retained {
+            return None;
+        }
+
+        self.invalidate_all_open_results()
+    }
+
+    fn invalidate_all_open_results(&mut self) -> Option<bool> {
+        let installed = self.global_search.result_scope == Some(SearchScope::AllOpenFiles);
+        let retained = self.global_search.all_open_context.initialized;
         if !installed && !retained {
             return None;
         }
