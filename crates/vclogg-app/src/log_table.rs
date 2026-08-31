@@ -1014,6 +1014,13 @@ impl LogTableDelegate {
         self.source.row_ix(key)
     }
 
+    pub(crate) fn projected_rows(&self) -> Option<&CompressedRows> {
+        match &self.source.row_projection {
+            LogRowProjection::All => None,
+            LogRowProjection::SourceRows(rows) => Some(rows),
+        }
+    }
+
     pub(crate) fn row_bounds_handle(&self) -> Rc<RefCell<BTreeMap<usize, Bounds<Pixels>>>> {
         self.interaction.row_bounds.clone()
     }
@@ -1546,6 +1553,14 @@ mod tests {
         assert_eq!(delegate.source_row(1), Some(9));
         assert_eq!(delegate.source_row(2), Some(27));
         assert_eq!(delegate.source_row(3), None);
+        assert_eq!(
+            delegate
+                .projected_rows()
+                .expect("projected delegate must own the visible rows")
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![3, 9, 27]
+        );
     }
 
     #[test]

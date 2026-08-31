@@ -586,7 +586,6 @@ struct DocumentTab {
     search_matcher: Option<SearchMatcher>,
     result_mode: ResultMode,
     result_mode_select: Entity<SelectState<Vec<ResultMode>>>,
-    result_rows: CompressedRows,
     search_revision: u64,
     results_visible: bool,
     restoring_result_selection: bool,
@@ -2060,6 +2059,29 @@ fn scale_uniform_wheel_scroll(handle: &gpui::UniformListScrollHandle, delta_y: P
 }
 
 impl DocumentTab {
+    fn result_rows(&self, cx: &App) -> CompressedRows {
+        self.result_table
+            .read(cx)
+            .delegate()
+            .projected_rows()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn result_row_count(&self, cx: &App) -> usize {
+        self.result_table.read(cx).delegate().row_count()
+    }
+
+    fn result_row_ix(&self, source_row: usize, cx: &App) -> Option<usize> {
+        self.result_table
+            .read(cx)
+            .delegate()
+            .row_ix_for_key(LogRowKey::Row {
+                document_id: self.id,
+                source_row,
+            })
+    }
+
     fn compute_result_rows(&self) -> CompressedRows {
         compute_result_rows(
             self.result_mode,
@@ -2098,9 +2120,7 @@ impl DocumentTab {
         } else {
             BTreeMap::new()
         };
-        let next_result_rows = self.compute_result_rows();
-        self.result_rows = next_result_rows;
-        let result_rows = self.result_rows.clone();
+        let result_rows = self.compute_result_rows();
         self.restoring_result_selection = true;
         let active_restored = self.result_table.update(cx, |table, cx| {
             if self.auto_follow {
@@ -3570,16 +3590,17 @@ impl Workspace {
         self.activate_workspace_tab(tab_id, window, cx);
     }
 
-    fn result_export_snapshot(&self) -> Option<ResultExport> {
+    fn result_export_snapshot(&self, cx: &App) -> Option<ResultExport> {
         match self.global_search.scope {
             SearchScope::CurrentFile => {
                 let tab = self.active_document()?;
-                (tab.load_state == DocumentLoadState::Ready && !tab.result_rows.is_empty()).then(
-                    || ResultExport::Single {
+                let rows = tab.result_rows(cx);
+                (tab.load_state == DocumentLoadState::Ready && !rows.is_empty()).then(|| {
+                    ResultExport::Single {
                         document: tab.document.clone(),
-                        rows: tab.result_rows.clone(),
-                    },
-                )
+                        rows,
+                    }
+                })
             }
             SearchScope::AllOpenFiles => {
                 let groups = self
@@ -3686,7 +3707,7 @@ impl Workspace {
         if self.result_export_task.is_some() || self.open_task.is_some() {
             return;
         }
-        let Some(export) = self.result_export_snapshot() else {
+        let Some(export) = self.result_export_snapshot(cx) else {
             return;
         };
         self.result_export_operation = Some(ResultExportOperation::OpenInNewTab);
@@ -3744,7 +3765,7 @@ impl Workspace {
         {
             return;
         }
-        let Some(export) = self.result_export_snapshot() else {
+        let Some(export) = self.result_export_snapshot(cx) else {
             return;
         };
         self.result_export_operation = Some(ResultExportOperation::MergeByTimestamp);
@@ -3797,7 +3818,7 @@ impl Workspace {
         if self.result_export_task.is_some() {
             return;
         }
-        let Some(export) = self.result_export_snapshot() else {
+        let Some(export) = self.result_export_snapshot(cx) else {
             return;
         };
         let suggested_name = self.result_export_suggested_name();
@@ -5868,7 +5889,7 @@ impl Workspace {
                 .result_viewport
                 .apply_wheel_scroll(
                     delta_y,
-                    self.documents[document_ix].result_rows.len(),
+                    self.documents[document_ix].result_row_count(cx),
                     row_height,
                     line_count,
                     line_scroll,
@@ -6398,7 +6419,7 @@ impl Workspace {
             });
             let result_table = cx.new(|cx| {
                 let mut delegate =
-                    LogTableDelegate::projected(document_id, document.clone(), result_rows.clone());
+                    LogTableDelegate::projected(document_id, document.clone(), result_rows);
                 delegate.set_marked_rows(marked_rows_snapshot);
                 delegate.set_view_options(session.show_line_numbers, session.show_row_separators);
                 delegate.set_appearance(&self.app_settings);
@@ -6622,7 +6643,6 @@ impl Workspace {
                 search_matcher: prepared.search_matcher,
                 result_mode,
                 result_mode_select,
-                result_rows,
                 search_revision: 0,
                 results_visible,
                 restoring_result_selection: false,
@@ -6805,7 +6825,7 @@ impl Workspace {
             let selected_result_ix = resume
                 .current_search
                 .selected_source_row
-                .and_then(|source_row| tab.result_rows.position(source_row))
+                .and_then(|source_row| tab.result_row_ix(source_row, cx))
                 .or(resume.current_search.selected_result_ix)
                 .filter(|_| result_count > 0)
                 .map(|ix| ix.min(result_count.saturating_sub(1)));
@@ -6962,12 +6982,11 @@ impl Workspace {
                 .filter(|row| tab.document.contains_source_row(*row))
                 .collect();
         }
-        tab.result_rows = tab.compute_result_rows();
+        let result_rows = tab.compute_result_rows();
         tab.log_viewport.invalidate_wrapped();
         tab.result_viewport.invalidate_wrapped();
 
         let marked_rows = Arc::new(tab.marked_rows.clone());
-        let result_rows = tab.result_rows.clone();
         tab.log_table.update(cx, |table, cx| {
             table.delegate_mut().replace_with_all(tab.document.clone());
             table.delegate_mut().set_marked_rows(marked_rows.clone());
@@ -7120,11 +7139,10 @@ impl Workspace {
                             .extend(std::mem::take(&mut tab.pending_restore_marked_rows));
                         tab.marked_rows
                             .retain(|row| *row < tab.document.line_count());
-                        tab.result_rows = tab.compute_result_rows();
+                        let result_rows = tab.compute_result_rows();
                         tab.log_viewport.invalidate_wrapped();
                         tab.result_viewport.invalidate_wrapped();
                         let marked_rows = Arc::new(tab.marked_rows.clone());
-                        let result_rows = tab.result_rows.clone();
                         let selected_result_row = (!follow_end)
                             .then(|| {
                                 selected_source_row
@@ -9195,11 +9213,12 @@ impl Workspace {
             }
             QuickFindTarget::Results(document_id) => {
                 let tab = self.documents.iter().find(|tab| tab.id == document_id)?;
-                let row_count = tab.result_rows.len();
+                let rows = tab.result_rows(cx);
+                let row_count = rows.len();
                 Some((
                     QuickFindSource::Document {
                         document: tab.document.clone(),
-                        rows: Some(tab.result_rows.clone()),
+                        rows: Some(rows),
                         row_count,
                     },
                     row_count,
@@ -14318,7 +14337,7 @@ impl Workspace {
                             crate::tr_args!(
                                 "{} 条结果{truncation}",
                                 "{} results{truncation}",
-                                tab.result_rows.len()
+                                tab.result_row_count(cx)
                             ),
                             tab.results_visible,
                         )
@@ -17237,7 +17256,7 @@ impl Workspace {
         };
         let result_menu_busy = self.result_export_task.is_some();
         let local_result_menu_disabled =
-            tab.result_rows.is_empty() || result_menu_busy || self.open_task.is_some();
+            tab.result_row_count(cx) == 0 || result_menu_busy || self.open_task.is_some();
         let global_result_menu_disabled = self.global_table.read(cx).delegate().results_count()
             == 0
             || result_menu_busy
