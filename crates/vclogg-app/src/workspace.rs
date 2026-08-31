@@ -2131,7 +2131,7 @@ impl DocumentTab {
                 .set_matched_rows(self.search_result.line_indices.clone());
             table.delegate_mut().set_row_projection(result_rows);
             let active_restored = table.sync_active_log_row(cx);
-            table.refresh(cx);
+            table.refresh_log_rows(cx);
             active_restored
         });
         if !active_restored {
@@ -7014,7 +7014,7 @@ impl Workspace {
                     .then(|| tab.search_matcher.clone())
                     .flatten(),
             );
-            table.refresh(cx);
+            table.refresh_log_rows(cx);
         });
         tab.result_table.update(cx, |table, cx| {
             table
@@ -7029,7 +7029,7 @@ impl Workspace {
                     .then(|| tab.search_matcher.clone())
                     .flatten(),
             );
-            table.refresh(cx);
+            table.refresh_log_rows(cx);
         });
 
         let restore_row = if prepared.load_state == DocumentLoadState::Ready {
@@ -7175,7 +7175,7 @@ impl Workspace {
                                     .then(|| tab.search_matcher.clone())
                                     .flatten(),
                             );
-                            table.refresh(cx);
+                            table.refresh_log_rows(cx);
                         });
                         tab.result_table.update(cx, |table, cx| {
                             table
@@ -7195,7 +7195,7 @@ impl Workspace {
                             } else {
                                 table.clear_selection(cx);
                             }
-                            table.refresh(cx);
+                            table.refresh_log_rows(cx);
                         });
                         tab.results_visible = results_visible;
                         tab.load_state = DocumentLoadState::Ready;
@@ -9810,7 +9810,7 @@ impl Workspace {
         let active_restored = self.global_table.update(cx, |table, cx| {
             table.delegate_mut().set_groups(groups, matcher);
             let active_restored = table.sync_active_log_row(cx);
-            table.refresh(cx);
+            table.refresh_log_rows(cx);
             active_restored
         });
         if word_wrap {

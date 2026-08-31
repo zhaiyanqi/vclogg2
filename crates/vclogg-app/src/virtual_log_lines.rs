@@ -190,6 +190,34 @@ mod tests {
     }
 
     #[test]
+    fn invalidated_projection_reprepares_the_same_viewport_coordinates() {
+        let cache = VisibleLineStore::<usize>::default();
+        cache.set_overscan(0);
+        let loaded = RefCell::new(Vec::new());
+
+        cache.prepare_visible_rows(0..2, 2, Some, |source_row, _| {
+            loaded.borrow_mut().push(*source_row);
+            Some(LinePreview::new(format!("line {source_row}"), false))
+        });
+        cache.invalidate_window();
+        cache.prepare_visible_rows(
+            0..2,
+            2,
+            |row_ix| Some(row_ix + 100),
+            |source_row, _| {
+                loaded.borrow_mut().push(*source_row);
+                Some(LinePreview::new(format!("line {source_row}"), false))
+            },
+        );
+
+        assert_eq!(*loaded.borrow(), [0, 1, 100, 101]);
+        assert_eq!(
+            cache.lines.borrow().keys().copied().collect::<Vec<_>>(),
+            [100, 101]
+        );
+    }
+
+    #[test]
     fn line_preview_is_bounded_and_visibly_marked() {
         let cache = VisibleLineStore::<usize>::default();
         cache.max_line_source_bytes.set(4);

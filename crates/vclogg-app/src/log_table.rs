@@ -286,12 +286,19 @@ pub(crate) trait LogTableCursor {
     fn take_suppressed_table_clear(&self) -> bool;
 }
 
+pub(crate) trait LogTableRows {
+    fn prepare_visible_log_rows(&self, visible_range: Range<usize>);
+}
+
 pub(crate) trait LogTableStateExt {
     fn active_log_row(&self) -> Option<usize>;
     fn set_active_log_row(&mut self, row_ix: usize, cx: &mut Context<Self>)
     where
         Self: Sized;
     fn sync_active_log_row(&mut self, cx: &mut Context<Self>) -> bool
+    where
+        Self: Sized;
+    fn refresh_log_rows(&mut self, cx: &mut Context<Self>)
     where
         Self: Sized;
 }
@@ -313,7 +320,7 @@ pub(crate) fn scroll_uniform_log_row_to_viewport_y(
 
 impl<D> LogTableStateExt for TableState<D>
 where
-    D: TableDelegate + LogTableCursor,
+    D: TableDelegate + LogTableCursor + LogTableRows,
 {
     fn active_log_row(&self) -> Option<usize> {
         self.delegate().active_log_row()
@@ -335,6 +342,12 @@ where
             self.clear_selection(cx);
             false
         }
+    }
+
+    fn refresh_log_rows(&mut self, cx: &mut Context<Self>) {
+        let visible_range = self.visible_range().rows().clone();
+        self.delegate().prepare_visible_log_rows(visible_range);
+        self.refresh(cx);
     }
 }
 
@@ -1226,6 +1239,12 @@ impl LogTableCursor for LogTableDelegate {
 
     fn take_suppressed_table_clear(&self) -> bool {
         self.interaction.suppress_table_clear.replace(false)
+    }
+}
+
+impl LogTableRows for LogTableDelegate {
+    fn prepare_visible_log_rows(&self, visible_range: Range<usize>) {
+        self.prepare_visible_rows(visible_range);
     }
 }
 

@@ -24,9 +24,9 @@ use vclogg_core::{CompressedRows, LogDocument, SearchMatcher};
 
 use crate::color_labels::ResolvedColorRule;
 use crate::log_table::{
-    LogTableCursor, LogTableStateExt, RowSelection, combined_match_ranges, line_marker,
-    line_marker_column_width, log_cell_horizontal_padding, log_line_height, log_line_number_cell,
-    log_row_selection_color, log_row_selection_overlay, message_column_width,
+    LogTableCursor, LogTableRows, LogTableStateExt, RowSelection, combined_match_ranges,
+    line_marker, line_marker_column_width, log_cell_horizontal_padding, log_line_height,
+    log_line_number_cell, log_row_selection_color, log_row_selection_overlay, message_column_width,
     severity_accent_overlay, severity_style,
 };
 use crate::selectable_log_text::{LogText, SelectableLogText, TextSelectionCache};
@@ -1168,6 +1168,12 @@ impl LogTableCursor for GlobalSearchTableDelegate {
 
     fn take_suppressed_table_clear(&self) -> bool {
         self.interaction.suppress_table_clear.replace(false)
+    }
+}
+
+impl LogTableRows for GlobalSearchTableDelegate {
+    fn prepare_visible_log_rows(&self, visible_range: Range<usize>) {
+        self.prepare_visible_rows(visible_range);
     }
 }
 
