@@ -120,8 +120,8 @@ pub(crate) struct GlobalSearchDocumentResult {
 /// Search-result snapshot with stable identity kept separate from presentation order.
 #[derive(Clone, Default)]
 pub(crate) struct GlobalSearchResults {
-    order: Vec<u64>,
-    by_document: BTreeMap<u64, GlobalSearchDocumentResult>,
+    order: Arc<Vec<u64>>,
+    by_document: Arc<BTreeMap<u64, GlobalSearchDocumentResult>>,
 }
 
 impl GlobalSearchResults {
@@ -134,14 +134,16 @@ impl GlobalSearchResults {
     }
 
     pub(crate) fn get_mut(&mut self, document_id: &u64) -> Option<&mut GlobalSearchDocumentResult> {
-        self.by_document.get_mut(document_id)
+        Arc::make_mut(&mut self.by_document).get_mut(document_id)
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&u64, &GlobalSearchDocumentResult)> {
-        self.order.iter().filter_map(|document_id| {
-            self.by_document
+        self.order.iter().map(|document_id| {
+            let result = self
+                .by_document
                 .get(document_id)
-                .map(|result| (document_id, result))
+                .expect("global result order and identity index must stay in sync");
+            (document_id, result)
         })
     }
 
@@ -153,32 +155,36 @@ impl GlobalSearchResults {
         &mut self,
         mut keep: impl FnMut(&u64, &mut GlobalSearchDocumentResult) -> bool,
     ) {
-        self.by_document
+        Arc::make_mut(&mut self.by_document)
             .retain(|document_id, result| keep(document_id, result));
-        self.order
-            .retain(|document_id| self.by_document.contains_key(document_id));
+        let by_document = &self.by_document;
+        Arc::make_mut(&mut self.order).retain(|document_id| by_document.contains_key(document_id));
     }
 
     pub(crate) fn clear(&mut self) {
-        self.order.clear();
-        self.by_document.clear();
+        self.order = Arc::default();
+        self.by_document = Arc::default();
     }
 }
 
 impl FromIterator<(u64, GlobalSearchDocumentResult)> for GlobalSearchResults {
     fn from_iter<T: IntoIterator<Item = (u64, GlobalSearchDocumentResult)>>(iter: T) -> Self {
-        let mut results = Self::default();
+        let mut order = Vec::new();
+        let mut by_document = BTreeMap::new();
         for (document_id, result) in iter {
-            let previous = results.by_document.insert(document_id, result);
+            let previous = by_document.insert(document_id, result);
             if previous.is_none() {
-                results.order.push(document_id);
+                order.push(document_id);
             }
             debug_assert!(
                 previous.is_none(),
                 "duplicate global search document identity"
             );
         }
-        results
+        Self {
+            order: Arc::new(order),
+            by_document: Arc::new(by_document),
+        }
     }
 }
 
@@ -677,6 +683,32 @@ mod state_controller_tests {
         results.retain(|document_id, _| *document_id != 9);
         assert_eq!(results.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [3]);
         assert!(results.get(&9).is_none());
+    }
+
+    #[test]
+    fn cloned_global_results_share_storage_until_mutated() {
+        let mut results = [(3, global_result("three.log"))]
+            .into_iter()
+            .collect::<GlobalSearchResults>();
+        let snapshot = results.clone();
+
+        assert!(Arc::ptr_eq(&results.order, &snapshot.order));
+        assert!(Arc::ptr_eq(&results.by_document, &snapshot.by_document));
+
+        results.get_mut(&3).expect("result should exist").title = "renamed.log".into();
+
+        assert!(Arc::ptr_eq(&results.order, &snapshot.order));
+        assert!(!Arc::ptr_eq(&results.by_document, &snapshot.by_document));
+        assert_eq!(
+            snapshot.get(&3).expect("snapshot should stay intact").title,
+            "three.log"
+        );
+
+        results.retain(|_, _| false);
+
+        assert!(!Arc::ptr_eq(&results.order, &snapshot.order));
+        assert!(results.is_empty());
+        assert!(snapshot.get(&3).is_some());
     }
 
     #[test]
