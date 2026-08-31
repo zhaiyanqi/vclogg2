@@ -223,6 +223,36 @@ impl Default for RetainedGlobalSearchContext {
     }
 }
 
+impl RetainedGlobalSearchContext {
+    pub(crate) fn remove_documents(&mut self, document_ids: &BTreeSet<u64>) {
+        self.results
+            .retain(|document_id, _| !document_ids.contains(document_id));
+        self.collapsed_document_ids
+            .retain(|document_id| !document_ids.contains(document_id));
+        self.selection
+            .retain(|document_id, _| !document_ids.contains(document_id));
+        if self.selected_row.is_some_and(|row| {
+            let document_id = match row {
+                GlobalSearchRow::Group { document_id }
+                | GlobalSearchRow::Match { document_id, .. } => document_id,
+            };
+            document_ids.contains(&document_id)
+        }) {
+            self.selected_row = None;
+        }
+        if self.viewport.as_ref().is_some_and(|viewport| {
+            let document_id = match viewport.key {
+                LogRowKey::Row { document_id, .. } | LogRowKey::FileGroup { document_id } => {
+                    document_id
+                }
+            };
+            document_ids.contains(&document_id)
+        }) {
+            self.viewport = None;
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) enum AppUpdateState {
     Unsupported,
@@ -709,6 +739,53 @@ mod state_controller_tests {
         assert!(!Arc::ptr_eq(&results.order, &snapshot.order));
         assert!(results.is_empty());
         assert!(snapshot.get(&3).is_some());
+    }
+
+    #[test]
+    fn retained_global_context_drops_closed_documents_and_interactions() {
+        let mut context = RetainedGlobalSearchContext {
+            initialized: true,
+            results: [
+                (9, global_result("nine.log")),
+                (3, global_result("three.log")),
+            ]
+            .into_iter()
+            .collect(),
+            collapsed_document_ids: BTreeSet::from([3, 9]),
+            selection: BTreeMap::from([
+                (3, [1].into_iter().collect()),
+                (9, [2].into_iter().collect()),
+            ]),
+            selected_row: Some(GlobalSearchRow::Match {
+                document_id: 9,
+                source_row: 2,
+            }),
+            viewport: Some(ViewportAnchor {
+                key: LogRowKey::Row {
+                    document_id: 9,
+                    source_row: 2,
+                },
+                viewport_y: gpui::px(0.),
+                at_end: false,
+                fallback_ix: 0,
+            }),
+            ..Default::default()
+        };
+
+        context.remove_documents(&BTreeSet::from([9]));
+
+        assert_eq!(
+            context
+                .results
+                .iter()
+                .map(|(id, _)| *id)
+                .collect::<Vec<_>>(),
+            [3]
+        );
+        assert_eq!(context.collapsed_document_ids, BTreeSet::from([3]));
+        assert_eq!(context.selection.keys().copied().collect::<Vec<_>>(), [3]);
+        assert_eq!(context.selected_row, None);
+        assert!(context.viewport.is_none());
     }
 
     #[test]

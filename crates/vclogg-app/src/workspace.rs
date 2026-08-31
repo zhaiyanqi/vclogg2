@@ -7519,6 +7519,9 @@ impl Workspace {
         self.global_search
             .results
             .retain(|document_id, _| !document_ids.contains(document_id));
+        self.global_search
+            .all_open_context
+            .remove_documents(&document_ids);
         self.reorder_documents_to_match_tabs();
         if !document_ids.is_empty() {
             self.global_search.revision = self.global_search.revision.saturating_add(1);
