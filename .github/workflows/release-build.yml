@@ -244,7 +244,7 @@ jobs:
               --latest=false
             )
           fi
-          gh release create "$GITHUB_REF_NAME" \
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             release-assets/windows-x86_64/vclogg2-*-windows-x86_64.zip \
             release-assets/macos-aarch64/vclogg2-*-macos-aarch64.zip \
             release-assets/linux-x86_64/vclogg2-*-linux-x86_64.tar.gz \
