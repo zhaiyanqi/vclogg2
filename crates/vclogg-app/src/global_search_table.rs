@@ -504,6 +504,18 @@ impl GlobalSearchTableDelegate {
         }
     }
 
+    pub(crate) fn has_same_virtual_content(&self, groups: &[GlobalSearchGroup]) -> bool {
+        groups.len() == self.projection.groups.len()
+            && groups
+                .iter()
+                .zip(&self.projection.groups)
+                .all(|(next, current)| {
+                    next.source.document_id == current.source.document_id
+                        && Arc::ptr_eq(&next.source.document, &current.source.document)
+                        && next.projection.rows == current.projection.rows
+                })
+    }
+
     pub fn set_groups(&mut self, groups: Vec<GlobalSearchGroup>, matcher: Option<SearchMatcher>) {
         self.interaction
             .row_selection
@@ -1595,6 +1607,7 @@ mod tests {
         let mut changed_presentation = group.clone();
         changed_presentation.projection.rows = [0].into_iter().collect();
         changed_presentation.presentation.marked_rows = Arc::new(BTreeSet::from([0]));
+        assert!(delegate.has_same_virtual_content(std::slice::from_ref(&changed_presentation)));
         delegate
             .interaction
             .row_bounds
@@ -1613,6 +1626,7 @@ mod tests {
         assert_eq!(reused.source().as_ref(), "cached global line");
 
         let replacement = test_group(Arc::new(LogDocument::placeholder("replacement.log")));
+        assert!(!delegate.has_same_virtual_content(std::slice::from_ref(&replacement)));
         delegate.set_groups(vec![replacement], None);
         assert!(delegate.content_revision() > initial_revision);
         let reloaded = delegate

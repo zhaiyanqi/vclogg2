@@ -9707,19 +9707,6 @@ impl Workspace {
     }
 
     fn refresh_global_result_rows(&mut self, cx: &mut Context<Self>) {
-        let word_wrap = self.global_viewport.is_wrapped();
-        let row_height = self.log_row_height();
-        let viewport_anchor = self.capture_global_viewport_anchor(row_height, cx);
-        let measured_heights = {
-            let table = self.global_table.read(cx);
-            if word_wrap {
-                self.global_viewport
-                    .wrapped_measured_heights_by_key(|row_ix| table.delegate().row_key(row_ix))
-            } else {
-                BTreeMap::new()
-            }
-        };
-
         let groups = match self.global_search.scope {
             SearchScope::AllOpenFiles => self
                 .documents
@@ -9817,13 +9804,30 @@ impl Workspace {
             && self.app_settings.highlight_matches)
             .then(|| self.global_search.matcher.clone())
             .flatten();
-        self.global_search.restoring_selection = true;
-        let active_restored = self.global_table.update(cx, |table, cx| {
-            table.delegate_mut().set_groups(groups, matcher);
-            let active_restored = table.sync_active_log_row(cx);
-            table.refresh_log_rows(cx);
-            active_restored
-        });
+        let virtual_content_changed = !self
+            .global_table
+            .read(cx)
+            .delegate()
+            .has_same_virtual_content(&groups);
+        if !virtual_content_changed {
+            self.install_global_result_groups(groups, matcher, cx);
+            return;
+        }
+
+        let word_wrap = self.global_viewport.is_wrapped();
+        let row_height = self.log_row_height();
+        let viewport_anchor = self.capture_global_viewport_anchor(row_height, cx);
+        let measured_heights = {
+            let table = self.global_table.read(cx);
+            if word_wrap {
+                self.global_viewport
+                    .wrapped_measured_heights_by_key(|row_ix| table.delegate().row_key(row_ix))
+            } else {
+                BTreeMap::new()
+            }
+        };
+
+        self.install_global_result_groups(groups, matcher, cx);
         if word_wrap {
             let table = self.global_table.read(cx);
             self.global_viewport.reset_wrapped_with_remapped_heights(
@@ -9836,6 +9840,21 @@ impl Workspace {
             self.global_viewport.invalidate_wrapped();
         }
         self.restore_global_viewport_anchor(viewport_anchor, row_height, cx);
+    }
+
+    fn install_global_result_groups(
+        &mut self,
+        groups: Vec<GlobalSearchGroup>,
+        matcher: Option<SearchMatcher>,
+        cx: &mut Context<Self>,
+    ) {
+        self.global_search.restoring_selection = true;
+        let active_restored = self.global_table.update(cx, |table, cx| {
+            table.delegate_mut().set_groups(groups, matcher);
+            let active_restored = table.sync_active_log_row(cx);
+            table.refresh_log_rows(cx);
+            active_restored
+        });
         if !active_restored {
             self.global_search.restoring_selection = false;
         }
