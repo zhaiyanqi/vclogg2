@@ -2369,6 +2369,14 @@ struct DirectorySearchResult {
     search_result: SearchResult,
 }
 
+struct CompletedGlobalSearch {
+    scope: SearchScope,
+    query: SearchQuery,
+    results: GlobalSearchResults,
+    matcher: Option<SearchMatcher>,
+    viewport_anchor: Option<RowViewportAnchor<LogRowKey>>,
+}
+
 pub struct Workspace {
     primary_window: bool,
     focus_handle: FocusHandle,
@@ -11022,6 +11030,49 @@ impl Workspace {
         self.searches.set_task(task);
     }
 
+    fn install_completed_global_search(
+        &mut self,
+        completed: CompletedGlobalSearch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.record_search_history(&completed.query.text, window, cx);
+        match completed.scope {
+            SearchScope::AllOpenFiles => self.global_search.query = completed.query,
+            SearchScope::Directory => self.global_search.directory_query = completed.query,
+            SearchScope::CurrentFile => {
+                debug_assert!(
+                    false,
+                    "current-file results have a document-owned installer"
+                );
+                return;
+            }
+        }
+        self.global_search.results = completed.results;
+        self.global_search.matcher = completed.matcher;
+        self.global_search.result_scope = Some(completed.scope);
+
+        let word_wrap = self.global_viewport.is_wrapped();
+        let row_height = self.log_row_height();
+        self.refresh_global_result_rows(cx);
+        self.position_global_row_viewport_anchor(completed.viewport_anchor, row_height, cx);
+        if word_wrap {
+            self.prime_global_wrapped_frame(row_height, false, window, cx);
+            self.position_global_row_viewport_anchor(completed.viewport_anchor, row_height, cx);
+        }
+        self.activity = Activity::Ready;
+
+        let pending_restore = match completed.scope {
+            SearchScope::AllOpenFiles => self.global_search.pending_all_open_restore.clone(),
+            SearchScope::Directory => self.global_search.pending_directory_restore.clone(),
+            SearchScope::CurrentFile => None,
+        };
+        if let Some(persisted) = pending_restore {
+            self.restore_persisted_global_presentation(completed.scope, persisted, window, cx);
+        }
+        self.schedule_workspace_search_state_save(window, cx);
+    }
+
     fn start_global_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.documents.is_empty() {
             return;
@@ -11161,41 +11212,17 @@ impl Workspace {
                                     ))
                                 })
                                 .collect::<GlobalSearchResults>();
-                            this.record_search_history(&query.text, window, cx);
-                            this.global_search.query = query;
-                            this.global_search.results = results;
-                            this.global_search.matcher = matcher;
-                            this.global_search.result_scope = Some(SearchScope::AllOpenFiles);
-                            let word_wrap = this.global_viewport.is_wrapped();
-                            let row_height = this.log_row_height();
-                            this.refresh_global_result_rows(cx);
-                            this.position_global_row_viewport_anchor(
-                                viewport_anchor,
-                                row_height,
+                            this.install_completed_global_search(
+                                CompletedGlobalSearch {
+                                    scope: SearchScope::AllOpenFiles,
+                                    query,
+                                    results,
+                                    matcher,
+                                    viewport_anchor,
+                                },
+                                window,
                                 cx,
                             );
-                            if word_wrap {
-                                this.prime_global_wrapped_frame(row_height, false, window, cx);
-                                this.position_global_row_viewport_anchor(
-                                    viewport_anchor,
-                                    row_height,
-                                    cx,
-                                );
-                            }
-                            this.activity = Activity::Ready;
-                            if let Some(persisted) =
-                                this.global_search.pending_all_open_restore.clone()
-                            {
-                                this.restore_persisted_global_presentation(
-                                    SearchScope::AllOpenFiles,
-                                    persisted,
-                                    window,
-                                    cx,
-                                );
-                            } else {
-                                this.capture_retained_global_context(SearchScope::AllOpenFiles, cx);
-                            }
-                            this.schedule_workspace_search_state_save(window, cx);
                         }
                     }
                     Err(error) => {
@@ -11369,9 +11396,7 @@ impl Workspace {
                         open_error_count,
                         unreadable_directory_count,
                     )) => {
-                        this.record_search_history(&query.text, window, cx);
-                        this.global_search.directory_query = query;
-                        this.global_search.results = results
+                        let results = results
                             .into_iter()
                             .map(|result| {
                                 let document_id = this
@@ -11389,38 +11414,17 @@ impl Workspace {
                                 )
                             })
                             .collect();
-                        this.global_search.matcher = matcher;
-                        this.global_search.result_scope = Some(SearchScope::Directory);
-                        let word_wrap = this.global_viewport.is_wrapped();
-                        let row_height = this.log_row_height();
-                        this.refresh_global_result_rows(cx);
-                        this.position_global_row_viewport_anchor(
-                            viewport_anchor,
-                            row_height,
+                        this.install_completed_global_search(
+                            CompletedGlobalSearch {
+                                scope: SearchScope::Directory,
+                                query,
+                                results,
+                                matcher,
+                                viewport_anchor,
+                            },
+                            window,
                             cx,
                         );
-                        if word_wrap {
-                            this.prime_global_wrapped_frame(row_height, false, window, cx);
-                            this.position_global_row_viewport_anchor(
-                                viewport_anchor,
-                                row_height,
-                                cx,
-                            );
-                        }
-                        this.activity = Activity::Ready;
-                        if let Some(persisted) =
-                            this.global_search.pending_directory_restore.clone()
-                        {
-                            this.restore_persisted_global_presentation(
-                                SearchScope::Directory,
-                                persisted,
-                                window,
-                                cx,
-                            );
-                        } else {
-                            this.capture_retained_global_context(SearchScope::Directory, cx);
-                        }
-                        this.schedule_workspace_search_state_save(window, cx);
                         if file_count == 0 {
                             window.push_notification(
                                 crate::tr_args!("目录中没有符合文件类型的文件：{}", "No matching file types were found in the directory: {}", directory.display()),
