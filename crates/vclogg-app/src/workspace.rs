@@ -425,6 +425,51 @@ struct TabMenuState {
     has_other_window: bool,
 }
 
+#[derive(IntoElement)]
+struct TitleBarMenuButton {
+    button: Button,
+}
+
+impl gpui::RenderOnce for TitleBarMenuButton {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        self.button
+    }
+}
+
+impl gpui::Styled for TitleBarMenuButton {
+    fn style(&mut self) -> &mut gpui::StyleRefinement {
+        self.button.style()
+    }
+}
+
+impl gpui::InteractiveElement for TitleBarMenuButton {
+    fn interactivity(&mut self) -> &mut gpui::Interactivity {
+        self.button.interactivity()
+    }
+}
+
+impl gpui::StatefulInteractiveElement for TitleBarMenuButton {}
+
+impl gpui_component::Selectable for TitleBarMenuButton {
+    fn selected(mut self, selected: bool) -> Self {
+        self.button = self.button.selected(selected);
+        self
+    }
+
+    fn is_selected(&self) -> bool {
+        self.button.is_selected()
+    }
+}
+
+impl gpui_component::Disableable for TitleBarMenuButton {
+    fn disabled(mut self, disabled: bool) -> Self {
+        self.button = self.button.disabled(disabled);
+        self
+    }
+}
+
+impl gpui_component::menu::DropdownMenu for TitleBarMenuButton {}
+
 struct LogContextMenuContext {
     selected_text: String,
     include_results: bool,
@@ -3105,6 +3150,7 @@ impl Workspace {
                         );
                         cx.set_reduce_motion(app_settings.reduce_motion);
                         crate::i18n::set_language(app_settings.language);
+                        this.refresh_localized_input_copy(window, cx);
                         crate::app_log::set_level(app_settings.app_log_level);
                         Self::apply_theme_preference(app_settings.theme_preference, window, cx);
                         this.app_settings = app_settings.clone();
@@ -5329,6 +5375,19 @@ impl Workspace {
         cx.notify();
     }
 
+    fn refresh_localized_input_copy(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.query.update(cx, |input, cx| {
+            input.set_placeholder(crate::tr!("搜索", "Search"), window, cx);
+        });
+        self.quick_find_query.update(cx, |input, cx| {
+            input.set_placeholder(
+                crate::tr!("在当前视图中查找", "Find in current view"),
+                window,
+                cx,
+            );
+        });
+    }
+
     fn preview_app_settings(
         &mut self,
         settings: AppSettings,
@@ -5357,6 +5416,7 @@ impl Workspace {
         crate::actions::apply_shortcuts(&self.app_settings.shortcuts, &settings.shortcuts, cx);
         cx.set_reduce_motion(settings.reduce_motion);
         crate::i18n::set_language(settings.language);
+        self.refresh_localized_input_copy(window, cx);
         crate::app_log::set_level(settings.app_log_level);
         Self::apply_theme_preference(settings.theme_preference, window, cx);
         self.app_settings = settings.clone();
@@ -5407,6 +5467,7 @@ impl Workspace {
             let shared_settings = settings.clone();
             workspace.update(cx, |workspace, cx| {
                 workspace.app_settings = shared_settings.clone();
+                workspace.refresh_localized_input_copy(window, cx);
                 if commit_defaults {
                     workspace.apply_search_defaults(
                         shared_settings.default_case_sensitive,
@@ -12373,17 +12434,26 @@ impl Workspace {
     }
 
     /// 菜单按钮为 28px 高、11px 横向内边距、8px 圆角和 12px 常规字重。
-    /// `Button` 的 size 预设只有 24/32px 两档，够不到 28px，所以显式覆写。
-    fn title_bar_menu_button(id: &'static str, label: &'static str) -> Button {
-        Button::new(id)
-            .small()
-            .ghost()
-            .label(label)
-            .h(px(28.))
-            .px(px(11.))
-            .rounded(px(8.))
-            .text_size(px(12.))
-            .font_weight(FontWeight::NORMAL)
+    /// `Button` 的 size 预设只有 24/32px 两档，够不到 28px；独立文字层同时避免
+    /// 英文字母在组件标签的紧凑行高中被裁切。
+    fn title_bar_menu_button(id: &'static str, label: &'static str) -> TitleBarMenuButton {
+        TitleBarMenuButton {
+            button: Button::new(id)
+                .small()
+                .ghost()
+                .h(px(28.))
+                .px(px(11.))
+                .rounded(px(8.))
+                .font_weight(FontWeight::NORMAL)
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .line_height(relative(1.25))
+                        .child(label),
+                ),
+        }
+        .accessibility_id(id)
+        .aria_label(label)
     }
 
     /// 下拉菜单使用已挂载的工作区根焦点查询动作快捷键，确保首帧就按完整内容计算宽度。
