@@ -52,15 +52,14 @@ pub struct GlobalSearchGroupSource {
 #[derive(Clone)]
 pub struct GlobalSearchGroupProjection {
     pub rows: CompressedRows,
-    pub matched_rows: CompressedRows,
-    pub marked_rows: Arc<BTreeSet<usize>>,
-    pub truncated: bool,
-    pub failure: Option<SharedString>,
-    pub collapsed: bool,
 }
 
 #[derive(Clone)]
 pub struct GlobalSearchGroupPresentation {
+    pub matched_rows: CompressedRows,
+    pub marked_rows: Arc<BTreeSet<usize>>,
+    pub truncated: bool,
+    pub failure: Option<SharedString>,
     pub color_rules: Arc<[ResolvedColorRule]>,
 }
 
@@ -119,6 +118,7 @@ struct GlobalInteractionState {
     active_row: Cell<Option<usize>>,
     suppress_table_clear: Cell<bool>,
     row_bounds: Rc<RefCell<BTreeMap<usize, Bounds<Pixels>>>>,
+    collapsed_documents: BTreeSet<u64>,
 }
 
 impl Default for GlobalSearchProjectionState {
@@ -180,6 +180,7 @@ impl Default for GlobalInteractionState {
             active_row: Cell::default(),
             suppress_table_clear: Cell::default(),
             row_bounds: Rc::default(),
+            collapsed_documents: BTreeSet::new(),
         }
     }
 }
@@ -525,6 +526,13 @@ impl GlobalSearchTableDelegate {
         if documents_changed {
             self.projection.content_revision = self.projection.content_revision.saturating_add(1);
         }
+        let document_ids = groups
+            .iter()
+            .map(|group| group.source.document_id)
+            .collect::<BTreeSet<_>>();
+        self.interaction
+            .collapsed_documents
+            .retain(|document_id| document_ids.contains(document_id));
         self.projection.groups = groups;
         self.presenter.matcher = matcher;
         self.interaction.row_bounds.borrow_mut().clear();
@@ -654,7 +662,9 @@ impl GlobalSearchTableDelegate {
                 LogRowKey::Row {
                     document_id,
                     source_row,
-                } if document_id == group.source.document_id && !group.projection.collapsed => {
+                } if document_id == group.source.document_id
+                    && !self.interaction.collapsed_documents.contains(&document_id) =>
+                {
                     group
                         .projection
                         .rows
@@ -710,18 +720,17 @@ impl GlobalSearchTableDelegate {
     }
 
     pub fn collapsed_document_ids(&self) -> BTreeSet<u64> {
-        self.projection
-            .groups
-            .iter()
-            .filter(|group| group.projection.collapsed)
-            .map(|group| group.source.document_id)
-            .collect()
+        self.interaction.collapsed_documents.clone()
     }
 
     pub(crate) fn restore_collapsed_document_ids(&mut self, document_ids: &BTreeSet<u64>) {
-        for group in &mut self.projection.groups {
-            group.projection.collapsed = document_ids.contains(&group.source.document_id);
-        }
+        self.interaction.collapsed_documents = self
+            .projection
+            .groups
+            .iter()
+            .map(|group| group.source.document_id)
+            .filter(|document_id| document_ids.contains(document_id))
+            .collect();
         self.rebuild_layout();
     }
 
@@ -737,7 +746,9 @@ impl GlobalSearchTableDelegate {
         if group.projection.rows.is_empty() {
             return;
         }
-        group.projection.collapsed = !group.projection.collapsed;
+        if !self.interaction.collapsed_documents.remove(&document_id) {
+            self.interaction.collapsed_documents.insert(document_id);
+        }
         self.rebuild_layout();
     }
 
@@ -765,7 +776,7 @@ impl GlobalSearchTableDelegate {
         self.projection
             .groups
             .iter()
-            .any(|group| group.projection.truncated)
+            .any(|group| group.presentation.truncated)
     }
 
     pub fn rows_len(&self) -> usize {
@@ -777,7 +788,13 @@ impl GlobalSearchTableDelegate {
             .groups
             .iter()
             .enumerate()
-            .filter(|(_, group)| !group.projection.collapsed && !group.projection.rows.is_empty())
+            .filter(|(_, group)| {
+                !self
+                    .interaction
+                    .collapsed_documents
+                    .contains(&group.source.document_id)
+                    && !group.projection.rows.is_empty()
+            })
             .filter_map(|(group_ix, group)| {
                 self.projection
                     .group_starts
@@ -806,9 +823,12 @@ impl GlobalSearchTableDelegate {
                     title: group.source.title.clone(),
                     path: group.source.path.clone(),
                     result_count: group.projection.rows.len(),
-                    truncated: group.projection.truncated,
-                    failure: group.projection.failure.clone(),
-                    collapsed: group.projection.collapsed,
+                    truncated: group.presentation.truncated,
+                    failure: group.presentation.failure.clone(),
+                    collapsed: self
+                        .interaction
+                        .collapsed_documents
+                        .contains(&group.source.document_id),
                 })
             }
             FlatRow::Match {
@@ -821,8 +841,8 @@ impl GlobalSearchTableDelegate {
                     document_id: group.source.document_id,
                     source_row,
                     selected: self.interaction.row_selection.borrow().contains(row_ix),
-                    marked: group.projection.marked_rows.contains(&source_row),
-                    matched: group.projection.matched_rows.contains(source_row),
+                    marked: group.presentation.marked_rows.contains(&source_row),
+                    matched: group.presentation.matched_rows.contains(source_row),
                     highlights: presentation.highlights,
                     text: presentation.text,
                     highlight_severity: self.presenter.highlight_log_levels,
@@ -1082,7 +1102,11 @@ impl GlobalSearchTableDelegate {
         for group in &self.projection.groups {
             self.projection.group_starts.push(self.projection.rows_len);
             self.projection.rows_len = self.projection.rows_len.saturating_add(1);
-            if !group.projection.collapsed {
+            if !self
+                .interaction
+                .collapsed_documents
+                .contains(&group.source.document_id)
+            {
                 self.projection.rows_len = self
                     .projection
                     .rows_len
@@ -1105,7 +1129,11 @@ impl GlobalSearchTableDelegate {
             return Some(FlatRow::Group { group_ix });
         }
         let group = self.projection.groups.get(group_ix)?;
-        if group.projection.collapsed {
+        if self
+            .interaction
+            .collapsed_documents
+            .contains(&group.source.document_id)
+        {
             return None;
         }
         let source_row = group
@@ -1219,9 +1247,9 @@ impl TableDelegate for GlobalSearchTableDelegate {
                     self.resolved_font_family(cx),
                     self.presenter.log_font_size,
                 )
-                .truncated(group.projection.truncated)
-                .failure(group.projection.failure.clone())
-                .collapsed(group.projection.collapsed);
+                .truncated(group.presentation.truncated)
+                .failure(group.presentation.failure.clone())
+                .collapsed(self.interaction.collapsed_documents.contains(&document_id));
                 div()
                     .id(("global-search-group", document_id))
                     .relative()
@@ -1339,8 +1367,8 @@ impl TableDelegate for GlobalSearchTableDelegate {
                 let group = &self.projection.groups[group_ix];
                 let selected = self.interaction.row_selection.borrow().contains(row_ix);
                 if col_ix == 0 {
-                    let marked = group.projection.marked_rows.contains(&source_row);
-                    let matched = group.projection.matched_rows.contains(source_row);
+                    let marked = group.presentation.marked_rows.contains(&source_row);
+                    let matched = group.presentation.matched_rows.contains(source_row);
                     let severity_accent = self
                         .presenter
                         .highlight_log_levels
@@ -1509,13 +1537,12 @@ mod tests {
             },
             projection: GlobalSearchGroupProjection {
                 rows: [0].into_iter().collect(),
+            },
+            presentation: GlobalSearchGroupPresentation {
                 matched_rows: [0].into_iter().collect(),
                 marked_rows: Arc::new(BTreeSet::new()),
                 truncated: false,
                 failure: None,
-                collapsed: false,
-            },
-            presentation: GlobalSearchGroupPresentation {
                 color_rules: Arc::default(),
             },
         }
@@ -1533,7 +1560,7 @@ mod tests {
         });
 
         let mut changed_presentation = group.clone();
-        changed_presentation.projection.marked_rows = Arc::new(BTreeSet::from([0]));
+        changed_presentation.presentation.marked_rows = Arc::new(BTreeSet::from([0]));
         delegate.set_groups(vec![changed_presentation], None);
         assert_eq!(delegate.content_revision(), initial_revision);
 
@@ -1555,6 +1582,25 @@ mod tests {
             })
             .expect("the replacement document should load a new line");
         assert_eq!(reloaded.source().as_ref(), "reloaded global line");
+    }
+
+    #[test]
+    fn group_collapse_is_owned_by_interaction_state() {
+        let document = Arc::new(LogDocument::placeholder("global-collapse.log"));
+        let mut delegate = GlobalSearchTableDelegate::new();
+        let mut group = test_group(document);
+        group.projection.rows = [2, 5].into_iter().collect();
+        delegate.set_groups(vec![group.clone()], None);
+        delegate.toggle_group(1);
+
+        group.presentation.marked_rows = Arc::new(BTreeSet::from([5]));
+        delegate.set_groups(vec![group], None);
+
+        assert_eq!(delegate.collapsed_document_ids(), BTreeSet::from([1]));
+        assert_eq!(delegate.rows_len(), 1);
+
+        delegate.set_groups(Vec::new(), None);
+        assert!(delegate.collapsed_document_ids().is_empty());
     }
 
     #[test]

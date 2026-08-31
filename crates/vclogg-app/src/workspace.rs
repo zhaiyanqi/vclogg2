@@ -9682,15 +9682,14 @@ impl Workspace {
         let word_wrap = self.global_viewport.is_wrapped();
         let row_height = self.log_row_height();
         let viewport_anchor = self.capture_global_viewport_anchor(row_height, cx);
-        let (collapsed_document_ids, measured_heights) = {
+        let measured_heights = {
             let table = self.global_table.read(cx);
-            let measured_heights = if word_wrap {
+            if word_wrap {
                 self.global_viewport
                     .wrapped_measured_heights_by_key(|row_ix| table.delegate().row_key(row_ix))
             } else {
                 BTreeMap::new()
-            };
-            (table.delegate().collapsed_document_ids(), measured_heights)
+            }
         };
 
         let groups = match self.global_search.scope {
@@ -9724,6 +9723,8 @@ impl Workspace {
                                 search_result,
                                 &tab.marked_rows,
                             ),
+                        },
+                        presentation: crate::global_search_table::GlobalSearchGroupPresentation {
                             matched_rows: search_result
                                 .map(|result| result.line_indices.clone())
                                 .unwrap_or_default(),
@@ -9731,9 +9732,6 @@ impl Workspace {
                             truncated: search_result.is_some_and(|result| result.truncated)
                                 && self.global_search.result_mode.includes_matches(),
                             failure: result.and_then(|result| result.failure.clone()),
-                            collapsed: collapsed_document_ids.contains(&tab.id),
-                        },
-                        presentation: crate::global_search_table::GlobalSearchGroupPresentation {
                             color_rules: tab.resolved_color_rules.clone(),
                         },
                     }
@@ -9767,15 +9765,14 @@ impl Workspace {
                             },
                             projection: crate::global_search_table::GlobalSearchGroupProjection {
                                 rows,
-                                matched_rows: result.search_result.line_indices.clone(),
-                                marked_rows: Arc::new(marked_rows),
-                                truncated: result.search_result.truncated
-                                    && self.global_search.result_mode.includes_matches(),
-                                failure: result.failure.clone(),
-                                collapsed: collapsed_document_ids.contains(&result.document_id),
                             },
                             presentation:
                                 crate::global_search_table::GlobalSearchGroupPresentation {
+                                    matched_rows: result.search_result.line_indices.clone(),
+                                    marked_rows: Arc::new(marked_rows),
+                                    truncated: result.search_result.truncated
+                                        && self.global_search.result_mode.includes_matches(),
+                                    failure: result.failure.clone(),
                                     color_rules: open_tab
                                         .map(|tab| tab.resolved_color_rules.clone())
                                         .unwrap_or_else(|| {
