@@ -7542,7 +7542,7 @@ dependencies = [
 
 [[package]]
 name = "vclogg-core"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -7559,7 +7559,7 @@ dependencies = [
 
 [[package]]
 name = "vclogg2"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "anyhow",
  "async-channel",
