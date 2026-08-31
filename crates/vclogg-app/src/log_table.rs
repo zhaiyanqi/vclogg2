@@ -28,7 +28,7 @@ use crate::color_labels::ResolvedColorRule;
 use crate::selectable_log_text::{LogText, SelectableLogText, TextSelectionCache};
 use crate::state_store::{AppSettings, DEFAULT_WORD_BOUNDARY_CHARACTERS, LogFontFamily};
 use crate::ui_theme;
-use crate::virtual_log_lines::{LogRowProjection, VirtualLogLineCache};
+use crate::virtual_log_lines::{LogRowProjection, VisibleLineStore};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LogSeverity {
@@ -654,10 +654,20 @@ pub(crate) fn combined_match_ranges(
 }
 
 pub struct LogTableDelegate {
+    source: LogRowSource,
+    presenter: LogRowPresenter,
+    interaction: LogInteractionState,
+}
+
+struct LogRowSource {
     document_id: u64,
     document: Arc<LogDocument>,
     content_revision: u64,
     row_projection: LogRowProjection,
+    visible_lines: VisibleLineStore<usize>,
+}
+
+struct LogRowPresenter {
     marked_rows: Arc<BTreeSet<usize>>,
     empty_message: SharedString,
     show_line_numbers: bool,
@@ -674,14 +684,123 @@ pub struct LogTableDelegate {
     matched_rows: CompressedRows,
     quick_find_matcher: Option<SearchMatcher>,
     color_rules: Arc<[ResolvedColorRule]>,
+}
+
+struct LogInteractionState {
     text_selections: TextSelectionCache<usize>,
     suppress_text_selection: Cell<bool>,
     word_boundary_characters: SharedString,
-    line_cache: VirtualLogLineCache<usize>,
     row_selection: Rc<RefCell<RowSelection>>,
     active_row: Cell<Option<usize>>,
     suppress_table_clear: Cell<bool>,
     row_bounds: Rc<RefCell<BTreeMap<usize, Bounds<Pixels>>>>,
+}
+
+impl LogRowSource {
+    fn new(document_id: u64, document: Arc<LogDocument>, row_projection: LogRowProjection) -> Self {
+        Self {
+            document_id,
+            document,
+            content_revision: 1,
+            row_projection,
+            visible_lines: VisibleLineStore::default(),
+        }
+    }
+
+    fn replace(&mut self, document: Arc<LogDocument>, row_projection: LogRowProjection) {
+        if !Arc::ptr_eq(&self.document, &document) {
+            self.visible_lines.clear();
+            self.content_revision = self.content_revision.saturating_add(1);
+        } else {
+            self.visible_lines.invalidate_window();
+        }
+        self.document = document;
+        self.row_projection = row_projection;
+    }
+
+    fn source_row(&self, row_ix: usize) -> Option<usize> {
+        match &self.row_projection {
+            LogRowProjection::All => self.document.source_row(row_ix),
+            LogRowProjection::SourceRows(source_rows) => source_rows.get(row_ix),
+        }
+    }
+
+    fn row_count(&self) -> usize {
+        match &self.row_projection {
+            LogRowProjection::All => self.document.line_count(),
+            LogRowProjection::SourceRows(source_rows) => source_rows.len(),
+        }
+    }
+
+    fn prepare_visible_rows(&self, visible_range: Range<usize>) {
+        self.visible_lines.prepare_visible_rows(
+            visible_range,
+            self.row_count(),
+            |row_ix| self.source_row(row_ix),
+            |source_row, max_bytes| self.document.line_preview(*source_row, max_bytes),
+        );
+    }
+
+    fn line_text(&self, source_row: usize) -> Option<LogText> {
+        self.visible_lines.line(source_row, |max_bytes| {
+            self.document.line_preview(source_row, max_bytes)
+        })
+    }
+}
+
+impl LogRowPresenter {
+    fn new(empty_message: SharedString) -> Self {
+        Self {
+            marked_rows: Arc::default(),
+            empty_message,
+            show_line_numbers: true,
+            show_row_separators: false,
+            highlight_log_levels: false,
+            log_font_family: LogFontFamily::default(),
+            log_font_size: 13,
+            log_line_spacing: 6,
+            line_number_width: 60,
+            line_number_text_color: None,
+            line_number_background_color: None,
+            show_line_number_row_separators: false,
+            search_matcher: None,
+            matched_rows: CompressedRows::default(),
+            quick_find_matcher: None,
+            color_rules: Arc::default(),
+        }
+    }
+
+    fn present(&self, text: LogText) -> LogRowPresentation {
+        let source_highlights = combined_match_ranges(
+            text.source(),
+            &self.color_rules,
+            self.search_matcher.as_ref(),
+            self.quick_find_matcher.as_ref(),
+        );
+        LogRowPresentation {
+            highlights: source_highlights
+                .into_iter()
+                .filter_map(|(range, highlight)| {
+                    text.display_range(range).map(|range| (range, highlight))
+                })
+                .collect(),
+            text,
+        }
+    }
+}
+
+impl Default for LogInteractionState {
+    fn default() -> Self {
+        Self {
+            text_selections: TextSelectionCache::default(),
+            suppress_text_selection: Cell::default(),
+            word_boundary_characters: DEFAULT_WORD_BOUNDARY_CHARACTERS.into(),
+            row_selection: Rc::default(),
+            active_row: Cell::default(),
+            suppress_table_clear: Cell::default(),
+            row_bounds: Rc::default(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -703,34 +822,11 @@ pub(crate) struct WrappedLogRow {
 impl LogTableDelegate {
     pub fn all(document_id: u64, document: Arc<LogDocument>) -> Self {
         Self {
-            document_id,
-            document,
-            content_revision: 1,
-            row_projection: LogRowProjection::All,
-            marked_rows: Arc::default(),
-            empty_message: crate::tr!("文件中没有日志行", "The file has no log lines").into(),
-            show_line_numbers: true,
-            show_row_separators: false,
-            highlight_log_levels: false,
-            log_font_family: LogFontFamily::default(),
-            log_font_size: 13,
-            log_line_spacing: 6,
-            line_number_width: 60,
-            line_number_text_color: None,
-            line_number_background_color: None,
-            show_line_number_row_separators: false,
-            search_matcher: None,
-            matched_rows: CompressedRows::default(),
-            quick_find_matcher: None,
-            color_rules: Arc::default(),
-            text_selections: TextSelectionCache::default(),
-            suppress_text_selection: Cell::default(),
-            word_boundary_characters: DEFAULT_WORD_BOUNDARY_CHARACTERS.into(),
-            line_cache: VirtualLogLineCache::default(),
-            row_selection: Rc::default(),
-            active_row: Cell::default(),
-            suppress_table_clear: Cell::default(),
-            row_bounds: Rc::default(),
+            source: LogRowSource::new(document_id, document, LogRowProjection::All),
+            presenter: LogRowPresenter::new(
+                crate::tr!("文件中没有日志行", "The file has no log lines").into(),
+            ),
+            interaction: LogInteractionState::default(),
         }
     }
 
@@ -740,82 +836,64 @@ impl LogTableDelegate {
         source_rows: CompressedRows,
     ) -> Self {
         Self {
-            document_id,
-            document,
-            content_revision: 1,
-            row_projection: LogRowProjection::SourceRows(source_rows),
-            marked_rows: Arc::default(),
-            empty_message: crate::tr!("没有匹配的日志行", "No log lines match").into(),
-            show_line_numbers: true,
-            show_row_separators: false,
-            highlight_log_levels: false,
-            log_font_family: LogFontFamily::default(),
-            log_font_size: 13,
-            log_line_spacing: 6,
-            line_number_width: 60,
-            line_number_text_color: None,
-            line_number_background_color: None,
-            show_line_number_row_separators: false,
-            search_matcher: None,
-            matched_rows: CompressedRows::default(),
-            quick_find_matcher: None,
-            color_rules: Arc::default(),
-            text_selections: TextSelectionCache::default(),
-            suppress_text_selection: Cell::default(),
-            word_boundary_characters: DEFAULT_WORD_BOUNDARY_CHARACTERS.into(),
-            line_cache: VirtualLogLineCache::default(),
-            row_selection: Rc::default(),
-            active_row: Cell::default(),
-            suppress_table_clear: Cell::default(),
-            row_bounds: Rc::default(),
+            source: LogRowSource::new(
+                document_id,
+                document,
+                LogRowProjection::SourceRows(source_rows),
+            ),
+            presenter: LogRowPresenter::new(
+                crate::tr!("没有匹配的日志行", "No log lines match").into(),
+            ),
+            interaction: LogInteractionState::default(),
         }
     }
 
     pub fn set_row_projection(&mut self, source_rows: CompressedRows) {
-        self.row_projection = LogRowProjection::SourceRows(source_rows);
-        self.line_cache.invalidate_window();
-        self.row_bounds.borrow_mut().clear();
-        self.row_selection.borrow_mut().clear();
-        self.active_row.set(None);
+        self.source.row_projection = LogRowProjection::SourceRows(source_rows);
+        self.source.visible_lines.invalidate_window();
+        self.interaction.row_bounds.borrow_mut().clear();
+        self.interaction.row_selection.borrow_mut().clear();
+        self.interaction.active_row.set(None);
     }
 
     pub fn set_marked_rows(&mut self, marked_rows: Arc<BTreeSet<usize>>) {
-        self.marked_rows = marked_rows;
+        self.presenter.marked_rows = marked_rows;
     }
 
     pub fn set_view_options(&mut self, show_line_numbers: bool, show_row_separators: bool) {
-        self.show_line_numbers = show_line_numbers;
-        self.show_row_separators = show_row_separators;
+        self.presenter.show_line_numbers = show_line_numbers;
+        self.presenter.show_row_separators = show_row_separators;
     }
 
     pub fn set_highlight_log_levels(&mut self, enabled: bool) {
-        self.highlight_log_levels = enabled;
+        self.presenter.highlight_log_levels = enabled;
     }
 
     pub fn set_appearance(&mut self, settings: &AppSettings) {
-        self.log_font_family = settings.log_font_family;
-        self.log_font_size = settings.log_font_size.clamp(8, 32);
-        self.log_line_spacing = settings.log_line_spacing.clamp(1, 40);
-        self.line_number_width = settings.line_number_width.clamp(40, 160);
-        self.line_number_text_color = settings
+        self.presenter.log_font_family = settings.log_font_family;
+        self.presenter.log_font_size = settings.log_font_size.clamp(8, 32);
+        self.presenter.log_line_spacing = settings.log_line_spacing.clamp(1, 40);
+        self.presenter.line_number_width = settings.line_number_width.clamp(40, 160);
+        self.presenter.line_number_text_color = settings
             .line_number_text_color
             .as_deref()
             .and_then(|value| try_parse_color(value).ok());
-        self.line_number_background_color = settings
+        self.presenter.line_number_background_color = settings
             .line_number_background_color
             .as_deref()
             .and_then(|value| try_parse_color(value).ok());
-        self.show_line_number_row_separators = settings.show_line_number_row_separators;
-        self.line_cache
+        self.presenter.show_line_number_row_separators = settings.show_line_number_row_separators;
+        self.source
+            .visible_lines
             .set_overscan(usize::from(settings.viewer_overscan.clamp(4, 40)));
     }
 
     pub fn set_word_boundary_characters(&mut self, characters: impl Into<SharedString>) {
-        self.word_boundary_characters = characters.into();
+        self.interaction.word_boundary_characters = characters.into();
     }
 
     pub(crate) fn resolved_font_family(&self, cx: &App) -> SharedString {
-        match self.log_font_family {
+        match self.presenter.log_font_family {
             LogFontFamily::CascadiaMono => "Cascadia Mono".into(),
             LogFontFamily::JetBrainsMono => "JetBrains Mono".into(),
             LogFontFamily::Consolas => "Consolas".into(),
@@ -824,56 +902,40 @@ impl LogTableDelegate {
     }
 
     pub(crate) fn content_revision(&self) -> u64 {
-        self.content_revision
+        self.source.content_revision
     }
 
     pub fn set_search_matcher(&mut self, search_matcher: Option<SearchMatcher>) {
-        self.search_matcher = search_matcher;
+        self.presenter.search_matcher = search_matcher;
     }
 
     pub fn set_matched_rows(&mut self, matched_rows: CompressedRows) {
-        self.matched_rows = matched_rows;
+        self.presenter.matched_rows = matched_rows;
     }
 
     pub fn set_quick_find_matcher(&mut self, quick_find_matcher: Option<SearchMatcher>) {
-        self.quick_find_matcher = quick_find_matcher;
+        self.presenter.quick_find_matcher = quick_find_matcher;
     }
 
     pub fn set_color_rules(&mut self, color_rules: Arc<[ResolvedColorRule]>) {
-        self.color_rules = color_rules;
+        self.presenter.color_rules = color_rules;
     }
 
     pub fn replace_with_all(&mut self, document: Arc<LogDocument>) {
-        if !Arc::ptr_eq(&self.document, &document) {
-            self.line_cache.clear();
-            self.content_revision = self.content_revision.saturating_add(1);
-        } else {
-            self.line_cache.invalidate_window();
-        }
-        self.document = document;
-        self.row_projection = LogRowProjection::All;
-        self.text_selections.clear();
-        self.row_selection.borrow_mut().clear();
+        self.source.replace(document, LogRowProjection::All);
+        self.interaction.text_selections.clear();
+        self.interaction.row_selection.borrow_mut().clear();
     }
 
     pub fn replace_with_rows(&mut self, document: Arc<LogDocument>, source_rows: CompressedRows) {
-        if !Arc::ptr_eq(&self.document, &document) {
-            self.line_cache.clear();
-            self.content_revision = self.content_revision.saturating_add(1);
-        } else {
-            self.line_cache.invalidate_window();
-        }
-        self.document = document;
-        self.row_projection = LogRowProjection::SourceRows(source_rows);
-        self.text_selections.clear();
-        self.row_selection.borrow_mut().clear();
+        self.source
+            .replace(document, LogRowProjection::SourceRows(source_rows));
+        self.interaction.text_selections.clear();
+        self.interaction.row_selection.borrow_mut().clear();
     }
 
     pub fn source_row(&self, row_ix: usize) -> Option<usize> {
-        match &self.row_projection {
-            LogRowProjection::All => self.document.source_row(row_ix),
-            LogRowProjection::SourceRows(source_rows) => source_rows.get(row_ix),
-        }
+        self.source.source_row(row_ix)
     }
 
     pub(crate) fn wrapped_row(&self, row_ix: usize) -> Option<WrappedLogRow> {
@@ -881,47 +943,25 @@ impl LogTableDelegate {
         let presentation = self.row_presentation(source_row)?;
         Some(WrappedLogRow {
             source_row,
-            selected: self.row_selection.borrow().contains(row_ix),
-            marked: self.marked_rows.contains(&source_row),
-            matched: self.matched_rows.contains(source_row),
-            highlight_severity: self.highlight_log_levels,
+            selected: self.interaction.row_selection.borrow().contains(row_ix),
+            marked: self.presenter.marked_rows.contains(&source_row),
+            matched: self.presenter.matched_rows.contains(source_row),
+            highlight_severity: self.presenter.highlight_log_levels,
             highlights: presentation.highlights,
             text: presentation.text,
         })
     }
 
     pub(crate) fn prepare_visible_rows(&self, visible_range: Range<usize>) {
-        self.line_cache.prepare_visible_rows(
-            visible_range,
-            self.row_count(),
-            |row_ix| self.source_row(row_ix),
-            |source_row, max_bytes| self.document.line_preview(*source_row, max_bytes),
-        );
+        self.source.prepare_visible_rows(visible_range);
     }
 
     fn line_text(&self, source_row: usize) -> Option<LogText> {
-        self.line_cache.line(source_row, |max_bytes| {
-            self.document.line_preview(source_row, max_bytes)
-        })
+        self.source.line_text(source_row)
     }
 
     fn row_presentation(&self, source_row: usize) -> Option<LogRowPresentation> {
-        let text = self.line_text(source_row)?;
-        let source_highlights = combined_match_ranges(
-            text.source(),
-            &self.color_rules,
-            self.search_matcher.as_ref(),
-            self.quick_find_matcher.as_ref(),
-        );
-        Some(LogRowPresentation {
-            highlights: source_highlights
-                .into_iter()
-                .filter_map(|(range, highlight)| {
-                    text.display_range(range).map(|range| (range, highlight))
-                })
-                .collect(),
-            text,
-        })
+        Some(self.presenter.present(self.line_text(source_row)?))
     }
 
     pub(crate) fn begin_pointer_selection(
@@ -932,63 +972,78 @@ impl LogTableDelegate {
         click_count: usize,
     ) {
         // A new gesture must not inherit line-drag suppression after a lost MouseUp.
-        self.suppress_text_selection.set(false);
-        self.row_selection.borrow_mut().begin_pointer_selection(
-            row_ix,
-            control,
-            shift,
-            click_count,
-        );
+        self.interaction.suppress_text_selection.set(false);
+        self.interaction
+            .row_selection
+            .borrow_mut()
+            .begin_pointer_selection(row_ix, control, shift, click_count);
     }
 
     pub(crate) fn prepare_context_selection(&self, row_ix: usize) {
-        self.row_selection
+        self.interaction
+            .row_selection
             .borrow_mut()
             .prepare_context_selection(row_ix);
     }
 
     pub(crate) fn extend_keyboard_selection(&self, row_ix: usize) {
-        self.row_selection
+        self.interaction
+            .row_selection
             .borrow_mut()
             .extend_keyboard_selection(row_ix);
     }
 
     pub(crate) fn extend_pointer_selection(&self, row_ix: usize) {
-        self.row_selection
+        self.interaction
+            .row_selection
             .borrow_mut()
             .extend_pointer_selection(row_ix);
     }
 
     pub(crate) fn restore_pointer_selection(&self) {
-        self.row_selection.borrow_mut().restore_pointer_selection();
+        self.interaction
+            .row_selection
+            .borrow_mut()
+            .restore_pointer_selection();
     }
 
     pub(crate) fn end_pointer_selection(&self) {
-        self.row_selection.borrow_mut().end_pointer_selection();
-        self.suppress_text_selection.set(false);
+        self.interaction
+            .row_selection
+            .borrow_mut()
+            .end_pointer_selection();
+        self.interaction.suppress_text_selection.set(false);
     }
 
     pub(crate) fn is_pointer_selecting(&self) -> bool {
-        self.row_selection.borrow().pointer_drag_anchor.is_some()
+        self.interaction
+            .row_selection
+            .borrow()
+            .pointer_drag_anchor
+            .is_some()
     }
 
     pub(crate) fn pointer_drag_anchor(&self) -> Option<usize> {
-        self.row_selection.borrow().pointer_drag_anchor
+        self.interaction.row_selection.borrow().pointer_drag_anchor
     }
 
     pub(crate) fn pointer_text_selection_allowed(&self) -> bool {
-        self.row_selection.borrow().pointer_text_selection_allowed
+        self.interaction
+            .row_selection
+            .borrow()
+            .pointer_text_selection_allowed
     }
 
     pub(crate) fn row_at_position(&self, position: Point<Pixels>) -> Option<usize> {
-        self.row_bounds
+        self.interaction
+            .row_bounds
             .borrow()
             .iter()
             .find_map(|(row_ix, bounds)| bounds.contains(&position).then_some(*row_ix))
     }
 
     pub(crate) fn visible_row_edge(&self, after: bool) -> Option<usize> {
-        let bounds = self.row_bounds.borrow();
+        let bounds = self.interaction.row_bounds.borrow();
         if after {
             bounds.keys().next_back().copied()
         } else {
@@ -997,56 +1052,59 @@ impl LogTableDelegate {
     }
 
     pub(crate) fn set_text_selection_suppressed(&self, suppressed: bool) {
-        self.suppress_text_selection.set(suppressed);
+        self.interaction.suppress_text_selection.set(suppressed);
     }
 
     pub(crate) fn is_text_selection_suppressed(&self) -> bool {
-        self.suppress_text_selection.get()
+        self.interaction.suppress_text_selection.get()
     }
 
     pub(crate) fn show_line_numbers(&self) -> bool {
-        self.show_line_numbers
+        self.presenter.show_line_numbers
     }
 
     pub(crate) fn show_row_separators(&self) -> bool {
-        self.show_row_separators
+        self.presenter.show_row_separators
     }
 
     pub(crate) fn line_number_width(&self) -> u16 {
-        self.line_number_width
+        self.presenter.line_number_width
     }
 
     pub(crate) fn line_number_text_color(&self, cx: &App) -> Hsla {
-        self.line_number_text_color
+        self.presenter
+            .line_number_text_color
             .unwrap_or_else(|| ui_theme::palette(cx).line_number)
     }
 
     pub(crate) fn line_number_background_color(&self, cx: &App) -> Hsla {
-        self.line_number_background_color
+        self.presenter
+            .line_number_background_color
             .unwrap_or_else(|| ui_theme::palette(cx).line_number_background)
     }
 
     pub(crate) fn show_line_number_row_separators(&self) -> bool {
-        self.show_line_number_row_separators
+        self.presenter.show_line_number_row_separators
     }
 
     pub(crate) fn log_font_size(&self) -> u16 {
-        self.log_font_size
+        self.presenter.log_font_size
     }
 
     pub fn settle_table_selection(&self, row_ix: usize) -> Option<usize> {
-        self.row_selection
+        self.interaction
+            .row_selection
             .borrow_mut()
             .settle_table_selection(row_ix);
         self.source_row(row_ix)
     }
 
     pub fn clear_row_selection(&self) {
-        self.row_selection.borrow_mut().clear();
+        self.interaction.row_selection.borrow_mut().clear();
     }
 
     pub fn selected_source_rows(&self) -> Vec<usize> {
-        let selection = self.row_selection.borrow();
+        let selection = self.interaction.row_selection.borrow();
         selection
             .ranges
             .iter()
@@ -1056,30 +1114,34 @@ impl LogTableDelegate {
     }
 
     pub fn selected_rows_count(&self) -> usize {
-        self.row_selection.borrow().count().min(self.row_count())
+        self.interaction
+            .row_selection
+            .borrow()
+            .count()
+            .min(self.row_count())
     }
 
     pub(crate) fn is_row_selected(&self, row_ix: usize) -> bool {
-        self.row_selection.borrow().contains(row_ix)
+        self.interaction.row_selection.borrow().contains(row_ix)
     }
 
     pub fn select_all_rows(&self) {
         let row_count = self.row_count();
         if row_count == 0 {
-            self.row_selection.borrow_mut().clear();
+            self.interaction.row_selection.borrow_mut().clear();
         } else {
-            let mut selection = self.row_selection.borrow_mut();
+            let mut selection = self.interaction.row_selection.borrow_mut();
             selection.replace_with(0, row_count - 1);
             selection.anchor = Some(0);
         }
     }
 
     pub fn restore_selected_source_rows(&self, source_rows: &[usize]) {
-        let mut selection = self.row_selection.borrow_mut();
+        let mut selection = self.interaction.row_selection.borrow_mut();
         selection.clear();
         for source_row in source_rows {
-            let row_ix = match &self.row_projection {
-                LogRowProjection::All => self.document.local_row(*source_row),
+            let row_ix = match &self.source.row_projection {
+                LogRowProjection::All => self.source.document.local_row(*source_row),
                 LogRowProjection::SourceRows(source_rows) => source_rows.position(*source_row),
             };
             if let Some(row_ix) = row_ix {
@@ -1090,34 +1152,35 @@ impl LogTableDelegate {
     }
 
     pub(crate) fn row_count(&self) -> usize {
-        match &self.row_projection {
-            LogRowProjection::All => self.document.line_count(),
-            LogRowProjection::SourceRows(source_rows) => source_rows.len(),
-        }
+        self.source.row_count()
     }
 }
 
 impl LogTableCursor for LogTableDelegate {
     fn active_log_row(&self) -> Option<usize> {
-        self.active_row.get()
+        self.interaction.active_row.get()
     }
 
     fn set_active_log_row(&self, row_ix: Option<usize>) {
-        self.active_row.set(row_ix);
+        self.interaction.active_row.set(row_ix);
     }
 
     fn suppress_next_table_clear(&self) {
-        self.suppress_table_clear.set(true);
+        self.interaction.suppress_table_clear.set(true);
     }
 
     fn take_suppressed_table_clear(&self) -> bool {
-        self.suppress_table_clear.replace(false)
+        self.interaction.suppress_table_clear.replace(false)
     }
 }
 
 impl TableDelegate for LogTableDelegate {
     fn columns_count(&self, _: &App) -> usize {
-        if self.show_line_numbers { 3 } else { 2 }
+        if self.presenter.show_line_numbers {
+            3
+        } else {
+            2
+        }
     }
 
     fn rows_count(&self, _: &App) -> usize {
@@ -1125,7 +1188,7 @@ impl TableDelegate for LogTableDelegate {
     }
 
     fn column(&self, col_ix: usize, cx: &App) -> Column {
-        let base = px(self.log_font_size as f32);
+        let base = px(self.presenter.log_font_size as f32);
         if col_ix == 0 {
             let width = line_marker_column_width();
             Column::new("marker", crate::tr!("标记", "Mark"))
@@ -1136,8 +1199,8 @@ impl TableDelegate for LogTableDelegate {
                 .resizable(false)
                 .fixed_left()
                 .movable(false)
-        } else if self.show_line_numbers && col_ix == 1 {
-            let width = px(self.line_number_width as f32);
+        } else if self.presenter.show_line_numbers && col_ix == 1 {
+            let width = px(self.presenter.line_number_width as f32);
             Column::new("line-number", crate::tr!("行", "Line"))
                 .p_0()
                 .width(width)
@@ -1147,13 +1210,13 @@ impl TableDelegate for LogTableDelegate {
                 .fixed_left()
                 .movable(false)
                 .text_right()
-        } else if col_ix == 1 + usize::from(self.show_line_numbers) {
+        } else if col_ix == 1 + usize::from(self.presenter.show_line_numbers) {
             Column::new("message", crate::tr!("日志", "Log"))
                 .p_0()
                 .width(message_column_width(
-                    self.document.metadata().longest_line_columns,
+                    self.source.document.metadata().longest_line_columns,
                     self.resolved_font_family(cx),
-                    self.log_font_size,
+                    self.presenter.log_font_size,
                     cx,
                 ))
                 .min_width(base * 24.)
@@ -1181,12 +1244,15 @@ impl TableDelegate for LogTableDelegate {
         let source_row = self.source_row(row_ix);
         let source_row_ix = source_row.unwrap_or(row_ix);
         let severity = source_row
-            .filter(|_| self.highlight_log_levels)
+            .filter(|_| self.presenter.highlight_log_levels)
             .and_then(|source_row| self.line_text(source_row))
             .and_then(|line| severity_style(line.source(), cx));
-        let row_bounds = self.row_bounds.clone();
+        let row_bounds = self.interaction.row_bounds.clone();
         div()
-            .id(format!("document-{}-row-{source_row_ix}", self.document_id))
+            .id(format!(
+                "document-{}-row-{source_row_ix}",
+                self.source.document_id
+            ))
             .border_0()
             .on_prepaint(move |bounds, _, _| {
                 row_bounds.borrow_mut().insert(row_ix, bounds);
@@ -1238,12 +1304,16 @@ impl TableDelegate for LogTableDelegate {
     ) -> impl IntoElement {
         let _performance_scope = crate::ui_performance::scope("LogTableDelegate::render_td");
         let source_row = self.source_row(row_ix).unwrap_or(row_ix);
-        let selected = self.row_selection.borrow().contains(row_ix);
-        let line_height = log_line_height(self.log_font_size, self.log_line_spacing);
+        let selected = self.interaction.row_selection.borrow().contains(row_ix);
+        let line_height = log_line_height(
+            self.presenter.log_font_size,
+            self.presenter.log_line_spacing,
+        );
         if col_ix == 0 {
-            let marked = self.marked_rows.contains(&source_row);
-            let matched = self.matched_rows.contains(source_row);
+            let marked = self.presenter.marked_rows.contains(&source_row);
+            let matched = self.presenter.matched_rows.contains(source_row);
             let severity_accent = self
+                .presenter
                 .highlight_log_levels
                 .then(|| self.line_text(source_row))
                 .flatten()
@@ -1258,19 +1328,19 @@ impl TableDelegate for LogTableDelegate {
                 })
                 .child(line_marker(marked, matched, cx))
                 .into_any_element()
-        } else if self.show_line_numbers && col_ix == 1 {
+        } else if self.presenter.show_line_numbers && col_ix == 1 {
             log_line_number_cell(
                 source_row,
-                self.log_font_size,
+                self.presenter.log_font_size,
                 line_height,
                 self.line_number_text_color(cx),
                 self.line_number_background_color(cx),
-                self.show_line_number_row_separators,
+                self.show_line_number_row_separators(),
                 cx,
             )
             .size_full()
             .into_any_element()
-        } else if col_ix == 1 + usize::from(self.show_line_numbers) {
+        } else if col_ix == 1 + usize::from(self.presenter.show_line_numbers) {
             let presentation =
                 self.row_presentation(source_row)
                     .unwrap_or_else(|| LogRowPresentation {
@@ -1285,7 +1355,10 @@ impl TableDelegate for LogTableDelegate {
                 .map(|(range, highlight)| (range, text_highlight_style(highlight, cx)))
                 .collect::<Vec<_>>();
             let styled_text = StyledText::new(text.display().clone()).with_highlights(highlights);
-            let selection = self.text_selections.handle(source_row, &text, window, cx);
+            let selection = self
+                .interaction
+                .text_selections
+                .handle(source_row, &text, window, cx);
             h_flex()
                 .relative()
                 .size_full()
@@ -1294,16 +1367,17 @@ impl TableDelegate for LogTableDelegate {
                 .when(selected, |cell| {
                     cell.bg(log_row_selection_color(cx))
                         .child(log_row_selection_overlay(
-                            row_ix == 0 || !self.row_selection.borrow().contains(row_ix - 1),
+                            row_ix == 0
+                                || !self.interaction.row_selection.borrow().contains(row_ix - 1),
                             row_ix + 1 >= self.row_count()
-                                || !self.row_selection.borrow().contains(row_ix + 1),
+                                || !self.interaction.row_selection.borrow().contains(row_ix + 1),
                             cx,
                         ))
                 })
-                .text_size(px(self.log_font_size as f32))
+                .text_size(px(self.presenter.log_font_size as f32))
                 .line_height(line_height)
                 .font_family(self.resolved_font_family(cx))
-                .when(self.show_row_separators && !selected, |cell| {
+                .when(self.presenter.show_row_separators && !selected, |cell| {
                     cell.border_b_1().border_color(cx.theme().border)
                 })
                 .child(
@@ -1315,7 +1389,7 @@ impl TableDelegate for LogTableDelegate {
                         ui_theme::text_selection_highlight(cx),
                     )
                     .suppress_selection(self.is_text_selection_suppressed())
-                    .word_boundary_characters(self.word_boundary_characters.clone()),
+                    .word_boundary_characters(self.interaction.word_boundary_characters.clone()),
                 )
                 .into_any_element()
         } else {
@@ -1334,7 +1408,7 @@ impl TableDelegate for LogTableDelegate {
             .justify_center()
             .gap_2()
             .text_color(cx.theme().muted_foreground)
-            .child(self.empty_message.clone())
+            .child(self.presenter.empty_message.clone())
     }
 
     fn visible_rows_changed(
@@ -1343,7 +1417,8 @@ impl TableDelegate for LogTableDelegate {
         _: &mut Window,
         _: &mut Context<TableState<Self>>,
     ) {
-        self.row_bounds
+        self.interaction
+            .row_bounds
             .borrow_mut()
             .retain(|row_ix, _| visible_range.contains(row_ix));
         self.prepare_visible_rows(visible_range);
@@ -1353,10 +1428,10 @@ impl TableDelegate for LogTableDelegate {
         let Some(source_row) = self.source_row(row_ix) else {
             return String::new();
         };
-        if self.show_line_numbers && col_ix == 0 {
+        if self.presenter.show_line_numbers && col_ix == 0 {
             (source_row + 1).to_string()
-        } else if col_ix == usize::from(self.show_line_numbers) {
-            self.document.line(source_row).unwrap_or_default()
+        } else if col_ix == usize::from(self.presenter.show_line_numbers) {
+            self.source.document.line(source_row).unwrap_or_default()
         } else {
             String::new()
         }
@@ -1372,7 +1447,8 @@ mod tests {
         let document = Arc::new(LogDocument::placeholder("presentation-state.log"));
         let mut delegate = LogTableDelegate::all(1, document);
         let cached = delegate
-            .line_cache
+            .source
+            .visible_lines
             .line(7, |_| Some(LinePreview::new("cached line", false)))
             .expect("the test line should be cached");
         assert!(
@@ -1394,7 +1470,8 @@ mod tests {
         delegate.set_appearance(&AppSettings::default());
 
         let reused = delegate
-            .line_cache
+            .source
+            .visible_lines
             .line(7, |_| Some(LinePreview::new("reloaded line", false)))
             .expect("the cached line should remain available");
         assert_eq!(reused.source(), cached.source());

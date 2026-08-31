@@ -40,7 +40,7 @@ impl CachedLogLine {
 /// presentation-only change never causes the source file to be read again. Direct consumers such
 /// as copy commands read the authoritative document directly. Visible rows are loaded before
 /// overscan rows, and retained preview payloads never exceed the cache byte budget.
-pub(crate) struct VirtualLogLineCache<K> {
+pub(crate) struct VisibleLineStore<K> {
     lines: RefCell<BTreeMap<K, CachedLogLine>>,
     window: Cell<Option<(usize, usize, usize, usize)>>,
     overscan: Cell<usize>,
@@ -48,7 +48,7 @@ pub(crate) struct VirtualLogLineCache<K> {
     max_cache_retained_bytes: Cell<usize>,
 }
 
-impl<K> Default for VirtualLogLineCache<K> {
+impl<K> Default for VisibleLineStore<K> {
     fn default() -> Self {
         Self {
             lines: RefCell::default(),
@@ -60,7 +60,7 @@ impl<K> Default for VirtualLogLineCache<K> {
     }
 }
 
-impl<K: Clone + Ord> VirtualLogLineCache<K> {
+impl<K: Clone + Ord> VisibleLineStore<K> {
     pub(crate) fn set_overscan(&self, overscan: usize) {
         if self.overscan.replace(overscan) != overscan {
             self.invalidate_window();
@@ -174,11 +174,11 @@ mod tests {
 
     use vclogg_core::LinePreview;
 
-    use super::VirtualLogLineCache;
+    use super::VisibleLineStore;
 
     #[test]
     fn reads_only_the_active_virtual_window() {
-        let cache = VirtualLogLineCache::<usize>::default();
+        let cache = VisibleLineStore::<usize>::default();
         cache.set_overscan(1);
         let loaded = RefCell::new(Vec::new());
 
@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn line_preview_is_bounded_and_visibly_marked() {
-        let cache = VirtualLogLineCache::<usize>::default();
+        let cache = VisibleLineStore::<usize>::default();
         cache.max_line_source_bytes.set(4);
 
         let line = cache
@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn cache_budget_prioritizes_visible_rows_over_overscan() {
-        let cache = VirtualLogLineCache::<usize>::default();
+        let cache = VisibleLineStore::<usize>::default();
         cache.set_overscan(1);
         cache.max_line_source_bytes.set(4);
         cache.max_cache_retained_bytes.set(4);

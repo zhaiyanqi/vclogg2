@@ -9729,30 +9729,36 @@ impl Workspace {
                         .find(|result| result.document_id == tab.id);
                     let search_result = result.map(|result| &result.search_result);
                     GlobalSearchGroup {
-                        document_id: tab.id,
-                        title: result
-                            .map(|result| result.title.clone())
-                            .unwrap_or_else(|| tab.title.clone()),
-                        path: result
-                            .map(|result| result.path.clone())
-                            .unwrap_or_else(|| tab.document.path().to_path_buf()),
-                        document: result
-                            .map(|result| result.document.clone())
-                            .unwrap_or_else(|| tab.document.clone()),
-                        rows: compute_result_rows(
-                            self.global_result_mode,
-                            search_result,
-                            &tab.marked_rows,
-                        ),
-                        matched_rows: search_result
-                            .map(|result| result.line_indices.clone())
-                            .unwrap_or_default(),
-                        marked_rows: Arc::new(tab.marked_rows.clone()),
-                        truncated: search_result.is_some_and(|result| result.truncated)
-                            && self.global_result_mode.includes_matches(),
-                        failure: result.and_then(|result| result.failure.clone()),
-                        collapsed: collapsed_document_ids.contains(&tab.id),
-                        color_rules: tab.resolved_color_rules.clone(),
+                        source: crate::global_search_table::GlobalSearchGroupSource {
+                            document_id: tab.id,
+                            title: result
+                                .map(|result| result.title.clone())
+                                .unwrap_or_else(|| tab.title.clone()),
+                            path: result
+                                .map(|result| result.path.clone())
+                                .unwrap_or_else(|| tab.document.path().to_path_buf()),
+                            document: result
+                                .map(|result| result.document.clone())
+                                .unwrap_or_else(|| tab.document.clone()),
+                        },
+                        projection: crate::global_search_table::GlobalSearchGroupProjection {
+                            rows: compute_result_rows(
+                                self.global_result_mode,
+                                search_result,
+                                &tab.marked_rows,
+                            ),
+                            matched_rows: search_result
+                                .map(|result| result.line_indices.clone())
+                                .unwrap_or_default(),
+                            marked_rows: Arc::new(tab.marked_rows.clone()),
+                            truncated: search_result.is_some_and(|result| result.truncated)
+                                && self.global_result_mode.includes_matches(),
+                            failure: result.and_then(|result| result.failure.clone()),
+                            collapsed: collapsed_document_ids.contains(&tab.id),
+                        },
+                        presentation: crate::global_search_table::GlobalSearchGroupPresentation {
+                            color_rules: tab.resolved_color_rules.clone(),
+                        },
                     }
                 })
                 .collect::<Vec<_>>(),
@@ -9773,20 +9779,29 @@ impl Workspace {
                             &marked_rows,
                         );
                         (!rows.is_empty() || result.failure.is_some()).then(|| GlobalSearchGroup {
-                            document_id: result.document_id,
-                            title: result.title.clone(),
-                            path: result.path.clone(),
-                            document: result.document.clone(),
-                            rows,
-                            matched_rows: result.search_result.line_indices.clone(),
-                            marked_rows: Arc::new(marked_rows),
-                            truncated: result.search_result.truncated
-                                && self.global_result_mode.includes_matches(),
-                            failure: result.failure.clone(),
-                            collapsed: collapsed_document_ids.contains(&result.document_id),
-                            color_rules: open_tab
-                                .map(|tab| tab.resolved_color_rules.clone())
-                                .unwrap_or_else(|| Arc::from(Vec::<ResolvedColorRule>::new())),
+                            source: crate::global_search_table::GlobalSearchGroupSource {
+                                document_id: result.document_id,
+                                title: result.title.clone(),
+                                path: result.path.clone(),
+                                document: result.document.clone(),
+                            },
+                            projection: crate::global_search_table::GlobalSearchGroupProjection {
+                                rows,
+                                matched_rows: result.search_result.line_indices.clone(),
+                                marked_rows: Arc::new(marked_rows),
+                                truncated: result.search_result.truncated
+                                    && self.global_result_mode.includes_matches(),
+                                failure: result.failure.clone(),
+                                collapsed: collapsed_document_ids.contains(&result.document_id),
+                            },
+                            presentation:
+                                crate::global_search_table::GlobalSearchGroupPresentation {
+                                    color_rules: open_tab
+                                        .map(|tab| tab.resolved_color_rules.clone())
+                                        .unwrap_or_else(|| {
+                                            Arc::from(Vec::<ResolvedColorRule>::new())
+                                        }),
+                                },
                         })
                     })
                     .collect::<Vec<_>>()
@@ -9796,14 +9811,14 @@ impl Workspace {
 
         let selected_will_restore = selected_row.is_some_and(|selected| {
             groups.iter().any(|group| match selected {
-                GlobalSearchRow::Group { document_id } => group.document_id == document_id,
+                GlobalSearchRow::Group { document_id } => group.source.document_id == document_id,
                 GlobalSearchRow::Match {
                     document_id,
                     source_row,
                 } => {
-                    group.document_id == document_id
-                        && !group.collapsed
-                        && group.rows.contains(source_row)
+                    group.source.document_id == document_id
+                        && !group.projection.collapsed
+                        && group.projection.rows.contains(source_row)
                 }
             })
         });

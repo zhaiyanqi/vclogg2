@@ -32,20 +32,35 @@ use crate::log_table::{
 use crate::selectable_log_text::{LogText, SelectableLogText, TextSelectionCache};
 use crate::state_store::{AppSettings, DEFAULT_WORD_BOUNDARY_CHARACTERS, LogFontFamily};
 use crate::ui_theme;
-use crate::virtual_log_lines::VirtualLogLineCache;
+use crate::virtual_log_lines::VisibleLineStore;
 
 #[derive(Clone)]
 pub struct GlobalSearchGroup {
+    pub source: GlobalSearchGroupSource,
+    pub projection: GlobalSearchGroupProjection,
+    pub presentation: GlobalSearchGroupPresentation,
+}
+
+#[derive(Clone)]
+pub struct GlobalSearchGroupSource {
     pub document_id: u64,
     pub title: SharedString,
     pub path: PathBuf,
     pub document: Arc<LogDocument>,
+}
+
+#[derive(Clone)]
+pub struct GlobalSearchGroupProjection {
     pub rows: CompressedRows,
     pub matched_rows: CompressedRows,
     pub marked_rows: Arc<BTreeSet<usize>>,
     pub truncated: bool,
     pub failure: Option<SharedString>,
     pub collapsed: bool,
+}
+
+#[derive(Clone)]
+pub struct GlobalSearchGroupPresentation {
     pub color_rules: Arc<[ResolvedColorRule]>,
 }
 
@@ -69,10 +84,20 @@ enum FlatRow {
 }
 
 pub struct GlobalSearchTableDelegate {
+    projection: GlobalSearchProjectionState,
+    presenter: GlobalRowPresenter,
+    visible_lines: VisibleLineStore<(u64, usize)>,
+    interaction: GlobalInteractionState,
+}
+
+struct GlobalSearchProjectionState {
     groups: Vec<GlobalSearchGroup>,
     content_revision: u64,
     group_starts: Vec<usize>,
     rows_len: usize,
+}
+
+struct GlobalRowPresenter {
     matcher: Option<SearchMatcher>,
     quick_find_matcher: Option<SearchMatcher>,
     log_font_family: LogFontFamily,
@@ -84,14 +109,79 @@ pub struct GlobalSearchTableDelegate {
     show_line_number_row_separators: bool,
     show_row_separators: bool,
     highlight_log_levels: bool,
+}
+
+struct GlobalInteractionState {
     word_boundary_characters: SharedString,
     text_selections: TextSelectionCache<(u64, usize)>,
     suppress_text_selection: Cell<bool>,
     row_selection: Rc<RefCell<RowSelection>>,
     active_row: Cell<Option<usize>>,
     suppress_table_clear: Cell<bool>,
-    line_cache: VirtualLogLineCache<(u64, usize)>,
     row_bounds: Rc<RefCell<BTreeMap<usize, Bounds<Pixels>>>>,
+}
+
+impl Default for GlobalSearchProjectionState {
+    fn default() -> Self {
+        Self {
+            groups: Vec::new(),
+            content_revision: 1,
+            group_starts: Vec::new(),
+            rows_len: 0,
+        }
+    }
+}
+
+impl Default for GlobalRowPresenter {
+    fn default() -> Self {
+        Self {
+            matcher: None,
+            quick_find_matcher: None,
+            log_font_family: LogFontFamily::default(),
+            log_font_size: 13,
+            log_line_spacing: 6,
+            line_number_width: 60,
+            line_number_text_color: None,
+            line_number_background_color: None,
+            show_line_number_row_separators: false,
+            show_row_separators: false,
+            highlight_log_levels: false,
+        }
+    }
+}
+
+impl GlobalRowPresenter {
+    fn present(&self, text: LogText, color_rules: &[ResolvedColorRule]) -> GlobalRowPresentation {
+        let source_highlights = combined_match_ranges(
+            text.source(),
+            color_rules,
+            self.matcher.as_ref(),
+            self.quick_find_matcher.as_ref(),
+        );
+        GlobalRowPresentation {
+            highlights: source_highlights
+                .into_iter()
+                .filter_map(|(range, highlight)| {
+                    text.display_range(range).map(|range| (range, highlight))
+                })
+                .collect(),
+            text,
+        }
+    }
+}
+
+impl Default for GlobalInteractionState {
+    fn default() -> Self {
+        Self {
+            word_boundary_characters: DEFAULT_WORD_BOUNDARY_CHARACTERS.into(),
+            text_selections: TextSelectionCache::default(),
+            suppress_text_selection: Cell::default(),
+            row_selection: Rc::default(),
+            active_row: Cell::default(),
+            suppress_table_clear: Cell::default(),
+            row_bounds: Rc::default(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -404,96 +494,77 @@ impl RenderOnce for GlobalSearchGroupHeader {
 impl GlobalSearchTableDelegate {
     pub fn new() -> Self {
         Self {
-            groups: Vec::new(),
-            content_revision: 1,
-            group_starts: Vec::new(),
-            rows_len: 0,
-            matcher: None,
-            quick_find_matcher: None,
-            log_font_family: LogFontFamily::default(),
-            log_font_size: 13,
-            log_line_spacing: 6,
-            line_number_width: 60,
-            line_number_text_color: None,
-            line_number_background_color: None,
-            show_line_number_row_separators: false,
-            show_row_separators: false,
-            highlight_log_levels: false,
-            word_boundary_characters: DEFAULT_WORD_BOUNDARY_CHARACTERS.into(),
-            text_selections: TextSelectionCache::default(),
-            suppress_text_selection: Cell::default(),
-            row_selection: Rc::default(),
-            active_row: Cell::default(),
-            suppress_table_clear: Cell::default(),
-            line_cache: VirtualLogLineCache::default(),
-            row_bounds: Rc::default(),
+            projection: GlobalSearchProjectionState::default(),
+            presenter: GlobalRowPresenter::default(),
+            visible_lines: VisibleLineStore::default(),
+            interaction: GlobalInteractionState::default(),
         }
     }
 
     pub fn set_groups(&mut self, groups: Vec<GlobalSearchGroup>, matcher: Option<SearchMatcher>) {
-        let documents_changed = groups.len() != self.groups.len()
+        let documents_changed = groups.len() != self.projection.groups.len()
             || groups.iter().any(|next| {
-                !self.groups.iter().any(|current| {
-                    current.document_id == next.document_id
-                        && Arc::ptr_eq(&current.document, &next.document)
+                !self.projection.groups.iter().any(|current| {
+                    current.source.document_id == next.source.document_id
+                        && Arc::ptr_eq(&current.source.document, &next.source.document)
                 })
             });
         let reusable_documents = groups
             .iter()
             .filter(|next| {
-                self.groups.iter().any(|current| {
-                    current.document_id == next.document_id
-                        && Arc::ptr_eq(&current.document, &next.document)
+                self.projection.groups.iter().any(|current| {
+                    current.source.document_id == next.source.document_id
+                        && Arc::ptr_eq(&current.source.document, &next.source.document)
                 })
             })
-            .map(|group| group.document_id)
+            .map(|group| group.source.document_id)
             .collect::<BTreeSet<_>>();
-        self.line_cache
+        self.visible_lines
             .retain(|(document_id, _)| reusable_documents.contains(document_id));
         if documents_changed {
-            self.content_revision = self.content_revision.saturating_add(1);
+            self.projection.content_revision = self.projection.content_revision.saturating_add(1);
         }
-        self.groups = groups;
-        self.matcher = matcher;
-        self.row_bounds.borrow_mut().clear();
-        self.row_selection.borrow_mut().clear();
-        self.active_row.set(None);
+        self.projection.groups = groups;
+        self.presenter.matcher = matcher;
+        self.interaction.row_bounds.borrow_mut().clear();
+        self.interaction.row_selection.borrow_mut().clear();
+        self.interaction.active_row.set(None);
         self.rebuild_layout();
     }
 
     pub fn set_quick_find_matcher(&mut self, matcher: Option<SearchMatcher>) {
-        self.quick_find_matcher = matcher;
+        self.presenter.quick_find_matcher = matcher;
     }
 
     pub fn set_appearance(&mut self, settings: &AppSettings) {
-        self.log_font_family = settings.log_font_family;
-        self.log_font_size = settings.log_font_size.clamp(8, 32);
-        self.log_line_spacing = settings.log_line_spacing.clamp(1, 40);
-        self.line_number_width = settings.line_number_width.clamp(40, 160);
-        self.line_number_text_color = settings
+        self.presenter.log_font_family = settings.log_font_family;
+        self.presenter.log_font_size = settings.log_font_size.clamp(8, 32);
+        self.presenter.log_line_spacing = settings.log_line_spacing.clamp(1, 40);
+        self.presenter.line_number_width = settings.line_number_width.clamp(40, 160);
+        self.presenter.line_number_text_color = settings
             .line_number_text_color
             .as_deref()
             .and_then(|value| try_parse_color(value).ok());
-        self.line_number_background_color = settings
+        self.presenter.line_number_background_color = settings
             .line_number_background_color
             .as_deref()
             .and_then(|value| try_parse_color(value).ok());
-        self.show_line_number_row_separators = settings.show_line_number_row_separators;
-        self.show_row_separators = settings.default_show_row_separators;
-        self.line_cache
+        self.presenter.show_line_number_row_separators = settings.show_line_number_row_separators;
+        self.presenter.show_row_separators = settings.default_show_row_separators;
+        self.visible_lines
             .set_overscan(usize::from(settings.viewer_overscan.clamp(4, 40)));
     }
 
     pub fn set_word_boundary_characters(&mut self, characters: impl Into<SharedString>) {
-        self.word_boundary_characters = characters.into();
+        self.interaction.word_boundary_characters = characters.into();
     }
 
     pub fn set_highlight_log_levels(&mut self, enabled: bool) {
-        self.highlight_log_levels = enabled;
+        self.presenter.highlight_log_levels = enabled;
     }
 
     pub(crate) fn resolved_font_family(&self, cx: &App) -> SharedString {
-        match self.log_font_family {
+        match self.presenter.log_font_family {
             LogFontFamily::CascadiaMono => "Cascadia Mono".into(),
             LogFontFamily::JetBrainsMono => "JetBrains Mono".into(),
             LogFontFamily::Consolas => "Consolas".into(),
@@ -502,207 +573,231 @@ impl GlobalSearchTableDelegate {
     }
 
     pub(crate) fn content_revision(&self) -> u64 {
-        self.content_revision
+        self.projection.content_revision
     }
 
     pub(crate) fn line_number_width(&self) -> u16 {
-        self.line_number_width
+        self.presenter.line_number_width
     }
 
     pub(crate) fn line_number_text_color(&self, cx: &App) -> Hsla {
-        self.line_number_text_color
+        self.presenter
+            .line_number_text_color
             .unwrap_or(cx.theme().muted_foreground)
     }
 
     pub(crate) fn line_number_background_color(&self, cx: &App) -> Hsla {
-        self.line_number_background_color
+        self.presenter
+            .line_number_background_color
             .unwrap_or_else(|| cx.theme().muted.opacity(0.45))
     }
 
     pub(crate) fn show_line_number_row_separators(&self) -> bool {
-        self.show_line_number_row_separators
+        self.presenter.show_line_number_row_separators
     }
 
     pub(crate) fn show_row_separators(&self) -> bool {
-        self.show_row_separators
+        self.presenter.show_row_separators
     }
 
     pub fn row(&self, row_ix: usize) -> Option<GlobalSearchRow> {
         match self.flat_row(row_ix)? {
             FlatRow::Group { group_ix } => Some(GlobalSearchRow::Group {
-                document_id: self.groups.get(group_ix)?.document_id,
+                document_id: self.projection.groups.get(group_ix)?.source.document_id,
             }),
             FlatRow::Match {
                 group_ix,
                 source_row,
             } => Some(GlobalSearchRow::Match {
-                document_id: self.groups.get(group_ix)?.document_id,
+                document_id: self.projection.groups.get(group_ix)?.source.document_id,
                 source_row,
             }),
         }
     }
 
     pub fn row_ix(&self, target: GlobalSearchRow) -> Option<usize> {
-        self.groups
+        self.projection
+            .groups
             .iter()
             .enumerate()
             .find_map(|(group_ix, group)| match target {
-                GlobalSearchRow::Group { document_id } if document_id == group.document_id => {
-                    self.group_starts.get(group_ix).copied()
+                GlobalSearchRow::Group { document_id }
+                    if document_id == group.source.document_id =>
+                {
+                    self.projection.group_starts.get(group_ix).copied()
                 }
                 GlobalSearchRow::Match {
                     document_id,
                     source_row,
-                } if document_id == group.document_id && !group.collapsed => {
-                    group.rows.position(source_row).and_then(|position| {
-                        self.group_starts
-                            .get(group_ix)
-                            .copied()
-                            .and_then(|start| start.checked_add(position.saturating_add(1)))
-                    })
+                } if document_id == group.source.document_id && !group.projection.collapsed => {
+                    group
+                        .projection
+                        .rows
+                        .position(source_row)
+                        .and_then(|position| {
+                            self.projection
+                                .group_starts
+                                .get(group_ix)
+                                .copied()
+                                .and_then(|start| start.checked_add(position.saturating_add(1)))
+                        })
                 }
                 _ => None,
             })
     }
 
     pub fn collapsed_document_ids(&self) -> BTreeSet<u64> {
-        self.groups
+        self.projection
+            .groups
             .iter()
-            .filter(|group| group.collapsed)
-            .map(|group| group.document_id)
+            .filter(|group| group.projection.collapsed)
+            .map(|group| group.source.document_id)
             .collect()
     }
 
     pub(crate) fn restore_collapsed_document_ids(&mut self, document_ids: &BTreeSet<u64>) {
-        for group in &mut self.groups {
-            group.collapsed = document_ids.contains(&group.document_id);
+        for group in &mut self.projection.groups {
+            group.projection.collapsed = document_ids.contains(&group.source.document_id);
         }
         self.rebuild_layout();
     }
 
     pub fn toggle_group(&mut self, document_id: u64) {
         let Some(group) = self
+            .projection
             .groups
             .iter_mut()
-            .find(|group| group.document_id == document_id)
+            .find(|group| group.source.document_id == document_id)
         else {
             return;
         };
-        if group.rows.is_empty() {
+        if group.projection.rows.is_empty() {
             return;
         }
-        group.collapsed = !group.collapsed;
+        group.projection.collapsed = !group.projection.collapsed;
         self.rebuild_layout();
     }
 
     pub fn group_has_results(&self, document_id: u64) -> bool {
-        self.groups
+        self.projection
+            .groups
             .iter()
-            .find(|group| group.document_id == document_id)
-            .is_some_and(|group| !group.rows.is_empty())
+            .find(|group| group.source.document_id == document_id)
+            .is_some_and(|group| !group.projection.rows.is_empty())
     }
 
     pub fn groups_count(&self) -> usize {
-        self.groups.len()
+        self.projection.groups.len()
     }
 
     pub fn results_count(&self) -> usize {
-        self.groups.iter().map(|group| group.rows.len()).sum()
+        self.projection
+            .groups
+            .iter()
+            .map(|group| group.projection.rows.len())
+            .sum()
     }
 
     pub fn has_truncated_results(&self) -> bool {
-        self.groups.iter().any(|group| group.truncated)
+        self.projection
+            .groups
+            .iter()
+            .any(|group| group.projection.truncated)
     }
 
     pub fn rows_len(&self) -> usize {
-        self.rows_len
+        self.projection.rows_len
     }
 
     pub fn quick_find_groups(&self) -> Vec<GlobalQuickFindGroup> {
-        self.groups
+        self.projection
+            .groups
             .iter()
             .enumerate()
-            .filter(|(_, group)| !group.collapsed && !group.rows.is_empty())
+            .filter(|(_, group)| !group.projection.collapsed && !group.projection.rows.is_empty())
             .filter_map(|(group_ix, group)| {
-                self.group_starts
+                self.projection
+                    .group_starts
                     .get(group_ix)
                     .copied()
                     .and_then(|start| start.checked_add(1))
                     .map(|view_start| GlobalQuickFindGroup {
                         view_start,
-                        document: group.document.clone(),
-                        rows: group.rows.clone(),
+                        document: group.source.document.clone(),
+                        rows: group.projection.rows.clone(),
                     })
             })
             .collect()
     }
 
     pub(crate) fn log_font_size(&self) -> u16 {
-        self.log_font_size
+        self.presenter.log_font_size
     }
 
     pub(crate) fn wrapped_row(&self, row_ix: usize) -> Option<WrappedGlobalRow> {
         match self.flat_row(row_ix)? {
             FlatRow::Group { group_ix } => {
-                let group = self.groups.get(group_ix)?;
+                let group = self.projection.groups.get(group_ix)?;
                 Some(WrappedGlobalRow::Group {
-                    document_id: group.document_id,
-                    title: group.title.clone(),
-                    path: group.path.clone(),
-                    result_count: group.rows.len(),
-                    truncated: group.truncated,
-                    failure: group.failure.clone(),
-                    collapsed: group.collapsed,
+                    document_id: group.source.document_id,
+                    title: group.source.title.clone(),
+                    path: group.source.path.clone(),
+                    result_count: group.projection.rows.len(),
+                    truncated: group.projection.truncated,
+                    failure: group.projection.failure.clone(),
+                    collapsed: group.projection.collapsed,
                 })
             }
             FlatRow::Match {
                 group_ix,
                 source_row,
             } => {
-                let group = self.groups.get(group_ix)?;
+                let group = self.projection.groups.get(group_ix)?;
                 let presentation = self.row_presentation(group_ix, source_row)?;
                 Some(WrappedGlobalRow::Match {
-                    document_id: group.document_id,
+                    document_id: group.source.document_id,
                     source_row,
-                    selected: self.row_selection.borrow().contains(row_ix),
-                    marked: group.marked_rows.contains(&source_row),
-                    matched: group.matched_rows.contains(source_row),
+                    selected: self.interaction.row_selection.borrow().contains(row_ix),
+                    marked: group.projection.marked_rows.contains(&source_row),
+                    matched: group.projection.matched_rows.contains(source_row),
                     highlights: presentation.highlights,
                     text: presentation.text,
-                    highlight_severity: self.highlight_log_levels,
+                    highlight_severity: self.presenter.highlight_log_levels,
                 })
             }
         }
     }
 
     pub(crate) fn prepare_visible_rows(&self, visible_range: Range<usize>) {
-        self.line_cache.prepare_visible_rows(
+        self.visible_lines.prepare_visible_rows(
             visible_range,
-            self.rows_len,
+            self.projection.rows_len,
             |row_ix| match self.flat_row(row_ix) {
                 Some(FlatRow::Match {
                     group_ix,
                     source_row,
                 }) => self
+                    .projection
                     .groups
                     .get(group_ix)
-                    .map(|group| (group.document_id, source_row)),
+                    .map(|group| (group.source.document_id, source_row)),
                 _ => None,
             },
             |(document_id, source_row), max_bytes| {
-                self.groups
+                self.projection
+                    .groups
                     .iter()
-                    .find(|group| group.document_id == *document_id)
-                    .and_then(|group| group.document.line_preview(*source_row, max_bytes))
+                    .find(|group| group.source.document_id == *document_id)
+                    .and_then(|group| group.source.document.line_preview(*source_row, max_bytes))
             },
         );
     }
 
     fn line_text(&self, group_ix: usize, source_row: usize) -> Option<LogText> {
-        let group = self.groups.get(group_ix)?;
-        self.line_cache
-            .line((group.document_id, source_row), |max_bytes| {
-                group.document.line_preview(source_row, max_bytes)
+        let group = self.projection.groups.get(group_ix)?;
+        self.visible_lines
+            .line((group.source.document_id, source_row), |max_bytes| {
+                group.source.document.line_preview(source_row, max_bytes)
             })
     }
 
@@ -711,23 +806,12 @@ impl GlobalSearchTableDelegate {
         group_ix: usize,
         source_row: usize,
     ) -> Option<GlobalRowPresentation> {
-        let group = self.groups.get(group_ix)?;
+        let group = self.projection.groups.get(group_ix)?;
         let text = self.line_text(group_ix, source_row)?;
-        let source_highlights = combined_match_ranges(
-            text.source(),
-            &group.color_rules,
-            self.matcher.as_ref(),
-            self.quick_find_matcher.as_ref(),
-        );
-        Some(GlobalRowPresentation {
-            highlights: source_highlights
-                .into_iter()
-                .filter_map(|(range, highlight)| {
-                    text.display_range(range).map(|range| (range, highlight))
-                })
-                .collect(),
-            text,
-        })
+        Some(
+            self.presenter
+                .present(text, &group.presentation.color_rules),
+        )
     }
 
     pub(crate) fn begin_pointer_selection(
@@ -738,57 +822,73 @@ impl GlobalSearchTableDelegate {
         click_count: usize,
     ) {
         // A new gesture must not inherit line-drag suppression after a lost MouseUp.
-        self.suppress_text_selection.set(false);
-        self.row_selection.borrow_mut().begin_pointer_selection(
-            row_ix,
-            control,
-            shift,
-            click_count,
-        );
+        self.interaction.suppress_text_selection.set(false);
+        self.interaction
+            .row_selection
+            .borrow_mut()
+            .begin_pointer_selection(row_ix, control, shift, click_count);
     }
 
     pub(crate) fn prepare_context_selection(&self, row_ix: usize) {
-        self.row_selection
+        self.interaction
+            .row_selection
             .borrow_mut()
             .prepare_context_selection(row_ix);
     }
 
     pub(crate) fn extend_pointer_selection(&self, row_ix: usize) {
-        self.row_selection
+        self.interaction
+            .row_selection
             .borrow_mut()
             .extend_pointer_selection(row_ix);
     }
 
     pub(crate) fn restore_pointer_selection(&self) {
-        self.row_selection.borrow_mut().restore_pointer_selection();
+        self.interaction
+            .row_selection
+            .borrow_mut()
+            .restore_pointer_selection();
     }
 
     pub(crate) fn end_pointer_selection(&self) {
-        self.row_selection.borrow_mut().end_pointer_selection();
-        self.suppress_text_selection.set(false);
+        self.interaction
+            .row_selection
+            .borrow_mut()
+            .end_pointer_selection();
+        self.interaction.suppress_text_selection.set(false);
     }
 
     pub(crate) fn is_pointer_selecting(&self) -> bool {
-        self.row_selection.borrow().is_pointer_selecting()
+        self.interaction
+            .row_selection
+            .borrow()
+            .is_pointer_selecting()
     }
 
     pub(crate) fn pointer_drag_anchor(&self) -> Option<usize> {
-        self.row_selection.borrow().pointer_drag_anchor()
+        self.interaction
+            .row_selection
+            .borrow()
+            .pointer_drag_anchor()
     }
 
     pub(crate) fn pointer_text_selection_allowed(&self) -> bool {
-        self.row_selection.borrow().is_text_selection_allowed()
+        self.interaction
+            .row_selection
+            .borrow()
+            .is_text_selection_allowed()
     }
 
     pub(crate) fn row_at_position(&self, position: Point<Pixels>) -> Option<usize> {
-        self.row_bounds
+        self.interaction
+            .row_bounds
             .borrow()
             .iter()
             .find_map(|(row_ix, bounds)| bounds.contains(&position).then_some(*row_ix))
     }
 
     pub(crate) fn visible_row_edge(&self, after: bool) -> Option<usize> {
-        let bounds = self.row_bounds.borrow();
+        let bounds = self.interaction.row_bounds.borrow();
         if after {
             bounds.keys().next_back().copied()
         } else {
@@ -797,11 +897,11 @@ impl GlobalSearchTableDelegate {
     }
 
     pub(crate) fn set_text_selection_suppressed(&self, suppressed: bool) {
-        self.suppress_text_selection.set(suppressed);
+        self.interaction.suppress_text_selection.set(suppressed);
     }
 
     pub(crate) fn is_text_selection_suppressed(&self) -> bool {
-        self.suppress_text_selection.get()
+        self.interaction.suppress_text_selection.get()
     }
 
     pub(crate) fn nearest_match_row(&self, row_ix: usize, prefer_after: bool) -> Option<usize> {
@@ -811,7 +911,7 @@ impl GlobalSearchTableDelegate {
         let before = (0..row_ix)
             .rev()
             .find(|candidate| matches!(self.flat_row(*candidate), Some(FlatRow::Match { .. })));
-        let after = (row_ix.saturating_add(1)..self.rows_len)
+        let after = (row_ix.saturating_add(1)..self.projection.rows_len)
             .find(|candidate| matches!(self.flat_row(*candidate), Some(FlatRow::Match { .. })));
         if prefer_after {
             after.or(before)
@@ -821,34 +921,45 @@ impl GlobalSearchTableDelegate {
     }
 
     pub(crate) fn extend_keyboard_selection(&self, row_ix: usize) {
-        self.row_selection
+        self.interaction
+            .row_selection
             .borrow_mut()
             .extend_keyboard_selection(row_ix);
     }
 
     pub(crate) fn settle_table_selection(&self, row_ix: usize) {
-        self.row_selection
+        self.interaction
+            .row_selection
             .borrow_mut()
             .settle_table_selection(row_ix);
     }
 
     pub(crate) fn clear_row_selection(&self) {
-        self.row_selection.borrow_mut().clear();
+        self.interaction.row_selection.borrow_mut().clear();
     }
 
     pub(crate) fn select_all_rows(&self) {
-        self.row_selection.borrow_mut().select_all(self.rows_len);
+        self.interaction
+            .row_selection
+            .borrow_mut()
+            .select_all(self.projection.rows_len);
     }
 
     pub(crate) fn selected_rows_count(&self) -> usize {
-        let selection = self.row_selection.borrow();
+        let selection = self.interaction.row_selection.borrow();
         selection
             .selected_ranges()
             .map(|(start, end)| {
-                let end = end.min(self.rows_len.saturating_sub(1));
+                let end = end.min(self.projection.rows_len.saturating_sub(1));
                 let row_count = end.saturating_sub(start).saturating_add(1);
-                let group_count = self.group_starts.partition_point(|row| *row <= end)
-                    - self.group_starts.partition_point(|row| *row < start);
+                let group_count = self
+                    .projection
+                    .group_starts
+                    .partition_point(|row| *row <= end)
+                    - self
+                        .projection
+                        .group_starts
+                        .partition_point(|row| *row < start);
                 row_count.saturating_sub(group_count)
             })
             .sum()
@@ -856,27 +967,30 @@ impl GlobalSearchTableDelegate {
 
     pub(crate) fn is_row_selected(&self, row_ix: usize) -> bool {
         matches!(self.flat_row(row_ix), Some(FlatRow::Match { .. }))
-            && self.row_selection.borrow().contains(row_ix)
+            && self.interaction.row_selection.borrow().contains(row_ix)
     }
 
     pub(crate) fn selected_matches(&self) -> Vec<(u64, usize)> {
-        let selection = self.row_selection.borrow();
+        let selection = self.interaction.row_selection.borrow();
         selection
-            .selected_indices(self.rows_len)
+            .selected_indices(self.projection.rows_len)
             .filter_map(|row_ix| match self.flat_row(row_ix)? {
                 FlatRow::Group { .. } => None,
                 FlatRow::Match {
                     group_ix,
                     source_row,
-                } => Some((self.groups[group_ix].document_id, source_row)),
+                } => Some((
+                    self.projection.groups[group_ix].source.document_id,
+                    source_row,
+                )),
             })
             .collect()
     }
 
     pub(crate) fn selection_snapshot(&self) -> BTreeMap<u64, CompressedRows> {
         let mut rows_by_document = BTreeMap::<u64, Vec<usize>>::new();
-        let selection = self.row_selection.borrow();
-        for row_ix in selection.selected_indices(self.rows_len) {
+        let selection = self.interaction.row_selection.borrow();
+        for row_ix in selection.selected_indices(self.projection.rows_len) {
             let Some(FlatRow::Match {
                 group_ix,
                 source_row,
@@ -884,7 +998,7 @@ impl GlobalSearchTableDelegate {
             else {
                 continue;
             };
-            let document_id = self.groups[group_ix].document_id;
+            let document_id = self.projection.groups[group_ix].source.document_id;
             rows_by_document
                 .entry(document_id)
                 .or_default()
@@ -897,7 +1011,7 @@ impl GlobalSearchTableDelegate {
     }
 
     pub(crate) fn restore_selection(&self, snapshot: &BTreeMap<u64, CompressedRows>) {
-        let selected_indices = (0..self.rows_len).filter(|row_ix| {
+        let selected_indices = (0..self.projection.rows_len).filter(|row_ix| {
             let Some(FlatRow::Match {
                 group_ix,
                 source_row,
@@ -906,44 +1020,52 @@ impl GlobalSearchTableDelegate {
                 return false;
             };
             snapshot
-                .get(&self.groups[group_ix].document_id)
+                .get(&self.projection.groups[group_ix].source.document_id)
                 .is_some_and(|rows| rows.contains(source_row))
         });
-        self.row_selection
+        self.interaction
+            .row_selection
             .borrow_mut()
             .replace_indices(selected_indices);
     }
 
     fn rebuild_layout(&mut self) {
-        self.line_cache.invalidate_window();
-        self.group_starts.clear();
-        self.rows_len = 0;
-        for group in &self.groups {
-            self.group_starts.push(self.rows_len);
-            self.rows_len = self.rows_len.saturating_add(1);
-            if !group.collapsed {
-                self.rows_len = self.rows_len.saturating_add(group.rows.len());
+        self.visible_lines.invalidate_window();
+        self.projection.group_starts.clear();
+        self.projection.rows_len = 0;
+        for group in &self.projection.groups {
+            self.projection.group_starts.push(self.projection.rows_len);
+            self.projection.rows_len = self.projection.rows_len.saturating_add(1);
+            if !group.projection.collapsed {
+                self.projection.rows_len = self
+                    .projection
+                    .rows_len
+                    .saturating_add(group.projection.rows.len());
             }
         }
     }
 
     fn flat_row(&self, row_ix: usize) -> Option<FlatRow> {
-        if row_ix >= self.rows_len {
+        if row_ix >= self.projection.rows_len {
             return None;
         }
         let group_ix = self
+            .projection
             .group_starts
             .partition_point(|start| *start <= row_ix)
             .saturating_sub(1);
-        let group_start = *self.group_starts.get(group_ix)?;
+        let group_start = *self.projection.group_starts.get(group_ix)?;
         if row_ix == group_start {
             return Some(FlatRow::Group { group_ix });
         }
-        let group = self.groups.get(group_ix)?;
-        if group.collapsed {
+        let group = self.projection.groups.get(group_ix)?;
+        if group.projection.collapsed {
             return None;
         }
-        let source_row = group.rows.get(row_ix.saturating_sub(group_start + 1))?;
+        let source_row = group
+            .projection
+            .rows
+            .get(row_ix.saturating_sub(group_start + 1))?;
         Some(FlatRow::Match {
             group_ix,
             source_row,
@@ -953,19 +1075,19 @@ impl GlobalSearchTableDelegate {
 
 impl LogTableCursor for GlobalSearchTableDelegate {
     fn active_log_row(&self) -> Option<usize> {
-        self.active_row.get()
+        self.interaction.active_row.get()
     }
 
     fn set_active_log_row(&self, row_ix: Option<usize>) {
-        self.active_row.set(row_ix);
+        self.interaction.active_row.set(row_ix);
     }
 
     fn suppress_next_table_clear(&self) {
-        self.suppress_table_clear.set(true);
+        self.interaction.suppress_table_clear.set(true);
     }
 
     fn take_suppressed_table_clear(&self) -> bool {
-        self.suppress_table_clear.replace(false)
+        self.interaction.suppress_table_clear.replace(false)
     }
 }
 
@@ -975,11 +1097,11 @@ impl TableDelegate for GlobalSearchTableDelegate {
     }
 
     fn rows_count(&self, _: &App) -> usize {
-        self.rows_len
+        self.projection.rows_len
     }
 
     fn column(&self, col_ix: usize, cx: &App) -> Column {
-        let base = px(self.log_font_size as f32);
+        let base = px(self.presenter.log_font_size as f32);
         match col_ix {
             0 => {
                 let width = line_marker_column_width();
@@ -993,7 +1115,7 @@ impl TableDelegate for GlobalSearchTableDelegate {
                     .movable(false)
             }
             1 => {
-                let width = px(self.line_number_width as f32);
+                let width = px(self.presenter.line_number_width as f32);
                 Column::new("global-line-number", crate::tr!("行", "Line"))
                     .p_0()
                     .width(width)
@@ -1007,13 +1129,14 @@ impl TableDelegate for GlobalSearchTableDelegate {
             2 => Column::new("global-message", crate::tr!("文件与日志", "File & log"))
                 .p_0()
                 .width(message_column_width(
-                    self.groups
+                    self.projection
+                        .groups
                         .iter()
-                        .map(|group| group.document.metadata().longest_line_columns)
+                        .map(|group| group.source.document.metadata().longest_line_columns)
                         .max()
                         .unwrap_or_default(),
                     self.resolved_font_family(cx),
-                    self.log_font_size,
+                    self.presenter.log_font_size,
                     cx,
                 ))
                 .min_width(base * 24.)
@@ -1038,21 +1161,21 @@ impl TableDelegate for GlobalSearchTableDelegate {
     ) -> Stateful<Div> {
         let _performance_scope =
             crate::ui_performance::scope("GlobalSearchTableDelegate::render_tr");
-        let row_bounds = self.row_bounds.clone();
+        let row_bounds = self.interaction.row_bounds.clone();
         match self.flat_row(row_ix) {
             Some(FlatRow::Group { group_ix }) => {
-                let group = &self.groups[group_ix];
-                let document_id = group.document_id;
+                let group = &self.projection.groups[group_ix];
+                let document_id = group.source.document_id;
                 let header = GlobalSearchGroupHeader::new(
-                    group.title.clone(),
-                    group.path.clone(),
-                    group.rows.len(),
+                    group.source.title.clone(),
+                    group.source.path.clone(),
+                    group.projection.rows.len(),
                     self.resolved_font_family(cx),
-                    self.log_font_size,
+                    self.presenter.log_font_size,
                 )
-                .truncated(group.truncated)
-                .failure(group.failure.clone())
-                .collapsed(group.collapsed);
+                .truncated(group.projection.truncated)
+                .failure(group.projection.failure.clone())
+                .collapsed(group.projection.collapsed);
                 div()
                     .id(("global-search-group", document_id))
                     .relative()
@@ -1084,8 +1207,9 @@ impl TableDelegate for GlobalSearchTableDelegate {
                 group_ix,
                 source_row,
             }) => {
-                let group = &self.groups[group_ix];
+                let group = &self.projection.groups[group_ix];
                 let severity = self
+                    .presenter
                     .highlight_log_levels
                     .then(|| self.line_text(group_ix, source_row))
                     .flatten()
@@ -1093,7 +1217,7 @@ impl TableDelegate for GlobalSearchTableDelegate {
                 div()
                     .id(format!(
                         "global-search-result-{}-{source_row}",
-                        group.document_id
+                        group.source.document_id
                     ))
                     .border_0()
                     .on_prepaint(move |bounds, _, _| {
@@ -1156,19 +1280,23 @@ impl TableDelegate for GlobalSearchTableDelegate {
         let Some(row) = self.flat_row(row_ix) else {
             return div().into_any_element();
         };
-        let line_height = log_line_height(self.log_font_size, self.log_line_spacing);
+        let line_height = log_line_height(
+            self.presenter.log_font_size,
+            self.presenter.log_line_spacing,
+        );
         match row {
             FlatRow::Group { .. } => div().into_any_element(),
             FlatRow::Match {
                 group_ix,
                 source_row,
             } => {
-                let group = &self.groups[group_ix];
-                let selected = self.row_selection.borrow().contains(row_ix);
+                let group = &self.projection.groups[group_ix];
+                let selected = self.interaction.row_selection.borrow().contains(row_ix);
                 if col_ix == 0 {
-                    let marked = group.marked_rows.contains(&source_row);
-                    let matched = group.matched_rows.contains(source_row);
+                    let marked = group.projection.marked_rows.contains(&source_row);
+                    let matched = group.projection.matched_rows.contains(source_row);
                     let severity_accent = self
+                        .presenter
                         .highlight_log_levels
                         .then(|| self.line_text(group_ix, source_row))
                         .flatten()
@@ -1186,11 +1314,11 @@ impl TableDelegate for GlobalSearchTableDelegate {
                 } else if col_ix == 1 {
                     log_line_number_cell(
                         source_row,
-                        self.log_font_size,
+                        self.presenter.log_font_size,
                         line_height,
                         self.line_number_text_color(cx),
                         self.line_number_background_color(cx),
-                        self.show_line_number_row_separators,
+                        self.show_line_number_row_separators(),
                         cx,
                     )
                     .size_full()
@@ -1213,8 +1341,8 @@ impl TableDelegate for GlobalSearchTableDelegate {
                         .collect::<Vec<_>>();
                     let styled_text =
                         StyledText::new(text.display().clone()).with_highlights(highlights);
-                    let selection = self.text_selections.handle(
-                        (group.document_id, source_row),
+                    let selection = self.interaction.text_selections.handle(
+                        (group.source.document_id, source_row),
                         &text,
                         window,
                         cx,
@@ -1228,26 +1356,28 @@ impl TableDelegate for GlobalSearchTableDelegate {
                             cell.bg(log_row_selection_color(cx))
                                 .child(log_row_selection_overlay(
                                     row_ix == 0 || !self.is_row_selected(row_ix - 1),
-                                    row_ix + 1 >= self.rows_len
+                                    row_ix + 1 >= self.projection.rows_len
                                         || !self.is_row_selected(row_ix + 1),
                                     cx,
                                 ))
                         })
-                        .text_size(px(self.log_font_size as f32))
+                        .text_size(px(self.presenter.log_font_size as f32))
                         .line_height(line_height)
                         .font_family(self.resolved_font_family(cx))
-                        .when(self.show_row_separators && !selected, |cell| {
+                        .when(self.presenter.show_row_separators && !selected, |cell| {
                             cell.border_b_1().border_color(cx.theme().border)
                         })
                         .child(
                             SelectableLogText::new(
                                 selection,
-                                group.document_id.rotate_left(32) ^ source_row as u64,
+                                group.source.document_id.rotate_left(32) ^ source_row as u64,
                                 text,
                                 styled_text,
                                 ui_theme::text_selection_highlight(cx),
                             )
-                            .word_boundary_characters(self.word_boundary_characters.clone())
+                            .word_boundary_characters(
+                                self.interaction.word_boundary_characters.clone(),
+                            )
                             .suppress_selection(self.is_text_selection_suppressed()),
                         )
                         .into_any_element()
@@ -1278,7 +1408,8 @@ impl TableDelegate for GlobalSearchTableDelegate {
         _: &mut Window,
         _: &mut Context<TableState<Self>>,
     ) {
-        self.row_bounds
+        self.interaction
+            .row_bounds
             .borrow_mut()
             .retain(|row_ix, _| visible_range.contains(row_ix));
         self.prepare_visible_rows(visible_range);
@@ -1289,14 +1420,17 @@ impl TableDelegate for GlobalSearchTableDelegate {
             return String::new();
         };
         match row {
-            FlatRow::Group { group_ix } if col_ix == 2 => {
-                self.groups[group_ix].path.display().to_string()
-            }
+            FlatRow::Group { group_ix } if col_ix == 2 => self.projection.groups[group_ix]
+                .source
+                .path
+                .display()
+                .to_string(),
             FlatRow::Match { source_row, .. } if col_ix == 1 => (source_row + 1).to_string(),
             FlatRow::Match {
                 group_ix,
                 source_row,
-            } if col_ix == 2 => self.groups[group_ix]
+            } if col_ix == 2 => self.projection.groups[group_ix]
+                .source
                 .document
                 .line(source_row)
                 .unwrap_or_default(),
@@ -1312,24 +1446,31 @@ mod tests {
     use vclogg_core::LogDocument;
 
     use super::{
-        GlobalSearchGroup, GlobalSearchGroupIcon, GlobalSearchTableDelegate,
+        GlobalSearchGroup, GlobalSearchGroupIcon, GlobalSearchGroupPresentation,
+        GlobalSearchGroupProjection, GlobalSearchGroupSource, GlobalSearchTableDelegate,
         format_group_result_count, global_search_group_header_presentation,
         global_search_group_title,
     };
 
     fn test_group(document: Arc<LogDocument>) -> GlobalSearchGroup {
         GlobalSearchGroup {
-            document_id: 1,
-            title: "test.log".into(),
-            path: PathBuf::from("test.log"),
-            document,
-            rows: [0].into_iter().collect(),
-            matched_rows: [0].into_iter().collect(),
-            marked_rows: Arc::new(BTreeSet::new()),
-            truncated: false,
-            failure: None,
-            collapsed: false,
-            color_rules: Arc::default(),
+            source: GlobalSearchGroupSource {
+                document_id: 1,
+                title: "test.log".into(),
+                path: PathBuf::from("test.log"),
+                document,
+            },
+            projection: GlobalSearchGroupProjection {
+                rows: [0].into_iter().collect(),
+                matched_rows: [0].into_iter().collect(),
+                marked_rows: Arc::new(BTreeSet::new()),
+                truncated: false,
+                failure: None,
+                collapsed: false,
+            },
+            presentation: GlobalSearchGroupPresentation {
+                color_rules: Arc::default(),
+            },
         }
     }
 
@@ -1340,17 +1481,17 @@ mod tests {
         let group = test_group(document.clone());
         delegate.set_groups(vec![group.clone()], None);
         let initial_revision = delegate.content_revision();
-        delegate.line_cache.line((1, 0), |_| {
+        delegate.visible_lines.line((1, 0), |_| {
             Some(vclogg_core::LinePreview::new("cached global line", false))
         });
 
         let mut changed_presentation = group.clone();
-        changed_presentation.marked_rows = Arc::new(BTreeSet::from([0]));
+        changed_presentation.projection.marked_rows = Arc::new(BTreeSet::from([0]));
         delegate.set_groups(vec![changed_presentation], None);
         assert_eq!(delegate.content_revision(), initial_revision);
 
         let reused = delegate
-            .line_cache
+            .visible_lines
             .line((1, 0), |_| {
                 Some(vclogg_core::LinePreview::new("reloaded global line", false))
             })
@@ -1361,7 +1502,7 @@ mod tests {
         delegate.set_groups(vec![replacement], None);
         assert!(delegate.content_revision() > initial_revision);
         let reloaded = delegate
-            .line_cache
+            .visible_lines
             .line((1, 0), |_| {
                 Some(vclogg_core::LinePreview::new("reloaded global line", false))
             })
