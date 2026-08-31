@@ -892,6 +892,16 @@ impl LogTableDelegate {
     }
 
     pub fn set_row_projection(&mut self, source_rows: CompressedRows) {
+        self.interaction
+            .row_selection
+            .borrow_mut()
+            .end_pointer_selection();
+        if matches!(
+            &self.source.row_projection,
+            LogRowProjection::SourceRows(current) if current == &source_rows
+        ) {
+            return;
+        }
         let (selected_rows, active_row, selection_anchor) = self.stable_interaction_rows();
         self.source.row_projection = LogRowProjection::SourceRows(source_rows);
         self.source.visible_lines.invalidate_window();
@@ -1609,6 +1619,35 @@ mod tests {
 
         assert!(delegate.selected_source_rows().is_empty());
         assert_eq!(delegate.active_log_row(), None);
+    }
+
+    #[test]
+    fn equivalent_projection_preserves_the_prepared_virtual_window() {
+        let document = Arc::new(LogDocument::placeholder("stable-result-window.log"));
+        let mut delegate = LogTableDelegate::projected(7, document, [3, 9].into_iter().collect());
+        delegate.source.visible_lines.prepare_visible_rows(
+            0..1,
+            2,
+            |row_ix| [3, 9].get(row_ix).copied(),
+            |source_row, _| Some(LinePreview::new(format!("line {source_row}"), false)),
+        );
+        delegate
+            .interaction
+            .row_bounds
+            .borrow_mut()
+            .insert(0, Bounds::default());
+
+        delegate.set_row_projection([3, 9].into_iter().collect());
+
+        assert!(delegate.interaction.row_bounds.borrow().contains_key(&0));
+        let reused = delegate
+            .source
+            .visible_lines
+            .line(3, |_| {
+                panic!("an equivalent projection must keep visible rows cached")
+            })
+            .expect("the prepared row should remain cached");
+        assert_eq!(reused.source().as_ref(), "line 3");
     }
 
     #[test]
