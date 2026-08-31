@@ -14602,10 +14602,8 @@ impl Workspace {
                     .when(committed_results_visible, |controls| {
                         controls.child(
                             h_flex()
-                                .gap_1()
                                 .flex_shrink_0()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(Icon::new(IconName::Check).xsmall())
                                 .child(
                                     h_flex()
                                         .min_w(px(68.))
