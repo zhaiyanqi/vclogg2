@@ -1,64 +1,143 @@
 # 交付说明
 
-## 可直接启动的开发环境
+VCLogg2 在 Windows、macOS 与 Linux 上提供同一套产品能力和更新协议。三平台使用同一份 `Cargo.lock`，分别由对应原生 runner 构建；平台差异只存在于安装格式、系统注册方式、代码签名和运行库。
 
-在仓库根目录执行：
+## 开发环境
+
+Windows 在仓库根目录执行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/run-debug.ps1
 ```
 
-脚本使用锁定的 `Cargo.lock` 启动 `vclogg2`。首次执行需要 GitHub 网络访问来解析 GPUI 与 gpui-component；后续可复用 Cargo 缓存。
+macOS/Linux 可先构建再启动 Debug 二进制：
 
-## Windows Release 产物
+```bash
+./scripts/build-debug.sh
+./target/debug/vclogg2
+```
 
-更新打包不需要签名密钥。在仓库根目录执行：
+首次执行需要网络访问来解析 GPUI 与 gpui-component；后续可复用 Cargo 缓存。平台原生依赖见仓库 `README.md` 的“从源码构建”章节。
+
+## 三平台 Release 产物
+
+### Windows x86_64
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 ```
 
-脚本先完成锁定依赖的 Release 构建，再在 `dist/` 生成：
+输出位于 `dist/windows-x86_64/`：
 
-- `vclogg2-<version>-win-x64/`：可直接运行的便携目录；
-- `vclogg2-<version>-win-x64.zip`：分发压缩包；
-- `vclogg2-<version>-win-x64-symbols.zip`：仅供崩溃分析留存的匹配 PDB，不向用户分发；
-- `latest.json`：版本、架构、文件大小和整包 SHA-256；
-- `vclogg2-<version>-win-x64.blockmap.json`：1 MiB 分块 SHA-256 清单，供客户端下载时逐块校验。
+- `vclogg2-<version>-windows-x86_64/`：便携目录，包含程序、安装与更新辅助、README 和许可证；
+- `vclogg2-<version>-windows-x86_64.zip`：用户分发包；
+- `vclogg2-<version>-windows-x86_64-symbols.zip`：开发侧崩溃分析 PDB；
+- `vclogg2-<version>-windows-x86_64.blockmap.json` 与 `latest.json`：更新校验和版本清单。
 
-便携目录包含 `vclogg2.exe`、安装辅助、README 和 Apache 2.0 许可证。PDB 使用最小行号调试信息生成并独立压缩；发布侧应按版本保留符号包，但 `publish-update.ps1` 不会把它复制到用户更新目录。安装新版时，安装脚本会清理旧版本曾安装的 `vclogg2.pdb`，避免过期符号继续占用空间或与新版 EXE 错配。应用日志使用有界内存缓冲，不会自行创建长期日志文件；需要诊断材料时由用户在“设置 → 高级”中显式导出。
+安装到当前用户目录并注册开始菜单及“打开方式”候选：
 
-把更新产物发布到服务端静态目录时执行：
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Install-VCLogg2.ps1 -Launch
+```
+
+默认目标为 `%LOCALAPPDATA%\Programs\VCLogg2`。安装脚本注册 `.log`、`.txt`、`.out`、`.trace`、`.csv` 和 `.json`，但不会写入 `UserChoice` 或替用户更改默认应用。
+
+### macOS aarch64
+
+```bash
+./scripts/package-release-macos.sh
+```
+
+输出位于 `dist/macos-aarch64/`：
+
+- `vclogg2-<version>-macos-aarch64/VCLogg2.app`：包含文档类型声明的原生应用包；
+- `vclogg2-<version>-macos-aarch64.zip`：用户分发包，包含当前用户安装与更新辅助；
+- 同名 `.blockmap.json` 与 `latest.json`：更新校验和版本清单。
+
+解压后执行：
+
+```bash
+./Install-VCLogg2-macos.sh --launch
+```
+
+默认目标为 `~/Applications/VCLogg2.app`，安装后通过 Launch Services 注册文件打开能力。Actions 产物只使用临时签名，没有 Apple Developer ID 签名和公证；正式对外分发应在打包后增加 Developer ID 签名、公证与 stapling。
+
+### Linux x86_64
+
+```bash
+./scripts/package-release-linux.sh
+```
+
+输出位于 `dist/linux-x86_64/`：
+
+- `vclogg2-<version>-linux-x86_64/`：便携目录，包含程序、图标、安装与更新辅助、README 和许可证；
+- `vclogg2-<version>-linux-x86_64.tar.gz`：用户分发包；
+- 同名 `.blockmap.json` 与 `latest.json`：更新校验和版本清单。
+
+解压后执行：
+
+```bash
+./Install-VCLogg2-linux.sh --launch
+```
+
+默认目标为 `~/.local/lib/vclogg2`，同时创建 `~/.local/bin/vclogg2` 入口以及用户级 `.desktop`、图标和 MIME 注册。运行环境需要兼容的 glibc、Fontconfig、Vulkan 与 Wayland/X11 库。
+
+## 功能一致性边界
+
+三个发行包均提供：
+
+- 每用户单实例和多原生窗口；Windows 使用命名管道，macOS/Linux 使用权限受限的 Unix domain socket；
+- 终端参数、系统文件关联、Finder/桌面环境打开事件和多文件拖放；
+- 系统废纸篓删除，不做不可恢复的直接删除；
+- 平台强文件身份索引缓存：Windows 使用卷/文件标识与 USN，macOS/Linux 使用设备号、inode 与 ctime；
+- 同一应用内更新清单、1 MiB 分块 SHA-256、正常退出后独立安装及重启；
+- 相同日志查看、搜索、导出、会话、云端过滤器和多窗口行为。
+
+macOS 默认快捷键主修饰键为 `Command`，Windows/Linux 为 `Ctrl`。这是原生交互约定，不是功能裁剪。
+
+## 更新发布
+
+客户端从配置服务器根地址派生平台更新源：
+
+```text
+/updates-vclogg2/windows-x86_64/
+/updates-vclogg2/macos-aarch64/
+/updates-vclogg2/linux-x86_64/
+```
+
+发布任一平台：
+
+```bash
+./scripts/publish-update.py \
+  --source dist/linux-x86_64 \
+  --target /srv/vclogg2/updates-vclogg2/linux-x86_64
+```
+
+脚本验证 `latest.json`、压缩包大小与 SHA-256，先复制版本化压缩包和 blockmap，最后原子替换清单。Windows 还可以使用：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/publish-update.ps1 `
-  -TargetDirectory D:\log-viewer-server\data\updates-vclogg2\win-x64
+  -TargetDirectory D:\log-viewer-server\data\updates-vclogg2\windows-x86_64
 ```
 
-脚本会重新核对压缩包大小和 SHA-256，先复制版本化包与 blockmap，最后替换 `latest.json`。服务端把该目录暴露为配置服务器根地址下的 `/updates-vclogg2/win-x64/`，默认对应 `data/updates-vclogg2/win-x64/`。
+Release 构建会在启动 15 秒后检查一次，也可由用户手动触发。下载过程中即时校验分块与整包 SHA-256；用户确认后，独立助手等待应用完成会话保存与正常退出，再调用对应平台安装脚本并重启。
 
-解压后可直接运行 `vclogg2.exe`。需要固定安装位置和开始菜单入口时，在解压目录执行：
+清单和哈希不提供发布者身份认证。部署环境必须保护更新源并使用 HTTPS；正式公开分发还应对 Windows 二进制进行代码签名，对 macOS 应用进行 Developer ID 签名和公证。
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\Install-VCLogg2.ps1
-```
+## GitHub Actions
 
-默认安装到 `%LOCALAPPDATA%\Programs\VCLogg2`；可通过 `-InstallDirectory` 指定其他目录，通过 `-Launch` 在安装后立即启动。安装脚本还会在 `HKCU` 注册 VCLogg2 的应用能力、ProgID 与六种受支持扩展名的“打开方式”候选，并通知 Windows Shell 刷新关联；它不会写入 `UserChoice` 或自动替换默认应用。安装后可在日志文件“属性 → 打开方式 → 更改”中由用户选择 VCLogg2。
+`.github/workflows/release-build.yml` 包含三个独立 job：
 
-可执行文件支持从终端接收一个或多个绝对/相对路径：
+- Windows Server 2022 x64：`check.ps1` + `package-release.ps1`；
+- macOS 15 ARM64：`check.sh` + `package-release-macos.sh`；
+- Ubuntu 22.04 x86_64：安装 GPUI 原生依赖后执行 `check.sh` + `package-release-linux.sh`。
 
-```powershell
-vclogg2.exe .\service.log D:\logs\worker.trace
-```
+工作流在推送或 PR 指向 `main`、推送 `v*` tag 时触发，也支持手动触发。每个平台上传压缩包、blockmap 与 `latest.json`，保留 14 天。工作流权限为 `contents: read`，不会自行创建 tag、GitHub Release 或修改仓库。
 
-现有实例会接管这些路径并保持参数顺序。
+## 验证脚本
 
-## 验证边界
-
-- `scripts/check.ps1`：工作区格式检查、编译检查和 Clippy；
-- `scripts/build-debug.ps1`：Debug 二进制；
-- `scripts/build-release.ps1`：优化后的 Release 二进制；
-- `scripts/package-release.ps1`：Release 构建加 Windows 便携分发包与更新交接元数据。
-- `scripts/publish-update.ps1`：验证并发布包、分块清单和最后生效的清单。
-
-应用内更新仅在 Release 构建启用：启动 15 秒后对已配置服务器检查一次，也可从工具栏手动触发。客户端直接读取更新清单，下载并校验分块与整包 SHA-256；用户确认安装后，独立助手等待应用完成正常退出和多窗口状态保存，再更新当前目录并重启。清单与哈希不做密钥认证，因此更新源的访问控制与 HTTPS 安全由部署环境负责。
+- `scripts/check.ps1` / `scripts/check.sh`：格式、workspace 全 target 静态检查和 Clippy；
+- `scripts/build-debug.ps1` / `scripts/build-debug.sh`：Debug 二进制；
+- `scripts/build-release.ps1` / `scripts/build-release.sh`：Release 二进制；
+- `scripts/package-release.ps1` / `package-release-macos.sh` / `package-release-linux.sh`：平台 Release 包与更新元数据；
+- `scripts/publish-update.py`：三平台通用发布；`scripts/publish-update.ps1` 是 Windows 专用包装。

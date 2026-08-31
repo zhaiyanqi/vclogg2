@@ -47,18 +47,39 @@ actions!(
 );
 
 pub fn init(cx: &mut App) {
+    let primary = "secondary";
     cx.bind_keys([
-        KeyBinding::new("ctrl-o", OpenFiles, Some(WORKSPACE_SHORTCUT_CONTEXT)),
-        KeyBinding::new("ctrl-shift-n", NewWindow, Some(WORKSPACE_SHORTCUT_CONTEXT)),
-        KeyBinding::new("f5", ReloadActive, Some(WORKSPACE_SHORTCUT_CONTEXT)),
-        KeyBinding::new("ctrl-w", CloseActiveTab, Some(WORKSPACE_SHORTCUT_CONTEXT)),
         KeyBinding::new(
-            "ctrl-shift-c",
+            &format!("{primary}-o"),
+            OpenFiles,
+            Some(WORKSPACE_SHORTCUT_CONTEXT),
+        ),
+        KeyBinding::new(
+            &format!("{primary}-shift-n"),
+            NewWindow,
+            Some(WORKSPACE_SHORTCUT_CONTEXT),
+        ),
+        KeyBinding::new("f5", ReloadActive, Some(WORKSPACE_SHORTCUT_CONTEXT)),
+        KeyBinding::new(
+            &format!("{primary}-w"),
+            CloseActiveTab,
+            Some(WORKSPACE_SHORTCUT_CONTEXT),
+        ),
+        KeyBinding::new(
+            &format!("{primary}-shift-c"),
             CopyCurrentLineWithNumber,
             Some(LOG_TABLE_SHORTCUT_CONTEXT),
         ),
-        KeyBinding::new("ctrl-c", CopyCurrentLine, Some(LOG_TABLE_SHORTCUT_CONTEXT)),
-        KeyBinding::new("ctrl-a", SelectAllRows, Some(LOG_TABLE_SHORTCUT_CONTEXT)),
+        KeyBinding::new(
+            &format!("{primary}-c"),
+            CopyCurrentLine,
+            Some(LOG_TABLE_SHORTCUT_CONTEXT),
+        ),
+        KeyBinding::new(
+            &format!("{primary}-a"),
+            SelectAllRows,
+            Some(LOG_TABLE_SHORTCUT_CONTEXT),
+        ),
         KeyBinding::new(
             "shift-up",
             ExtendSelectionUp,
@@ -89,24 +110,48 @@ pub fn init(cx: &mut App) {
             ExtendSelectionLast,
             Some(LOG_TABLE_SHORTCUT_CONTEXT),
         ),
-        KeyBinding::new("ctrl-g", GoToLine, Some(WORKSPACE_SHORTCUT_CONTEXT)),
-        KeyBinding::new("m", ToggleMarkedRow, Some(LOG_TABLE_SHORTCUT_CONTEXT)),
-        KeyBinding::new("ctrl-d", CycleColorLabel, Some(WORKSPACE_SHORTCUT_CONTEXT)),
-        KeyBinding::new("ctrl-f", FocusSearch, Some(WORKSPACE_SHORTCUT_CONTEXT)),
         KeyBinding::new(
-            "ctrl-shift-f",
+            &format!("{primary}-g"),
+            GoToLine,
+            Some(WORKSPACE_SHORTCUT_CONTEXT),
+        ),
+        KeyBinding::new("m", ToggleMarkedRow, Some(LOG_TABLE_SHORTCUT_CONTEXT)),
+        KeyBinding::new(
+            &format!("{primary}-d"),
+            CycleColorLabel,
+            Some(WORKSPACE_SHORTCUT_CONTEXT),
+        ),
+        KeyBinding::new(
+            &format!("{primary}-f"),
+            FocusSearch,
+            Some(WORKSPACE_SHORTCUT_CONTEXT),
+        ),
+        KeyBinding::new(
+            &format!("{primary}-shift-f"),
             OpenQuickFind,
             Some(WORKSPACE_SHORTCUT_CONTEXT),
         ),
-        KeyBinding::new("ctrl-,", OpenSettings, Some(WORKSPACE_SHORTCUT_CONTEXT)),
+        KeyBinding::new(
+            &format!("{primary}-,"),
+            OpenSettings,
+            Some(WORKSPACE_SHORTCUT_CONTEXT),
+        ),
         KeyBinding::new(
             "alt-c",
             ToggleCaseSensitive,
             Some(WORKSPACE_SHORTCUT_CONTEXT),
         ),
         KeyBinding::new("w", ToggleWordWrap, Some(WORKSPACE_SHORTCUT_CONTEXT)),
-        KeyBinding::new("ctrl-home", JumpToStart, Some(WORKSPACE_SHORTCUT_CONTEXT)),
-        KeyBinding::new("ctrl-end", JumpToEnd, Some(WORKSPACE_SHORTCUT_CONTEXT)),
+        KeyBinding::new(
+            &format!("{primary}-home"),
+            JumpToStart,
+            Some(WORKSPACE_SHORTCUT_CONTEXT),
+        ),
+        KeyBinding::new(
+            &format!("{primary}-end"),
+            JumpToEnd,
+            Some(WORKSPACE_SHORTCUT_CONTEXT),
+        ),
         KeyBinding::new("f11", ToggleFullscreen, Some(WORKSPACE_SHORTCUT_CONTEXT)),
     ]);
 }
@@ -125,7 +170,7 @@ pub fn shortcut_to_key_binding(shortcut: &str) -> Option<String> {
             "ctrl" | "control" => "ctrl".to_string(),
             "alt" => "alt".to_string(),
             "shift" => "shift".to_string(),
-            "meta" | "cmd" | "command" => "platform".to_string(),
+            "meta" | "cmd" | "command" => "cmd".to_string(),
             _ => return None,
         });
     }

@@ -122,8 +122,8 @@ fn application_icon() -> Arc<Image> {
 
     ICON.get_or_init(|| {
         Arc::new(Image::from_bytes(
-            ImageFormat::Svg,
-            include_bytes!("../assets/icons/document-text-20-regular.svg").to_vec(),
+            ImageFormat::Png,
+            include_bytes!("../resources/windows/vclogg2.png").to_vec(),
         ))
     })
     .clone()
@@ -1635,7 +1635,7 @@ impl SettingsDialog {
                 DescriptionList::new()
                     .small()
                     .columns(1)
-                    .item(crate::tr!("语言与工具链", "Language & toolchain"), "Rust 2024 Edition · Cargo · MSVC", 1)
+                    .item(crate::tr!("语言与工具链", "Language & toolchain"), "Rust 2024 Edition · Cargo · native toolchain", 1)
                     .item(crate::tr!("界面", "Interface"), "GPUI · gpui-component · gpui-base", 1)
                     .item(crate::tr!("数据与检索", "Data & search"), crate::tr!("SQLite/WAL · 内存映射 · 正则与多模式匹配", "SQLite/WAL · memory mapping · regex and multi-pattern matching"), 1)
                     .item(
@@ -1643,7 +1643,7 @@ impl SettingsDialog {
                         crate::tr!("HTTP/HTTPS · rustls · SHA-256 · 语义化版本", "HTTP/HTTPS · rustls · SHA-256 · semantic versioning"),
                         1,
                     )
-                    .item(crate::tr!("平台集成", "Platform integration"), crate::tr!("Windows 资源、凭据库、文件打开关联与原生窗口", "Windows resources, credential storage, file-opening associations, and native windows"), 1),
+                    .item(crate::tr!("平台集成", "Platform integration"), crate::tr!("系统回收站、凭据库、文件打开关联、单实例与原生窗口", "System trash, credential storage, file-opening associations, single-instance routing, and native windows"), 1),
                 cx,
             ))
             .child(about_section(

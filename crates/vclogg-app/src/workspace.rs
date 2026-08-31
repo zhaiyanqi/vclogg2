@@ -7870,7 +7870,7 @@ impl Workspace {
         let path = tab.document.path().to_path_buf();
         let description = crate::tr_args!(
             "文件将被移入系统回收站，对应标签页也会关闭。\n\n{name}\n{}\n\n如果需要，可以稍后从系统回收站恢复。",
-            "The file will be moved to the system Recycle Bin and its tab will close.\n\n{name}\n{}\n\nYou can restore it later from the Recycle Bin if needed.",
+            "The file will be moved to the system trash and its tab will close.\n\n{name}\n{}\n\nYou can restore it later from the trash if needed.",
             path.display(),
         );
         let workspace = cx.entity();
@@ -7937,26 +7937,35 @@ impl Workspace {
                     .await;
                 _ = this.update_in(cx, |this, window, cx| {
                     match result {
-                        Ok((moved, collections)) => {
-                            if let Some((recent, pinned, last_workspace)) = collections {
-                                this.recent_files = recent;
-                                this.pinned_files = pinned;
-                                this.last_workspace_files = last_workspace;
-                            }
-                            window.push_notification(
-                                if moved {
-                                    crate::tr_args!("已关闭并移入回收站：{name}", "Closed and moved to the Recycle Bin: {name}")
-                                } else {
-                                    crate::tr_args!("已关闭标签；文件原本已不存在：{name}", "Tab closed; the file no longer existed: {name}")
-                                },
-                                cx,
-                            );
+                    Ok((moved, collections)) => {
+                        if let Some((recent, pinned, last_workspace)) = collections {
+                            this.recent_files = recent;
+                            this.pinned_files = pinned;
+                            this.last_workspace_files = last_workspace;
                         }
-                        Err(error) => window.push_notification(
-                            crate::tr_args!("标签已关闭，但文件未能移入回收站：{error}", "The tab closed, but the file couldn’t be moved to the Recycle Bin: {error}"),
+                        window.push_notification(
+                            if moved {
+                                crate::tr_args!(
+                                    "已关闭并移入回收站：{name}",
+                                    "Closed and moved to the trash: {name}"
+                                )
+                            } else {
+                                crate::tr_args!(
+                                    "已关闭标签；文件原本已不存在：{name}",
+                                    "Tab closed; the file no longer existed: {name}"
+                                )
+                            },
                             cx,
-                        ),
+                        );
                     }
+                    Err(error) => window.push_notification(
+                        crate::tr_args!(
+                            "标签已关闭，但文件未能移入回收站：{error}",
+                            "The tab closed, but the file couldn’t be moved to the trash: {error}"
+                        ),
+                        cx,
+                    ),
+                }
                     cx.notify();
                 });
             }));
@@ -13016,6 +13025,16 @@ impl Workspace {
 
     fn render_file_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let _performance_scope = crate::ui_performance::scope("Workspace::render_file_toolbar");
+        let open_files_tooltip = if cfg!(target_os = "macos") {
+            crate::tr!("打开日志…（Cmd+O）", "Open log… (Cmd+O)")
+        } else {
+            crate::tr!("打开日志…（Ctrl+O）", "Open log… (Ctrl+O)")
+        };
+        let jump_to_end_tooltip = if cfg!(target_os = "macos") {
+            crate::tr!("跳到文件末尾（Cmd+End）", "Jump to end of file (Cmd+End)")
+        } else {
+            crate::tr!("跳到文件末尾（Ctrl+End）", "Jump to end of file (Ctrl+End)")
+        };
         let workspace = cx.entity();
         let has_document = self.active_document().is_some();
         let active_file_is_pinned = self.active_file_is_pinned();
@@ -13083,7 +13102,7 @@ impl Workspace {
                     .child(toolbar_icon_button(
                         Button::new("open-files")
                             .icon(IconName::FolderOpen)
-                            .tooltip(crate::tr!("打开日志…（Ctrl+O）", "Open log… (Ctrl+O)"))
+                            .tooltip(open_files_tooltip)
                             .loading(matches!(self.activity, Activity::Opening))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.open_files(&OpenFiles, window, cx);
@@ -13121,10 +13140,7 @@ impl Workspace {
                     .child(toolbar_icon_button(
                         Button::new("jump-to-end")
                             .icon(IconName::ArrowDown)
-                            .tooltip(crate::tr!(
-                                "跳到文件末尾（Ctrl+End）",
-                                "Jump to end of file (Ctrl+End)"
-                            ))
+                            .tooltip(jump_to_end_tooltip)
                             .disabled(!has_document)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.jump_to_end(&JumpToEnd, window, cx);

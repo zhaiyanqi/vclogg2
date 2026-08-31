@@ -24,6 +24,18 @@ const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_BLOCKMAP_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
+#[cfg(target_os = "windows")]
+const UPDATE_PLATFORM: &str = "windows";
+#[cfg(target_os = "macos")]
+const UPDATE_PLATFORM: &str = "macos";
+#[cfg(target_os = "linux")]
+const UPDATE_PLATFORM: &str = "linux";
+
+#[cfg(target_arch = "x86_64")]
+const UPDATE_ARCHITECTURE: &str = "x86_64";
+#[cfg(target_arch = "aarch64")]
+const UPDATE_ARCHITECTURE: &str = "aarch64";
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateManifest {
@@ -209,6 +221,7 @@ impl UpdateClient {
     }
 }
 
+#[cfg(windows)]
 pub fn launch_installer(update: &DownloadedUpdate) -> anyhow::Result<()> {
     let current_executable = std::env::current_exe()?;
     let install_directory = current_executable
@@ -270,6 +283,81 @@ pub fn launch_installer(update: &DownloadedUpdate) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+pub fn launch_installer(update: &DownloadedUpdate) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let current_executable = std::env::current_exe()?;
+    let install_directory = current_install_directory(&current_executable)?;
+    let helper_path = update
+        .archive_path
+        .parent()
+        .ok_or_else(|| {
+            anyhow::anyhow!(crate::tr!(
+                "无法确定更新暂存目录",
+                "Couldn’t determine the update staging directory"
+            ))
+        })?
+        .join("Apply-VCLogg2Update.sh");
+    fs::write(
+        &helper_path,
+        include_str!("../../../scripts/Apply-VCLogg2Update.sh"),
+    )?;
+    fs::set_permissions(&helper_path, fs::Permissions::from_mode(0o700))?;
+
+    let log_path = helper_path.with_extension("log");
+    let log = File::create(log_path)?;
+    let error_log = log.try_clone()?;
+    Command::new("/bin/sh")
+        .arg(&helper_path)
+        .arg("--archive")
+        .arg(&update.archive_path)
+        .arg("--install-directory")
+        .arg(install_directory)
+        .arg("--wait-pid")
+        .arg(std::process::id().to_string())
+        .arg("--platform")
+        .arg(UPDATE_PLATFORM)
+        .arg("--launch")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(error_log))
+        .spawn()?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn current_install_directory(current_executable: &Path) -> anyhow::Result<PathBuf> {
+    if let Some(app_bundle) = current_executable
+        .ancestors()
+        .find(|path| path.extension().is_some_and(|extension| extension == "app"))
+    {
+        return Ok(app_bundle.to_path_buf());
+    }
+    current_executable
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            anyhow::anyhow!(crate::tr!(
+                "无法确定当前安装目录",
+                "Couldn’t determine the current installation directory"
+            ))
+        })
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn current_install_directory(current_executable: &Path) -> anyhow::Result<PathBuf> {
+    current_executable
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            anyhow::anyhow!(crate::tr!(
+                "无法确定当前安装目录",
+                "Couldn’t determine the current installation directory"
+            ))
+        })
+}
+
 #[cfg(test)]
 mod performance_tests {
     use std::{hint::black_box, time::Instant};
@@ -307,27 +395,30 @@ fn build_feed_url(server_url: &str) -> anyhow::Result<Url> {
     url.set_query(None);
     url.set_fragment(None);
     let base_path = url.path().trim_end_matches('/');
-    url.set_path(&format!("{base_path}/updates-vclogg2/win-x64/"));
+    url.set_path(&format!(
+        "{base_path}/updates-vclogg2/{UPDATE_PLATFORM}-{UPDATE_ARCHITECTURE}/"
+    ));
     Ok(url)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::build_feed_url;
+    use super::{UPDATE_ARCHITECTURE, UPDATE_PLATFORM, build_feed_url};
 
     #[test]
     fn update_feed_uses_the_vclogg2_product_path() {
+        let platform_path = format!("{UPDATE_PLATFORM}-{UPDATE_ARCHITECTURE}");
         assert_eq!(
             build_feed_url("http://127.0.0.1:8787")
                 .expect("root server URL should be valid")
                 .as_str(),
-            "http://127.0.0.1:8787/updates-vclogg2/win-x64/"
+            format!("http://127.0.0.1:8787/updates-vclogg2/{platform_path}/")
         );
         assert_eq!(
             build_feed_url("https://example.test/services/log-viewer/?ignored=1#fragment")
                 .expect("nested server URL should be valid")
                 .as_str(),
-            "https://example.test/services/log-viewer/updates-vclogg2/win-x64/"
+            format!("https://example.test/services/log-viewer/updates-vclogg2/{platform_path}/")
         );
     }
 
@@ -343,8 +434,8 @@ mod tests {
 fn validate_manifest(manifest: &UpdateManifest) -> anyhow::Result<()> {
     if manifest.schema_version != UPDATE_SCHEMA
         || manifest.product != "VCLogg2"
-        || manifest.platform != "windows"
-        || manifest.architecture != "x86_64"
+        || manifest.platform != UPDATE_PLATFORM
+        || manifest.architecture != UPDATE_ARCHITECTURE
     {
         anyhow::bail!(crate::tr!(
             "更新清单与当前应用不兼容",

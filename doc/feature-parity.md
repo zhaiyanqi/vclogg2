@@ -1,6 +1,6 @@
 # VCLogg2 功能与验收记录
 
-最后核对：2026-08-26
+最后核对：2026-08-31
 
 ## 文档范围
 
@@ -12,20 +12,21 @@
 | 能力域 | 当前状态 | 主要实现 / 验收证据 |
 | --- | --- | --- |
 | 文件打开、预览、索引、编码、重新加载与追加跟随 | 已实现 | `crates/vclogg-core/src/document.rs`、`crates/vclogg-app/src/workspace.rs`；安全预览与完整快照原子换入，强身份缓存失败时回退重建 |
-| 单实例、多标签、多窗口、拖放、标签复制/移动与窗口生命周期 | 已实现 | `crates/vclogg-app/src/single_instance.rs`、`workspace.rs`；Windows 启动请求转交，窗口级 `Workspace` / `Root`，稳定文档 ID，最后窗口关闭后退出进程 |
+| 单实例、多标签、多窗口、拖放、标签复制/移动与窗口生命周期 | 已实现 | `crates/vclogg-app/src/single_instance.rs`、`workspace.rs`；Windows 命名管道及 macOS/Linux Unix socket 启动请求转交，窗口级 `Workspace` / `Root`，稳定文档 ID，最后窗口关闭后退出进程 |
 | 正文与搜索结果浏览、换行、导航、多选、文字选择、复制和行菜单 | 已实现 | `crates/vclogg-app/src/log_table.rs`、`global_search_table.rs`、`selectable_log_text.rs`；固定行 DataTable 与可变行高虚拟列表共享领域选择语义 |
 | 当前文件/全局搜索、正则、多关键词、补全、页内查找、取消和进度 | 已实现 | `crates/vclogg-core/src/search.rs`、`search_autocomplete.rs`、`workspace.rs`；迟到轮次拒绝、全局结果整轮原子安装 |
 | 标记、颜色标签、日志级别、匹配高亮与三种结果模式 | 已实现 | `crates/vclogg-app/src/color_labels.rs` 与三个表格 delegate；按文档 ID + 源行同步正文、当前结果和全局结果 |
 | 会话、最近/收藏/上一次文件、历史清理与设置持久化 | 已实现 | `crates/vclogg-app/src/state_store.rs`、`history_dialog.rs`；SQLite/WAL、revision 合并、退出事务化 flush |
 | 搜索结果导出、时间戳合并与临时结果回收站 | 已实现 | `crates/vclogg-app/src/result_export.rs`、`trash.rs`；流式输出、同目录原子替换、临时文件隔离 |
 | 预定义过滤器与云端过滤器 | 已实现 | `crates/vclogg-app/src/predefined_filters*.rs`、`cloud_filters.rs`、`settings_dialog.rs`；设置页网络配置与 Cookie 连接测试、本地导入导出、无客户端密钥注册、冲突选择和离线只读目录 |
-| Windows 文件集成与更新交付 | 主路径已实现 | 文件关联、打开目录命令、便携包、哈希清单和安装助手已落地；实际更新服务仍需端到端验收 |
+| 三平台文件集成与更新交付 | 主路径已实现 | Windows“打开方式”、macOS 文档类型、Linux desktop/MIME、系统废纸篓、平台包、哈希清单和安装助手均已落地；实际更新服务仍需逐平台端到端验收 |
 
 ## 本轮交付
 
 ### 单实例与外部打开
 
-- Windows 只保留一个 VCLogg2 进程，后续启动通过用户级命名管道把请求交给已有进程。
+- Windows 使用用户级命名管道，macOS/Linux 使用权限受限的每用户 Unix domain socket；三个平台都只保留一个 VCLogg2 进程，并把后续启动请求交给已有进程。
+- Finder、桌面环境或文件关联传入的 URL/路径会复用同一外部打开队列；macOS Dock 重新打开事件在没有可见窗口时创建新窗口。
 - 再次启动不带文件参数时，已有进程创建一个新的原生窗口；带文件参数时，按最近激活顺序选择目标窗口并激活它。
 - 目标窗口正在打开或重载文件时，外部路径在该窗口排队，等当前任务结束后继续普通打开链路。
 
@@ -51,21 +52,25 @@
 
 ## 验收清单
 
-自动验收：
+在当前平台执行自动验收：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\check.ps1
+```
+
+```bash
+./scripts/check.sh
 ```
 
 该脚本依次验证格式、整个 workspace 的所有 target 静态检查，以及 `clippy -D warnings`。
 
 单实例与退出生命周期手工验收（项目规则禁止自动启动窗口，本轮未代替用户执行）：
 
-1. 运行 Debug 或 Release 产物，确认 Windows 通知区域没有 VCLogg2 图标。
+1. 运行 Debug 或 Release 产物，确认系统通知区域没有 VCLogg2 图标。
 2. VCLogg2 运行时再次不带参数启动，确认只有一个进程且创建第二个窗口。
 3. 依次激活两个窗口，通过文件关联或命令行外部打开日志，确认文件进入最后激活的窗口；连续外部打开时确认路径不会丢失。
 4. 关闭其中一个窗口，确认另一个窗口和进程继续运行。
-5. 关闭最后一个 VCLogg2 窗口，确认进程结束且任务管理器中没有后台驻留实例。
+5. 关闭最后一个 VCLogg2 窗口，确认进程结束且系统进程列表中没有后台驻留实例。
 6. 重新启动，检查最近文件、收藏与文件会话仍可恢复。
 
 ## 历史提交记录

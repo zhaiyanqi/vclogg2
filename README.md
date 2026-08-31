@@ -1,8 +1,8 @@
 # VCLogg2
 
-使用 Rust 与 GPUI Component 构建的 Windows 原生日志查看器，专注于大文件浏览、实时跟随、多范围检索、筛选与结果导出。
+使用 Rust 与 GPUI Component 构建的桌面日志查看器，专注于大文件浏览、实时跟随、多范围检索、筛选与结果导出。
 
-> 当前目标平台为 Windows 10/11 x64。功能实现状态以 [`doc/migration-status.md`](doc/migration-status.md) 为准，未列为“已完成”的能力不视为已经交付。
+> Windows 10/11 x64、macOS 15 ARM64 与 Ubuntu 22.04 x86_64 是同等支持的桌面平台。三者共享日志浏览、单实例多窗口、系统废纸篓、文件打开集成和应用内更新能力；平台差异仅限原生安装格式、快捷键修饰键与系统运行库。功能实现状态以 [`doc/migration-status.md`](doc/migration-status.md) 为准。
 
 [功能亮点](#功能亮点) · [快速开始](#快速开始) · [搜索与筛选](#搜索与筛选) · [快捷键](#常用快捷键) · [从源码构建](#从源码构建) · [项目文档](#项目文档) · [参与贡献](#参与贡献) · [鸣谢](#鸣谢)
 
@@ -11,7 +11,7 @@
 - **面向大文件**：后台建立行起点索引，通过只读文件映射按需解码可见行，并使用虚拟化表格控制内存占用。
 - **先预览、后完整加载**：打开文件时先提供有界安全预览，再原子换入完整索引；支持持久索引缓存、文件重新加载和纯追加场景的增量尾部索引。
 - **灵活检索**：支持多关键词、大小写匹配、字节正则、页内查找，以及当前标签、多标签和目录三种搜索范围。
-- **原生工作区**：支持多标签、多窗口、外部文件拖放、跨窗口标签移动或复制，以及 Windows 单进程启动请求接管。
+- **原生工作区**：支持多标签、多窗口、外部文件拖放、跨窗口标签移动或复制，以及三平台单进程启动请求接管。
 - **可恢复会话**：使用 SQLite/WAL 保存最近文件、收藏、查询、标记、视口、标签顺序和呈现偏好，退出时事务化写入状态。
 - **面向分析的交互**：支持行标记、颜色标签、日志级别着色、多选与文字选择、结果分组、流式导出和按时间戳合并结果。
 - **编码与二进制查看**：自动检测 UTF-8、UTF-16、常见传统编码和二进制文件；显示、搜索、高亮与导出共享同一解码快照。
@@ -19,9 +19,9 @@
 
 ## 快速开始
 
-### 使用 Windows 发布包
+### Windows
 
-获取 `vclogg2-<version>-win-x64.zip` 后解压，可直接运行：
+获取 `vclogg2-<version>-windows-x86_64.zip` 后解压，可直接运行：
 
 ```powershell
 .\vclogg2.exe
@@ -35,19 +35,41 @@ powershell -ExecutionPolicy Bypass -File .\Install-VCLogg2.ps1
 
 默认安装目录为 `%LOCALAPPDATA%\Programs\VCLogg2`。安装脚本只注册 `.log`、`.txt`、`.out`、`.trace`、`.csv` 和 `.json` 的候选应用，不会擅自修改系统默认应用。
 
+### macOS
+
+获取 `vclogg2-<version>-macos-aarch64.zip` 后解压，在终端执行安装脚本，或直接打开包内的 `VCLogg2.app`：
+
+```bash
+./Install-VCLogg2-macos.sh --launch
+```
+
+默认安装到 `~/Applications/VCLogg2.app` 并注册支持的文档类型。Actions 产物使用临时签名，未使用 Apple Developer ID 签名或公证，因此首次打开时 macOS 可能要求在系统安全设置中确认。
+
+### Linux
+
+Linux x86_64 包名为 `vclogg2-<version>-linux-x86_64.tar.gz`：
+
+```bash
+tar -xzf vclogg2-<version>-linux-x86_64.tar.gz
+cd vclogg2-<version>-linux-x86_64
+./Install-VCLogg2-linux.sh --launch
+```
+
+默认安装到 `~/.local/lib/vclogg2`，创建 `~/.local/bin/vclogg2` 入口并注册桌面应用与受支持 MIME 类型。Linux 包面向 Ubuntu 22.04 或具有兼容 glibc、Fontconfig、Vulkan、Wayland/X11 运行库的发行版。
+
 ### 从命令行打开日志
 
 可向可执行文件传入一个或多个绝对或相对路径：
 
-```powershell
-vclogg2.exe .\service.log D:\logs\worker.trace
+```text
+vclogg2 <service.log> <worker.trace>
 ```
 
 如果 VCLogg2 已在运行，路径会按参数顺序交给现有进程，并在最近激活的窗口中打开。
 
 ### 基本使用流程
 
-1. 使用 `Ctrl+O`、命令行参数或文件拖放打开一个或多个日志。
+1. 使用 Windows/Linux 的 `Ctrl+O`、macOS 的 `Command+O`、命令行参数或文件拖放打开一个或多个日志。
 2. 在搜索框输入关键词并按 `Enter`，结果会显示在独立结果区域中。
 3. 通过搜索范围菜单切换当前标签、多标签或目录搜索。
 4. 使用结果模式组合匹配行与标记行，并按需复制、标记或导出当前结果。
@@ -80,41 +102,51 @@ vclogg2.exe .\service.log D:\logs\worker.trace
 
 | 快捷键 | 操作 |
 | --- | --- |
-| `Ctrl+O` | 打开一个或多个日志文件 |
-| `Ctrl+Shift+N` | 创建新窗口 |
-| `Ctrl+W` | 关闭当前标签 |
-| `Ctrl+F` | 聚焦主搜索框 |
-| `Ctrl+Shift+F` | 打开当前区域的页内查找 |
-| `Ctrl+G` | 转到指定源行 |
-| `Ctrl+Home` / `Ctrl+End` | 跳到文件开头 / 末尾 |
+| `Ctrl+O` / `Command+O` | 打开一个或多个日志文件 |
+| `Ctrl+Shift+N` / `Command+Shift+N` | 创建新窗口 |
+| `Ctrl+W` / `Command+W` | 关闭当前标签 |
+| `Ctrl+F` / `Command+F` | 聚焦主搜索框 |
+| `Ctrl+Shift+F` / `Command+Shift+F` | 打开当前区域的页内查找 |
+| `Ctrl+G` / `Command+G` | 转到指定源行 |
+| `Ctrl+Home` / `Ctrl+End`、`Command+Home` / `Command+End` | 跳到文件开头 / 末尾 |
 | `F5` | 重新加载当前文件 |
 | `Alt+C` | 切换主搜索的大小写匹配 |
-| `Ctrl+D` | 为当前文字或所选行轮换颜色标签 |
-| `Ctrl+A` | 选择当前日志区域的全部行 |
-| `Ctrl+C` | 复制文字选区，或复制所选整行 |
-| `Ctrl+Shift+C` | 复制所选整行并包含源行号 |
+| `Ctrl+D` / `Command+D` | 为当前文字或所选行轮换颜色标签 |
+| `Ctrl+A` / `Command+A` | 选择当前日志区域的全部行 |
+| `Ctrl+C` / `Command+C` | 复制文字选区，或复制所选整行 |
+| `Ctrl+Shift+C` / `Command+Shift+C` | 复制所选整行并包含源行号 |
 | `M` | 标记或取消标记当前选择 |
 | `W` | 切换当前标签的自动换行 |
-| `Ctrl+,` | 打开设置 |
+| `Ctrl+,` / `Command+,` | 打开设置 |
 | `F11` | 切换全屏显示 |
 
-其中九项常用操作可在设置中重新绑定；`F5`、`Ctrl+G`、`Ctrl+Shift+C` 和 `F11` 等固定命令不可配置。
+其中九项常用操作可在设置中重新绑定；`F5`、转到行、带行号复制和 `F11` 等固定命令不可配置。macOS 默认使用 `Command`，Windows/Linux 默认使用 `Ctrl`。
 
 ## 从源码构建
 
 ### 环境要求
 
-- Windows 10/11 x64
-- Rust stable，使用 MSVC 工具链
-- Visual Studio 2022 Build Tools，包含“使用 C++ 的桌面开发”和 Windows SDK
-- Git；首次解析 GPUI 与 gpui-component 依赖时需要访问 GitHub
+- 所有平台：Rust stable、Git；首次解析 GPUI 与 gpui-component 依赖时需要访问 GitHub
+- Windows：MSVC Rust 工具链，以及包含“使用 C++ 的桌面开发”和 Windows SDK 的 Visual Studio 2022 Build Tools
+- macOS：Xcode 和 Xcode Command Line Tools
+- Linux：Clang、CMake、Fontconfig、Vulkan、Wayland、X11/XCB 与 xkbcommon 开发库；GitHub Actions 使用 Ubuntu 22.04
 
 检查本机环境：
 
-```powershell
+```text
 rustc --version
 cargo --version
 git --version
+```
+
+Ubuntu/Debian 可安装与 Actions 一致的 GPUI 构建依赖：
+
+```bash
+sudo apt-get update
+sudo apt-get install --yes --no-install-recommends \
+  build-essential clang cmake libfontconfig-dev libglib2.0-dev libssl-dev \
+  libvulkan1 libwayland-dev libx11-dev libx11-xcb-dev libxcb1-dev \
+  libxkbcommon-x11-dev pkg-config
 ```
 
 Windows 可执行文件在链接时为 GPUI 主线程预留 8 MiB 栈空间，以容纳首帧原生界面树构建；该设置同时覆盖 Debug、Release 和直接启动脚本。
@@ -133,25 +165,33 @@ powershell -ExecutionPolicy Bypass -File scripts/run-debug.ps1
 
 ### 构建与检查
 
-Debug 构建：
+Windows Debug 构建：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/build-debug.ps1
 ```
 
-Release 构建：
+Windows Release 构建：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1
 ```
 
-静态检查：
+Windows 静态检查：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/check.ps1
 ```
 
-Release 可执行文件位于 `target\release\vclogg2.exe`。所有脚本都使用锁定的 `Cargo.lock`。
+macOS/Linux 使用对应的 Shell 脚本：
+
+```bash
+./scripts/build-debug.sh
+./scripts/build-release.sh
+./scripts/check.sh
+```
+
+Release 可执行文件位于 Windows 的 `target\release\vclogg2.exe` 或 macOS/Linux 的 `target/release/vclogg2`。三平台脚本使用同一份锁定的 `Cargo.lock`，检查范围和优化配置一致。
 
 ## 性能诊断
 
@@ -178,20 +218,42 @@ powershell -ExecutionPolicy Bypass -File scripts/run-performance-debug.ps1 `
 
 ## 打包与发布
 
-生成 Windows x64 便携目录、ZIP、整包/分块哈希与更新交接清单：
+生成 Windows x64 便携目录、ZIP、安装脚本与更新元数据：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 ```
 
-产物位于 `dist\`。发布到服务端静态更新目录：
+生成 macOS ARM64 `.app` ZIP 或 Linux x86_64 便携 TAR.GZ；两者同样包含安装脚本、整包/分块哈希与更新清单：
+
+```bash
+# 在 macOS 上执行
+./scripts/package-release-macos.sh
+
+# 在 Linux 上执行
+./scripts/package-release-linux.sh
+```
+
+三种平台的产物分别写入 `dist/windows-x86_64/`、`dist/macos-aarch64/` 与 `dist/linux-x86_64/`。打包脚本根据实际 runner 架构命名产物；macOS 还会生成临时签名的 `.app`。
+
+仓库中的 [`.github/workflows/release-build.yml`](.github/workflows/release-build.yml) 会在推送或 PR 指向 `main`、推送 `v*` tag 时并行构建 Windows x64、macOS ARM64 和 Linux x86_64，也支持在 GitHub Actions 页面手动执行。构建结果作为 Actions Artifacts 保存 14 天；该工作流不会自动创建 GitHub Release。
+
+任一平台的产物都可通过跨平台发布脚本写入对应静态更新目录；脚本先验证清单、大小和 SHA-256，最后原子替换 `latest.json`：
+
+```bash
+./scripts/publish-update.py \
+  --source dist/macos-aarch64 \
+  --target /srv/vclogg2/updates-vclogg2/macos-aarch64
+```
+
+Windows 也可继续使用 PowerShell 包装脚本：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/publish-update.ps1 `
-  -TargetDirectory D:\server\data\updates-vclogg2\win-x64
+  -TargetDirectory D:\server\data\updates-vclogg2\windows-x86_64
 ```
 
-更新打包不需要签名密钥。发行版会验证分块与整包 SHA-256，并在应用正常退出、会话完成保存后交给独立助手安装并重启。更新清单本身不做密钥认证，更新源的访问控制与 HTTPS 安全由部署环境负责。完整交付边界见 [`doc/delivery.md`](doc/delivery.md)。
+三平台发行版使用相同更新协议：验证分块与整包 SHA-256，并在应用正常退出、会话完成保存后交给平台独立助手安装并重启。更新清单本身不做密钥认证，因此更新源的访问控制、HTTPS 以及 Windows 代码签名或 macOS Developer ID 签名/公证由部署环境负责。完整交付边界见 [`doc/delivery.md`](doc/delivery.md)。
 
 ## 工程结构
 
@@ -208,12 +270,12 @@ scripts/               启动、检查、构建、打包和发布脚本
 
 ## 本地数据与隐私
 
-- 会话状态保存在本机应用数据目录的 `VCLogg2\sessions\vclogg2-state.db`，数据库使用 WAL。
+- 会话状态保存在系统应用数据目录下的 `VCLogg2/sessions/vclogg2-state.db`，数据库使用 WAL。
 - 行索引缓存在系统缓存目录中，与 SQLite 会话身份分离；缓存失效时会安全重建。
-- Rust 线程 panic 报告保存在同级 `VCLogg2\crashes\panic-*.log`，默认只保留最近 20 份；应用数据目录不可写时回退到系统临时目录。
+- Rust 线程 panic 报告保存在同级 `VCLogg2/crashes/panic-*.log`，默认只保留最近 20 份；应用数据目录不可写时回退到系统临时目录。
 - 云端连接的公开配置写入 SQLite，Cookie 与 CSRF 仅保存在系统凭据库；公开目录离线缓存不包含账户秘密。
 - 应用日志使用有界内存缓冲，不会自行创建长期日志文件；只有用户显式导出时才写入磁盘。
-- 与可执行文件匹配的 PDB 只进入开发侧符号包，不进入用户分发包或安装目录。
+- Windows PDB 只进入开发侧符号包，不进入用户分发包或安装目录。
 
 ## 项目文档
 
@@ -223,7 +285,7 @@ scripts/               启动、检查、构建、打包和发布脚本
 | [`doc/feature-parity.md`](doc/feature-parity.md) | 已实现能力证据、待确认差异与验收步骤 |
 | [`doc/architecture.md`](doc/architecture.md) | 模块职责、状态边界与关键实现约束 |
 | [`doc/ui-layout.md`](doc/ui-layout.md) | UI 控件层级、稳定编号与交互说明 |
-| [`doc/delivery.md`](doc/delivery.md) | Windows 构建、打包、安装与更新交付 |
+| [`doc/delivery.md`](doc/delivery.md) | 三平台构建、安装、更新与发布交付 |
 | [`doc/ui-polish-acceptance.md`](doc/ui-polish-acceptance.md) | 界面细节与手工视觉验收清单 |
 
 ## 参与贡献
@@ -232,7 +294,7 @@ scripts/               启动、检查、构建、打包和发布脚本
 
 1. 将 `vclogg-core` 保持为不依赖 GPUI 的日志领域核心。
 2. 修改功能边界、UI 层级或交付流程时，同步更新对应 `doc/` 文档。
-3. 提交前运行 `scripts/check.ps1`，确保格式、`cargo check` 与 Clippy 检查通过。
+3. 提交前在 Windows 运行 `scripts/check.ps1`，在 macOS/Linux 运行 `scripts/check.sh`，确保格式、`cargo check` 与 Clippy 检查通过。
 4. 在问题或变更说明中写明复现路径、预期行为、实际行为和验证范围。
 
 ## 鸣谢

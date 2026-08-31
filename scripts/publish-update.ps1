@@ -1,7 +1,7 @@
 ﻿param(
     [Parameter(Mandatory)]
     [string]$TargetDirectory,
-    [string]$SourceDirectory = (Join-Path $PSScriptRoot '..\dist')
+    [string]$SourceDirectory = (Join-Path $PSScriptRoot '..\dist\windows-x86_64')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,7 +16,7 @@ if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding utf8 | ConvertFrom-Json
 if ($manifest.schemaVersion -ne 1 -or $manifest.product -ne 'VCLogg2' -or
     $manifest.platform -ne 'windows' -or $manifest.architecture -ne 'x86_64') {
-    throw 'latest.json 与 Windows x64 VCLogg2 更新契约不兼容。'
+    throw 'latest.json 与 Windows x86_64 VCLogg2 更新契约不兼容。'
 }
 
 $artifactName = [string]$manifest.artifact

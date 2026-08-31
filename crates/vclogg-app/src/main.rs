@@ -34,13 +34,15 @@ mod ui_theme;
 mod updater;
 mod workspace;
 
+use std::path::PathBuf;
+
 use gpui::*;
 use gpui_component::{Root, TitleBar, theme::ThemeMode};
 
 use crate::workspace::{InitialDocument, Workspace};
 
 struct SingleInstanceRuntime {
-    _request_task: Task<()>,
+    _request_tasks: Vec<Task<()>>,
 }
 
 impl Global for SingleInstanceRuntime {}
@@ -120,18 +122,15 @@ fn handle_external_open_request(request: single_instance::OpenRequest, cx: &mut 
     }
 }
 
-fn install_single_instance_listener(
+fn external_request_listener(
     receiver: async_channel::Receiver<single_instance::OpenRequest>,
     cx: &mut App,
-) {
-    let request_task = cx.spawn(async move |cx| {
+) -> Task<()> {
+    cx.spawn(async move |cx| {
         while let Ok(request) = receiver.recv().await {
             cx.update(|cx| handle_external_open_request(request, cx));
         }
-    });
-    cx.set_global(SingleInstanceRuntime {
-        _request_task: request_task,
-    });
+    })
 }
 
 fn main() {
@@ -161,6 +160,30 @@ fn main() {
         .map(InitialDocument::from_path)
         .collect::<Vec<_>>();
     let app = gpui_platform::application().with_assets(gpui_component_assets::Assets);
+    let (platform_open_sender, platform_open_receiver) = async_channel::unbounded();
+    app.on_open_urls(move |urls| {
+        let paths = urls
+            .into_iter()
+            .filter_map(|value| {
+                url::Url::parse(&value)
+                    .ok()
+                    .filter(|url| url.scheme() == "file")
+                    .and_then(|url| url.to_file_path().ok())
+                    .or_else(|| {
+                        let path = PathBuf::from(value);
+                        path.is_absolute().then_some(path)
+                    })
+            })
+            .collect::<Vec<_>>();
+        if !paths.is_empty() {
+            _ = platform_open_sender.send_blocking(single_instance::OpenRequest { paths });
+        }
+    });
+    app.on_reopen(|cx| {
+        if let Err(error) = open_workspace_window(cx, false, Vec::new()) {
+            log::error!("重新打开应用时未能创建 VCLogg2 窗口：{error:#}");
+        }
+    });
 
     app.run(move |cx| {
         ui_performance::init_ui_thread();
@@ -169,9 +192,13 @@ fn main() {
         ui_theme::apply_product_theme(ThemeMode::Light, cx);
         actions::init(cx);
         Workspace::init_window_registry(cx);
+        let mut request_tasks = vec![external_request_listener(platform_open_receiver, cx)];
         if let Some(receiver) = forwarded_requests {
-            install_single_instance_listener(receiver, cx);
+            request_tasks.push(external_request_listener(receiver, cx));
         }
+        cx.set_global(SingleInstanceRuntime {
+            _request_tasks: request_tasks,
+        });
         std::mem::forget(cx.on_app_quit(Workspace::flush_all_on_quit));
         cx.set_quit_mode(QuitMode::LastWindowClosed);
 

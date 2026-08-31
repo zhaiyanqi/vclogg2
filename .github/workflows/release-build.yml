@@ -1,0 +1,173 @@
+name: Multiplatform Release Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-2022
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        shell: powershell
+        run: >-
+          rustup toolchain install stable
+          --profile minimal
+          --component rustfmt
+          --component clippy
+
+      - name: Cache Cargo dependencies and build output
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~\.cargo\registry
+            ~\.cargo\git
+            target
+          key: vclogg2-${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            vclogg2-${{ runner.os }}-${{ runner.arch }}-cargo-
+
+      - name: Check workspace
+        shell: powershell
+        run: powershell -ExecutionPolicy Bypass -File scripts/check.ps1
+
+      - name: Build Windows release package
+        shell: powershell
+        run: powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
+
+      - name: Upload Windows release package
+        uses: actions/upload-artifact@v7
+        with:
+          name: vclogg2-windows-x86_64
+          path: |
+            dist/windows-x86_64/vclogg2-*-windows-x86_64.zip
+            dist/windows-x86_64/vclogg2-*-windows-x86_64.blockmap.json
+            dist/windows-x86_64/latest.json
+          if-no-files-found: error
+          retention-days: 14
+
+  macos:
+    name: macOS AArch64
+    runs-on: macos-15
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        run: >-
+          rustup toolchain install stable
+          --profile minimal
+          --component rustfmt
+          --component clippy
+
+      - name: Cache Cargo dependencies and build output
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: vclogg2-${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            vclogg2-${{ runner.os }}-${{ runner.arch }}-cargo-
+
+      - name: Check workspace
+        run: ./scripts/check.sh
+
+      - name: Build macOS release package
+        run: ./scripts/package-release-macos.sh
+
+      - name: Upload macOS release package
+        uses: actions/upload-artifact@v7
+        with:
+          name: vclogg2-macos-aarch64
+          path: |
+            dist/macos-aarch64/vclogg2-*-macos-aarch64.zip
+            dist/macos-aarch64/vclogg2-*-macos-aarch64.blockmap.json
+            dist/macos-aarch64/latest.json
+          if-no-files-found: error
+          retention-days: 14
+
+  linux:
+    name: Linux x86_64
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install GPUI system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            clang \
+            cmake \
+            libfontconfig-dev \
+            libglib2.0-dev \
+            libssl-dev \
+            libvulkan1 \
+            libwayland-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
+            libxkbcommon-x11-dev \
+            pkg-config
+
+      - name: Install Rust toolchain
+        run: >-
+          rustup toolchain install stable
+          --profile minimal
+          --component rustfmt
+          --component clippy
+
+      - name: Cache Cargo dependencies and build output
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: vclogg2-${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            vclogg2-${{ runner.os }}-${{ runner.arch }}-cargo-
+
+      - name: Check workspace
+        run: ./scripts/check.sh
+
+      - name: Build Linux release package
+        run: ./scripts/package-release-linux.sh
+
+      - name: Upload Linux release package
+        uses: actions/upload-artifact@v7
+        with:
+          name: vclogg2-linux-x86_64
+          path: |
+            dist/linux-x86_64/vclogg2-*-linux-x86_64.tar.gz
+            dist/linux-x86_64/vclogg2-*-linux-x86_64.blockmap.json
+            dist/linux-x86_64/latest.json
+          if-no-files-found: error
+          retention-days: 14

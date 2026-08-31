@@ -31,6 +31,7 @@ serde.workspace = true
 serde_json.workspace = true
 semver.workspace = true
 sha2.workspace = true
+trash.workspace = true
 url.workspace = true
 uuid.workspace = true
 vclogg-core = { path = "../vclogg-core" }

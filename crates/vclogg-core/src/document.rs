@@ -10,6 +10,9 @@ use std::{
 #[cfg(windows)]
 use std::{os::windows::ffi::OsStrExt as _, os::windows::io::AsRawHandle as _};
 
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt as _;
+
 use anyhow::{Context as _, Result};
 use chardetng::EncodingDetector;
 use encoding_rs::{Encoding, UTF_8, UTF_16BE, UTF_16LE};
@@ -266,7 +269,7 @@ impl LogDocument {
     }
 
     /// Open a complete document, reusing a line index only when the cached
-    /// Windows file identity still exactly matches the source.
+    /// platform file identity still exactly matches the source.
     pub fn open_with_index_cache(
         path: impl AsRef<Path>,
         cache_dir: impl AsRef<Path>,
@@ -1127,9 +1130,17 @@ fn read_file_identity(file: &File) -> Option<FileIdentity> {
     })
 }
 
-#[cfg(not(windows))]
-fn read_file_identity(_: &File) -> Option<FileIdentity> {
-    None
+#[cfg(unix)]
+fn read_file_identity(file: &File) -> Option<FileIdentity> {
+    let metadata = file.metadata().ok()?;
+    let mut file_id = [0_u8; 16];
+    file_id[..8].copy_from_slice(&metadata.ino().to_le_bytes());
+    file_id[8..].copy_from_slice(&metadata.ctime_nsec().to_le_bytes());
+    Some(FileIdentity {
+        volume_serial: metadata.dev(),
+        file_id,
+        usn: metadata.ctime(),
+    })
 }
 
 fn looks_like_binary(sample: &[u8]) -> bool {
@@ -1213,12 +1224,16 @@ fn detect_file_encoding_from_sample(sample: &[u8], byte_size: u64) -> FileEncodi
             .filter(|byte| **byte == 0)
             .count();
         let le_newlines = sample
-            .chunks_exact(2)
-            .filter(|pair| *pair == [b'\n', 0])
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .filter(|pair| **pair == [b'\n', 0])
             .count();
         let be_newlines = sample
-            .chunks_exact(2)
-            .filter(|pair| *pair == [0, b'\n'])
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .filter(|pair| **pair == [0, b'\n'])
             .count();
         let le_signal = le_newlines > be_newlines && le_newlines.saturating_mul(200) > pairs;
         let be_signal = be_newlines > le_newlines && be_newlines.saturating_mul(200) > pairs;

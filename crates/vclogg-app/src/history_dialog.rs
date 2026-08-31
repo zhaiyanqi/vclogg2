@@ -233,11 +233,11 @@ impl HistoryDialog {
                 } else {
                     crate::tr_args!("删除 {count} 个临时搜索结果？", "Delete {count} temporary search results?")
                 })
-                .description(crate::tr!("这些临时文件会移入系统回收站；当前仍打开的结果不会进入本次操作。", "These temporary files will be moved to the system Recycle Bin. Results that are still open are excluded."))
+                .description(crate::tr!("这些临时文件会移入系统回收站；当前仍打开的结果不会进入本次操作。", "These temporary files will be moved to the system trash. Results that are still open are excluded."))
                 .button_props(
                     DialogButtonProps::default()
                         .ok_variant(ButtonVariant::Danger)
-                        .ok_text(crate::tr!("移入回收站", "Move to Recycle Bin"))
+                        .ok_text(crate::tr!("移入回收站", "Move to Trash"))
                         .cancel_text(crate::tr!("取消", "Cancel"))
                         .show_cancel(true),
                 )
@@ -373,7 +373,7 @@ impl HistoryDialog {
                         Button::new(("delete-temporary-result", index))
                             .small()
                             .danger()
-                            .label(crate::tr!("移入回收站", "Move to Recycle Bin"))
+                            .label(crate::tr!("移入回收站", "Move to Trash"))
                             .disabled(open || self.deleting_temporary_results)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.confirm_delete_temporary_results(

@@ -18,10 +18,14 @@ $version = $package.version
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 New-Item -ItemType Directory -Path $resolvedOutputDirectory -Force | Out-Null
-$stageDirectory = [System.IO.Path]::GetFullPath(
-    (Join-Path $resolvedOutputDirectory "vclogg2-$version-win-x64")
+$platformDirectory = [System.IO.Path]::GetFullPath(
+    (Join-Path $resolvedOutputDirectory 'windows-x86_64')
 )
-$outputPrefix = $resolvedOutputDirectory.TrimEnd('\') + '\'
+New-Item -ItemType Directory -Path $platformDirectory -Force | Out-Null
+$stageDirectory = [System.IO.Path]::GetFullPath(
+    (Join-Path $platformDirectory "vclogg2-$version-windows-x86_64")
+)
+$outputPrefix = $platformDirectory.TrimEnd('\') + '\'
 if (-not $stageDirectory.StartsWith($outputPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "暂存目录不在指定输出目录内：$stageDirectory"
 }
@@ -37,16 +41,16 @@ Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Install-VCLogg2.ps1') -Destination $stageDirectory
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Apply-VCLogg2Update.ps1') -Destination $stageDirectory
 
-$archiveName = "vclogg2-$version-win-x64.zip"
-$archivePath = Join-Path $resolvedOutputDirectory $archiveName
+$archiveName = "vclogg2-$version-windows-x86_64.zip"
+$archivePath = Join-Path $platformDirectory $archiveName
 if (Test-Path -LiteralPath $archivePath) {
     Remove-Item -LiteralPath $archivePath -Force
 }
 Compress-Archive -Path (Join-Path $stageDirectory '*') -DestinationPath $archivePath -CompressionLevel Optimal
 
 $releaseSymbols = Join-Path $repositoryRoot 'target\release\vclogg2.pdb'
-$symbolsArchiveName = "vclogg2-$version-win-x64-symbols.zip"
-$symbolsArchivePath = Join-Path $resolvedOutputDirectory $symbolsArchiveName
+$symbolsArchiveName = "vclogg2-$version-windows-x86_64-symbols.zip"
+$symbolsArchivePath = Join-Path $platformDirectory $symbolsArchiveName
 if (Test-Path -LiteralPath $symbolsArchivePath) {
     Remove-Item -LiteralPath $symbolsArchivePath -Force
 }
@@ -70,8 +74,8 @@ try {
     $stream.Dispose()
 }
 
-$blockmapName = "vclogg2-$version-win-x64.blockmap.json"
-$blockmapPath = Join-Path $resolvedOutputDirectory $blockmapName
+$blockmapName = "vclogg2-$version-windows-x86_64.blockmap.json"
+$blockmapPath = Join-Path $platformDirectory $blockmapName
 $blockmapJson = [ordered]@{
     schemaVersion = 1
     algorithm = 'sha256'
@@ -87,7 +91,7 @@ $blockmapJson = [ordered]@{
 
 $archiveInfo = Get-Item -LiteralPath $archivePath
 $archiveHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-$manifestPath = Join-Path $resolvedOutputDirectory 'latest.json'
+$manifestPath = Join-Path $platformDirectory 'latest.json'
 $manifestJson = [ordered]@{
     schemaVersion = 1
     product = 'VCLogg2'

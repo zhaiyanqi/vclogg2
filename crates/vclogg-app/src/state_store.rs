@@ -210,15 +210,20 @@ mod theme_preference_tests {
 
 impl Default for ShortcutSettings {
     fn default() -> Self {
+        let primary = if cfg!(target_os = "macos") {
+            "Cmd"
+        } else {
+            "Ctrl"
+        };
         Self {
-            open_file: "Ctrl+O".into(),
-            focus_search: "Ctrl+F".into(),
-            quick_find: "Ctrl+Shift+F".into(),
-            close_tab: "Ctrl+W".into(),
-            open_settings: "Ctrl+,".into(),
+            open_file: format!("{primary}+O"),
+            focus_search: format!("{primary}+F"),
+            quick_find: format!("{primary}+Shift+F"),
+            close_tab: format!("{primary}+W"),
+            open_settings: format!("{primary}+,"),
             toggle_case_sensitive: "Alt+C".into(),
-            jump_to_bottom: "Ctrl+End".into(),
-            cycle_color_label: "Ctrl+D".into(),
+            jump_to_bottom: format!("{primary}+End"),
+            cycle_color_label: format!("{primary}+D"),
             toggle_word_wrap: "W".into(),
         }
     }

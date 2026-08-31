@@ -17,6 +17,8 @@ pub(crate) enum Startup {
 pub(crate) struct PrimaryInstance {
     #[cfg(windows)]
     server: windows::ServerPipe,
+    #[cfg(unix)]
+    server: unix::ServerSocket,
 }
 
 pub(crate) fn command_line_paths() -> Vec<PathBuf> {
@@ -50,10 +52,9 @@ pub(crate) fn acquire_or_forward(paths: &[PathBuf]) -> Result<Startup> {
         windows::acquire_or_forward(paths)
     }
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     {
-        let _ = paths;
-        Ok(Startup::Primary(PrimaryInstance {}))
+        unix::acquire_or_forward(paths)
     }
 }
 
@@ -64,9 +65,277 @@ impl PrimaryInstance {
             windows::start_listener(self.server).map(Some)
         }
 
-        #[cfg(not(windows))]
+        #[cfg(unix)]
         {
-            Ok(None)
+            unix::start_listener(self.server).map(Some)
+        }
+    }
+}
+
+#[cfg(unix)]
+mod unix {
+    use std::{
+        ffi::OsString,
+        fmt::Write as _,
+        fs,
+        io::{Read as _, Write as _},
+        os::unix::{
+            ffi::{OsStrExt as _, OsStringExt as _},
+            fs::{FileTypeExt as _, PermissionsExt as _},
+            net::{UnixListener, UnixStream},
+        },
+        path::{Path, PathBuf},
+        thread,
+        time::{Duration, Instant},
+    };
+
+    use anyhow::{Context as _, Result, anyhow, bail};
+    use sha2::{Digest as _, Sha256};
+
+    use super::{OpenRequest, PrimaryInstance, Startup};
+
+    const SOCKET_MAGIC: &[u8; 8] = b"VCLGIPC1";
+    const MAX_PATHS: usize = 4_096;
+    const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+    const STARTUP_FORWARD_TIMEOUT: Duration = Duration::from_secs(5);
+    const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
+    const RETRY_INTERVAL: Duration = Duration::from_millis(40);
+
+    pub(super) struct ServerSocket {
+        listener: UnixListener,
+        path: PathBuf,
+    }
+
+    impl Drop for ServerSocket {
+        fn drop(&mut self) {
+            _ = fs::remove_file(&self.path);
+        }
+    }
+
+    pub(super) fn acquire_or_forward(paths: &[PathBuf]) -> Result<Startup> {
+        let socket_path = socket_path()?;
+        let request = encode_request(paths)?;
+        let started_at = Instant::now();
+
+        loop {
+            match UnixListener::bind(&socket_path) {
+                Ok(listener) => {
+                    fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))
+                        .with_context(|| {
+                            format!("无法限制单实例套接字权限：{}", socket_path.display())
+                        })?;
+                    return Ok(Startup::Primary(PrimaryInstance {
+                        server: ServerSocket {
+                            listener,
+                            path: socket_path,
+                        },
+                    }));
+                }
+                Err(bind_error) => match UnixStream::connect(&socket_path) {
+                    Ok(stream) => match forward_request(stream, &request) {
+                        Ok(()) => return Ok(Startup::Forwarded),
+                        Err(_) if started_at.elapsed() < STARTUP_FORWARD_TIMEOUT => {
+                            thread::sleep(RETRY_INTERVAL);
+                        }
+                        Err(forward_error) => {
+                            return Err(forward_error).with_context(|| {
+                                format!(
+                                    "已有 VCLogg2 实例，但无法转交启动请求（创建套接字错误 {bind_error}）"
+                                )
+                            });
+                        }
+                    },
+                    Err(connect_error)
+                        if matches!(
+                            connect_error.kind(),
+                            std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
+                        ) =>
+                    {
+                        remove_stale_socket(&socket_path)?;
+                        if started_at.elapsed() >= STARTUP_FORWARD_TIMEOUT {
+                            return Err(connect_error).with_context(|| {
+                                format!("无法创建或连接单实例套接字：{}", socket_path.display())
+                            });
+                        }
+                        thread::sleep(RETRY_INTERVAL);
+                    }
+                    Err(_connect_error) if started_at.elapsed() < STARTUP_FORWARD_TIMEOUT => {
+                        thread::sleep(RETRY_INTERVAL);
+                    }
+                    Err(connect_error) => {
+                        return Err(connect_error).with_context(|| {
+                            format!("无法连接已有 VCLogg2 实例：{}", socket_path.display())
+                        });
+                    }
+                },
+            }
+        }
+    }
+
+    pub(super) fn start_listener(
+        server: ServerSocket,
+    ) -> Result<async_channel::Receiver<OpenRequest>> {
+        let (sender, receiver) = async_channel::unbounded();
+        thread::Builder::new()
+            .name("vclogg2-single-instance".to_string())
+            .spawn(move || run_listener(server, sender))
+            .context("无法启动 VCLogg2 单实例监听线程")?;
+        Ok(receiver)
+    }
+
+    fn run_listener(server: ServerSocket, sender: async_channel::Sender<OpenRequest>) {
+        loop {
+            let (stream, _) = match server.listener.accept() {
+                Ok(connection) => connection,
+                Err(error) => {
+                    log::error!("等待单实例客户端失败：{error}");
+                    thread::sleep(RETRY_INTERVAL);
+                    continue;
+                }
+            };
+            match serve_connection(stream, &sender) {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(error) => log::warn!("忽略无效的单实例启动请求：{error:#}"),
+            }
+        }
+    }
+
+    fn serve_connection(
+        mut stream: UnixStream,
+        sender: &async_channel::Sender<OpenRequest>,
+    ) -> Result<bool> {
+        stream.set_read_timeout(Some(CONNECTION_TIMEOUT))?;
+        stream.set_write_timeout(Some(CONNECTION_TIMEOUT))?;
+        let request = read_request(&mut stream);
+        let keep_listening = match request {
+            Ok(request) => {
+                let accepted = sender.send_blocking(request).is_ok();
+                stream.write_all(&[u8::from(accepted)])?;
+                accepted
+            }
+            Err(error) => {
+                _ = stream.write_all(&[0]);
+                return Err(error);
+            }
+        };
+        stream.flush()?;
+        Ok(keep_listening)
+    }
+
+    fn forward_request(mut stream: UnixStream, request: &[u8]) -> Result<()> {
+        stream.set_read_timeout(Some(CONNECTION_TIMEOUT))?;
+        stream.set_write_timeout(Some(CONNECTION_TIMEOUT))?;
+        stream.write_all(request)?;
+        stream.shutdown(std::net::Shutdown::Write)?;
+        let mut acknowledgement = [0_u8; 1];
+        stream.read_exact(&mut acknowledgement)?;
+        if acknowledgement[0] != 1 {
+            bail!("已有 VCLogg2 实例未接受启动请求");
+        }
+        Ok(())
+    }
+
+    fn read_request(stream: &mut UnixStream) -> Result<OpenRequest> {
+        let mut request = Vec::new();
+        stream
+            .take((MAX_REQUEST_BYTES + 1) as u64)
+            .read_to_end(&mut request)?;
+        if request.len() > MAX_REQUEST_BYTES {
+            bail!("外部打开请求超过 {} KiB 限制", MAX_REQUEST_BYTES / 1024);
+        }
+        decode_request(&request)
+    }
+
+    fn encode_request(paths: &[PathBuf]) -> Result<Vec<u8>> {
+        if paths.len() > MAX_PATHS {
+            bail!("一次最多转交 {MAX_PATHS} 个文件路径");
+        }
+        let mut request = Vec::with_capacity(SOCKET_MAGIC.len() + 4);
+        request.extend_from_slice(SOCKET_MAGIC);
+        request.extend_from_slice(&(paths.len() as u32).to_le_bytes());
+        for path in paths {
+            let path = path.as_os_str().as_bytes();
+            let path_len = u32::try_from(path.len()).context("文件路径过长")?;
+            request.extend_from_slice(&path_len.to_le_bytes());
+            request.extend_from_slice(path);
+            if request.len() > MAX_REQUEST_BYTES {
+                bail!("外部打开请求超过 {} KiB 限制", MAX_REQUEST_BYTES / 1024);
+            }
+        }
+        Ok(request)
+    }
+
+    fn decode_request(request: &[u8]) -> Result<OpenRequest> {
+        if request.len() < SOCKET_MAGIC.len() + 4 || &request[..SOCKET_MAGIC.len()] != SOCKET_MAGIC
+        {
+            bail!("单实例启动请求协议不匹配");
+        }
+        let mut offset = SOCKET_MAGIC.len();
+        let path_count = take_u32(request, &mut offset)? as usize;
+        if path_count > MAX_PATHS {
+            bail!("单实例启动请求包含过多文件路径");
+        }
+        let mut paths = Vec::with_capacity(path_count);
+        for _ in 0..path_count {
+            let byte_count = take_u32(request, &mut offset)? as usize;
+            let end = offset
+                .checked_add(byte_count)
+                .filter(|end| *end <= request.len())
+                .context("单实例启动请求中的文件路径不完整")?;
+            let path = PathBuf::from(OsString::from_vec(request[offset..end].to_vec()));
+            offset = end;
+            if path.as_os_str().is_empty() {
+                bail!("单实例启动请求包含空文件路径");
+            }
+            paths.push(path);
+        }
+        if offset != request.len() {
+            bail!("单实例启动请求包含多余数据");
+        }
+        Ok(OpenRequest { paths })
+    }
+
+    fn take_u32(input: &[u8], offset: &mut usize) -> Result<u32> {
+        let end = offset
+            .checked_add(4)
+            .filter(|end| *end <= input.len())
+            .context("单实例启动请求不完整")?;
+        let bytes = input[*offset..end]
+            .try_into()
+            .map_err(|_| anyhow!("单实例启动请求不完整"))?;
+        *offset = end;
+        Ok(u32::from_le_bytes(bytes))
+    }
+
+    fn socket_path() -> Result<PathBuf> {
+        let identity = crate::app_paths::data_local_dir()
+            .or_else(dirs::home_dir)
+            .unwrap_or_else(|| PathBuf::from("vclogg2-default-user"));
+        let mut hasher = Sha256::new();
+        hasher.update(identity.as_os_str().as_bytes());
+        let digest = hasher.finalize();
+        let mut user_key = String::with_capacity(16);
+        for byte in digest.iter().take(8) {
+            _ = write!(user_key, "{byte:02x}");
+        }
+        let directory = std::env::temp_dir().join(format!("vclogg2-{user_key}"));
+        fs::create_dir_all(&directory)
+            .with_context(|| format!("无法创建单实例套接字目录：{}", directory.display()))?;
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("无法限制单实例套接字目录权限：{}", directory.display()))?;
+        Ok(directory.join("instance.sock"))
+    }
+
+    fn remove_stale_socket(path: &Path) -> Result<()> {
+        match fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.file_type().is_socket() => fs::remove_file(path)
+                .with_context(|| format!("无法清理失效的单实例套接字：{}", path.display())),
+            Ok(_) => bail!("单实例套接字路径被非套接字占用：{}", path.display()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => {
+                Err(error).with_context(|| format!("无法检查单实例套接字：{}", path.display()))
+            }
         }
     }
 }
