@@ -612,8 +612,10 @@ mod windows {
                 .filter(|end| *end <= request.len())
                 .context("单实例启动请求中的文件路径不完整")?;
             let units = request[offset..end]
-                .chunks_exact(2)
-                .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|bytes| u16::from_le_bytes(*bytes))
                 .collect::<Vec<_>>();
             offset = end;
             let path = PathBuf::from(OsString::from_wide(&units));
