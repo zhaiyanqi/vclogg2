@@ -4891,14 +4891,15 @@ impl Workspace {
             .map(|tab| {
                 (
                     path_match_key(tab.document.path()),
-                    tab.resolved_color_rules.clone(),
+                    (tab.document.clone(), tab.resolved_color_rules.clone()),
                 )
             })
             .collect::<BTreeMap<_, _>>();
         self.global_table.update(cx, |table, cx| {
             table.delegate_mut().update_color_rules(|source| {
                 path_match_map_get(&color_rules_by_path, &source.path)
-                    .cloned()
+                    .filter(|(document, _)| source.document.same_source_snapshot(document))
+                    .map(|(_, color_rules)| color_rules.clone())
                     .unwrap_or_default()
             });
             table.refresh(cx);
@@ -9779,8 +9780,9 @@ impl Workspace {
                     .results
                     .iter()
                     .filter_map(|(document_id, result)| {
-                        let open_tab =
-                            path_match_map_get(&open_documents_by_path, &result.path).copied();
+                        let open_tab = path_match_map_get(&open_documents_by_path, &result.path)
+                            .copied()
+                            .filter(|tab| result.document.same_source_snapshot(&tab.document));
                         let marked_rows = open_tab
                             .map(|tab| tab.marked_rows.clone())
                             .unwrap_or_default();

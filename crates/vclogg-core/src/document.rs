@@ -296,6 +296,7 @@ pub struct LogDocument {
     longest_completed_line_bytes: usize,
     longest_completed_line_columns: usize,
     append_fingerprint: AppendFingerprint,
+    content_digest: [u8; 32],
     encoding: FileEncoding,
 }
 
@@ -602,6 +603,29 @@ impl LogDocument {
         self.local_row(source_row).is_some()
     }
 
+    /// Whether both values represent the same immutable complete byte snapshot.
+    ///
+    /// This deliberately does not establish path identity; callers associating
+    /// per-file state must match paths separately. Independently constructed
+    /// partial previews are not considered equivalent because their unseen bytes
+    /// were never fingerprinted. References to the exact same snapshot remain
+    /// equivalent even while it is only a preview.
+    pub fn same_source_snapshot(&self, other: &Self) -> bool {
+        if std::ptr::eq(self, other) {
+            return true;
+        }
+        if !self.contains_complete_source() || !other.contains_complete_source() {
+            return false;
+        }
+        self.metadata.file_size == other.metadata.file_size
+            && self.metadata.encoding_name == other.metadata.encoding_name
+            && self.content_digest == other.content_digest
+    }
+
+    fn contains_complete_source(&self) -> bool {
+        self.segment_start_row == 0 && self.bytes.len() as u64 == self.metadata.file_size
+    }
+
     /// Decode one logical line without retaining its text in memory.
     pub fn line(&self, source_row: usize) -> Option<String> {
         self.line_bytes(source_row)
@@ -759,11 +783,13 @@ impl LogDocument {
         let file_size = source_size;
         let sample_len = bytes.len().min(APPEND_SAMPLE_BYTES);
         let tail_start = bytes.len().saturating_sub(sample_len);
+        let integrity_blocks =
+            integrity_blocks.unwrap_or_else(|| calculate_integrity_blocks(&bytes).into());
+        let content_digest = digest_integrity_blocks(&integrity_blocks);
         let append_fingerprint = AppendFingerprint {
             head: Arc::from(&bytes[..sample_len]),
             tail: Arc::from(&bytes[tail_start..]),
-            integrity_blocks: integrity_blocks
-                .unwrap_or_else(|| calculate_integrity_blocks(&bytes).into()),
+            integrity_blocks,
         };
         let metadata = DocumentMetadata {
             path,
@@ -783,6 +809,7 @@ impl LogDocument {
             longest_completed_line_bytes: indexed_lines.longest_completed_line_bytes,
             longest_completed_line_columns: indexed_lines.longest_completed_line_columns,
             append_fingerprint,
+            content_digest,
             encoding,
         }
     }
@@ -793,6 +820,16 @@ fn calculate_integrity_blocks(bytes: &[u8]) -> Vec<[u8; 32]> {
         .chunks(APPEND_INTEGRITY_BLOCK_BYTES)
         .map(|block| Sha256::digest(block).into())
         .collect()
+}
+
+fn digest_integrity_blocks(blocks: &[[u8; 32]]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"vclogg-document-content-v1");
+    digest.update((blocks.len() as u64).to_le_bytes());
+    for block in blocks {
+        digest.update(block);
+    }
+    digest.finalize().into()
 }
 
 fn build_line_index_with_integrity(
@@ -1585,6 +1622,73 @@ fn display_columns(bytes: &[u8], first_line: bool) -> usize {
         b'\r' => columns,
         _ => columns.saturating_add(1),
     })
+}
+
+#[cfg(test)]
+mod source_snapshot_tests {
+    use std::{fs, path::PathBuf, time::SystemTime};
+
+    use super::LogDocument;
+
+    fn test_directory(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("系统时间应晚于 Unix 纪元")
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "vclogg2-source-snapshot-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).expect("应能创建文档快照测试目录");
+        directory
+    }
+
+    #[test]
+    fn complete_documents_opened_independently_share_snapshot_identity() {
+        let directory = test_directory("same");
+        let path = directory.join("source.log");
+        fs::write(&path, b"alpha\nbeta\n").expect("应能写入测试日志");
+
+        let first = LogDocument::open(&path).expect("应能首次打开测试日志");
+        let second = LogDocument::open(&path).expect("应能再次打开测试日志");
+
+        assert!(first.same_source_snapshot(&second));
+        _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn same_sized_but_different_contents_have_distinct_snapshot_identity() {
+        let directory = test_directory("different");
+        let first_path = directory.join("first.log");
+        let second_path = directory.join("second.log");
+        fs::write(&first_path, b"alpha\n").expect("应能写入第一份测试日志");
+        fs::write(&second_path, b"omega\n").expect("应能写入第二份测试日志");
+
+        let first = LogDocument::open(&first_path).expect("应能打开第一份测试日志");
+        let second = LogDocument::open(&second_path).expect("应能打开第二份测试日志");
+
+        assert_eq!(first.metadata().file_size, second.metadata().file_size);
+        assert!(!first.same_source_snapshot(&second));
+        _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn independently_opened_partial_previews_are_not_assumed_equivalent() {
+        let directory = test_directory("preview");
+        let path = directory.join("source.log");
+        fs::write(&path, b"alpha\nbeta\n").expect("应能写入测试日志");
+
+        let (first, first_complete) =
+            LogDocument::open_preview(&path, 6, 1).expect("应能打开第一份日志预览");
+        let (second, second_complete) =
+            LogDocument::open_preview(&path, 6, 1).expect("应能打开第二份日志预览");
+
+        assert!(!first_complete);
+        assert!(!second_complete);
+        assert!(first.same_source_snapshot(&first));
+        assert!(!first.same_source_snapshot(&second));
+        _ = fs::remove_dir_all(directory);
+    }
 }
 
 #[cfg(test)]
