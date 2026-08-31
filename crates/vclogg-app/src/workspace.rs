@@ -9753,14 +9753,17 @@ impl Workspace {
             SearchScope::Directory
                 if self.global_search.result_scope == Some(SearchScope::Directory) =>
             {
+                let open_documents_by_path = self
+                    .documents
+                    .iter()
+                    .map(|tab| (path_match_key(tab.document.path()), tab))
+                    .collect::<BTreeMap<_, _>>();
                 self.global_search
                     .results
                     .iter()
                     .filter_map(|(document_id, result)| {
-                        let open_tab = self
-                            .documents
-                            .iter()
-                            .find(|tab| paths_match(tab.document.path(), &result.path));
+                        let open_tab =
+                            path_match_map_get(&open_documents_by_path, &result.path).copied();
                         let marked_rows = open_tab
                             .map(|tab| tab.marked_rows.clone())
                             .unwrap_or_default();
@@ -11270,8 +11273,8 @@ impl Workspace {
         let open_document_paths = self
             .documents
             .iter()
-            .map(|tab| tab.document.path().to_path_buf())
-            .collect::<Vec<_>>();
+            .map(|tab| path_match_key(tab.document.path()))
+            .collect::<BTreeSet<_>>();
         let row_height = self.log_row_height();
         let viewport_anchor = self
             .global_search
@@ -11327,9 +11330,7 @@ impl Workspace {
                         match run {
                             SearchRun::Completed(search_result)
                                 if !search_result.line_indices.is_empty()
-                                    || open_document_paths
-                                        .iter()
-                                        .any(|open_path| paths_match(open_path, path)) =>
+                                    || path_match_set_contains(&open_document_paths, path) =>
                             {
                                 Ok(Some((document, search_result)))
                             }
@@ -18213,12 +18214,74 @@ fn compute_result_rows(
     }
 }
 
-fn paths_match(left: &std::path::Path, right: &std::path::Path) -> bool {
-    left == right
-        || (cfg!(windows)
-            && left
-                .to_string_lossy()
-                .eq_ignore_ascii_case(&right.to_string_lossy()))
+#[cfg(not(windows))]
+type PathMatchKey = PathBuf;
+#[cfg(windows)]
+type PathMatchKey = String;
+
+#[cfg(not(windows))]
+fn path_match_key(path: &Path) -> PathMatchKey {
+    path.to_path_buf()
+}
+
+#[cfg(windows)]
+fn path_match_key(path: &Path) -> PathMatchKey {
+    path.to_string_lossy().to_ascii_lowercase()
+}
+
+#[cfg(not(windows))]
+fn path_match_set_contains(paths: &BTreeSet<PathMatchKey>, path: &Path) -> bool {
+    paths.contains(path)
+}
+
+#[cfg(windows)]
+fn path_match_set_contains(paths: &BTreeSet<PathMatchKey>, path: &Path) -> bool {
+    paths.contains(&path_match_key(path))
+}
+
+#[cfg(not(windows))]
+fn path_match_map_get<'a, V>(paths: &'a BTreeMap<PathMatchKey, V>, path: &Path) -> Option<&'a V> {
+    paths.get(path)
+}
+
+#[cfg(windows)]
+fn path_match_map_get<'a, V>(paths: &'a BTreeMap<PathMatchKey, V>, path: &Path) -> Option<&'a V> {
+    paths.get(&path_match_key(path))
+}
+
+fn paths_match(left: &Path, right: &Path) -> bool {
+    #[cfg(not(windows))]
+    {
+        left == right
+    }
+    #[cfg(windows)]
+    {
+        path_match_key(left) == path_match_key(right)
+    }
+}
+
+#[cfg(test)]
+mod path_match_tests {
+    use super::*;
+
+    #[test]
+    fn path_indexes_use_the_same_identity_as_direct_matching() {
+        let stored = Path::new("logs/a.log");
+        let key = path_match_key(stored);
+        let set = BTreeSet::from([key.clone()]);
+        let map = BTreeMap::from([(key, 7)]);
+
+        assert!(path_match_set_contains(&set, stored));
+        assert_eq!(path_match_map_get(&map, stored), Some(&7));
+        assert!(paths_match(stored, stored));
+
+        let differently_cased = Path::new("LOGS/A.LOG");
+        assert_eq!(
+            path_match_set_contains(&set, differently_cased),
+            cfg!(windows)
+        );
+        assert_eq!(paths_match(stored, differently_cased), cfg!(windows));
+    }
 }
 
 fn recent_file_label(recent: &RecentFile) -> String {
