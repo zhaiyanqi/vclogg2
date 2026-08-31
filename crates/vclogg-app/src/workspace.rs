@@ -7168,7 +7168,7 @@ impl Workspace {
                     return;
                 }
 
-                match result {
+                let reloaded = match result {
                     Ok((document, search_result, query, search_matcher)) => {
                         tab.document = document;
                         tab.search_query.text = query.text;
@@ -7237,6 +7237,7 @@ impl Workspace {
                                 .update(cx, |table, cx| table.set_active_log_row(row, cx));
                         }
                         this.activity = Activity::Ready;
+                        true
                     }
                     Err(error) => {
                         if follow_end {
@@ -7245,7 +7246,16 @@ impl Workspace {
                         let message: SharedString = error.to_string().into();
                         window.push_notification(message.clone(), cx);
                         this.activity = Activity::Error;
+                        false
                     }
+                };
+                if reloaded {
+                    let document_ids = BTreeSet::from([document_id]);
+                    this.global_search.results.remove_documents(&document_ids);
+                    this.global_search
+                        .all_open_context
+                        .remove_documents(&document_ids);
+                    this.refresh_global_result_rows(cx);
                 }
                 this.open_task = None;
                 this.open_queued_external_paths_if_idle(window, cx);
