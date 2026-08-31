@@ -8001,7 +8001,12 @@ impl Workspace {
         }
         tab.title = title.clone().into();
         tab.custom_title = Some(title.clone());
-        self.refresh_global_result_rows(cx);
+        self.global_table.update(cx, |table, cx| {
+            table
+                .delegate_mut()
+                .update_group_title(document_id, title.clone().into());
+            table.refresh(cx);
+        });
         if self
             .active_document()
             .is_some_and(|tab| tab.id == document_id)
@@ -8026,7 +8031,12 @@ impl Workspace {
         let original_title = tab.document.file_name();
         tab.title = original_title.clone().into();
         tab.custom_title = None;
-        self.refresh_global_result_rows(cx);
+        self.global_table.update(cx, |table, cx| {
+            table
+                .delegate_mut()
+                .update_group_title(document_id, original_title.clone().into());
+            table.refresh(cx);
+        });
         if self
             .active_document()
             .is_some_and(|tab| tab.id == document_id)

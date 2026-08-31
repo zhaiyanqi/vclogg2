@@ -595,6 +595,13 @@ impl GlobalSearchTableDelegate {
         }
     }
 
+    pub fn update_group_title(&mut self, document_id: u64, title: SharedString) {
+        let Some(group_ix) = self.projection.group_by_document.get(&document_id) else {
+            return;
+        };
+        self.projection.groups[*group_ix].source.title = title;
+    }
+
     pub fn set_quick_find_matcher(&mut self, matcher: Option<SearchMatcher>) {
         self.presenter.quick_find_matcher = matcher;
     }
@@ -1642,6 +1649,16 @@ mod tests {
             .visible_lines
             .line((1, 0), |_| {
                 Some(vclogg_core::LinePreview::new("reloaded global line", false))
+            })
+            .expect("the cached line should remain available");
+        assert_eq!(reused.source().as_ref(), "cached global line");
+
+        delegate.update_group_title(1, "renamed.log".into());
+        assert_eq!(delegate.projection.groups[0].source.title, "renamed.log");
+        let reused = delegate
+            .visible_lines
+            .line((1, 0), |_| {
+                panic!("a title change must not reload log text")
             })
             .expect("the cached line should remain available");
         assert_eq!(reused.source().as_ref(), "cached global line");
