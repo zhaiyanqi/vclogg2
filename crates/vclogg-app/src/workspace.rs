@@ -11229,11 +11229,16 @@ impl Workspace {
                         {
                             this.activity = Activity::Ready;
                         } else {
+                            let open_document_ids = this
+                                .documents
+                                .iter()
+                                .map(|tab| tab.id)
+                                .collect::<BTreeSet<_>>();
                             let results = outcomes
                                 .into_iter()
                                 .filter_map(|(target, run)| {
                                     let (document_id, title, path, document, _) = target;
-                                    if !this.documents.iter().any(|tab| tab.id == document_id) {
+                                    if !open_document_ids.contains(&document_id) {
                                         return None;
                                     }
                                     let (search_result, failure) = match run {
