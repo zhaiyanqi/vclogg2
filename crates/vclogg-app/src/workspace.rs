@@ -2118,7 +2118,7 @@ impl DocumentTab {
         }
     }
 
-    fn refresh_result_rows(&mut self, cx: &mut App) {
+    fn refresh_result_rows(&mut self, row_height: Pixels, cx: &mut App) {
         let result_rows = self.compute_result_rows();
         let projection_changed =
             self.result_table.read(cx).delegate().projected_rows() != Some(&result_rows);
@@ -2130,14 +2130,7 @@ impl DocumentTab {
         let row_height = if word_wrap && self.result_viewport.wrapped_base_height() > px(0.) {
             self.result_viewport.wrapped_base_height()
         } else {
-            self.result_table
-                .read(cx)
-                .vertical_scroll_handle
-                .0
-                .borrow()
-                .last_item_size
-                .map(|size| size.item.height)
-                .unwrap_or_else(|| px(self.result_table.read(cx).delegate().log_font_size() as f32))
+            row_height
         };
         let viewport_anchor =
             Workspace::capture_local_viewport_anchor(self, WrappedRegion::Results, row_height, cx);
@@ -3168,9 +3161,7 @@ impl Workspace {
                                 table.refresh_log_rows(cx);
                             });
                             if word_wrap {
-                                let base_height = px((this.app_settings.log_font_size
-                                    + this.app_settings.log_line_spacing)
-                                    as f32);
+                                let base_height = this.log_row_height();
                                 this.prime_global_wrapped_group_toggle(
                                     wrapped_group_anchor,
                                     base_height,
@@ -6583,6 +6574,7 @@ impl Workspace {
                     let SelectEvent::Confirm(Some(mode)) = event else {
                         return;
                     };
+                    let row_height = this.log_row_height();
                     let Some(tab) = this.documents.iter_mut().find(|tab| tab.id == document_id)
                     else {
                         return;
@@ -6591,7 +6583,7 @@ impl Workspace {
                         return;
                     }
                     tab.result_mode = *mode;
-                    tab.refresh_result_rows(cx);
+                    tab.refresh_result_rows(row_height, cx);
                     if mode.includes_marks() && !tab.marked_rows.is_empty() {
                         tab.results_visible = true;
                     }
@@ -8893,6 +8885,7 @@ impl Workspace {
             });
             let mut changed_documents = Vec::new();
             let mut changed_rows = 0_usize;
+            let row_height = self.log_row_height();
             for (document_id, rows) in selected_by_document {
                 let Some(tab_ix) = self.documents.iter().position(|tab| tab.id == document_id)
                 else {
@@ -8922,7 +8915,7 @@ impl Workspace {
                     table.delegate_mut().set_marked_rows(marked_rows);
                     table.refresh(cx);
                 });
-                tab.refresh_result_rows(cx);
+                tab.refresh_result_rows(row_height, cx);
                 if is_marking && tab.result_mode.includes_marks() {
                     tab.results_visible = true;
                 }
@@ -8959,6 +8952,7 @@ impl Workspace {
             );
             return;
         }
+        let row_height = self.log_row_height();
         let (document_id, is_marking) = {
             let tab = &mut self.documents[active_ix];
             if selected_rows
@@ -8994,7 +8988,7 @@ impl Workspace {
                 table.delegate_mut().set_marked_rows(marked_rows);
                 table.refresh(cx);
             });
-            tab.refresh_result_rows(cx);
+            tab.refresh_result_rows(row_height, cx);
             if is_marking && tab.result_mode.includes_marks() {
                 tab.results_visible = true;
             }
@@ -11032,7 +11026,7 @@ impl Workspace {
                         tab.search_query = query;
                         tab.search_result = result;
                         tab.search_matcher = search_matcher;
-                        tab.refresh_result_rows(cx);
+                        tab.refresh_result_rows(row_height, cx);
                         Self::position_local_row_viewport_anchor(
                             tab,
                             WrappedRegion::Results,
@@ -11554,6 +11548,7 @@ impl Workspace {
         let case_sensitive = self.app_settings.default_case_sensitive;
         let regex = self.app_settings.default_use_regex;
         let max_results = self.app_settings.search_result_limit();
+        let row_height = self.log_row_height();
         let tab = &mut self.documents[active_ix];
         tab.search_revision += 1;
         tab.search_query = SearchQuery {
@@ -11565,7 +11560,7 @@ impl Workspace {
         tab.search_result = SearchResult::default();
         tab.search_matcher = None;
         tab.results_visible = false;
-        tab.refresh_result_rows(cx);
+        tab.refresh_result_rows(row_height, cx);
         tab.refresh_search_matcher(highlight_matches, cx);
         self.reset_search_history_navigation();
         self.close_search_autocomplete();
