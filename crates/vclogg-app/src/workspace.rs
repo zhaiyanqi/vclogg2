@@ -563,6 +563,27 @@ enum LogRegion {
     GlobalResults,
 }
 
+fn restored_results_visible(persisted: bool, result_mode: ResultMode, has_marks: bool) -> bool {
+    persisted || (result_mode.includes_marks() && has_marks)
+}
+
+fn restored_selection_table(
+    active_region: PersistedLogRegion,
+    results_visible: bool,
+) -> SelectionTable {
+    match active_region {
+        PersistedLogRegion::CurrentResults if results_visible => SelectionTable::Results,
+        PersistedLogRegion::Body | PersistedLogRegion::CurrentResults => SelectionTable::Log,
+    }
+}
+
+fn restored_log_region(active_region: PersistedLogRegion, results_visible: bool) -> LogRegion {
+    match restored_selection_table(active_region, results_visible) {
+        SelectionTable::Log => LogRegion::Body,
+        SelectionTable::Results => LogRegion::CurrentResults,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct RowViewportPosition {
     row_ix: usize,
@@ -1608,6 +1629,36 @@ mod scroll_position_tests {
         assert!(ResultMode::MatchesAndMarks.includes_marks());
         assert!(ResultMode::MarksOnly.includes_marks());
         assert!(!ResultMode::MatchesOnly.includes_marks());
+    }
+
+    #[test]
+    fn restored_marks_can_make_the_result_projection_visible() {
+        assert!(restored_results_visible(false, ResultMode::MarksOnly, true));
+        assert!(!restored_results_visible(
+            false,
+            ResultMode::MatchesOnly,
+            true
+        ));
+    }
+
+    #[test]
+    fn hidden_results_cannot_own_restored_selection() {
+        assert_eq!(
+            restored_selection_table(PersistedLogRegion::CurrentResults, false),
+            SelectionTable::Log
+        );
+        assert_eq!(
+            restored_log_region(PersistedLogRegion::CurrentResults, false),
+            LogRegion::Body
+        );
+        assert_eq!(
+            restored_selection_table(PersistedLogRegion::CurrentResults, true),
+            SelectionTable::Results
+        );
+        assert_eq!(
+            restored_log_region(PersistedLogRegion::CurrentResults, true),
+            LogRegion::CurrentResults
+        );
     }
 
     #[test]
@@ -6581,8 +6632,11 @@ impl Workspace {
                 },
             ));
 
-            let results_visible = session.resume.current_search.results_visible
-                || (result_mode.includes_marks() && !marked_rows.is_empty());
+            let results_visible = restored_results_visible(
+                session.resume.current_search.results_visible,
+                result_mode,
+                !marked_rows.is_empty(),
+            );
             let pending_restore_row = session.selected_row;
             if let Some(selected_row) = pending_restore_row.and_then(|row| document.local_row(row))
             {
@@ -6690,10 +6744,10 @@ impl Workspace {
                 auto_follow: false,
                 show_line_numbers: session.show_line_numbers,
                 show_row_separators: session.show_row_separators,
-                selection_table: match session.resume.active_region {
-                    PersistedLogRegion::Body => SelectionTable::Log,
-                    PersistedLogRegion::CurrentResults => SelectionTable::Results,
-                },
+                selection_table: restored_selection_table(
+                    session.resume.active_region,
+                    results_visible,
+                ),
                 uses_default_view_options,
                 load_state: prepared.load_state,
                 pending_restore_row: (prepared.load_state != DocumentLoadState::Ready)
@@ -6848,11 +6902,13 @@ impl Workspace {
         {
             let tab = &mut self.documents[document_ix];
             tab.auto_follow = resume.viewer.auto_follow;
-            tab.results_visible = resume.current_search.results_visible;
-            tab.selection_table = match resume.active_region {
-                PersistedLogRegion::Body => SelectionTable::Log,
-                PersistedLogRegion::CurrentResults => SelectionTable::Results,
-            };
+            tab.results_visible = restored_results_visible(
+                resume.current_search.results_visible,
+                tab.result_mode,
+                !tab.marked_rows.is_empty(),
+            );
+            tab.selection_table =
+                restored_selection_table(resume.active_region, tab.results_visible);
 
             let result_count = tab.result_table.read(cx).delegate().row_count();
             let selected_result_ix = resume
@@ -6894,10 +6950,7 @@ impl Workspace {
         if self.active_ix == Some(document_ix)
             && self.global_search.scope == SearchScope::CurrentFile
         {
-            self.active_log_region = match resume.active_region {
-                PersistedLogRegion::Body => LogRegion::Body,
-                PersistedLogRegion::CurrentResults => LogRegion::CurrentResults,
-            };
+            self.active_log_region = restored_log_region(resume.active_region, tab.results_visible);
         }
     }
 
@@ -6991,13 +7044,13 @@ impl Workspace {
             tab.log_viewport.set_word_wrap(session.word_wrap);
             tab.result_viewport.set_word_wrap(session.word_wrap);
             tab.uses_default_view_options = false;
-            tab.results_visible = session.resume.current_search.results_visible
-                || (tab.result_mode.includes_marks()
-                    && !tab.pending_restore_marked_rows.is_empty());
-            tab.selection_table = match session.resume.active_region {
-                PersistedLogRegion::Body => SelectionTable::Log,
-                PersistedLogRegion::CurrentResults => SelectionTable::Results,
-            };
+            tab.results_visible = restored_results_visible(
+                session.resume.current_search.results_visible,
+                tab.result_mode,
+                !tab.pending_restore_marked_rows.is_empty(),
+            );
+            tab.selection_table =
+                restored_selection_table(session.resume.active_region, tab.results_visible);
             tab.refresh_view_options(cx);
             for table in [tab.log_table.clone(), tab.result_table.clone()] {
                 table.update(cx, |table, cx| {
