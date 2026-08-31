@@ -1691,12 +1691,24 @@ mod tests {
         delegate.set_groups(vec![replacement]);
         assert!(delegate.content_revision() > initial_revision);
         assert_eq!(delegate.layout_revision(), initial_layout_revision);
+        assert!(
+            delegate
+                .visible_lines
+                .line((1, 0), |_| {
+                    panic!("an invalidated virtual window must not read the replacement document")
+                })
+                .is_none()
+        );
+        delegate.visible_lines.prepare_visible_rows(
+            0..1,
+            1,
+            |_| Some((1, 0)),
+            |_, _| Some(vclogg_core::LinePreview::new("reloaded global line", false)),
+        );
         let reloaded = delegate
             .visible_lines
-            .line((1, 0), |_| {
-                Some(vclogg_core::LinePreview::new("reloaded global line", false))
-            })
-            .expect("the replacement document should load a new line");
+            .line((1, 0), |_| panic!("the prepared line must be cached"))
+            .expect("the prepared replacement line should be available");
         assert_eq!(reloaded.source().as_ref(), "reloaded global line");
     }
 

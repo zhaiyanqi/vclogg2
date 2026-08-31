@@ -47,10 +47,11 @@ impl CachedLogLine {
 /// presentation-only change never causes the source file to be read again. Direct consumers such
 /// as copy commands read the authoritative document directly. Visible rows are loaded before
 /// overscan rows, and retained preview payloads never exceed the cache byte budget. The prepared
-/// window is the only cache writer: incidental reads outside that window return a bounded preview
-/// without displacing visible rows.
+/// window is also the only source-read authority: incidental queries outside that window return
+/// no text, while an uncached row inside it may still return a bounded transient preview.
 pub(crate) struct VisibleLineStore<K> {
     lines: RefCell<BTreeMap<K, CachedLogLine>>,
+    prepared_keys: RefCell<BTreeSet<K>>,
     window: Cell<Option<(usize, usize, usize, usize)>>,
     overscan: Cell<usize>,
     max_line_source_bytes: Cell<usize>,
@@ -61,6 +62,7 @@ impl<K> Default for VisibleLineStore<K> {
     fn default() -> Self {
         Self {
             lines: RefCell::default(),
+            prepared_keys: RefCell::default(),
             window: Cell::default(),
             overscan: Cell::new(12),
             max_line_source_bytes: Cell::new(DEFAULT_MAX_LINE_SOURCE_BYTES),
@@ -78,6 +80,7 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
 
     pub(crate) fn invalidate_window(&self) {
         self.window.set(None);
+        self.prepared_keys.borrow_mut().clear();
     }
 
     pub(crate) fn clear(&self) {
@@ -95,6 +98,9 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
         key: K,
         load: impl FnOnce(usize) -> Option<LinePreview>,
     ) -> Option<LogText> {
+        if !self.prepared_keys.borrow().contains(&key) {
+            return None;
+        }
         if let Some(line) = self.lines.borrow().get(&key) {
             return Some(line.text.clone());
         }
@@ -133,6 +139,7 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
                 priority_keys.push(key);
             }
         }
+        *self.prepared_keys.borrow_mut() = priority_keys.iter().cloned().collect();
 
         let byte_budget = self.max_cache_retained_bytes.get();
         let mut previous = std::mem::take(&mut *self.lines.borrow_mut());
@@ -222,11 +229,13 @@ mod tests {
         let cache = VisibleLineStore::<usize>::default();
         cache.max_line_source_bytes.set(4);
 
+        cache.prepare_visible_rows(0..1, 1, Some, |_, limit| {
+            assert_eq!(limit, 4);
+            Some(LinePreview::new("abcd", true))
+        });
+
         let line = cache
-            .line(0, |limit| {
-                assert_eq!(limit, 4);
-                Some(LinePreview::new("abcd", true))
-            })
+            .line(0, |_| panic!("the prepared row must be cached"))
             .expect("the preview should load");
 
         assert_eq!(line.source().as_ref(), "abcd…");
@@ -234,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn incidental_reads_do_not_displace_the_prepared_window() {
+    fn rows_outside_the_prepared_window_are_not_read() {
         let cache = VisibleLineStore::<usize>::default();
         cache.set_overscan(0);
         cache.max_line_source_bytes.set(4);
@@ -247,9 +256,13 @@ mod tests {
         });
         assert_eq!(*loaded.borrow(), vec![10, 11]);
 
-        cache
-            .line(0, |_| Some(LinePreview::new("away", false)))
-            .expect("an incidental read should still return a preview");
+        assert!(
+            cache
+                .line(0, |_| panic!(
+                    "a row outside the virtual window must not be read"
+                ))
+                .is_none()
+        );
         assert_eq!(
             cache.lines.borrow().keys().copied().collect::<Vec<_>>(),
             [10, 11]
@@ -287,5 +300,26 @@ mod tests {
                 .sum::<usize>()
                 <= 4
         );
+    }
+
+    #[test]
+    fn uncached_rows_inside_the_prepared_window_can_read_a_transient_preview() {
+        let cache = VisibleLineStore::<usize>::default();
+        cache.set_overscan(0);
+        cache.max_line_source_bytes.set(4);
+        cache.max_cache_retained_bytes.set(4);
+
+        cache.prepare_visible_rows(0..2, 2, Some, |source_row, _| {
+            Some(LinePreview::new(format!("row {source_row}"), false))
+        });
+
+        let line = cache
+            .line(1, |limit| {
+                assert_eq!(limit, 4);
+                Some(LinePreview::new("next", true))
+            })
+            .expect("the visible row may be read without entering the cache");
+        assert_eq!(line.source().as_ref(), "next…");
+        assert!(!cache.lines.borrow().contains_key(&1));
     }
 }
