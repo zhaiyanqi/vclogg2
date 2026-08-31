@@ -7251,13 +7251,20 @@ impl Workspace {
                         false
                     }
                 };
-                if reloaded {
-                    let document_ids = BTreeSet::from([document_id]);
-                    this.global_search.results.remove_documents(&document_ids);
-                    this.global_search
-                        .all_open_context
-                        .remove_documents(&document_ids);
-                    this.refresh_global_result_rows(cx);
+                if reloaded
+                    && let Some(visible_results_invalidated) =
+                        this.invalidate_all_open_results_for_reload(document_id, cx)
+                {
+                    if visible_results_invalidated {
+                        window.push_notification(
+                            crate::tr!(
+                                "文件已更新，请重新执行全部打开文件搜索",
+                                "The file changed. Run the all-open-files search again."
+                            ),
+                            cx,
+                        );
+                    }
+                    this.schedule_workspace_search_state_save(window, cx);
                 }
                 this.open_task = None;
                 this.open_queued_external_paths_if_idle(window, cx);
@@ -11651,6 +11658,48 @@ impl Workspace {
         self.activity = Activity::Ready;
         self.schedule_checkpoint(document_id, window, cx);
         cx.notify();
+    }
+
+    fn invalidate_all_open_results_for_reload(
+        &mut self,
+        document_id: u64,
+        cx: &mut Context<Self>,
+    ) -> Option<bool> {
+        let installed = self.global_search.result_scope == Some(SearchScope::AllOpenFiles)
+            && self.global_search.results.get(&document_id).is_some();
+        let retained = self
+            .global_search
+            .all_open_context
+            .results
+            .get(&document_id)
+            .is_some();
+        if !installed && !retained {
+            return None;
+        }
+
+        let visible = installed
+            && self.global_search.scope == SearchScope::AllOpenFiles
+            && self.global_search.results_visible;
+        self.global_search.revision = self.global_search.revision.saturating_add(1);
+        if installed {
+            self.global_search.results.clear();
+            self.global_search.matcher = None;
+            self.global_search.result_scope = None;
+            self.global_search.results_visible = false;
+        }
+        self.global_search.all_open_context.invalidate_results();
+        self.global_search.pending_all_open_restore = None;
+        if self.global_search.scope == SearchScope::AllOpenFiles
+            && self.active_log_region == LogRegion::GlobalResults
+        {
+            self.active_log_region = self
+                .active_document()
+                .filter(|tab| tab.results_visible && tab.selection_table == SelectionTable::Results)
+                .map(|_| LogRegion::CurrentResults)
+                .unwrap_or(LogRegion::Body);
+        }
+        self.refresh_global_result_rows(cx);
+        Some(visible)
     }
 
     fn clear_global_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {

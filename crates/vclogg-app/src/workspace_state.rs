@@ -224,6 +224,19 @@ impl Default for RetainedGlobalSearchContext {
 }
 
 impl RetainedGlobalSearchContext {
+    pub(crate) fn invalidate_results(&mut self) {
+        self.initialized = false;
+        self.results.clear();
+        self.matcher = None;
+        self.results_visible = false;
+        self.collapsed_document_ids.clear();
+        self.selection.clear();
+        self.selected_row = None;
+        self.viewport = None;
+        self.horizontal_offset = 0.;
+        self.active = false;
+    }
+
     pub(crate) fn remove_documents(&mut self, document_ids: &BTreeSet<u64>) {
         self.results.remove_documents(document_ids);
         self.collapsed_document_ids
@@ -923,6 +936,50 @@ mod state_controller_tests {
         assert_eq!(context.selection.keys().copied().collect::<Vec<_>>(), [3]);
         assert_eq!(context.selected_row, None);
         assert!(context.viewport.is_none());
+    }
+
+    #[test]
+    fn invalidating_retained_results_preserves_presentation_preferences() {
+        let mut context = RetainedGlobalSearchContext {
+            initialized: true,
+            results: [(3, global_result("a.log"))].into_iter().collect(),
+            matcher: SearchMatcher::literal_phrase("needle").expect("matcher should compile"),
+            result_mode: ResultMode::MarksOnly,
+            results_visible: true,
+            collapsed_document_ids: BTreeSet::from([3]),
+            selection: BTreeMap::from([(3, [2].into_iter().collect())]),
+            selected_row: Some(GlobalSearchRow::Match {
+                document_id: 3,
+                source_row: 2,
+            }),
+            viewport: Some(ViewportAnchor {
+                key: LogRowKey::Row {
+                    document_id: 3,
+                    source_row: 2,
+                },
+                viewport_y: gpui::px(0.),
+                at_end: false,
+                fallback_ix: 1,
+            }),
+            horizontal_offset: 12.,
+            word_wrap: true,
+            active: true,
+        };
+
+        context.invalidate_results();
+
+        assert!(!context.initialized);
+        assert!(context.results.is_empty());
+        assert!(context.matcher.is_none());
+        assert!(!context.results_visible);
+        assert!(context.collapsed_document_ids.is_empty());
+        assert!(context.selection.is_empty());
+        assert!(context.selected_row.is_none());
+        assert!(context.viewport.is_none());
+        assert_eq!(context.horizontal_offset, 0.);
+        assert_eq!(context.result_mode, ResultMode::MarksOnly);
+        assert!(context.word_wrap);
+        assert!(!context.active);
     }
 
     #[test]
