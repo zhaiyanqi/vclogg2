@@ -764,13 +764,17 @@ impl GlobalSearchTableDelegate {
     }
 
     pub(crate) fn restore_collapsed_document_ids(&mut self, document_ids: &BTreeSet<u64>) {
-        self.interaction.collapsed_documents = self
+        let collapsed_documents = self
             .projection
             .groups
             .iter()
             .map(|group| group.source.document_id)
             .filter(|document_id| document_ids.contains(document_id))
             .collect();
+        if self.interaction.collapsed_documents == collapsed_documents {
+            return;
+        }
+        self.interaction.collapsed_documents = collapsed_documents;
         self.rebuild_layout();
     }
 

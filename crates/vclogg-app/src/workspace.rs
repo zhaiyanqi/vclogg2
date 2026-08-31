@@ -3163,7 +3163,7 @@ impl Workspace {
                                 table.delegate_mut().toggle_group(document_id);
                                 table.delegate().clear_row_selection();
                                 table.clear_selection(cx);
-                                table.refresh(cx);
+                                table.refresh_log_rows(cx);
                             });
                             if word_wrap {
                                 let base_height = px((this.app_settings.log_font_size
@@ -10743,7 +10743,7 @@ impl Workspace {
                 table.delegate().set_active_log_row(None);
                 table.clear_selection(cx);
             }
-            table.refresh(cx);
+            table.refresh_log_rows(cx);
             selected_ix.is_some()
         });
         if !selected_restored {
