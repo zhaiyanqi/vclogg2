@@ -2,7 +2,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet},
     ops::Range,
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
 };
@@ -828,6 +828,20 @@ impl GlobalSearchTableDelegate {
             .iter()
             .map(|group| group.projection.rows.len())
             .sum()
+    }
+
+    /// Result content currently installed in the virtual list, independent of
+    /// collapse, selection, highlighting, and other presentation state.
+    pub(crate) fn projected_result_groups(
+        &self,
+    ) -> impl Iterator<Item = (&Path, &Arc<LogDocument>, &CompressedRows)> {
+        self.projection.groups.iter().map(|group| {
+            (
+                group.source.path.as_path(),
+                &group.source.document,
+                &group.projection.rows,
+            )
+        })
     }
 
     pub fn has_truncated_results(&self) -> bool {
@@ -1690,6 +1704,13 @@ mod tests {
 
         assert_eq!(delegate.collapsed_document_ids(), BTreeSet::from([1]));
         assert_eq!(delegate.rows_len(), 1);
+        assert_eq!(
+            delegate
+                .projected_result_groups()
+                .map(|(path, _, rows)| (path.to_path_buf(), rows.clone()))
+                .collect::<Vec<_>>(),
+            vec![(PathBuf::from("test.log"), [2, 5].into_iter().collect())]
+        );
 
         delegate.set_groups(Vec::new());
         assert!(delegate.collapsed_document_ids().is_empty());

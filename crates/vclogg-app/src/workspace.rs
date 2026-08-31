@@ -3614,55 +3614,21 @@ impl Workspace {
                     }
                 })
             }
-            SearchScope::AllOpenFiles => {
-                let groups = self
-                    .documents
-                    .iter()
-                    .filter(|tab| self.global_search.selected_documents.contains(&tab.id))
-                    .filter_map(|tab| {
-                        if tab.load_state != DocumentLoadState::Ready {
-                            return None;
-                        }
-                        let result = self.global_search.results.get(&tab.id);
-                        let rows = compute_result_rows(
-                            self.global_search.result_mode,
-                            result.map(|result| &result.search_result),
-                            &tab.marked_rows,
-                        );
-                        (!rows.is_empty()).then(|| ExportGroup {
-                            path: result
-                                .map(|result| result.path.clone())
-                                .unwrap_or_else(|| tab.document.path().to_path_buf()),
-                            document: result
-                                .map(|result| result.document.clone())
-                                .unwrap_or_else(|| tab.document.clone()),
-                            rows,
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                (!groups.is_empty()).then(|| ResultExport::Global {
-                    groups: groups.into(),
-                })
-            }
-            SearchScope::Directory => {
-                if self.global_search.result_scope != Some(SearchScope::Directory) {
+            scope @ (SearchScope::AllOpenFiles | SearchScope::Directory) => {
+                if scope == SearchScope::Directory
+                    && self.global_search.result_scope != Some(SearchScope::Directory)
+                {
                     return None;
                 }
-                let groups = self
-                    .global_search
-                    .results
-                    .values()
-                    .filter_map(|result| {
-                        let rows = compute_result_rows(
-                            self.global_search.result_mode,
-                            Some(&result.search_result),
-                            &BTreeSet::new(),
-                        );
-                        (!rows.is_empty()).then(|| ExportGroup {
-                            path: result.path.clone(),
-                            document: result.document.clone(),
-                            rows,
-                        })
+                let table = self.global_table.read(cx);
+                let groups = table
+                    .delegate()
+                    .projected_result_groups()
+                    .filter(|(_, _, rows)| !rows.is_empty())
+                    .map(|(path, document, rows)| ExportGroup {
+                        path: path.to_path_buf(),
+                        document: document.clone(),
+                        rows: rows.clone(),
                     })
                     .collect::<Vec<_>>();
                 (!groups.is_empty()).then(|| ResultExport::Global {
