@@ -132,7 +132,7 @@ Release 构建会在启动 15 秒后检查一次，也可由用户手动触发�
 - macOS 15 ARM64：`check.sh` + `package-release-macos.sh`；
 - Ubuntu 22.04 x86_64：安装 GPUI 原生依赖后执行 `check.sh` + `package-release-linux.sh`。
 
-工作流在推送或 PR 指向 `main`、推送 `v*` tag 时触发，也支持手动触发。每个平台上传压缩包、blockmap 与 `latest.json`，保留 14 天。工作流权限为 `contents: read`，不会自行创建 tag、GitHub Release 或修改仓库。
+工作流在推送或 PR 指向 `main`、推送 `v*` tag 时触发，也支持手动触发。每个平台上传压缩包、blockmap 与 `latest.json`，保留 14 天。普通构建 job 保持 `contents: read`；只有已存在的 `v*` tag 触发且三平台全部成功时，末尾 `release` job 才取得 `contents: write`，下载三份 Artifact 并创建带自动发行说明的 GitHub Release。Release 附件包含三平台安装包与各自 blockmap；同名的三个 `latest.json` 继续留在平台 Artifact 和独立更新目录中，不上传到 Release。
 
 ## 验证脚本
 

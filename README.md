@@ -236,7 +236,7 @@ powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 
 三种平台的产物分别写入 `dist/windows-x86_64/`、`dist/macos-aarch64/` 与 `dist/linux-x86_64/`。打包脚本根据实际 runner 架构命名产物；macOS 还会生成临时签名的 `.app`。
 
-仓库中的 [`.github/workflows/release-build.yml`](.github/workflows/release-build.yml) 会在推送或 PR 指向 `main`、推送 `v*` tag 时并行构建 Windows x64、macOS ARM64 和 Linux x86_64，也支持在 GitHub Actions 页面手动执行。构建结果作为 Actions Artifacts 保存 14 天；该工作流不会自动创建 GitHub Release。
+仓库中的 [`.github/workflows/release-build.yml`](.github/workflows/release-build.yml) 会在推送或 PR 指向 `main`、推送 `v*` tag 时并行构建 Windows x64、macOS ARM64 和 Linux x86_64，也支持在 GitHub Actions 页面手动执行。构建结果作为 Actions Artifacts 保存 14 天；推送 `v*` tag 且三个构建全部成功后，工作流还会自动创建带生成式发行说明的 GitHub Release，并附加三平台安装包与 blockmap。
 
 任一平台的产物都可通过跨平台发布脚本写入对应静态更新目录；脚本先验证清单、大小和 SHA-256，最后原子替换 `latest.json`：
 

@@ -171,3 +171,46 @@ jobs:
             dist/linux-x86_64/latest.json
           if-no-files-found: error
           retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs: [windows, macos, linux]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Windows release package
+        uses: actions/download-artifact@v8
+        with:
+          name: vclogg2-windows-x86_64
+          path: release-assets/windows-x86_64
+
+      - name: Download macOS release package
+        uses: actions/download-artifact@v8
+        with:
+          name: vclogg2-macos-aarch64
+          path: release-assets/macos-aarch64
+
+      - name: Download Linux release package
+        uses: actions/download-artifact@v8
+        with:
+          name: vclogg2-linux-x86_64
+          path: release-assets/linux-x86_64
+
+      - name: Create GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            release-assets/windows-x86_64/vclogg2-*-windows-x86_64.zip \
+            release-assets/macos-aarch64/vclogg2-*-macos-aarch64.zip \
+            release-assets/linux-x86_64/vclogg2-*-linux-x86_64.tar.gz \
+            release-assets/*/*.blockmap.json \
+            --verify-tag \
+            --generate-notes \
+            --title "VCLogg2 $GITHUB_REF_NAME"
