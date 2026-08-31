@@ -9741,6 +9741,7 @@ impl Workspace {
             self.global_search.matcher = None;
             self.global_search.result_scope = None;
             self.refresh_global_result_rows(cx);
+            self.fallback_from_hidden_global_results();
         }
         self.schedule_workspace_search_state_save(window, cx);
         cx.notify();
@@ -11649,8 +11650,12 @@ impl Workspace {
         tab.search_result = SearchResult::default();
         tab.search_matcher = None;
         tab.results_visible = false;
+        tab.selection_table = SelectionTable::Log;
         tab.refresh_result_rows(row_height, cx);
         tab.refresh_search_matcher(highlight_matches, cx);
+        if self.active_log_region == LogRegion::CurrentResults {
+            self.active_log_region = LogRegion::Body;
+        }
         self.reset_search_history_navigation();
         self.close_search_autocomplete();
         self.query
@@ -11689,17 +11694,21 @@ impl Workspace {
         }
         self.global_search.all_open_context.invalidate_results();
         self.global_search.pending_all_open_restore = None;
-        if self.global_search.scope == SearchScope::AllOpenFiles
-            && self.active_log_region == LogRegion::GlobalResults
-        {
-            self.active_log_region = self
-                .active_document()
-                .filter(|tab| tab.results_visible && tab.selection_table == SelectionTable::Results)
-                .map(|_| LogRegion::CurrentResults)
-                .unwrap_or(LogRegion::Body);
-        }
+        self.fallback_from_hidden_global_results();
         self.refresh_global_result_rows(cx);
         Some(visible)
+    }
+
+    fn fallback_from_hidden_global_results(&mut self) {
+        if self.active_log_region != LogRegion::GlobalResults || self.global_search.results_visible
+        {
+            return;
+        }
+        self.active_log_region = self
+            .active_document()
+            .filter(|tab| tab.results_visible && tab.selection_table == SelectionTable::Results)
+            .map(|_| LogRegion::CurrentResults)
+            .unwrap_or(LogRegion::Body);
     }
 
     fn clear_global_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -11718,6 +11727,7 @@ impl Workspace {
         self.global_search.pending_all_open_restore = None;
         self.global_search.all_open_context = RetainedGlobalSearchContext::default();
         self.refresh_global_result_rows(cx);
+        self.fallback_from_hidden_global_results();
         self.reset_search_history_navigation();
         self.close_search_autocomplete();
         self.query
@@ -11744,6 +11754,7 @@ impl Workspace {
         self.global_search.directory_context = RetainedGlobalSearchContext::default();
         self.global_search.clear_directory_document_ids();
         self.refresh_global_result_rows(cx);
+        self.fallback_from_hidden_global_results();
         self.reset_search_history_navigation();
         self.close_search_autocomplete();
         self.query
