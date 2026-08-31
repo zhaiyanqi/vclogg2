@@ -226,13 +226,12 @@ fn format_group_result_count(result_count: usize) -> String {
 }
 
 fn global_search_group_title(title: &str, path: &std::path::Path) -> String {
-    if path
-        .file_name()
-        .is_some_and(|file_name| file_name.to_string_lossy() == title)
-    {
-        path.display().to_string()
+    let displayed_path = path.to_string_lossy();
+    let file_name = displayed_path.rsplit(['/', '\\']).next();
+    if file_name == Some(title) {
+        displayed_path.into_owned()
     } else {
-        format!("{title} — {}", path.display())
+        format!("{title} — {displayed_path}")
     }
 }
 
