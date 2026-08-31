@@ -35,6 +35,7 @@ mod ui_theme;
 mod updater;
 mod virtual_log_lines;
 mod workspace;
+mod workspace_state;
 
 use std::path::PathBuf;
 

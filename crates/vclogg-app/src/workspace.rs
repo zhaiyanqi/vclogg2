@@ -47,7 +47,7 @@ use gpui_component::{
     popover::Popover,
     resizable::{ResizableState, resizable_panel, v_resizable},
     scroll::ScrollableElement as _,
-    select::{Select, SelectEvent, SelectItem, SelectState},
+    select::{Select, SelectEvent, SelectState},
     status_bar::StatusBar,
     tab::{Tab, TabBar},
     table::{DataTable, TableDelegate, TableEvent, TableState},
@@ -71,7 +71,7 @@ use crate::{
         ToggleCaseSensitive, ToggleFullscreen, ToggleMarkedRow, ToggleRegex, ToggleWordWrap,
         WORKSPACE_CONTEXT,
     },
-    cloud_filters::{CloudClient, CloudConnectionProfile},
+    cloud_filters::CloudClient,
     color_labels::{
         ColorLabel, KeywordColorRule, ResolvedColorRule, color_with_alpha, default_color_labels,
         resolve_color_rules,
@@ -82,8 +82,8 @@ use crate::{
     },
     global_search_files_dialog::{GlobalSearchFileOption, GlobalSearchFilesDialog},
     global_search_table::{
-        GlobalQuickFindGroup, GlobalSearchGroup, GlobalSearchGroupHeader, GlobalSearchRow,
-        GlobalSearchTableDelegate, WrappedGlobalRow,
+        GlobalSearchGroup, GlobalSearchGroupHeader, GlobalSearchRow, GlobalSearchTableDelegate,
+        WrappedGlobalRow,
     },
     history_dialog::{HistoryDialog, HistoryDialogEvent},
     log_table::{
@@ -120,6 +120,12 @@ use crate::{
         AvailableUpdate, DownloadedUpdate, UpdateClient, UpdateDownloadProgress, launch_installer,
     },
     virtual_log_lines::LogRowKey,
+    workspace_state::{
+        AppUpdateState, CloudController, GlobalSearchDocumentResult, GlobalSearchState,
+        PersistenceController, QuickFindBoundary, QuickFindDirection, QuickFindMatch,
+        QuickFindSource, QuickFindState, QuickFindTarget, ResultMode, RetainedGlobalSearchContext,
+        RowViewportAnchor, SearchScope, UpdateController, ViewportAnchor,
+    },
 };
 
 const WRAPPED_HEIGHT_CACHE_LIMIT: usize = 4096;
@@ -554,21 +560,6 @@ enum LogRegion {
     Body,
     CurrentResults,
     GlobalResults,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ViewportAnchor<K> {
-    key: K,
-    viewport_y: Pixels,
-    at_end: bool,
-    fallback_ix: usize,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct RowViewportAnchor<K> {
-    key: K,
-    viewport_y: Pixels,
-    fallback_ix: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1931,62 +1922,6 @@ fn scale_uniform_wheel_scroll(handle: &gpui::UniformListScrollHandle, delta_y: P
     base_handle.set_offset(point(current.x, target_y));
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum ResultMode {
-    #[default]
-    MatchesAndMarks,
-    MatchesOnly,
-    MarksOnly,
-}
-
-impl ResultMode {
-    const ALL: [Self; 3] = [Self::MatchesAndMarks, Self::MatchesOnly, Self::MarksOnly];
-
-    fn includes_matches(self) -> bool {
-        matches!(self, Self::MatchesAndMarks | Self::MatchesOnly)
-    }
-
-    fn includes_marks(self) -> bool {
-        matches!(self, Self::MatchesAndMarks | Self::MarksOnly)
-    }
-
-    fn from_database(value: i64) -> Self {
-        match value {
-            1 => Self::MatchesOnly,
-            2 => Self::MarksOnly,
-            _ => Self::MatchesAndMarks,
-        }
-    }
-
-    fn database_value(self) -> i64 {
-        match self {
-            Self::MatchesAndMarks => 0,
-            Self::MatchesOnly => 1,
-            Self::MarksOnly => 2,
-        }
-    }
-
-    fn select_index(self) -> usize {
-        usize::try_from(self.database_value()).unwrap_or_default()
-    }
-}
-
-impl SelectItem for ResultMode {
-    type Value = Self;
-
-    fn title(&self) -> SharedString {
-        match self {
-            Self::MatchesAndMarks => crate::tr!("标记与匹配", "Marks & matches").into(),
-            Self::MatchesOnly => crate::tr!("仅匹配", "Matches only").into(),
-            Self::MarksOnly => crate::tr!("仅标记", "Marks only").into(),
-        }
-    }
-
-    fn value(&self) -> &Self::Value {
-        self
-    }
-}
-
 impl DocumentTab {
     fn compute_result_rows(&self) -> CompressedRows {
         compute_result_rows(
@@ -2178,99 +2113,12 @@ enum Activity {
     Error,
 }
 
-#[derive(Clone)]
-enum AppUpdateState {
-    Unsupported,
-    Idle,
-    Checking,
-    Current,
-    Available(Box<AvailableUpdate>),
-    Downloading { version: String },
-    Downloaded(DownloadedUpdate),
-    Error,
-}
-
-impl AppUpdateState {
-    fn button_label(&self, transferred: u64, total: u64) -> String {
-        match self {
-            Self::Unsupported => {
-                crate::tr!("更新（开发版）", "Updates (development build)").to_string()
-            }
-            Self::Idle => crate::tr!("检查更新", "Check for updates").to_string(),
-            Self::Checking => crate::tr!("检查更新中…", "Checking for updates…").to_string(),
-            Self::Current => crate::tr!("已是最新版", "Up to date").to_string(),
-            Self::Available(update) => {
-                crate::tr_args!("下载 {}", "Download {}", update.manifest.version)
-            }
-            Self::Downloading { version } if total > 0 => crate::tr_args!(
-                "下载 {version} · {:.0}%",
-                "Downloading {version} · {:.0}%",
-                transferred as f64 / total as f64 * 100.,
-            ),
-            Self::Downloading { version } => {
-                crate::tr_args!("下载 {version}…", "Downloading {version}…")
-            }
-            Self::Downloaded(update) => crate::tr_args!("安装 {}", "Install {}", update.version),
-            Self::Error => crate::tr!("重试更新", "Retry update").to_string(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum SearchScope {
-    #[default]
-    CurrentFile,
-    AllOpenFiles,
-    Directory,
-}
-
-impl SearchScope {
-    fn owns_global_word_wrap(self) -> bool {
-        matches!(self, Self::AllOpenFiles | Self::Directory)
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum SearchAutocompleteMode {
     #[default]
     Closed,
     Matches,
     History,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum QuickFindTarget {
-    Log(u64),
-    Results(u64),
-    GlobalResults,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum QuickFindDirection {
-    Forward,
-    Backward,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum QuickFindBoundary {
-    Start,
-    End,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct QuickFindMatch {
-    target: QuickFindTarget,
-    view_row: usize,
-    source_row: usize,
-}
-
-enum QuickFindSource {
-    Document {
-        document: Arc<LogDocument>,
-        rows: Option<CompressedRows>,
-        row_count: usize,
-    },
-    Global(Vec<GlobalQuickFindGroup>),
 }
 
 #[derive(Clone, Copy)]
@@ -2376,51 +2224,6 @@ struct SearchPresentationProgress {
     matched_lines: usize,
 }
 
-#[derive(Clone)]
-struct GlobalSearchDocumentResult {
-    document_id: u64,
-    title: SharedString,
-    path: PathBuf,
-    document: Arc<LogDocument>,
-    search_result: SearchResult,
-    failure: Option<SharedString>,
-}
-
-#[derive(Clone)]
-struct RetainedGlobalSearchContext {
-    initialized: bool,
-    results: Vec<GlobalSearchDocumentResult>,
-    matcher: Option<SearchMatcher>,
-    result_mode: ResultMode,
-    results_visible: bool,
-    collapsed_document_ids: BTreeSet<u64>,
-    selection: BTreeMap<u64, CompressedRows>,
-    selected_row: Option<GlobalSearchRow>,
-    viewport: Option<ViewportAnchor<LogRowKey>>,
-    horizontal_offset: f32,
-    word_wrap: bool,
-    active: bool,
-}
-
-impl Default for RetainedGlobalSearchContext {
-    fn default() -> Self {
-        Self {
-            initialized: false,
-            results: Vec::new(),
-            matcher: None,
-            result_mode: ResultMode::MatchesAndMarks,
-            results_visible: false,
-            collapsed_document_ids: BTreeSet::new(),
-            selection: BTreeMap::new(),
-            selected_row: None,
-            viewport: None,
-            horizontal_offset: 0.,
-            word_wrap: false,
-            active: false,
-        }
-    }
-}
-
 impl SearchPresentationProgress {
     fn from_progress(progress: &SearchProgress) -> Self {
         let snapshot = progress.snapshot();
@@ -2451,42 +2254,15 @@ pub struct Workspace {
     query: Entity<InputState>,
     search_history: Vec<String>,
     predefined_filters: Vec<PredefinedFilter>,
-    cloud_settings: CloudSettings,
-    cloud_client: Option<CloudClient>,
-    cloud_connection: Option<CloudConnectionProfile>,
-    cloud_client_error: Option<String>,
-    update_client: Option<UpdateClient>,
-    update_state: AppUpdateState,
-    update_transferred: u64,
-    update_total: u64,
-    update_task: Option<Task<()>>,
-    update_progress_task: Option<Task<()>>,
+    cloud: CloudController,
+    updates: UpdateController,
     search_history_ix: Option<usize>,
     search_history_draft: Option<String>,
     search_autocomplete_mode: SearchAutocompleteMode,
     search_suggestion_ix: Option<usize>,
     search_suggestion_scroll: UniformListScrollHandle,
-    quick_find_query: Entity<InputState>,
-    quick_find_open: bool,
-    quick_find_target: Option<QuickFindTarget>,
-    quick_find_anchor: usize,
-    quick_find_match: Option<QuickFindMatch>,
-    quick_find_matcher: Option<SearchMatcher>,
-    quick_find_case_sensitive: bool,
-    quick_find_whole_word: bool,
-    quick_find_regex: bool,
-    quick_find_error: Option<SharedString>,
-    quick_find_no_match: bool,
-    quick_find_boundary: Option<QuickFindBoundary>,
-    quick_find_busy: bool,
-    quick_find_direction: Option<QuickFindDirection>,
-    quick_find_revision: u64,
-    quick_find_cancellation: Option<SearchCancellation>,
-    quick_find_task: Option<Task<()>>,
-    search_scope: SearchScope,
-    global_query: SearchQuery,
-    directory_query: SearchQuery,
-    directory_search_options: DirectorySearchOptions,
+    quick_find: QuickFindState,
+    global_search: GlobalSearchState,
     global_table: Entity<TableState<GlobalSearchTableDelegate>>,
     global_surface: Entity<LogRegionSurface>,
     global_viewport: LogViewportState<(u64, usize)>,
@@ -2494,20 +2270,6 @@ pub struct Workspace {
     global_results_focus_handle: FocusHandle,
     active_log_region: LogRegion,
     last_user_log_region: LogRegion,
-    global_result_mode: ResultMode,
-    global_result_mode_select: Entity<SelectState<Vec<ResultMode>>>,
-    global_selected_documents: BTreeSet<u64>,
-    global_search_preferences: BTreeMap<PathBuf, bool>,
-    global_search_results: Vec<GlobalSearchDocumentResult>,
-    global_search_matcher: Option<SearchMatcher>,
-    global_result_scope: Option<SearchScope>,
-    all_open_search_context: RetainedGlobalSearchContext,
-    directory_search_context: RetainedGlobalSearchContext,
-    pending_all_open_search_restore: Option<PersistedGlobalSearchContext>,
-    pending_directory_search_restore: Option<PersistedGlobalSearchContext>,
-    restoring_global_selection: bool,
-    global_search_revision: u64,
-    global_results_visible: bool,
     transient_paths: BTreeSet<PathBuf>,
     pending_tab_moves: BTreeSet<u64>,
     documents: Vec<DocumentTab>,
@@ -2543,21 +2305,10 @@ pub struct Workspace {
     search_panel_resize_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     file_watch_task: Option<Task<()>>,
     deactivated_input_focus: Option<FocusHandle>,
-    _state_bootstrap_task: Task<()>,
     _update_client_bootstrap_task: Task<()>,
     _cloud_client_bootstrap_task: Task<()>,
     _automatic_update_task: Task<()>,
-    state_tasks: Vec<Task<()>>,
-    checkpoint_task: Option<Task<()>>,
-    workspace_order_task: Option<Task<()>>,
-    search_history_save_task: Option<Task<()>>,
-    app_settings_save_task: Option<Task<()>>,
-    appearance_save_task: Option<Task<()>>,
-    settings_category_save_task: Option<Task<()>>,
-    search_panel_height_save_task: Option<Task<()>>,
-    search_context_save_task: Option<Task<()>>,
-    pending_workspace_search_save: Option<WorkspaceSearchState>,
-    state_store: Option<Arc<StateStore>>,
+    persistence: PersistenceController,
     last_workspace_files: Vec<LastWorkspaceFile>,
     pinned_files: Vec<RecentFile>,
     recent_files: Vec<RecentFile>,
@@ -2574,10 +2325,6 @@ pub struct Workspace {
     pending_predefined_filters_save: Option<(u64, Vec<PredefinedFilter>)>,
     settings_saving: bool,
     search_defaults_modified: bool,
-    pending_sessions: Vec<(PathBuf, FileSessionState, FileSessionState)>,
-    pending_session_overrides: BTreeMap<PathBuf, FileSessionState>,
-    last_saved_sessions: BTreeMap<PathBuf, FileSessionState>,
-    session_save_task: Option<Task<()>>,
     active_search: Option<ActiveSearch>,
     search_progress: Option<SearchPresentationProgress>,
     subscriptions: Vec<Subscription>,
@@ -2647,7 +2394,7 @@ impl Workspace {
                 });
             let appearance_subscription =
                 cx.observe_window_appearance(window, |workspace, window, cx| {
-                    if workspace.state_store.is_some()
+                    if workspace.persistence.store.is_some()
                         && workspace.app_settings.theme_preference == ThemePreference::System
                     {
                         Self::apply_theme_preference(ThemePreference::System, window, cx);
@@ -2711,7 +2458,7 @@ impl Workspace {
     fn release_input_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let inputs = [
             self.query.focus_handle(cx),
-            self.quick_find_query.focus_handle(cx),
+            self.quick_find.query.focus_handle(cx),
         ];
         let Some(focused) = inputs.into_iter().find(|handle| handle.is_focused(window)) else {
             return;
@@ -3268,8 +3015,8 @@ impl Workspace {
                         this.active_log_region = LogRegion::GlobalResults;
                     }
                 }
-                if this.restoring_global_selection {
-                    this.restoring_global_selection = false;
+                if this.global_search.restoring_selection {
+                    this.global_search.restoring_selection = false;
                     return;
                 }
                 match row {
@@ -3316,17 +3063,17 @@ impl Workspace {
                 let SelectEvent::Confirm(Some(mode)) = event else {
                     return;
                 };
-                if this.global_result_mode == *mode {
+                if this.global_search.result_mode == *mode {
                     return;
                 }
-                this.global_result_mode = *mode;
+                this.global_search.result_mode = *mode;
                 if mode.includes_marks()
                     && this.documents.iter().any(|tab| {
-                        this.global_selected_documents.contains(&tab.id)
+                        this.global_search.selected_documents.contains(&tab.id)
                             && !tab.marked_rows.is_empty()
                     })
                 {
-                    this.global_results_visible = true;
+                    this.global_search.results_visible = true;
                 }
                 this.refresh_global_result_rows(cx);
                 this.schedule_workspace_search_state_save(window, cx);
@@ -3351,10 +3098,10 @@ impl Workspace {
             _ = this.update_in(cx, |this, _, cx| {
                 match client {
                     Ok(client) => {
-                        this.update_client = Some(client);
-                        this.update_state = AppUpdateState::Idle;
+                        this.updates.client = Some(client);
+                        this.updates.state = AppUpdateState::Idle;
                     }
-                    Err(_) => this.update_state = AppUpdateState::Error,
+                    Err(_) => this.updates.state = AppUpdateState::Error,
                 }
                 cx.notify();
             });
@@ -3370,11 +3117,11 @@ impl Workspace {
             _ = this.update_in(cx, |this, _, cx| {
                 match result {
                     Ok((client, connection)) => {
-                        this.cloud_client = Some(client);
-                        this.cloud_connection = connection;
-                        this.cloud_client_error = None;
+                        this.cloud.client = Some(client);
+                        this.cloud.connection = connection;
+                        this.cloud.client_error = None;
                     }
-                    Err(error) => this.cloud_client_error = Some(error),
+                    Err(error) => this.cloud.client_error = Some(error),
                 }
                 cx.notify();
             });
@@ -3404,7 +3151,7 @@ impl Workspace {
                 .timer(Duration::from_secs(15))
                 .await;
             _ = this.update_in(cx, |this, window, cx| {
-                if matches!(this.update_state, AppUpdateState::Idle) {
+                if matches!(this.updates.state, AppUpdateState::Idle) {
                     this.check_for_updates(false, window, cx);
                 }
             });
@@ -3466,9 +3213,9 @@ impl Workspace {
                             app_settings.default_case_sensitive = this.case_sensitive;
                             app_settings.default_use_regex = this.regex;
                         }
-                        this.state_store = Some(store);
+                        this.persistence.store = Some(store);
                         let pending_workspace_search_save =
-                            this.pending_workspace_search_save.take();
+                            this.persistence.pending_workspace_search_save.take();
                         cx.update_global::<WorkspaceWindowRegistry, _>(|registry, _| {
                             if !registry.last_settings_category_loaded {
                                 registry.last_settings_category = last_settings_category
@@ -3510,7 +3257,7 @@ impl Workspace {
                                 cx,
                             );
                         }
-                        this.global_search_preferences = global_search_preferences;
+                        this.global_search.preferences = global_search_preferences;
                         this.search_history = search_history;
                         this.predefined_filters =
                             cx.update_global::<WorkspaceWindowRegistry, _>(|registry, _| {
@@ -3521,7 +3268,7 @@ impl Workspace {
                                     predefined_filters
                                 }
                             });
-                        this.cloud_settings = cloud_settings;
+                        this.cloud.settings = cloud_settings;
                         this.reset_search_history_navigation();
                         this.refresh_search_autocomplete(cx);
                         for tab in this
@@ -3557,7 +3304,7 @@ impl Workspace {
                         });
                         this.refresh_global_result_rows(cx);
                         this.history_loading = false;
-                        let pending_sessions = std::mem::take(&mut this.pending_sessions);
+                        let pending_sessions = std::mem::take(&mut this.persistence.pending_sessions);
                         for (path, base, state) in pending_sessions {
                             this.save_file_session(path, base, state, window, cx);
                         }
@@ -3588,6 +3335,8 @@ impl Workspace {
                 cx.notify();
             });
         });
+        let mut persistence = PersistenceController::new(state_bootstrap_task);
+        persistence.state_tasks.extend(index_cache_cleanup_task);
 
         Self {
             primary_window,
@@ -3596,42 +3345,15 @@ impl Workspace {
             query,
             search_history: Vec::new(),
             predefined_filters: Vec::new(),
-            cloud_settings: CloudSettings::default(),
-            cloud_client: None,
-            cloud_connection: None,
-            cloud_client_error: None,
-            update_client: None,
-            update_state,
-            update_transferred: 0,
-            update_total: 0,
-            update_task: None,
-            update_progress_task: None,
+            cloud: CloudController::default(),
+            updates: UpdateController::new(update_state),
             search_history_ix: None,
             search_history_draft: None,
             search_autocomplete_mode: SearchAutocompleteMode::Closed,
             search_suggestion_ix: None,
             search_suggestion_scroll: UniformListScrollHandle::new(),
-            quick_find_query,
-            quick_find_open: false,
-            quick_find_target: None,
-            quick_find_anchor: 0,
-            quick_find_match: None,
-            quick_find_matcher: None,
-            quick_find_case_sensitive: false,
-            quick_find_whole_word: false,
-            quick_find_regex: false,
-            quick_find_error: None,
-            quick_find_no_match: false,
-            quick_find_boundary: None,
-            quick_find_busy: false,
-            quick_find_direction: None,
-            quick_find_revision: 0,
-            quick_find_cancellation: None,
-            quick_find_task: None,
-            search_scope: SearchScope::CurrentFile,
-            global_query: SearchQuery::default(),
-            directory_query: SearchQuery::default(),
-            directory_search_options: DirectorySearchOptions::default(),
+            quick_find: QuickFindState::new(quick_find_query),
+            global_search: GlobalSearchState::new(global_result_mode_select),
             global_table,
             global_surface,
             global_viewport,
@@ -3639,20 +3361,6 @@ impl Workspace {
             global_results_focus_handle,
             active_log_region: LogRegion::Body,
             last_user_log_region: LogRegion::Body,
-            global_result_mode: ResultMode::MatchesAndMarks,
-            global_result_mode_select,
-            global_selected_documents: BTreeSet::new(),
-            global_search_preferences: BTreeMap::new(),
-            global_search_results: Vec::new(),
-            global_search_matcher: None,
-            global_result_scope: None,
-            all_open_search_context: RetainedGlobalSearchContext::default(),
-            directory_search_context: RetainedGlobalSearchContext::default(),
-            pending_all_open_search_restore: None,
-            pending_directory_search_restore: None,
-            restoring_global_selection: false,
-            global_search_revision: 0,
-            global_results_visible: false,
             transient_paths: BTreeSet::new(),
             pending_tab_moves: BTreeSet::new(),
             documents: Vec::new(),
@@ -3688,21 +3396,10 @@ impl Workspace {
             search_panel_resize_bounds: Rc::new(Cell::new(None)),
             file_watch_task: None,
             deactivated_input_focus: None,
-            _state_bootstrap_task: state_bootstrap_task,
             _update_client_bootstrap_task: update_client_bootstrap_task,
             _cloud_client_bootstrap_task: cloud_client_bootstrap_task,
             _automatic_update_task: automatic_update_task,
-            state_tasks: index_cache_cleanup_task.into_iter().collect(),
-            checkpoint_task: None,
-            workspace_order_task: None,
-            search_history_save_task: None,
-            app_settings_save_task: None,
-            appearance_save_task: None,
-            settings_category_save_task: None,
-            search_panel_height_save_task: None,
-            search_context_save_task: None,
-            pending_workspace_search_save: None,
-            state_store: None,
+            persistence,
             last_workspace_files: Vec::new(),
             pinned_files: Vec::new(),
             recent_files: Vec::new(),
@@ -3719,10 +3416,6 @@ impl Workspace {
             pending_predefined_filters_save: None,
             settings_saving: false,
             search_defaults_modified: false,
-            pending_sessions: Vec::new(),
-            pending_session_overrides: BTreeMap::new(),
-            last_saved_sessions: BTreeMap::new(),
-            session_save_task: None,
             active_search: None,
             search_progress: None,
             subscriptions,
@@ -3782,7 +3475,7 @@ impl Workspace {
     }
 
     fn result_export_snapshot(&self) -> Option<ResultExport> {
-        match self.search_scope {
+        match self.global_search.scope {
             SearchScope::CurrentFile => {
                 let tab = self.active_document()?;
                 (tab.load_state == DocumentLoadState::Ready && !tab.result_rows.is_empty()).then(
@@ -3796,17 +3489,18 @@ impl Workspace {
                 let groups = self
                     .documents
                     .iter()
-                    .filter(|tab| self.global_selected_documents.contains(&tab.id))
+                    .filter(|tab| self.global_search.selected_documents.contains(&tab.id))
                     .filter_map(|tab| {
                         if tab.load_state != DocumentLoadState::Ready {
                             return None;
                         }
                         let result = self
-                            .global_search_results
+                            .global_search
+                            .results
                             .iter()
                             .find(|result| result.document_id == tab.id);
                         let rows = compute_result_rows(
-                            self.global_result_mode,
+                            self.global_search.result_mode,
                             result.map(|result| &result.search_result),
                             &tab.marked_rows,
                         );
@@ -3826,15 +3520,16 @@ impl Workspace {
                 })
             }
             SearchScope::Directory => {
-                if self.global_result_scope != Some(SearchScope::Directory) {
+                if self.global_search.result_scope != Some(SearchScope::Directory) {
                     return None;
                 }
                 let groups = self
-                    .global_search_results
+                    .global_search
+                    .results
                     .iter()
                     .filter_map(|result| {
                         let rows = compute_result_rows(
-                            self.global_result_mode,
+                            self.global_search.result_mode,
                             Some(&result.search_result),
                             &BTreeSet::new(),
                         );
@@ -3853,7 +3548,7 @@ impl Workspace {
     }
 
     fn result_export_suggested_name(&self) -> String {
-        match self.search_scope {
+        match self.global_search.scope {
             SearchScope::CurrentFile => self
                 .active_document()
                 .and_then(|tab| tab.document.path().file_stem())
@@ -3947,7 +3642,7 @@ impl Workspace {
     }
 
     fn open_timestamp_merged_results(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(self.search_scope, SearchScope::CurrentFile)
+        if matches!(self.global_search.scope, SearchScope::CurrentFile)
             || self.result_export_task.is_some()
             || self.open_task.is_some()
         {
@@ -4244,7 +3939,7 @@ impl Workspace {
         }
         for path in &paths {
             if !overrides.sessions.contains_key(path)
-                && let Some(session) = self.pending_session_overrides.get(path)
+                && let Some(session) = self.persistence.pending_session_overrides.get(path)
             {
                 overrides.sessions.insert(path.clone(), session.clone());
             }
@@ -4289,7 +3984,7 @@ impl Workspace {
                     .map(|tab| (path.clone(), tab.id))
             })
             .collect::<BTreeMap<_, _>>();
-        let state_store = self.state_store.clone();
+        let state_store = self.persistence.store.clone();
         let OpenDocumentOverrides {
             sessions,
             move_completions,
@@ -4404,14 +4099,15 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(store) = self.state_store.clone() else {
+        let Some(store) = self.persistence.store.clone() else {
             return;
         };
         if paths.is_empty() {
             return;
         }
 
-        self.state_tasks
+        self.persistence
+            .state_tasks
             .push(cx.spawn_in(window, async move |this, cx| {
                 let result = cx
                     .background_spawn(async move {
@@ -4451,7 +4147,7 @@ impl Workspace {
         else {
             return;
         };
-        let Some(store) = self.state_store.clone() else {
+        let Some(store) = self.persistence.store.clone() else {
             return;
         };
         if self.pinned_updating {
@@ -4460,7 +4156,8 @@ impl Workspace {
         let pinned = !self.active_file_is_pinned();
         self.pinned_updating = true;
         cx.notify();
-        self.state_tasks
+        self.persistence
+            .state_tasks
             .push(cx.spawn_in(window, async move |this, cx| {
                 let result = cx
                     .background_spawn(async move {
@@ -4489,7 +4186,7 @@ impl Workspace {
     }
 
     fn clear_pinned_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(store) = self.state_store.clone() else {
+        let Some(store) = self.persistence.store.clone() else {
             return;
         };
         if self.pinned_updating || self.pinned_files.is_empty() {
@@ -4497,7 +4194,8 @@ impl Workspace {
         }
         self.pinned_updating = true;
         cx.notify();
-        self.state_tasks
+        self.persistence
+            .state_tasks
             .push(cx.spawn_in(window, async move |this, cx| {
                 let result = cx
                     .background_spawn(async move {
@@ -4526,7 +4224,7 @@ impl Workspace {
     }
 
     fn open_history_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(store) = self.state_store.clone() else {
+        let Some(store) = self.persistence.store.clone() else {
             window.push_notification(
                 crate::tr!("状态库尚未就绪", "State storage is not ready"),
                 cx,
@@ -4562,7 +4260,8 @@ impl Workspace {
         }
         self.history_dialog_loading = true;
         cx.notify();
-        self.state_tasks
+        self.persistence
+            .state_tasks
             .push(cx.spawn_in(window, async move |this, cx| {
                 let store_for_query = store.clone();
                 let result = cx
@@ -4665,30 +4364,31 @@ impl Workspace {
         if !changed {
             return;
         }
-        let Some(store) = self.state_store.clone() else {
+        let Some(store) = self.persistence.store.clone() else {
             return;
         };
         let category = category.storage_value().to_string();
-        let previous_save = self.settings_category_save_task.take();
-        self.settings_category_save_task = Some(cx.spawn_in(window, async move |this, cx| {
-            if let Some(previous_save) = previous_save {
-                previous_save.await;
-            }
-            let result = cx
-                .background_spawn(async move { store.save_last_settings_category(&category) })
-                .await;
-            if let Err(error) = result {
-                _ = this.update_in(cx, |_, window, cx| {
-                    window.push_notification(
-                        crate::tr_args!(
-                            "设置页位置未能保存：{error}",
-                            "Couldn’t save the settings page position: {error}"
-                        ),
-                        cx,
-                    );
-                });
-            }
-        }));
+        let previous_save = self.persistence.settings_category_save_task.take();
+        self.persistence.settings_category_save_task =
+            Some(cx.spawn_in(window, async move |this, cx| {
+                if let Some(previous_save) = previous_save {
+                    previous_save.await;
+                }
+                let result = cx
+                    .background_spawn(async move { store.save_last_settings_category(&category) })
+                    .await;
+                if let Err(error) = result {
+                    _ = this.update_in(cx, |_, window, cx| {
+                        window.push_notification(
+                            crate::tr_args!(
+                                "设置页位置未能保存：{error}",
+                                "Couldn’t save the settings page position: {error}"
+                            ),
+                            cx,
+                        );
+                    });
+                }
+            }));
     }
 
     fn restore_search_panel_height(
@@ -4723,29 +4423,32 @@ impl Workspace {
     ) {
         self.search_panel_height = Some(height);
         self.search_panel_height_modified = true;
-        let Some(store) = self.state_store.clone() else {
+        let Some(store) = self.persistence.store.clone() else {
             return;
         };
-        let previous_save = self.search_panel_height_save_task.take();
-        self.search_panel_height_save_task = Some(cx.spawn_in(window, async move |this, cx| {
-            if let Some(previous_save) = previous_save {
-                previous_save.await;
-            }
-            let result = cx
-                .background_spawn(async move { store.save_search_panel_height(height.as_f32()) })
-                .await;
-            if let Err(error) = result {
-                _ = this.update_in(cx, |_, window, cx| {
-                    window.push_notification(
-                        crate::tr_args!(
-                            "搜索面板高度未能保存：{error}",
-                            "Couldn’t save the search panel height: {error}"
-                        ),
-                        cx,
-                    );
-                });
-            }
-        }));
+        let previous_save = self.persistence.search_panel_height_save_task.take();
+        self.persistence.search_panel_height_save_task =
+            Some(cx.spawn_in(window, async move |this, cx| {
+                if let Some(previous_save) = previous_save {
+                    previous_save.await;
+                }
+                let result = cx
+                    .background_spawn(
+                        async move { store.save_search_panel_height(height.as_f32()) },
+                    )
+                    .await;
+                if let Err(error) = result {
+                    _ = this.update_in(cx, |_, window, cx| {
+                        window.push_notification(
+                            crate::tr_args!(
+                                "搜索面板高度未能保存：{error}",
+                                "Couldn’t save the search panel height: {error}"
+                            ),
+                            cx,
+                        );
+                    });
+                }
+            }));
     }
 
     fn resize_search_panel_from_drag(
@@ -4919,10 +4622,10 @@ impl Workspace {
                 self.app_settings.clone(),
                 original_search_history.clone(),
                 SettingsNetworkSnapshot {
-                    settings: self.cloud_settings.clone(),
-                    client: self.cloud_client.clone(),
-                    connection: self.cloud_connection.clone(),
-                    client_error: self.cloud_client_error.clone(),
+                    settings: self.cloud.settings.clone(),
+                    client: self.cloud.client.clone(),
+                    connection: self.cloud.connection.clone(),
+                    client_error: self.cloud.client_error.clone(),
                 },
                 active_category,
                 window,
@@ -4950,7 +4653,7 @@ impl Workspace {
                     this.save_cloud_settings(settings.clone(), window, cx)
                 }
                 SettingsDialogEvent::CloudConnection(connection) => {
-                    this.cloud_connection = connection.clone();
+                    this.cloud.connection = connection.clone();
                     cx.notify();
                 }
             },
@@ -5116,7 +4819,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(store) = self.state_store.clone() else {
+        let Some(store) = self.persistence.store.clone() else {
             window.push_notification(
                 crate::tr!(
                     "状态库尚未就绪，颜色标签未保存",
@@ -5143,7 +4846,8 @@ impl Workspace {
         }
         self.color_labels_saving = true;
         cx.notify();
-        self.state_tasks
+        self.persistence
+            .state_tasks
             .push(cx.spawn_in(window, async move |this, cx| {
                 let result = cx
                     .background_spawn(async move { store.save_color_labels(&labels) })
@@ -5175,10 +4879,10 @@ impl Workspace {
         let filters = cx.new(|cx| {
             PredefinedFiltersDialog::new(
                 self.predefined_filters.clone(),
-                self.cloud_settings.clone(),
-                self.cloud_client.clone(),
-                self.cloud_connection.clone(),
-                self.cloud_client_error.clone(),
+                self.cloud.settings.clone(),
+                self.cloud.client.clone(),
+                self.cloud.connection.clone(),
+                self.cloud.client_error.clone(),
                 window,
                 cx,
             )
@@ -5194,7 +4898,7 @@ impl Workspace {
                     this.save_cloud_settings(settings.clone(), window, cx)
                 }
                 PredefinedFiltersDialogEvent::CloudConnection(connection) => {
-                    this.cloud_connection = connection.clone();
+                    this.cloud.connection = connection.clone();
                     cx.notify();
                 }
             },
@@ -5267,7 +4971,7 @@ impl Workspace {
                 workspace.apply_predefined_filters(shared_filters, cx)
             });
         }
-        if self.state_store.is_none() {
+        if self.persistence.store.is_none() {
             window.push_notification(
                 crate::tr!(
                     "过滤器已应用，但状态库尚未就绪，未持久保存",
@@ -5292,7 +4996,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(store) = self.state_store.clone() else {
+        let Some(store) = self.persistence.store.clone() else {
             window.push_notification(
                 crate::tr!(
                     "状态库尚未就绪，预定义过滤器未保存",
@@ -5304,7 +5008,8 @@ impl Workspace {
         };
         self.predefined_filters_saving = true;
         cx.notify();
-        self.state_tasks
+        self.persistence
+            .state_tasks
             .push(cx.spawn_in(window, async move |this, cx| {
                 let result = cx
                     .background_spawn(async move {
@@ -5342,7 +5047,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(store) = self.state_store.clone() else {
+        let Some(store) = self.persistence.store.clone() else {
             window.push_notification(
                 crate::tr!(
                     "状态库尚未就绪，云端连接设置未保存",
@@ -5352,7 +5057,7 @@ impl Workspace {
             );
             return;
         };
-        self.cloud_settings = settings.clone();
+        self.cloud.settings = settings.clone();
         let source_window = window.window_handle();
         let other_workspaces = cx
             .global::<WorkspaceWindowRegistry>()
@@ -5364,11 +5069,12 @@ impl Workspace {
         for workspace in other_workspaces {
             let settings = settings.clone();
             workspace.update(cx, |workspace, cx| {
-                workspace.cloud_settings = settings;
+                workspace.cloud.settings = settings;
                 cx.notify();
             });
         }
-        self.state_tasks
+        self.persistence
+            .state_tasks
             .push(cx.spawn_in(window, async move |this, cx| {
                 let result = cx
                     .background_spawn(async move { store.save_cloud_settings(&settings) })
@@ -5388,7 +5094,7 @@ impl Workspace {
     }
 
     fn check_for_updates(&mut self, manual: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.update_task.is_some() {
+        if self.updates.task.is_some() {
             return;
         }
         if cfg!(debug_assertions) {
@@ -5397,29 +5103,29 @@ impl Workspace {
             }
             return;
         }
-        let Some(client) = self.update_client.clone() else {
-            self.update_state = AppUpdateState::Error;
+        let Some(client) = self.updates.client.clone() else {
+            self.updates.state = AppUpdateState::Error;
             cx.notify();
             return;
         };
-        let static_server_url = (!self.cloud_settings.server_url.trim().is_empty())
-            .then(|| self.cloud_settings.server_url.trim().to_string());
-        self.update_state = AppUpdateState::Checking;
-        self.update_task = Some(cx.spawn_in(window, async move |this, cx| {
+        let static_server_url = (!self.cloud.settings.server_url.trim().is_empty())
+            .then(|| self.cloud.settings.server_url.trim().to_string());
+        self.updates.state = AppUpdateState::Checking;
+        self.updates.task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
                     client.check_latest(env!("CARGO_PKG_VERSION"), static_server_url.as_deref())
                 })
                 .await;
             _ = this.update_in(cx, |this, window, cx| {
-                this.update_task = None;
+                this.updates.task = None;
                 match result {
                     Ok(Some(update)) => {
-                        this.update_state = AppUpdateState::Available(Box::new(update.clone()));
+                        this.updates.state = AppUpdateState::Available(Box::new(update.clone()));
                         this.confirm_update_download(update, window, cx);
                     }
                     Ok(None) => {
-                        this.update_state = AppUpdateState::Current;
+                        this.updates.state = AppUpdateState::Current;
                         if manual {
                             window.push_notification(
                                 crate::tr_args!(
@@ -5432,7 +5138,7 @@ impl Workspace {
                         }
                     }
                     Err(error) => {
-                        this.update_state = AppUpdateState::Error;
+                        this.updates.state = AppUpdateState::Error;
                         if manual {
                             window.push_notification(
                                 crate::tr_args!(
@@ -5489,21 +5195,21 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.update_task.is_some() {
+        if self.updates.task.is_some() {
             return;
         }
-        let Some(client) = self.update_client.clone() else {
+        let Some(client) = self.updates.client.clone() else {
             return;
         };
         let progress = UpdateDownloadProgress::default();
         let progress_for_download = progress.clone();
         let version = update.manifest.version.clone();
-        self.update_transferred = 0;
-        self.update_total = update.manifest.size;
-        self.update_state = AppUpdateState::Downloading {
+        self.updates.transferred = 0;
+        self.updates.total = update.manifest.size;
+        self.updates.state = AppUpdateState::Downloading {
             version: version.clone(),
         };
-        self.update_progress_task = Some(cx.spawn_in(window, async move |this, cx| {
+        self.updates.progress_task = Some(cx.spawn_in(window, async move |this, cx| {
             loop {
                 cx.background_executor()
                     .timer(Duration::from_millis(100))
@@ -5512,11 +5218,12 @@ impl Workspace {
                 let keep_polling = this
                     .update_in(cx, |this, _, cx| {
                         let keep_polling =
-                            matches!(this.update_state, AppUpdateState::Downloading { .. });
-                        if keep_polling && (this.update_transferred, this.update_total) != snapshot
+                            matches!(this.updates.state, AppUpdateState::Downloading { .. });
+                        if keep_polling
+                            && (this.updates.transferred, this.updates.total) != snapshot
                         {
-                            this.update_transferred = snapshot.0;
-                            this.update_total = snapshot.1;
+                            this.updates.transferred = snapshot.0;
+                            this.updates.total = snapshot.1;
                             cx.notify();
                         }
                         keep_polling
@@ -5527,21 +5234,21 @@ impl Workspace {
                 }
             }
         }));
-        self.update_task = Some(cx.spawn_in(window, async move |this, cx| {
+        self.updates.task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move { client.download(&update, &progress_for_download) })
                 .await;
             _ = this.update_in(cx, |this, window, cx| {
-                this.update_task = None;
-                this.update_progress_task.take();
+                this.updates.task = None;
+                this.updates.progress_task.take();
                 match result {
                     Ok(downloaded) => {
-                        this.update_transferred = this.update_total;
-                        this.update_state = AppUpdateState::Downloaded(downloaded.clone());
+                        this.updates.transferred = this.updates.total;
+                        this.updates.state = AppUpdateState::Downloaded(downloaded.clone());
                         this.confirm_update_install(downloaded, window, cx);
                     }
                     Err(error) => {
-                        this.update_state = AppUpdateState::Error;
+                        this.updates.state = AppUpdateState::Error;
                         window.push_notification(
                             crate::tr_args!(
                                 "下载更新失败：{error}",
@@ -5592,18 +5299,18 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.update_task.is_some() {
+        if self.updates.task.is_some() {
             return;
         }
-        self.update_task = Some(cx.spawn_in(window, async move |this, cx| {
+        self.updates.task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move { launch_installer(&update) })
                 .await;
             _ = this.update_in(cx, |this, window, cx| match result {
                 Ok(()) => cx.quit(),
                 Err(error) => {
-                    this.update_task = None;
-                    this.update_state = AppUpdateState::Error;
+                    this.updates.task = None;
+                    this.updates.state = AppUpdateState::Error;
                     window.push_notification(
                         crate::tr_args!(
                             "无法启动更新安装助手：{error}",
@@ -5618,7 +5325,7 @@ impl Workspace {
     }
 
     fn handle_update_button(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.update_state.clone() {
+        match self.updates.state.clone() {
             AppUpdateState::Unsupported => {
                 window.push_notification(crate::tr!("开发构建不执行应用更新，请使用发行版验证更新流程", "Development builds don’t install updates. Use a release build to verify the update flow."), cx)
             }
@@ -5636,10 +5343,10 @@ impl Workspace {
         self.regex = regex;
         self.app_settings.default_case_sensitive = case_sensitive;
         self.app_settings.default_use_regex = regex;
-        self.global_query.case_sensitive = case_sensitive;
-        self.global_query.regex = regex;
-        self.directory_query.case_sensitive = case_sensitive;
-        self.directory_query.regex = regex;
+        self.global_search.query.case_sensitive = case_sensitive;
+        self.global_search.query.regex = regex;
+        self.global_search.directory_query.case_sensitive = case_sensitive;
+        self.global_search.directory_query.regex = regex;
         for tab in &mut self.documents {
             tab.search_query.case_sensitive = case_sensitive;
             tab.search_query.regex = regex;
@@ -5654,44 +5361,48 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(store) = self.state_store.clone() else {
+        let Some(store) = self.persistence.store.clone() else {
             return;
         };
-        let previous_save = self.app_settings_save_task.take();
+        let previous_save = self.persistence.app_settings_save_task.take();
         if report_completion {
             self.settings_saving = true;
         }
-        self.app_settings_save_task = Some(cx.spawn_in(window, async move |this, cx| {
-            if let Some(previous_save) = previous_save {
-                previous_save.await;
-            }
-            let result = cx
-                .background_spawn(async move { store.save_app_settings(settings) })
-                .await;
-            _ = this.update_in(cx, |this, window, cx| {
-                if report_completion {
-                    this.settings_saving = false;
+        self.persistence.app_settings_save_task =
+            Some(cx.spawn_in(window, async move |this, cx| {
+                if let Some(previous_save) = previous_save {
+                    previous_save.await;
                 }
-                match result {
-                    Ok(()) if report_completion => {
-                        window.push_notification(crate::tr!("设置已保存", "Settings saved"), cx)
+                let result = cx
+                    .background_spawn(async move { store.save_app_settings(settings) })
+                    .await;
+                _ = this.update_in(cx, |this, window, cx| {
+                    if report_completion {
+                        this.settings_saving = false;
                     }
-                    Ok(()) => {}
-                    Err(error) if report_completion => window.push_notification(
-                        crate::tr_args!("设置未能保存：{error}", "Couldn’t save settings: {error}"),
-                        cx,
-                    ),
-                    Err(error) => window.push_notification(
-                        crate::tr_args!(
-                            "搜索默认值未能保存：{error}",
-                            "Couldn’t save search defaults: {error}"
+                    match result {
+                        Ok(()) if report_completion => {
+                            window.push_notification(crate::tr!("设置已保存", "Settings saved"), cx)
+                        }
+                        Ok(()) => {}
+                        Err(error) if report_completion => window.push_notification(
+                            crate::tr_args!(
+                                "设置未能保存：{error}",
+                                "Couldn’t save settings: {error}"
+                            ),
+                            cx,
                         ),
-                        cx,
-                    ),
-                }
-                cx.notify();
-            });
-        }));
+                        Err(error) => window.push_notification(
+                            crate::tr_args!(
+                                "搜索默认值未能保存：{error}",
+                                "Couldn’t save search defaults: {error}"
+                            ),
+                            cx,
+                        ),
+                    }
+                    cx.notify();
+                });
+            }));
     }
 
     fn set_search_defaults(
@@ -5724,7 +5435,7 @@ impl Workspace {
         self.query.update(cx, |input, cx| {
             input.set_placeholder(crate::tr!("搜索", "Search"), window, cx);
         });
-        self.quick_find_query.update(cx, |input, cx| {
+        self.quick_find.query.update(cx, |input, cx| {
             input.set_placeholder(
                 crate::tr!("在当前视图中查找", "Find in current view"),
                 window,
@@ -5787,8 +5498,8 @@ impl Workspace {
             tab.refresh_log_level_highlighting(settings.highlight_log_levels, cx);
             tab.refresh_search_matcher(settings.highlight_matches, cx);
         }
-        self.global_query.max_results = search_result_limit;
-        self.directory_query.max_results = search_result_limit;
+        self.global_search.query.max_results = search_result_limit;
+        self.global_search.directory_query.max_results = search_result_limit;
         self.global_table.update(cx, |table, cx| {
             table.delegate_mut().set_appearance(&settings);
             table
@@ -5830,8 +5541,8 @@ impl Workspace {
                     tab.refresh_log_level_highlighting(shared_settings.highlight_log_levels, cx);
                     tab.refresh_search_matcher(shared_settings.highlight_matches, cx);
                 }
-                workspace.global_query.max_results = search_result_limit;
-                workspace.directory_query.max_results = search_result_limit;
+                workspace.global_search.query.max_results = search_result_limit;
+                workspace.global_search.directory_query.max_results = search_result_limit;
                 workspace.global_table.update(cx, |table, cx| {
                     table.delegate_mut().set_appearance(&shared_settings);
                     table.delegate_mut().set_word_boundary_characters(
@@ -5857,7 +5568,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.state_store.is_none() {
+        if self.persistence.store.is_none() {
             window.push_notification(
                 crate::tr!(
                     "状态库尚未就绪，设置未保存",
@@ -5879,7 +5590,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.state_store.is_none() {
+        if self.persistence.store.is_none() {
             window.push_notification(
                 crate::tr!(
                     "状态库尚未就绪，设置未保存",
@@ -5916,7 +5627,7 @@ impl Workspace {
             return;
         }
         cx.stop_propagation();
-        if self.state_store.is_none() {
+        if self.persistence.store.is_none() {
             return;
         }
 
@@ -6082,11 +5793,11 @@ impl Workspace {
     }
 
     fn schedule_appearance_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(store) = self.state_store.clone() else {
+        let Some(store) = self.persistence.store.clone() else {
             return;
         };
         let settings = self.app_settings.clone();
-        self.appearance_save_task = Some(cx.spawn_in(window, async move |this, cx| {
+        self.persistence.appearance_save_task = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(300))
                 .await;
@@ -6133,7 +5844,7 @@ impl Workspace {
     }
 
     fn clear_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(store) = self.state_store.clone() else {
+        let Some(store) = self.persistence.store.clone() else {
             return;
         };
         if self.history_clearing {
@@ -6146,7 +5857,8 @@ impl Workspace {
             .collect::<Vec<_>>();
         self.history_clearing = true;
         cx.notify();
-        self.state_tasks
+        self.persistence
+            .state_tasks
             .push(cx.spawn_in(window, async move |this, cx| {
                 let result = cx
                     .background_spawn(async move {
@@ -6206,22 +5918,24 @@ impl Workspace {
         if self.transient_paths.contains(&path) {
             return;
         }
-        self.pending_session_overrides
+        self.persistence
+            .pending_session_overrides
             .insert(path.clone(), state.clone());
-        let Some(store) = self.state_store.clone() else {
-            self.pending_sessions.push((path, base, state));
+        let Some(store) = self.persistence.store.clone() else {
+            self.persistence.pending_sessions.push((path, base, state));
             return;
         };
         let saved_path = path.clone();
         let desired_state = state.clone();
-        let previous_save = self.session_save_task.take();
-        self.session_save_task = Some(cx.spawn_in(window, async move |this, cx| {
+        let previous_save = self.persistence.session_save_task.take();
+        self.persistence.session_save_task = Some(cx.spawn_in(window, async move |this, cx| {
             if let Some(previous_save) = previous_save {
                 previous_save.await;
             }
             let effective_base = this
                 .update_in(cx, |this, _, _| {
-                    this.last_saved_sessions
+                    this.persistence
+                        .last_saved_sessions
                         .get(&saved_path)
                         .filter(|saved| saved.revision > base.revision)
                         .cloned()
@@ -6235,13 +5949,17 @@ impl Workspace {
             _ = this.update_in(cx, |this, window, cx| match result {
                 Ok(result) => {
                     if this
+                        .persistence
                         .pending_session_overrides
                         .get(&saved_path)
                         .is_some_and(|latest| Self::session_contents_equal(latest, &desired_state))
                     {
-                        this.pending_session_overrides.remove(&saved_path);
+                        this.persistence
+                            .pending_session_overrides
+                            .remove(&saved_path);
                     }
-                    this.last_saved_sessions
+                    this.persistence
+                        .last_saved_sessions
                         .insert(saved_path.clone(), result.state.clone());
                     if let Some(tab) = this
                         .documents
@@ -6341,21 +6059,22 @@ impl Workspace {
     }
 
     fn take_quit_snapshot(&mut self, cx: &mut Context<Self>) -> QuitWorkspaceSnapshot {
-        self.checkpoint_task.take();
-        self.capture_retained_global_context(self.search_scope, cx);
+        self.persistence.checkpoint_task.take();
+        self.capture_retained_global_context(self.global_search.scope, cx);
         let search_state = self.primary_window.then(|| self.workspace_search_state());
-        let store = self.state_store.clone();
+        let store = self.persistence.store.clone();
         let predefined_filters = cx
             .global::<WorkspaceWindowRegistry>()
             .predefined_filters
             .clone();
-        let mut sessions = std::mem::take(&mut self.pending_sessions)
+        let mut sessions = std::mem::take(&mut self.persistence.pending_sessions)
             .into_iter()
             .filter(|(path, _, _)| !self.transient_paths.contains(path))
             .map(|(path, _, state)| (path, state))
             .collect::<BTreeMap<_, _>>();
         sessions.extend(
-            self.pending_session_overrides
+            self.persistence
+                .pending_session_overrides
                 .iter()
                 .filter(|(path, _)| !self.transient_paths.contains(*path))
                 .map(|(path, state)| (path.clone(), state.clone())),
@@ -6382,26 +6101,26 @@ impl Workspace {
             .filter(|tab| !self.transient_paths.contains(tab.document.path()))
             .map(|tab| tab.document.path().to_path_buf());
 
-        let mut state_tasks = std::mem::take(&mut self.state_tasks);
-        if let Some(task) = self.session_save_task.take() {
+        let mut state_tasks = std::mem::take(&mut self.persistence.state_tasks);
+        if let Some(task) = self.persistence.session_save_task.take() {
             state_tasks.push(task);
         }
-        if let Some(task) = self.search_history_save_task.take() {
+        if let Some(task) = self.persistence.search_history_save_task.take() {
             state_tasks.push(task);
         }
-        if let Some(task) = self.app_settings_save_task.take() {
+        if let Some(task) = self.persistence.app_settings_save_task.take() {
             state_tasks.push(task);
         }
-        if let Some(task) = self.appearance_save_task.take() {
+        if let Some(task) = self.persistence.appearance_save_task.take() {
             state_tasks.push(task);
         }
-        if let Some(task) = self.settings_category_save_task.take() {
+        if let Some(task) = self.persistence.settings_category_save_task.take() {
             state_tasks.push(task);
         }
-        if let Some(task) = self.search_panel_height_save_task.take() {
+        if let Some(task) = self.persistence.search_panel_height_save_task.take() {
             state_tasks.push(task);
         }
-        if let Some(task) = self.search_context_save_task.take() {
+        if let Some(task) = self.persistence.search_context_save_task.take() {
             state_tasks.push(task);
         }
         QuitWorkspaceSnapshot {
@@ -6413,7 +6132,7 @@ impl Workspace {
             active_path,
             search_state,
             state_tasks,
-            workspace_order_task: self.workspace_order_task.take(),
+            workspace_order_task: self.persistence.workspace_order_task.take(),
         }
     }
 
@@ -6426,19 +6145,19 @@ impl Workspace {
         if !self.documents.iter().any(|tab| tab.id == document_id) {
             return;
         }
-        self.checkpoint_task = Some(cx.spawn_in(window, async move |this, cx| {
+        self.persistence.checkpoint_task = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(1_500))
                 .await;
             _ = this.update_in(cx, |this, window, cx| {
                 let Some(tab) = this.documents.iter().find(|tab| tab.id == document_id) else {
-                    this.checkpoint_task = None;
+                    this.persistence.checkpoint_task = None;
                     return;
                 };
                 let path = tab.document.path().to_path_buf();
                 let base = tab.session_base.clone();
                 let state = this.file_session_state(tab, cx);
-                this.checkpoint_task = None;
+                this.persistence.checkpoint_task = None;
                 this.save_file_session(path, base, state, window, cx);
             });
         }));
@@ -6549,12 +6268,13 @@ impl Workspace {
             let document_id = self.next_document_id;
             self.next_document_id += 1;
             if self
-                .global_search_preferences
+                .global_search
+                .preferences
                 .get(&path)
                 .copied()
                 .unwrap_or(true)
             {
-                self.global_selected_documents.insert(document_id);
+                self.global_search.selected_documents.insert(document_id);
             }
             let log_table = cx.new(|cx| {
                 let mut delegate = LogTableDelegate::all(document_id, document.clone());
@@ -6885,14 +6605,16 @@ impl Workspace {
         }
         self.record_recent_paths(recorded_paths, window, cx);
         for cache_write in cache_writes {
-            self.state_tasks.push(cx.spawn(async move |_, cx| {
-                if let Err(error) = cx
-                    .background_spawn(async move { cache_write.persist() })
-                    .await
-                {
-                    log::error!("索引缓存未能保存：{error:#}");
-                }
-            }));
+            self.persistence
+                .state_tasks
+                .push(cx.spawn(async move |_, cx| {
+                    if let Err(error) = cx
+                        .background_spawn(async move { cache_write.persist() })
+                        .await
+                    {
+                        log::error!("索引缓存未能保存：{error:#}");
+                    }
+                }));
         }
 
         if !warnings.is_empty() {
@@ -7020,7 +6742,9 @@ impl Workspace {
             row_height,
             cx,
         );
-        if self.active_ix == Some(document_ix) && self.search_scope == SearchScope::CurrentFile {
+        if self.active_ix == Some(document_ix)
+            && self.global_search.scope == SearchScope::CurrentFile
+        {
             self.active_log_region = match resume.active_region {
                 PersistedLogRegion::Body => LogRegion::Body,
                 PersistedLogRegion::CurrentResults => LogRegion::CurrentResults,
@@ -7481,7 +7205,7 @@ impl Workspace {
             });
 
         window.set_window_title(&title);
-        if self.search_scope == SearchScope::CurrentFile {
+        if self.global_search.scope == SearchScope::CurrentFile {
             self.reset_search_history_navigation();
             self.query
                 .update(cx, |state, cx| state.set_value(query, window, cx));
@@ -7657,13 +7381,15 @@ impl Workspace {
         } else {
             self.active_tab_id = previous_active_id;
         }
-        self.global_selected_documents
+        self.global_search
+            .selected_documents
             .retain(|document_id| !document_ids.contains(document_id));
-        self.global_search_results
+        self.global_search
+            .results
             .retain(|result| !document_ids.contains(&result.document_id));
         self.reorder_documents_to_match_tabs();
         if !document_ids.is_empty() {
-            self.global_search_revision = self.global_search_revision.saturating_add(1);
+            self.global_search.revision = self.global_search.revision.saturating_add(1);
             self.refresh_global_result_rows(cx);
         }
         self.sync_active_document(window, cx);
@@ -7695,7 +7421,7 @@ impl Workspace {
         self.reorder_documents_to_match_tabs();
 
         let document_order = self.documents.iter().map(|tab| tab.id).collect::<Vec<_>>();
-        self.global_search_results.sort_by_key(|result| {
+        self.global_search.results.sort_by_key(|result| {
             document_order
                 .iter()
                 .position(|document_id| *document_id == result.document_id)
@@ -7707,7 +7433,7 @@ impl Workspace {
     }
 
     fn persist_workspace_order(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let store = self.state_store.clone();
+        let store = self.persistence.store.clone();
         let sessions = self
             .documents
             .iter()
@@ -7728,9 +7454,9 @@ impl Workspace {
             .filter(|tab| !self.transient_paths.contains(tab.document.path()))
             .map(|tab| tab.document.path().to_path_buf());
         let primary_window = self.primary_window;
-        let previous_task = self.workspace_order_task.take();
+        let previous_task = self.persistence.workspace_order_task.take();
 
-        self.workspace_order_task = Some(cx.spawn_in(window, async move |this, cx| {
+        self.persistence.workspace_order_task = Some(cx.spawn_in(window, async move |this, cx| {
             if let Some(task) = previous_task {
                 task.await;
             }
@@ -8132,7 +7858,8 @@ impl Workspace {
         tab.title = display_title.clone();
         tab.custom_title = Some(title.clone());
         if let Some(result) = self
-            .global_search_results
+            .global_search
+            .results
             .iter_mut()
             .find(|result| result.document_id == document_id)
         {
@@ -8165,7 +7892,8 @@ impl Workspace {
         tab.title = display_title.clone();
         tab.custom_title = None;
         if let Some(result) = self
-            .global_search_results
+            .global_search
+            .results
             .iter_mut()
             .find(|result| result.document_id == document_id)
         {
@@ -8248,8 +7976,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let store = self.state_store.clone();
-        self.state_tasks
+        let store = self.persistence.store.clone();
+        self.persistence
+            .state_tasks
             .push(cx.spawn_in(window, async move |this, cx| {
                 let result = cx
                     .background_spawn(async move {
@@ -8563,7 +8292,8 @@ impl Workspace {
                 return;
             }
         }
-        if self.active_log_region == LogRegion::GlobalResults && self.global_results_visible {
+        if self.active_log_region == LogRegion::GlobalResults && self.global_search.results_visible
+        {
             let selected_rows = self.global_table.read(cx).delegate().selected_matches();
             if selected_rows.is_empty() {
                 window.push_notification(
@@ -8584,7 +8314,8 @@ impl Workspace {
                     .find(|tab| tab.id == document_id)
                     .map(|tab| tab.document.clone())
                     .or_else(|| {
-                        self.global_search_results
+                        self.global_search
+                            .results
                             .iter()
                             .find(|result| result.document_id == document_id)
                             .map(|result| result.document.clone())
@@ -8678,7 +8409,8 @@ impl Workspace {
 
     fn select_all_rows(&mut self, _: &SelectAllRows, window: &mut Window, cx: &mut Context<Self>) {
         TextSelection::clear(window, cx);
-        if self.active_log_region == LogRegion::GlobalResults && self.global_results_visible {
+        if self.active_log_region == LogRegion::GlobalResults && self.global_search.results_visible
+        {
             self.global_table.update(cx, |table, cx| {
                 table.delegate().select_all_rows();
                 cx.notify();
@@ -8985,8 +8717,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.active_log_region == LogRegion::GlobalResults && self.global_results_visible {
-            if self.search_scope == SearchScope::Directory {
+        if self.active_log_region == LogRegion::GlobalResults && self.global_search.results_visible
+        {
+            if self.global_search.scope == SearchScope::Directory {
                 window.push_notification(
                     crate::tr!(
                         "请先打开目录结果所属文件，再标记日志行",
@@ -9136,10 +8869,10 @@ impl Workspace {
             (tab.id, is_marking)
         };
         if is_marking
-            && self.global_result_mode.includes_marks()
-            && self.global_selected_documents.contains(&document_id)
+            && self.global_search.result_mode.includes_marks()
+            && self.global_search.selected_documents.contains(&document_id)
         {
-            self.global_results_visible = true;
+            self.global_search.results_visible = true;
         }
         self.refresh_global_result_rows(cx);
         let action = if is_marking {
@@ -9190,7 +8923,8 @@ impl Workspace {
         }
         let (target, anchor) = match self.last_user_log_region {
             LogRegion::GlobalResults
-                if self.search_scope != SearchScope::CurrentFile && self.global_results_visible =>
+                if self.global_search.scope != SearchScope::CurrentFile
+                    && self.global_search.results_visible =>
             {
                 (
                     QuickFindTarget::GlobalResults,
@@ -9201,7 +8935,7 @@ impl Workspace {
                 )
             }
             LogRegion::CurrentResults
-                if self.search_scope == SearchScope::CurrentFile && tab.results_visible =>
+                if self.global_search.scope == SearchScope::CurrentFile && tab.results_visible =>
             {
                 (
                     QuickFindTarget::Results(tab.id),
@@ -9217,38 +8951,25 @@ impl Workspace {
             ),
         };
 
-        self.cancel_quick_find_work();
-        self.quick_find_open = true;
-        self.quick_find_target = Some(target);
-        self.quick_find_anchor = anchor;
-        self.quick_find_match = None;
-        self.quick_find_no_match = false;
-        self.quick_find_boundary = None;
+        self.quick_find.open(target, anchor);
         self.update_quick_find_matcher(window, cx);
-        let focus = self.quick_find_query.focus_handle(cx);
-        self.quick_find_query
+        let focus = self.quick_find.query.focus_handle(cx);
+        self.quick_find
+            .query
             .update(cx, |state, cx| state.select_all(window, cx));
         window.defer(cx, move |window, cx| focus.focus(window, cx));
-        if !self.quick_find_query.read(cx).value().is_empty() {
+        if !self.quick_find.query.read(cx).value().is_empty() {
             self.start_quick_find(QuickFindDirection::Forward, true, window, cx);
         }
         cx.notify();
     }
 
     fn quick_find_input_has_focus(&self, window: &Window, cx: &App) -> bool {
-        self.quick_find_open && self.quick_find_query.focus_handle(cx).is_focused(window)
+        self.quick_find.open && self.quick_find.query.focus_handle(cx).is_focused(window)
     }
 
     fn close_quick_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let target = self.quick_find_target;
-        self.cancel_quick_find_work();
-        self.quick_find_open = false;
-        self.quick_find_target = None;
-        self.quick_find_match = None;
-        self.quick_find_matcher = None;
-        self.quick_find_error = None;
-        self.quick_find_no_match = false;
-        self.quick_find_boundary = None;
+        let target = self.quick_find.close();
         self.refresh_quick_find_highlights(cx);
         match target {
             Some(QuickFindTarget::Log(document_id)) => self
@@ -9274,60 +8995,54 @@ impl Workspace {
     }
 
     fn cancel_quick_find_work(&mut self) {
-        self.quick_find_revision = self.quick_find_revision.saturating_add(1);
-        if let Some(cancellation) = self.quick_find_cancellation.take() {
-            cancellation.cancel();
-        }
-        self.quick_find_task = None;
-        self.quick_find_busy = false;
-        self.quick_find_direction = None;
+        self.quick_find.cancel_work();
     }
 
     fn update_quick_find_matcher(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let query = self.quick_find_query.read(cx).value().to_string();
+        let query = self.quick_find.query.read(cx).value().to_string();
         match SearchMatcher::quick_find(
             &query,
-            self.quick_find_case_sensitive,
-            self.quick_find_whole_word,
-            self.quick_find_regex,
+            self.quick_find.case_sensitive,
+            self.quick_find.whole_word,
+            self.quick_find.regex,
         ) {
             Ok(matcher) => {
-                self.quick_find_matcher = matcher;
-                self.quick_find_error = None;
+                self.quick_find.matcher = matcher;
+                self.quick_find.error = None;
             }
             Err(error) => {
-                self.quick_find_matcher = None;
-                self.quick_find_error = Some(error.to_string().into());
+                self.quick_find.matcher = None;
+                self.quick_find.error = Some(error.to_string().into());
             }
         }
         self.refresh_quick_find_highlights(cx);
     }
 
     fn focus_quick_find_input(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let focus = self.quick_find_query.focus_handle(cx);
+        let focus = self.quick_find.query.focus_handle(cx);
         window.defer(cx, move |window, cx| focus.focus(window, cx));
     }
 
     fn toggle_quick_find_case_sensitive(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.quick_find_case_sensitive = !self.quick_find_case_sensitive;
+        self.quick_find.case_sensitive = !self.quick_find.case_sensitive;
         self.schedule_incremental_quick_find(window, cx);
         self.focus_quick_find_input(window, cx);
     }
 
     fn toggle_quick_find_whole_word(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.quick_find_whole_word = !self.quick_find_whole_word;
+        self.quick_find.whole_word = !self.quick_find.whole_word;
         self.schedule_incremental_quick_find(window, cx);
         self.focus_quick_find_input(window, cx);
     }
 
     fn toggle_quick_find_regex(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.quick_find_regex = !self.quick_find_regex;
+        self.quick_find.regex = !self.quick_find.regex;
         self.schedule_incremental_quick_find(window, cx);
         self.focus_quick_find_input(window, cx);
     }
 
     fn refresh_quick_find_highlights(&mut self, cx: &mut Context<Self>) {
-        let matcher = self.quick_find_matcher.clone();
+        let matcher = self.quick_find.matcher.clone();
         for tab in &self.documents {
             tab.log_table.update(cx, |table, cx| {
                 table.delegate_mut().set_quick_find_matcher(matcher.clone());
@@ -9345,25 +9060,25 @@ impl Workspace {
     }
 
     fn schedule_incremental_quick_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.quick_find_open {
+        if !self.quick_find.open {
             return;
         }
         self.cancel_quick_find_work();
-        self.quick_find_match = None;
-        self.quick_find_no_match = false;
-        self.quick_find_boundary = None;
+        self.quick_find.matched = None;
+        self.quick_find.no_match = false;
+        self.quick_find.boundary = None;
         self.update_quick_find_matcher(window, cx);
-        if self.quick_find_query.read(cx).value().is_empty() || self.quick_find_matcher.is_none() {
+        if self.quick_find.query.read(cx).value().is_empty() || self.quick_find.matcher.is_none() {
             cx.notify();
             return;
         }
-        let revision = self.quick_find_revision;
-        self.quick_find_task = Some(cx.spawn_in(window, async move |this, cx| {
+        let revision = self.quick_find.revision;
+        self.quick_find.task = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(50))
                 .await;
             _ = this.update_in(cx, |this, window, cx| {
-                if this.quick_find_open && this.quick_find_revision == revision {
+                if this.quick_find.open && this.quick_find.revision == revision {
                     this.start_quick_find(QuickFindDirection::Forward, true, window, cx);
                 }
             });
@@ -9419,24 +9134,24 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.quick_find_open {
+        if !self.quick_find.open {
             return;
         }
-        let query = self.quick_find_query.read(cx).value().to_string();
+        let query = self.quick_find.query.read(cx).value().to_string();
         if query.is_empty() {
             self.cancel_quick_find_work();
-            self.quick_find_match = None;
-            self.quick_find_no_match = false;
-            self.quick_find_boundary = None;
+            self.quick_find.matched = None;
+            self.quick_find.no_match = false;
+            self.quick_find.boundary = None;
             cx.notify();
             return;
         }
-        let Some(target) = self.quick_find_target else {
+        let Some(target) = self.quick_find.target else {
             return;
         };
-        let Some(matcher) = self.quick_find_matcher.clone() else {
+        let Some(matcher) = self.quick_find.matcher.clone() else {
             self.update_quick_find_matcher(window, cx);
-            let Some(matcher) = self.quick_find_matcher.clone() else {
+            let Some(matcher) = self.quick_find.matcher.clone() else {
                 return;
             };
             return self.start_quick_find_with_matcher(
@@ -9464,10 +9179,10 @@ impl Workspace {
             return;
         };
         if row_count == 0 {
-            self.quick_find_busy = false;
-            self.quick_find_direction = None;
-            self.quick_find_no_match |= incremental;
-            self.quick_find_boundary = Some(match direction {
+            self.quick_find.busy = false;
+            self.quick_find.direction = None;
+            self.quick_find.no_match |= incremental;
+            self.quick_find.boundary = Some(match direction {
                 QuickFindDirection::Forward => QuickFindBoundary::End,
                 QuickFindDirection::Backward => QuickFindBoundary::Start,
             });
@@ -9479,14 +9194,14 @@ impl Workspace {
             QuickFindDirection::Forward => QuickFindBoundary::End,
             QuickFindDirection::Backward => QuickFindBoundary::Start,
         };
-        if !incremental && self.quick_find_boundary == Some(requested_boundary) {
-            self.quick_find_busy = false;
-            self.quick_find_direction = None;
+        if !incremental && self.quick_find.boundary == Some(requested_boundary) {
+            self.quick_find.busy = false;
+            self.quick_find.direction = None;
             return;
         }
 
         let current_match = (!incremental)
-            .then_some(self.quick_find_match)
+            .then_some(self.quick_find.matched)
             .flatten()
             .filter(|matched| matched.target == target);
         let start = match (direction, current_match) {
@@ -9494,16 +9209,16 @@ impl Workspace {
                 (matched.view_row + 1 < row_count).then_some(matched.view_row + 1)
             }
             (QuickFindDirection::Backward, Some(matched)) => matched.view_row.checked_sub(1),
-            (QuickFindDirection::Forward, None) => Some(self.quick_find_anchor.min(row_count - 1)),
+            (QuickFindDirection::Forward, None) => Some(self.quick_find.anchor.min(row_count - 1)),
             (QuickFindDirection::Backward, None) => {
-                self.quick_find_anchor.min(row_count - 1).checked_sub(1)
+                self.quick_find.anchor.min(row_count - 1).checked_sub(1)
             }
         };
         let Some(start) = start else {
-            self.quick_find_busy = false;
-            self.quick_find_direction = None;
-            self.quick_find_no_match |= incremental;
-            self.quick_find_boundary = Some(match direction {
+            self.quick_find.busy = false;
+            self.quick_find.direction = None;
+            self.quick_find.no_match |= incremental;
+            self.quick_find.boundary = Some(match direction {
                 QuickFindDirection::Forward => QuickFindBoundary::End,
                 QuickFindDirection::Backward => QuickFindBoundary::Start,
             });
@@ -9512,40 +9227,40 @@ impl Workspace {
         };
 
         self.cancel_quick_find_work();
-        let revision = self.quick_find_revision;
+        let revision = self.quick_find.revision;
         let cancellation = SearchCancellation::default();
-        self.quick_find_cancellation = Some(cancellation.clone());
-        self.quick_find_busy = true;
-        self.quick_find_direction = Some(direction);
-        self.quick_find_boundary = None;
+        self.quick_find.cancellation = Some(cancellation.clone());
+        self.quick_find.busy = true;
+        self.quick_find.direction = Some(direction);
+        self.quick_find.boundary = None;
         cx.notify();
-        self.quick_find_task = Some(cx.spawn(async move |this, cx| {
+        self.quick_find.task = Some(cx.spawn(async move |this, cx| {
             let matched = cx
                 .background_spawn(async move {
                     Self::find_quick_match(source, target, matcher, direction, start, cancellation)
                 })
                 .await;
             _ = this.update(cx, |this, cx| {
-                if !this.quick_find_open
-                    || this.quick_find_revision != revision
-                    || this.quick_find_target != Some(target)
+                if !this.quick_find.open
+                    || this.quick_find.revision != revision
+                    || this.quick_find.target != Some(target)
                 {
                     return;
                 }
-                this.quick_find_busy = false;
-                this.quick_find_direction = None;
-                this.quick_find_cancellation = None;
-                this.quick_find_task = None;
+                this.quick_find.busy = false;
+                this.quick_find.direction = None;
+                this.quick_find.cancellation = None;
+                this.quick_find.task = None;
                 match matched {
                     Some(matched) => {
-                        this.quick_find_match = Some(matched);
-                        this.quick_find_no_match = false;
-                        this.quick_find_boundary = None;
+                        this.quick_find.matched = Some(matched);
+                        this.quick_find.no_match = false;
+                        this.quick_find.boundary = None;
                         this.apply_quick_find_match(matched, cx);
                     }
                     None => {
-                        this.quick_find_no_match |= incremental;
-                        this.quick_find_boundary = Some(match direction {
+                        this.quick_find.no_match |= incremental;
+                        this.quick_find.boundary = Some(match direction {
                             QuickFindDirection::Forward => QuickFindBoundary::End,
                             QuickFindDirection::Backward => QuickFindBoundary::Start,
                         });
@@ -9704,7 +9419,7 @@ impl Workspace {
                 title: tab.title.clone(),
                 path: tab.document.path().to_path_buf(),
                 opened_at: tab.opened_at,
-                selected: self.global_selected_documents.contains(&tab.id),
+                selected: self.global_search.selected_documents.contains(&tab.id),
             })
             .collect::<Vec<_>>();
         let picker = cx.new(|_| GlobalSearchFilesDialog::new(files));
@@ -9748,7 +9463,7 @@ impl Workspace {
 
     fn open_directory_search_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let picker = cx.new(|cx| {
-            DirectorySearchDialog::new(self.directory_search_options.clone(), window, cx)
+            DirectorySearchDialog::new(self.global_search.directory_options.clone(), window, cx)
         });
         let workspace = cx.entity();
         window.open_dialog(cx, move |dialog, _, _| {
@@ -9793,10 +9508,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.directory_search_options == options {
+        if self.global_search.directory_options == options {
             return;
         }
-        if self.search_scope == SearchScope::Directory
+        if self.global_search.scope == SearchScope::Directory
             && self
                 .active_search
                 .as_ref()
@@ -9804,15 +9519,15 @@ impl Workspace {
         {
             self.cancel_search();
         }
-        self.directory_search_options = options;
-        self.pending_directory_search_restore = None;
-        self.directory_search_context = RetainedGlobalSearchContext::default();
-        if self.global_result_scope == Some(SearchScope::Directory) {
-            self.global_search_revision = self.global_search_revision.saturating_add(1);
-            self.global_results_visible = false;
-            self.global_search_results.clear();
-            self.global_search_matcher = None;
-            self.global_result_scope = None;
+        self.global_search.directory_options = options;
+        self.global_search.pending_directory_restore = None;
+        self.global_search.directory_context = RetainedGlobalSearchContext::default();
+        if self.global_search.result_scope == Some(SearchScope::Directory) {
+            self.global_search.revision = self.global_search.revision.saturating_add(1);
+            self.global_search.results_visible = false;
+            self.global_search.results.clear();
+            self.global_search.matcher = None;
+            self.global_search.result_scope = None;
             self.refresh_global_result_rows(cx);
         }
         self.schedule_workspace_search_state_save(window, cx);
@@ -9834,7 +9549,7 @@ impl Workspace {
             .intersection(&available)
             .copied()
             .collect::<BTreeSet<_>>();
-        if self.global_selected_documents == selected {
+        if self.global_search.selected_documents == selected {
             return;
         }
         if self
@@ -9844,33 +9559,36 @@ impl Workspace {
         {
             self.cancel_search();
         }
-        self.global_search_revision = self.global_search_revision.saturating_add(1);
-        self.global_selected_documents = selected;
+        self.global_search.revision = self.global_search.revision.saturating_add(1);
+        self.global_search.selected_documents = selected;
         let preferences = self
             .documents
             .iter()
             .map(|tab| {
-                let selected = self.global_selected_documents.contains(&tab.id);
+                let selected = self.global_search.selected_documents.contains(&tab.id);
                 let path = tab.document.path().to_path_buf();
-                self.global_search_preferences
+                self.global_search
+                    .preferences
                     .insert(path.clone(), selected);
                 (path, selected)
             })
             .collect::<Vec<_>>();
-        if let Some(store) = self.state_store.clone() {
-            self.state_tasks.push(cx.spawn(async move |this, cx| {
-                let result = cx
-                    .background_spawn(
-                        async move { store.save_global_search_preferences(&preferences) },
-                    )
-                    .await;
-                if let Err(error) = result {
-                    _ = this.update(cx, |_, cx| {
-                        cx.notify();
-                        log::error!("全局搜索参与偏好未能保存：{error}");
-                    });
-                }
-            }));
+        if let Some(store) = self.persistence.store.clone() {
+            self.persistence
+                .state_tasks
+                .push(cx.spawn(async move |this, cx| {
+                    let result = cx
+                        .background_spawn(async move {
+                            store.save_global_search_preferences(&preferences)
+                        })
+                        .await;
+                    if let Err(error) = result {
+                        _ = this.update(cx, |_, cx| {
+                            cx.notify();
+                            log::error!("全局搜索参与偏好未能保存：{error}");
+                        });
+                    }
+                }));
         }
         self.refresh_global_result_rows(cx);
         self.maybe_restore_persisted_search(window, cx);
@@ -9893,14 +9611,15 @@ impl Workspace {
             (table.delegate().collapsed_document_ids(), measured_heights)
         };
 
-        let groups = match self.search_scope {
+        let groups = match self.global_search.scope {
             SearchScope::AllOpenFiles => self
                 .documents
                 .iter()
-                .filter(|tab| self.global_selected_documents.contains(&tab.id))
+                .filter(|tab| self.global_search.selected_documents.contains(&tab.id))
                 .map(|tab| {
                     let result = self
-                        .global_search_results
+                        .global_search
+                        .results
                         .iter()
                         .find(|result| result.document_id == tab.id);
                     let search_result = result.map(|result| &result.search_result);
@@ -9919,7 +9638,7 @@ impl Workspace {
                         },
                         projection: crate::global_search_table::GlobalSearchGroupProjection {
                             rows: compute_result_rows(
-                                self.global_result_mode,
+                                self.global_search.result_mode,
                                 search_result,
                                 &tab.marked_rows,
                             ),
@@ -9928,7 +9647,7 @@ impl Workspace {
                                 .unwrap_or_default(),
                             marked_rows: Arc::new(tab.marked_rows.clone()),
                             truncated: search_result.is_some_and(|result| result.truncated)
-                                && self.global_result_mode.includes_matches(),
+                                && self.global_search.result_mode.includes_matches(),
                             failure: result.and_then(|result| result.failure.clone()),
                             collapsed: collapsed_document_ids.contains(&tab.id),
                         },
@@ -9938,8 +9657,11 @@ impl Workspace {
                     }
                 })
                 .collect::<Vec<_>>(),
-            SearchScope::Directory if self.global_result_scope == Some(SearchScope::Directory) => {
-                self.global_search_results
+            SearchScope::Directory
+                if self.global_search.result_scope == Some(SearchScope::Directory) =>
+            {
+                self.global_search
+                    .results
                     .iter()
                     .filter_map(|result| {
                         let open_tab = self
@@ -9950,7 +9672,7 @@ impl Workspace {
                             .map(|tab| tab.marked_rows.clone())
                             .unwrap_or_default();
                         let rows = compute_result_rows(
-                            self.global_result_mode,
+                            self.global_search.result_mode,
                             Some(&result.search_result),
                             &marked_rows,
                         );
@@ -9966,7 +9688,7 @@ impl Workspace {
                                 matched_rows: result.search_result.line_indices.clone(),
                                 marked_rows: Arc::new(marked_rows),
                                 truncated: result.search_result.truncated
-                                    && self.global_result_mode.includes_matches(),
+                                    && self.global_search.result_mode.includes_matches(),
                                 failure: result.failure.clone(),
                                 collapsed: collapsed_document_ids.contains(&result.document_id),
                             },
@@ -9985,11 +9707,11 @@ impl Workspace {
             SearchScope::CurrentFile | SearchScope::Directory => Vec::new(),
         };
 
-        let matcher = (self.global_result_mode.includes_matches()
+        let matcher = (self.global_search.result_mode.includes_matches()
             && self.app_settings.highlight_matches)
-            .then(|| self.global_search_matcher.clone())
+            .then(|| self.global_search.matcher.clone())
             .flatten();
-        self.restoring_global_selection = true;
+        self.global_search.restoring_selection = true;
         let active_restored = self.global_table.update(cx, |table, cx| {
             table.delegate_mut().set_groups(groups, matcher);
             let active_restored = table.sync_active_log_row(cx);
@@ -10009,7 +9731,7 @@ impl Workspace {
         }
         self.restore_global_viewport_anchor(viewport_anchor, row_height, cx);
         if !active_restored {
-            self.restoring_global_selection = false;
+            self.global_search.restoring_selection = false;
         }
     }
 
@@ -10229,7 +9951,7 @@ impl Workspace {
         if checked && filter.use_regex {
             self.set_search_defaults(self.case_sensitive, true, window, cx);
         }
-        let checkpoint = match self.search_scope {
+        let checkpoint = match self.global_search.scope {
             SearchScope::CurrentFile => self.active_ix.map(|active_ix| {
                 let tab = &mut self.documents[active_ix];
                 tab.search_query.text = next;
@@ -10237,13 +9959,13 @@ impl Workspace {
                 tab.id
             }),
             SearchScope::AllOpenFiles => {
-                self.global_query.text = next;
-                self.global_query.regex = self.regex;
+                self.global_search.query.text = next;
+                self.global_search.query.regex = self.regex;
                 None
             }
             SearchScope::Directory => {
-                self.directory_query.text = next;
-                self.directory_query.regex = self.regex;
+                self.global_search.directory_query.text = next;
+                self.global_search.directory_query.regex = self.regex;
                 None
             }
         };
@@ -10297,29 +10019,30 @@ impl Workspace {
             });
         }
 
-        let Some(store) = self.state_store.clone() else {
+        let Some(store) = self.persistence.store.clone() else {
             return;
         };
-        let previous_save = self.search_history_save_task.take();
-        self.search_history_save_task = Some(cx.spawn_in(window, async move |this, cx| {
-            if let Some(previous_save) = previous_save {
-                previous_save.await;
-            }
-            let result = cx
-                .background_spawn(async move { store.save_search_history(&history) })
-                .await;
-            if let Err(error) = result {
-                _ = this.update_in(cx, |_, window, cx| {
-                    window.push_notification(
-                        crate::tr_args!(
-                            "搜索历史未能保存：{error}",
-                            "Couldn’t save search history: {error}"
-                        ),
-                        cx,
-                    );
-                });
-            }
-        }));
+        let previous_save = self.persistence.search_history_save_task.take();
+        self.persistence.search_history_save_task =
+            Some(cx.spawn_in(window, async move |this, cx| {
+                if let Some(previous_save) = previous_save {
+                    previous_save.await;
+                }
+                let result = cx
+                    .background_spawn(async move { store.save_search_history(&history) })
+                    .await;
+                if let Err(error) = result {
+                    _ = this.update_in(cx, |_, window, cx| {
+                        window.push_notification(
+                            crate::tr_args!(
+                                "搜索历史未能保存：{error}",
+                                "Couldn’t save search history: {error}"
+                            ),
+                            cx,
+                        );
+                    });
+                }
+            }));
     }
 
     fn remove_search_history_entries(
@@ -10396,8 +10119,8 @@ impl Workspace {
         pending: Option<&PersistedGlobalSearchContext>,
     ) -> PersistedGlobalSearchContext {
         let query = match scope {
-            SearchScope::AllOpenFiles => &self.global_query,
-            SearchScope::Directory => &self.directory_query,
+            SearchScope::AllOpenFiles => &self.global_search.query,
+            SearchScope::Directory => &self.global_search.directory_query,
             SearchScope::CurrentFile => return PersistedGlobalSearchContext::default(),
         };
         if !context.initialized
@@ -10483,35 +10206,44 @@ impl Workspace {
 
     fn workspace_search_state(&self) -> WorkspaceSearchState {
         WorkspaceSearchState {
-            active_scope: match self.search_scope {
+            active_scope: match self.global_search.scope {
                 SearchScope::CurrentFile => PersistedSearchScope::CurrentFile,
                 SearchScope::AllOpenFiles => PersistedSearchScope::AllOpenFiles,
                 SearchScope::Directory => PersistedSearchScope::Directory,
             },
             all_open: self.persisted_global_context(
                 SearchScope::AllOpenFiles,
-                &self.all_open_search_context,
-                self.pending_all_open_search_restore.as_ref(),
+                &self.global_search.all_open_context,
+                self.global_search.pending_all_open_restore.as_ref(),
             ),
             directory: self.persisted_global_context(
                 SearchScope::Directory,
-                &self.directory_search_context,
-                self.pending_directory_search_restore.as_ref(),
+                &self.global_search.directory_context,
+                self.global_search.pending_directory_restore.as_ref(),
             ),
             directory_options: PersistedDirectorySearchOptions {
                 directory: self
-                    .directory_search_options
+                    .global_search
+                    .directory_options
                     .directory
                     .as_deref()
                     .map(|path| path.to_string_lossy().into_owned()),
                 file_type: 0,
                 file_type_filter_enabled: Some(
-                    self.directory_search_options.file_type_filter_enabled,
+                    self.global_search
+                        .directory_options
+                        .file_type_filter_enabled,
                 ),
-                file_type_patterns: Some(self.directory_search_options.file_type_patterns.clone()),
-                include_subdirectories: self.directory_search_options.include_subdirectories,
+                file_type_patterns: Some(
+                    self.global_search
+                        .directory_options
+                        .file_type_patterns
+                        .clone(),
+                ),
+                include_subdirectories: self.global_search.directory_options.include_subdirectories,
                 include_hidden_directories: self
-                    .directory_search_options
+                    .global_search
+                    .directory_options
                     .include_hidden_directories,
             },
             ..WorkspaceSearchState::default()
@@ -10527,30 +10259,31 @@ impl Workspace {
         if !self.primary_window {
             return;
         }
-        let Some(store) = self.state_store.clone() else {
-            self.pending_workspace_search_save = Some(state);
+        let Some(store) = self.persistence.store.clone() else {
+            self.persistence.pending_workspace_search_save = Some(state);
             return;
         };
-        let previous_save = self.search_context_save_task.take();
-        self.search_context_save_task = Some(cx.spawn_in(window, async move |this, cx| {
-            if let Some(previous_save) = previous_save {
-                previous_save.await;
-            }
-            let result = cx
-                .background_spawn(async move { store.save_workspace_search_state(&state) })
-                .await;
-            if let Err(error) = result {
-                _ = this.update_in(cx, |_, window, cx| {
-                    window.push_notification(
-                        crate::tr_args!(
-                            "搜索状态未能保存：{error}",
-                            "Couldn’t save search state: {error}"
-                        ),
-                        cx,
-                    );
-                });
-            }
-        }));
+        let previous_save = self.persistence.search_context_save_task.take();
+        self.persistence.search_context_save_task =
+            Some(cx.spawn_in(window, async move |this, cx| {
+                if let Some(previous_save) = previous_save {
+                    previous_save.await;
+                }
+                let result = cx
+                    .background_spawn(async move { store.save_workspace_search_state(&state) })
+                    .await;
+                if let Err(error) = result {
+                    _ = this.update_in(cx, |_, window, cx| {
+                        window.push_notification(
+                            crate::tr_args!(
+                                "搜索状态未能保存：{error}",
+                                "Couldn’t save search state: {error}"
+                            ),
+                            cx,
+                        );
+                    });
+                }
+            }));
     }
 
     fn schedule_workspace_search_state_save(
@@ -10558,13 +10291,13 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.capture_retained_global_context(self.search_scope, cx);
+        self.capture_retained_global_context(self.global_search.scope, cx);
         let state = self.workspace_search_state();
-        if self.pending_all_open_search_restore.is_some() {
-            self.pending_all_open_search_restore = Some(state.all_open.clone());
+        if self.global_search.pending_all_open_restore.is_some() {
+            self.global_search.pending_all_open_restore = Some(state.all_open.clone());
         }
-        if self.pending_directory_search_restore.is_some() {
-            self.pending_directory_search_restore = Some(state.directory.clone());
+        if self.global_search.pending_directory_restore.is_some() {
+            self.global_search.pending_directory_restore = Some(state.directory.clone());
         }
         self.queue_workspace_search_state_save(state, window, cx);
     }
@@ -10576,12 +10309,13 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let search_result_limit = self.app_settings.search_result_limit();
-        self.global_query = Self::restored_search_query(&state.all_open.query, search_result_limit);
-        self.directory_query =
+        self.global_search.query =
+            Self::restored_search_query(&state.all_open.query, search_result_limit);
+        self.global_search.directory_query =
             Self::restored_search_query(&state.directory.query, search_result_limit);
         let (legacy_file_type_filter_enabled, legacy_file_type_patterns) =
             DirectorySearchOptions::from_legacy_file_type(state.directory_options.file_type);
-        self.directory_search_options = DirectorySearchOptions {
+        self.global_search.directory_options = DirectorySearchOptions {
             directory: state
                 .directory_options
                 .directory
@@ -10598,49 +10332,50 @@ impl Workspace {
             include_subdirectories: state.directory_options.include_subdirectories,
             include_hidden_directories: state.directory_options.include_hidden_directories,
         };
-        self.all_open_search_context = RetainedGlobalSearchContext {
+        self.global_search.all_open_context = RetainedGlobalSearchContext {
             result_mode: ResultMode::from_database(state.all_open.result_mode),
             results_visible: state.all_open.results_visible,
             word_wrap: state.all_open.word_wrap,
             active: state.all_open.active,
             ..RetainedGlobalSearchContext::default()
         };
-        self.directory_search_context = RetainedGlobalSearchContext {
+        self.global_search.directory_context = RetainedGlobalSearchContext {
             result_mode: ResultMode::from_database(state.directory.result_mode),
             results_visible: state.directory.results_visible,
             word_wrap: state.directory.word_wrap,
             active: state.directory.active,
             ..RetainedGlobalSearchContext::default()
         };
-        self.pending_all_open_search_restore =
+        self.global_search.pending_all_open_restore =
             state.all_open.results_visible.then_some(state.all_open);
-        self.pending_directory_search_restore =
+        self.global_search.pending_directory_restore =
             state.directory.results_visible.then_some(state.directory);
-        self.search_scope = match state.active_scope {
+        self.global_search.scope = match state.active_scope {
             PersistedSearchScope::CurrentFile => SearchScope::CurrentFile,
             PersistedSearchScope::AllOpenFiles => SearchScope::AllOpenFiles,
             PersistedSearchScope::Directory => SearchScope::Directory,
         };
         if matches!(
-            self.search_scope,
+            self.global_search.scope,
             SearchScope::AllOpenFiles | SearchScope::Directory
         ) {
-            self.restore_retained_global_context(self.search_scope, window, cx);
+            self.restore_retained_global_context(self.global_search.scope, window, cx);
         }
-        let text = match self.search_scope {
+        let text = match self.global_search.scope {
             SearchScope::CurrentFile => self
                 .active_document()
                 .map(|tab| tab.search_query.text.clone())
                 .unwrap_or_default(),
-            SearchScope::AllOpenFiles => self.global_query.text.clone(),
-            SearchScope::Directory => self.directory_query.text.clone(),
+            SearchScope::AllOpenFiles => self.global_search.query.text.clone(),
+            SearchScope::Directory => self.global_search.directory_query.text.clone(),
         };
         self.query
             .update(cx, |query, cx| query.set_value(text, window, cx));
     }
 
     fn global_document_id_for_path(&self, path: &str) -> Option<u64> {
-        self.global_search_results
+        self.global_search
+            .results
             .iter()
             .find(|result| Self::persisted_path_matches(&result.path, path))
             .map(|result| result.document_id)
@@ -10736,8 +10471,8 @@ impl Workspace {
         });
         let context = RetainedGlobalSearchContext {
             initialized: true,
-            results: self.global_search_results.clone(),
-            matcher: self.global_search_matcher.clone(),
+            results: self.global_search.results.clone(),
+            matcher: self.global_search.matcher.clone(),
             result_mode: ResultMode::from_database(persisted.result_mode),
             results_visible: persisted.results_visible,
             collapsed_document_ids,
@@ -10753,12 +10488,12 @@ impl Workspace {
         };
         match scope {
             SearchScope::AllOpenFiles => {
-                self.all_open_search_context = context;
-                self.pending_all_open_search_restore = None;
+                self.global_search.all_open_context = context;
+                self.global_search.pending_all_open_restore = None;
             }
             SearchScope::Directory => {
-                self.directory_search_context = context;
-                self.pending_directory_search_restore = None;
+                self.global_search.directory_context = context;
+                self.global_search.pending_directory_restore = None;
             }
             SearchScope::CurrentFile => return,
         }
@@ -10769,29 +10504,29 @@ impl Workspace {
         if self.active_search.is_some() || self.open_task.is_some() {
             return;
         }
-        match self.search_scope {
+        match self.global_search.scope {
             SearchScope::AllOpenFiles => {
-                if self.pending_all_open_search_restore.is_none()
+                if self.global_search.pending_all_open_restore.is_none()
                     || self.documents.is_empty()
                     || self.documents.iter().any(|tab| {
-                        self.global_selected_documents.contains(&tab.id)
+                        self.global_search.selected_documents.contains(&tab.id)
                             && tab.load_state != DocumentLoadState::Ready
                     })
                 {
                     return;
                 }
-                let query_text = self.global_query.text.clone();
+                let query_text = self.global_search.query.text.clone();
                 self.query
                     .update(cx, |query, cx| query.set_value(query_text, window, cx));
                 self.start_global_search(window, cx);
             }
             SearchScope::Directory => {
-                if self.pending_directory_search_restore.is_none()
-                    || self.directory_search_options.directory.is_none()
+                if self.global_search.pending_directory_restore.is_none()
+                    || self.global_search.directory_options.directory.is_none()
                 {
                     return;
                 }
-                let query_text = self.directory_query.text.clone();
+                let query_text = self.global_search.directory_query.text.clone();
                 self.query
                     .update(cx, |query, cx| query.set_value(query_text, window, cx));
                 self.start_directory_search(window, cx);
@@ -10817,11 +10552,11 @@ impl Workspace {
             )
         };
         let context = RetainedGlobalSearchContext {
-            initialized: self.global_result_scope == Some(scope),
-            results: self.global_search_results.clone(),
-            matcher: self.global_search_matcher.clone(),
-            result_mode: self.global_result_mode,
-            results_visible: self.global_results_visible,
+            initialized: self.global_search.result_scope == Some(scope),
+            results: self.global_search.results.clone(),
+            matcher: self.global_search.matcher.clone(),
+            result_mode: self.global_search.result_mode,
+            results_visible: self.global_search.results_visible,
             collapsed_document_ids,
             selection,
             selected_row,
@@ -10831,8 +10566,8 @@ impl Workspace {
             active: self.active_log_region == LogRegion::GlobalResults,
         };
         match scope {
-            SearchScope::AllOpenFiles => self.all_open_search_context = context,
-            SearchScope::Directory => self.directory_search_context = context,
+            SearchScope::AllOpenFiles => self.global_search.all_open_context = context,
+            SearchScope::Directory => self.global_search.directory_context = context,
             SearchScope::CurrentFile => {}
         }
     }
@@ -10844,26 +10579,28 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let context = match scope {
-            SearchScope::AllOpenFiles => self.all_open_search_context.clone(),
-            SearchScope::Directory => self.directory_search_context.clone(),
+            SearchScope::AllOpenFiles => self.global_search.all_open_context.clone(),
+            SearchScope::Directory => self.global_search.directory_context.clone(),
             SearchScope::CurrentFile => return,
         };
-        self.global_search_results = context.results.clone();
-        self.global_search_matcher = context.matcher.clone();
-        self.global_result_mode = context.result_mode;
-        self.global_results_visible = context.results_visible;
+        self.global_search.results = context.results.clone();
+        self.global_search.matcher = context.matcher.clone();
+        self.global_search.result_mode = context.result_mode;
+        self.global_search.results_visible = context.results_visible;
         self.global_viewport.set_word_wrap(context.word_wrap);
-        self.global_result_scope = context.initialized.then_some(scope);
-        self.global_result_mode_select.update(cx, |select, cx| {
-            select.set_selected_index(
-                Some(IndexPath::new(context.result_mode.select_index())),
-                window,
-                cx,
-            );
-        });
+        self.global_search.result_scope = context.initialized.then_some(scope);
+        self.global_search
+            .result_mode_select
+            .update(cx, |select, cx| {
+                select.set_selected_index(
+                    Some(IndexPath::new(context.result_mode.select_index())),
+                    window,
+                    cx,
+                );
+            });
         self.refresh_global_result_rows(cx);
 
-        self.restoring_global_selection = context.selected_row.is_some();
+        self.global_search.restoring_selection = context.selected_row.is_some();
         let selected_restored = self.global_table.update(cx, |table, cx| {
             table
                 .delegate_mut()
@@ -10882,7 +10619,7 @@ impl Workspace {
             selected_ix.is_some()
         });
         if !selected_restored {
-            self.restoring_global_selection = false;
+            self.global_search.restoring_selection = false;
         }
         self.global_viewport.invalidate();
         let word_wrap = self.global_viewport.is_wrapped();
@@ -10906,7 +10643,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.search_scope == next_scope {
+        if self.global_search.scope == next_scope {
             return;
         }
         if self
@@ -10918,19 +10655,19 @@ impl Workspace {
         }
         let draft = self.query.read(cx).value().to_string();
         self.reset_search_history_navigation();
-        match self.search_scope {
+        match self.global_search.scope {
             SearchScope::CurrentFile => {
                 if let Some(active_ix) = self.active_ix {
                     self.documents[active_ix].search_query.text = draft;
                 }
             }
             SearchScope::AllOpenFiles => {
-                self.global_query.text = draft;
+                self.global_search.query.text = draft;
             }
-            SearchScope::Directory => self.directory_query.text = draft,
+            SearchScope::Directory => self.global_search.directory_query.text = draft,
         }
-        self.capture_retained_global_context(self.search_scope, cx);
-        self.search_scope = next_scope;
+        self.capture_retained_global_context(self.global_search.scope, cx);
+        self.global_search.scope = next_scope;
         if matches!(
             next_scope,
             SearchScope::AllOpenFiles | SearchScope::Directory
@@ -10948,8 +10685,8 @@ impl Workspace {
                 .active_document()
                 .map(|tab| tab.search_query.text.clone())
                 .unwrap_or_default(),
-            SearchScope::AllOpenFiles => self.global_query.text.clone(),
-            SearchScope::Directory => self.directory_query.text.clone(),
+            SearchScope::AllOpenFiles => self.global_search.query.text.clone(),
+            SearchScope::Directory => self.global_search.directory_query.text.clone(),
         };
         self.query
             .update(cx, |state, cx| state.set_value(text, window, cx));
@@ -10971,7 +10708,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let result_path = self
-            .global_search_results
+            .global_search
+            .results
             .iter()
             .find(|result| result.document_id == document_id)
             .map(|result| result.path.clone());
@@ -11017,7 +10755,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let result_path = self
-            .global_search_results
+            .global_search
+            .results
             .iter()
             .find(|result| result.document_id == document_id)
             .map(|result| result.path.clone());
@@ -11058,7 +10797,7 @@ impl Workspace {
 
     fn start_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_search_autocomplete();
-        match self.search_scope {
+        match self.global_search.scope {
             SearchScope::CurrentFile => self.start_current_search(window, cx),
             SearchScope::AllOpenFiles => self.start_global_search(window, cx),
             SearchScope::Directory => self.start_directory_search(window, cx),
@@ -11249,7 +10988,7 @@ impl Workspace {
             return;
         }
         let text = self.query.read(cx).value().to_string();
-        if self.global_selected_documents.is_empty() {
+        if self.global_search.selected_documents.is_empty() {
             window.push_notification(
                 crate::tr!(
                     "尚未选择参与全局搜索的文件",
@@ -11260,7 +10999,7 @@ impl Workspace {
             return;
         }
         if self.documents.iter().any(|tab| {
-            self.global_selected_documents.contains(&tab.id)
+            self.global_search.selected_documents.contains(&tab.id)
                 && tab.load_state != DocumentLoadState::Ready
         }) {
             window.push_notification(
@@ -11280,25 +11019,27 @@ impl Workspace {
             max_results: self.app_settings.search_result_limit(),
         };
         if self
-            .pending_all_open_search_restore
+            .global_search
+            .pending_all_open_restore
             .as_ref()
             .is_some_and(|persisted| persisted.query.text != query.text)
         {
-            self.pending_all_open_search_restore = None;
+            self.global_search.pending_all_open_restore = None;
         }
         let row_height = self.log_row_height();
         let viewport_anchor = self
-            .global_results_visible
+            .global_search
+            .results_visible
             .then(|| self.capture_global_row_viewport_anchor(row_height, cx))
             .flatten();
         self.cancel_search();
-        self.global_search_revision = self.global_search_revision.saturating_add(1);
-        let revision = self.global_search_revision;
+        self.global_search.revision = self.global_search.revision.saturating_add(1);
+        let revision = self.global_search.revision;
         let cancellation = SearchCancellation::default();
         let targets = self
             .documents
             .iter()
-            .filter(|tab| self.global_selected_documents.contains(&tab.id))
+            .filter(|tab| self.global_search.selected_documents.contains(&tab.id))
             .map(|tab| {
                 (
                     tab.id,
@@ -11319,7 +11060,7 @@ impl Workspace {
             cancellation: cancellation.clone(),
         });
         self.search_progress = Some(SearchPresentationProgress::combine(&progresses));
-        self.global_results_visible = true;
+        self.global_search.results_visible = true;
         self.activity = Activity::Searching;
         cx.notify();
 
@@ -11381,7 +11122,7 @@ impl Workspace {
                 let is_current = this.active_search.as_ref().is_some_and(|search| {
                     search.target == ActiveSearchTarget::Global && search.revision == revision
                 });
-                if !is_current || this.global_search_revision != revision {
+                if !is_current || this.global_search.revision != revision {
                     return;
                 }
 
@@ -11419,11 +11160,12 @@ impl Workspace {
                                 })
                                 .collect::<Vec<_>>();
                             this.record_search_history(&query.text, window, cx);
-                            this.global_query.text = query.text;
-                            this.global_query.max_results = this.app_settings.search_result_limit();
-                            this.global_search_results = results;
-                            this.global_search_matcher = matcher;
-                            this.global_result_scope = Some(SearchScope::AllOpenFiles);
+                            this.global_search.query.text = query.text;
+                            this.global_search.query.max_results =
+                                this.app_settings.search_result_limit();
+                            this.global_search.results = results;
+                            this.global_search.matcher = matcher;
+                            this.global_search.result_scope = Some(SearchScope::AllOpenFiles);
                             let word_wrap = this.global_viewport.is_wrapped();
                             let row_height = this.log_row_height();
                             this.refresh_global_result_rows(cx);
@@ -11441,7 +11183,9 @@ impl Workspace {
                                 );
                             }
                             this.activity = Activity::Ready;
-                            if let Some(persisted) = this.pending_all_open_search_restore.clone() {
+                            if let Some(persisted) =
+                                this.global_search.pending_all_open_restore.clone()
+                            {
                                 this.restore_persisted_global_presentation(
                                     SearchScope::AllOpenFiles,
                                     persisted,
@@ -11470,7 +11214,7 @@ impl Workspace {
     }
 
     fn start_directory_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(directory) = self.directory_search_options.directory.clone() else {
+        let Some(directory) = self.global_search.directory_options.directory.clone() else {
             window.push_notification(
                 crate::tr!(
                     "请先设置目录搜索范围",
@@ -11490,13 +11234,14 @@ impl Workspace {
             max_results: self.app_settings.search_result_limit(),
         };
         if self
-            .pending_directory_search_restore
+            .global_search
+            .pending_directory_restore
             .as_ref()
             .is_some_and(|persisted| persisted.query.text != query.text)
         {
-            self.pending_directory_search_restore = None;
+            self.global_search.pending_directory_restore = None;
         }
-        let options = self.directory_search_options.clone();
+        let options = self.global_search.directory_options.clone();
         let open_document_paths = self
             .documents
             .iter()
@@ -11504,12 +11249,13 @@ impl Workspace {
             .collect::<Vec<_>>();
         let row_height = self.log_row_height();
         let viewport_anchor = self
-            .global_results_visible
+            .global_search
+            .results_visible
             .then(|| self.capture_global_row_viewport_anchor(row_height, cx))
             .flatten();
         self.cancel_search();
-        self.global_search_revision = self.global_search_revision.saturating_add(1);
-        let revision = self.global_search_revision;
+        self.global_search.revision = self.global_search.revision.saturating_add(1);
+        let revision = self.global_search.revision;
         let cancellation = SearchCancellation::default();
         let progresses = Arc::new(Mutex::new(Vec::<SearchProgress>::new()));
         self.active_search = Some(ActiveSearch {
@@ -11518,7 +11264,7 @@ impl Workspace {
             cancellation: cancellation.clone(),
         });
         self.search_progress = Some(SearchPresentationProgress::default());
-        self.global_results_visible = true;
+        self.global_search.results_visible = true;
         self.activity = Activity::Searching;
         cx.notify();
 
@@ -11656,7 +11402,7 @@ impl Workspace {
                 let is_current = this.active_search.as_ref().is_some_and(|search| {
                     search.target == ActiveSearchTarget::Global && search.revision == revision
                 });
-                if !is_current || this.global_search_revision != revision {
+                if !is_current || this.global_search.revision != revision {
                     return;
                 }
 
@@ -11671,10 +11417,10 @@ impl Workspace {
                         unreadable_directory_count,
                     )) => {
                         this.record_search_history(&query.text, window, cx);
-                        this.directory_query = query;
-                        this.global_search_results = results;
-                        this.global_search_matcher = matcher;
-                        this.global_result_scope = Some(SearchScope::Directory);
+                        this.global_search.directory_query = query;
+                        this.global_search.results = results;
+                        this.global_search.matcher = matcher;
+                        this.global_search.result_scope = Some(SearchScope::Directory);
                         let word_wrap = this.global_viewport.is_wrapped();
                         let row_height = this.log_row_height();
                         this.refresh_global_result_rows(cx);
@@ -11693,7 +11439,7 @@ impl Workspace {
                         }
                         this.activity = Activity::Ready;
                         if let Some(persisted) =
-                            this.pending_directory_search_restore.clone()
+                            this.global_search.pending_directory_restore.clone()
                         {
                             this.restore_persisted_global_presentation(
                                 SearchScope::Directory,
@@ -11756,7 +11502,7 @@ impl Workspace {
     }
 
     fn clear_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.search_scope {
+        match self.global_search.scope {
             SearchScope::CurrentFile => self.clear_current_search(window, cx),
             SearchScope::AllOpenFiles => self.clear_global_search(window, cx),
             SearchScope::Directory => self.clear_directory_search(window, cx),
@@ -11797,19 +11543,19 @@ impl Workspace {
 
     fn clear_global_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_search();
-        self.global_search_revision = self.global_search_revision.saturating_add(1);
-        self.global_query = SearchQuery {
+        self.global_search.revision = self.global_search.revision.saturating_add(1);
+        self.global_search.query = SearchQuery {
             text: String::new(),
             case_sensitive: self.app_settings.default_case_sensitive,
             regex: self.app_settings.default_use_regex,
             max_results: self.app_settings.search_result_limit(),
         };
-        self.global_results_visible = false;
-        self.global_search_results.clear();
-        self.global_search_matcher = None;
-        self.global_result_scope = None;
-        self.pending_all_open_search_restore = None;
-        self.all_open_search_context = RetainedGlobalSearchContext::default();
+        self.global_search.results_visible = false;
+        self.global_search.results.clear();
+        self.global_search.matcher = None;
+        self.global_search.result_scope = None;
+        self.global_search.pending_all_open_restore = None;
+        self.global_search.all_open_context = RetainedGlobalSearchContext::default();
         self.refresh_global_result_rows(cx);
         self.reset_search_history_navigation();
         self.close_search_autocomplete();
@@ -11822,19 +11568,19 @@ impl Workspace {
 
     fn clear_directory_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_search();
-        self.global_search_revision = self.global_search_revision.saturating_add(1);
-        self.directory_query = SearchQuery {
+        self.global_search.revision = self.global_search.revision.saturating_add(1);
+        self.global_search.directory_query = SearchQuery {
             text: String::new(),
             case_sensitive: self.app_settings.default_case_sensitive,
             regex: self.app_settings.default_use_regex,
             max_results: self.app_settings.search_result_limit(),
         };
-        self.global_results_visible = false;
-        self.global_search_results.clear();
-        self.global_search_matcher = None;
-        self.global_result_scope = None;
-        self.pending_directory_search_restore = None;
-        self.directory_search_context = RetainedGlobalSearchContext::default();
+        self.global_search.results_visible = false;
+        self.global_search.results.clear();
+        self.global_search.matcher = None;
+        self.global_search.result_scope = None;
+        self.global_search.pending_directory_restore = None;
+        self.global_search.directory_context = RetainedGlobalSearchContext::default();
         self.refresh_global_result_rows(cx);
         self.reset_search_history_navigation();
         self.close_search_autocomplete();
@@ -12375,8 +12121,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let toggles_from_global_results = self.active_log_region == LogRegion::GlobalResults
-            && self.global_results_visible
-            && self.search_scope.owns_global_word_wrap();
+            && self.global_search.results_visible
+            && self.global_search.scope.owns_global_word_wrap();
         let enabled = if toggles_from_global_results {
             !self.global_viewport.is_wrapped()
         } else {
@@ -12387,7 +12133,8 @@ impl Workspace {
         };
         let row_height = self.log_row_height();
 
-        if self.search_scope.owns_global_word_wrap() && self.global_viewport.is_wrapped() != enabled
+        if self.global_search.scope.owns_global_word_wrap()
+            && self.global_viewport.is_wrapped() != enabled
         {
             let anchor = self.capture_global_row_viewport_anchor(row_height, cx);
             if enabled {
@@ -12458,7 +12205,8 @@ impl Workspace {
 
     fn active_navigation_region(&self) -> Option<(u64, WrappedRegion)> {
         let tab = self.active_document()?;
-        if self.active_log_region == LogRegion::GlobalResults && self.global_results_visible {
+        if self.active_log_region == LogRegion::GlobalResults && self.global_search.results_visible
+        {
             return Some((tab.id, WrappedRegion::GlobalResults));
         }
         Some((
@@ -12632,12 +12380,13 @@ impl Workspace {
         let _performance_scope = crate::ui_performance::scope("Workspace::render_title_bar");
         let workspace = cx.entity();
         let has_document = self.active_document().is_some();
-        let has_selected_log_rows =
-            if self.active_log_region == LogRegion::GlobalResults && self.global_results_visible {
-                self.global_table.read(cx).delegate().selected_rows_count() > 0
-            } else {
-                self.selected_source_row.is_some()
-            };
+        let has_selected_log_rows = if self.active_log_region == LogRegion::GlobalResults
+            && self.global_search.results_visible
+        {
+            self.global_table.read(cx).delegate().selected_rows_count() > 0
+        } else {
+            self.selected_source_row.is_some()
+        };
         let active_file_is_pinned = self.active_file_is_pinned();
         let auto_follow = self.active_document().is_some_and(|tab| tab.auto_follow);
         let show_line_numbers = self
@@ -12647,8 +12396,8 @@ impl Workspace {
             .active_document()
             .is_some_and(|tab| tab.show_row_separators);
         let word_wrap = if self.active_log_region == LogRegion::GlobalResults
-            && self.global_results_visible
-            && self.search_scope.owns_global_word_wrap()
+            && self.global_search.results_visible
+            && self.global_search.scope.owns_global_word_wrap()
         {
             self.global_viewport.is_wrapped()
         } else {
@@ -12661,13 +12410,8 @@ impl Workspace {
         let case_sensitive = self.case_sensitive;
         let regex = self.regex;
         let tab_count = self.tabs.len();
-        let update_button_label = self
-            .update_state
-            .button_label(self.update_transferred, self.update_total);
-        let update_busy = matches!(
-            self.update_state,
-            AppUpdateState::Checking | AppUpdateState::Downloading { .. }
-        );
+        let update_button_label = self.updates.button_label();
+        let update_busy = self.updates.is_busy();
         let active_encoding = self.active_document().map(|tab| {
             (
                 tab.id,
@@ -12739,7 +12483,7 @@ impl Workspace {
                 .item(
                     PopupMenuItem::new(crate::tr!("历史…", "History…"))
                         .disabled(file_workspace.read_with(cx, |this, _| {
-                            this.state_store.is_none() || this.history_dialog_loading
+                            this.persistence.store.is_none() || this.history_dialog_loading
                         }))
                         .on_click(history),
                 )
@@ -14012,12 +13756,12 @@ impl Workspace {
             crate::ui_performance::scope("Workspace::render_search_scope_control");
         let workspace = cx.entity();
         let menu_workspace = workspace.clone();
-        let selected_scope = self.search_scope;
+        let selected_scope = self.global_search.scope;
         let has_scope_settings = matches!(
-            self.search_scope,
+            self.global_search.scope,
             SearchScope::AllOpenFiles | SearchScope::Directory
         );
-        let settings_button = match self.search_scope {
+        let settings_button = match self.global_search.scope {
             SearchScope::CurrentFile => None,
             SearchScope::AllOpenFiles => Some(
                 Button::new("search-scope-global-settings")
@@ -14054,12 +13798,12 @@ impl Workspace {
             .outline()
             .dropdown_caret(true)
             .when(has_scope_settings, |button| button.rounded_r_none())
-            .icon(match self.search_scope {
+            .icon(match self.global_search.scope {
                 SearchScope::CurrentFile => IconName::Search,
                 SearchScope::AllOpenFiles => IconName::File,
                 SearchScope::Directory => IconName::FolderOpen,
             })
-            .label(match self.search_scope {
+            .label(match self.global_search.scope {
                 SearchScope::CurrentFile => crate::tr!("当前", "Current"),
                 SearchScope::AllOpenFiles => crate::tr!("全局", "Global"),
                 SearchScope::Directory => crate::tr!("目录", "Directory"),
@@ -14183,7 +13927,7 @@ impl Workspace {
                     window.prevent_default();
                     cx.stop_propagation();
                     GlobalState::suppress_text_selection(cx);
-                    match this.search_scope {
+                    match this.global_search.scope {
                         SearchScope::CurrentFile => {}
                         SearchScope::AllOpenFiles => {
                             this.open_global_search_files_dialog(window, cx);
@@ -14200,17 +13944,17 @@ impl Workspace {
     fn render_quick_find_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let _performance_scope = crate::ui_performance::scope("Workspace::render_quick_find_bar");
         let colors = ui_theme::palette(cx);
-        let query_empty = self.quick_find_query.read(cx).value().is_empty();
-        let invalid_message = self.quick_find_error.as_deref();
-        let target_label = match self.quick_find_target {
+        let query_empty = self.quick_find.query.read(cx).value().is_empty();
+        let invalid_message = self.quick_find.error.as_deref();
+        let target_label = match self.quick_find.target {
             Some(QuickFindTarget::Log(_)) => crate::tr!("正文", "Log"),
             Some(QuickFindTarget::Results(_)) => crate::tr!("当前结果", "Current results"),
             Some(QuickFindTarget::GlobalResults) => crate::tr!("全局结果", "Global results"),
             None => crate::tr!("当前视图", "Current view"),
         };
-        let boundary_message = (!self.quick_find_no_match && invalid_message.is_none())
+        let boundary_message = (!self.quick_find.no_match && invalid_message.is_none())
             .then(|| {
-                self.quick_find_boundary.map(|boundary| match boundary {
+                self.quick_find.boundary.map(|boundary| match boundary {
                     QuickFindBoundary::Start => crate::tr!(
                         "已到达开头，没有更早的匹配项",
                         "Reached the beginning; there are no earlier matches"
@@ -14223,7 +13967,8 @@ impl Workspace {
             })
             .flatten();
         let status_message = invalid_message.or_else(|| {
-            self.quick_find_no_match
+            self.quick_find
+                .no_match
                 .then_some(crate::tr!("没有找到匹配项", "No matches found"))
                 .or(boundary_message)
         });
@@ -14238,9 +13983,9 @@ impl Workspace {
         );
         let previous_tooltip = if let Some(message) = invalid_message {
             message
-        } else if self.quick_find_no_match {
+        } else if self.quick_find.no_match {
             crate::tr!("没有找到匹配项", "No matches found")
-        } else if self.quick_find_boundary == Some(QuickFindBoundary::Start) {
+        } else if self.quick_find.boundary == Some(QuickFindBoundary::Start) {
             crate::tr!(
                 "已到达开头，没有更早的匹配项",
                 "Reached the beginning; there are no earlier matches"
@@ -14253,9 +13998,9 @@ impl Workspace {
         };
         let next_tooltip = if let Some(message) = invalid_message {
             message
-        } else if self.quick_find_no_match {
+        } else if self.quick_find.no_match {
             crate::tr!("没有找到匹配项", "No matches found")
-        } else if self.quick_find_boundary == Some(QuickFindBoundary::End) {
+        } else if self.quick_find.boundary == Some(QuickFindBoundary::End) {
             crate::tr!(
                 "已到达末尾，没有更多匹配项",
                 "Reached the end; there are no more matches"
@@ -14263,18 +14008,18 @@ impl Workspace {
         } else {
             crate::tr!("查找下一处（Enter / F3）", "Find next (Enter / F3)")
         };
-        let controls_disabled = query_empty || self.quick_find_busy || invalid_message.is_some();
-        let case_sensitive_tooltip = if self.quick_find_case_sensitive {
+        let controls_disabled = query_empty || self.quick_find.busy || invalid_message.is_some();
+        let case_sensitive_tooltip = if self.quick_find.case_sensitive {
             crate::tr!("关闭匹配大小写", "Turn off match case")
         } else {
             crate::tr!("匹配大小写", "Match case")
         };
-        let whole_word_tooltip = if self.quick_find_whole_word {
+        let whole_word_tooltip = if self.quick_find.whole_word {
             crate::tr!("关闭全词匹配", "Turn off whole-word matching")
         } else {
             crate::tr!("全词匹配", "Whole-word matching")
         };
-        let regex_tooltip = if self.quick_find_regex {
+        let regex_tooltip = if self.quick_find.regex {
             crate::tr!("关闭正则表达式", "Turn off regular expressions")
         } else {
             crate::tr!("使用正则表达式", "Use regular expressions")
@@ -14306,7 +14051,7 @@ impl Workspace {
                     .py_1p5()
                     .rounded(cx.theme().radius_lg)
                     .border_1()
-                    .border_color(if self.quick_find_no_match || invalid_message.is_some() {
+                    .border_color(if self.quick_find.no_match || invalid_message.is_some() {
                         cx.theme().danger
                     } else if boundary_message.is_some() {
                         cx.theme().warning
@@ -14341,7 +14086,7 @@ impl Workspace {
                     }))
                     .child(
                         div().flex_1().min_w_0().h_8().child(
-                            Input::new(&self.quick_find_query)
+                            Input::new(&self.quick_find.query)
                                 .size_full()
                                 .bg(colors.control_surface)
                                 .accessibility_id("A150")
@@ -14360,8 +14105,8 @@ impl Workspace {
                                                 .p_0()
                                                 .rounded(px(4.))
                                                 .accessibility_id("A463")
-                                                .selected(self.quick_find_case_sensitive)
-                                                .toggled(self.quick_find_case_sensitive)
+                                                .selected(self.quick_find.case_sensitive)
+                                                .toggled(self.quick_find.case_sensitive)
                                                 .tooltip(case_sensitive_tooltip)
                                                 .child(
                                                     h_flex()
@@ -14375,7 +14120,7 @@ impl Workspace {
                                                                 ))
                                                                 .size(px(15.))
                                                                 .text_color(option_icon_color(
-                                                                    self.quick_find_case_sensitive,
+                                                                    self.quick_find.case_sensitive,
                                                                 )),
                                                         )
                                                         .child(
@@ -14403,8 +14148,8 @@ impl Workspace {
                                                 .p_0()
                                                 .rounded(px(4.))
                                                 .accessibility_id("A464")
-                                                .selected(self.quick_find_whole_word)
-                                                .toggled(self.quick_find_whole_word)
+                                                .selected(self.quick_find.whole_word)
+                                                .toggled(self.quick_find.whole_word)
                                                 .tooltip(whole_word_tooltip)
                                                 .child(
                                                     h_flex()
@@ -14418,7 +14163,7 @@ impl Workspace {
                                                                 ))
                                                                 .size(px(15.))
                                                                 .text_color(option_icon_color(
-                                                                    self.quick_find_whole_word,
+                                                                    self.quick_find.whole_word,
                                                                 )),
                                                         )
                                                         .child(
@@ -14444,8 +14189,8 @@ impl Workspace {
                                                 .p_0()
                                                 .rounded(px(4.))
                                                 .accessibility_id("A465")
-                                                .selected(self.quick_find_regex)
-                                                .toggled(self.quick_find_regex)
+                                                .selected(self.quick_find.regex)
+                                                .toggled(self.quick_find.regex)
                                                 .tooltip(regex_tooltip)
                                                 .child(
                                                     h_flex()
@@ -14459,7 +14204,7 @@ impl Workspace {
                                                                 ))
                                                                 .size(px(15.))
                                                                 .text_color(option_icon_color(
-                                                                    self.quick_find_regex,
+                                                                    self.quick_find.regex,
                                                                 )),
                                                         )
                                                         .child(
@@ -14484,8 +14229,8 @@ impl Workspace {
                             .ghost()
                             .icon(IconName::ArrowUp)
                             .loading(
-                                self.quick_find_busy
-                                    && self.quick_find_direction
+                                self.quick_find.busy
+                                    && self.quick_find.direction
                                         == Some(QuickFindDirection::Backward),
                             )
                             .disabled(controls_disabled)
@@ -14504,8 +14249,8 @@ impl Workspace {
                             .ghost()
                             .icon(IconName::ArrowDown)
                             .loading(
-                                self.quick_find_busy
-                                    && self.quick_find_direction
+                                self.quick_find.busy
+                                    && self.quick_find.direction
                                         == Some(QuickFindDirection::Forward),
                             )
                             .disabled(controls_disabled)
@@ -14547,8 +14292,8 @@ impl Workspace {
         let show_search_suggestions =
             !search_suggestions.is_empty() && self.query.focus_handle(cx).is_focused(window);
         let search_history_open = self.search_autocomplete_mode == SearchAutocompleteMode::History;
-        let global_selected_count = self.global_selected_documents.len();
-        let search_scope_tooltip = match self.search_scope {
+        let global_selected_count = self.global_search.selected_documents.len();
+        let search_scope_tooltip = match self.global_search.scope {
             SearchScope::CurrentFile => crate::tr!(
                 "选择搜索范围（当前文件）",
                 "Choose search scope (current file)"
@@ -14561,7 +14306,8 @@ impl Workspace {
                 self.documents.len(),
             ),
             SearchScope::Directory => self
-                .directory_search_options
+                .global_search
+                .directory_options
                 .directory
                 .as_deref()
                 .map(|directory| {
@@ -14598,7 +14344,7 @@ impl Workspace {
             .hover(cx.theme().muted)
             .active(cx.theme().primary.opacity(0.18));
         let (result_mode_select, result_count_label, committed_results_visible) =
-            match self.search_scope {
+            match self.global_search.scope {
                 SearchScope::CurrentFile => self.active_document().map_or(
                     (None, crate::tr!("0 条结果", "0 results").to_string(), false),
                     |tab| {
@@ -14627,42 +14373,43 @@ impl Workspace {
                         ""
                     };
                     (
-                        Some(self.global_result_mode_select.clone()),
+                        Some(self.global_search.result_mode_select.clone()),
                         crate::tr_args!(
                             "{} 条 · {} 个文件{truncation}",
                             "{} results · {} files{truncation}",
                             delegate.results_count(),
                             delegate.groups_count(),
                         ),
-                        self.global_results_visible,
+                        self.global_search.results_visible,
                     )
                 }
             };
-        let search_disabled = match self.search_scope {
+        let search_disabled = match self.global_search.scope {
             SearchScope::CurrentFile => !active_document_ready,
             SearchScope::AllOpenFiles => {
                 !has_document
                     || global_selected_count == 0
                     || self.documents.iter().any(|tab| {
-                        self.global_selected_documents.contains(&tab.id)
+                        self.global_search.selected_documents.contains(&tab.id)
                             && tab.load_state != DocumentLoadState::Ready
                     })
             }
-            SearchScope::Directory => self.directory_search_options.directory.is_none(),
+            SearchScope::Directory => self.global_search.directory_options.directory.is_none(),
         };
         let clear_disabled = !has_document
             || (query_empty
-                && match self.search_scope {
+                && match self.global_search.scope {
                     SearchScope::CurrentFile => self
                         .active_document()
                         .is_none_or(|tab| !tab.results_visible),
                     SearchScope::AllOpenFiles | SearchScope::Directory => {
-                        !self.global_results_visible
+                        !self.global_search.results_visible
                     }
                 });
         let active_document_id = self.active_document().map(|tab| tab.id);
         let searching_current_scope = self.active_search.as_ref().is_some_and(|search| match self
-            .search_scope
+            .global_search
+            .scope
         {
             SearchScope::CurrentFile => active_document_id.is_some_and(|document_id| {
                 search.target == ActiveSearchTarget::Document(document_id)
@@ -15137,12 +14884,14 @@ impl Workspace {
             .row_drag_bounds
             .get(&(tab.id, WrappedRegion::Log))
             .copied();
-        let result_bounds = match self.search_scope {
+        let result_bounds = match self.global_search.scope {
             SearchScope::CurrentFile if tab.results_visible => self
                 .row_drag_bounds
                 .get(&(tab.id, WrappedRegion::Results))
                 .copied(),
-            SearchScope::AllOpenFiles | SearchScope::Directory if self.global_results_visible => {
+            SearchScope::AllOpenFiles | SearchScope::Directory
+                if self.global_search.results_visible =>
+            {
                 self.row_drag_bounds
                     .get(&(0, WrappedRegion::GlobalResults))
                     .copied()
@@ -16193,7 +15942,7 @@ impl Workspace {
                 .to_string());
             }
             let active_ix = self.open_document_ix_for_global_result(document_id).ok_or_else(|| {
-                if self.search_scope == SearchScope::Directory {
+                if self.global_search.scope == SearchScope::Directory {
                     crate::tr!(
                         "请先打开目录结果所属文件，再应用颜色标签",
                         "Open the file containing the directory result before applying a color label"
@@ -16240,7 +15989,8 @@ impl Workspace {
 
     fn open_document_ix_for_global_result(&self, document_id: u64) -> Option<usize> {
         let result_path = self
-            .global_search_results
+            .global_search
+            .results
             .iter()
             .find(|result| result.document_id == document_id)
             .map(|result| result.path.as_path());
@@ -17545,9 +17295,11 @@ impl Workspace {
         let _performance_scope =
             crate::ui_performance::scope("Workspace::render_document_workspace");
         let tab = self.active_document().expect("active document must exist");
-        let results_visible = match self.search_scope {
+        let results_visible = match self.global_search.scope {
             SearchScope::CurrentFile => tab.results_visible,
-            SearchScope::AllOpenFiles | SearchScope::Directory => self.global_results_visible,
+            SearchScope::AllOpenFiles | SearchScope::Directory => {
+                self.global_search.results_visible
+            }
         };
         let result_menu_busy = self.result_export_task.is_some();
         let local_result_menu_disabled =
@@ -17574,7 +17326,7 @@ impl Workspace {
         };
         let global_line_number_width =
             px(self.global_table.read(cx).delegate().line_number_width() as f32);
-        let result_content = match self.search_scope {
+        let result_content = match self.global_search.scope {
             SearchScope::CurrentFile => v_flex()
                 .w_full()
                 .flex_1()
@@ -17638,8 +17390,8 @@ impl Workspace {
                         ))
                         .child(tab.result_surface.clone())
                         .when(
-                            self.quick_find_open
-                                && self.quick_find_target
+                            self.quick_find.open
+                                && self.quick_find.target
                                     == Some(QuickFindTarget::Results(document_id)),
                             |region| region.child(self.render_quick_find_bar(cx)),
                         )
@@ -17719,8 +17471,8 @@ impl Workspace {
                         ))
                         .child(self.global_surface.clone())
                         .when(
-                            self.quick_find_open
-                                && self.quick_find_target == Some(QuickFindTarget::GlobalResults),
+                            self.quick_find.open
+                                && self.quick_find.target == Some(QuickFindTarget::GlobalResults),
                             |region| region.child(self.render_quick_find_bar(cx)),
                         )
                         .context_menu(move |menu, window, cx| {
@@ -17860,8 +17612,8 @@ impl Workspace {
                                 ))
                                 .child(tab.log_surface.clone())
                                 .when(
-                                    self.quick_find_open
-                                        && self.quick_find_target
+                                    self.quick_find.open
+                                        && self.quick_find.target
                                             == Some(QuickFindTarget::Log(document_id)),
                                     |region| region.child(self.render_quick_find_bar(cx)),
                                 )
@@ -17899,13 +17651,14 @@ impl Workspace {
         let marked_count = self
             .active_document()
             .map_or(0, |tab| tab.marked_rows.len());
-        let selected_count =
-            if self.active_log_region == LogRegion::GlobalResults && self.global_results_visible {
-                self.global_table.read(cx).delegate().selected_rows_count()
-            } else {
-                self.active_document()
-                    .map_or(0, |tab| tab.selected_rows_count(cx))
-            };
+        let selected_count = if self.active_log_region == LogRegion::GlobalResults
+            && self.global_search.results_visible
+        {
+            self.global_table.read(cx).delegate().selected_rows_count()
+        } else {
+            self.active_document()
+                .map_or(0, |tab| tab.selected_rows_count(cx))
+        };
         let right = self
             .selected_source_row
             .map(|row| {
