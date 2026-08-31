@@ -42,5 +42,8 @@ windows-sys.workspace = true
 [lints]
 workspace = true
 
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+
 [target.'cfg(windows)'.build-dependencies]
 embed-resource = "3"

@@ -12,6 +12,7 @@ use gpui::{
     SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _, Subscription,
     Task, UniformListScrollHandle, Window, div, img, prelude::FluentBuilder as _, uniform_list,
 };
+use gpui_base::Link;
 use gpui_component::{
     ActiveTheme as _, Colorize as _, Disableable as _, IconName, IndexPath, Sizable as _,
     WindowExt as _,
@@ -40,6 +41,8 @@ use crate::{
     },
 };
 use vclogg_core::IndexCacheInfo;
+
+const GITHUB_REPOSITORY_URL: &str = "https://github.com/zhaiyanqi/vclogg2";
 
 impl SelectItem for LogFontFamily {
     type Value = Self;
@@ -276,7 +279,7 @@ impl SettingsCategory {
                 "高级 应用日志 日志等级 关闭 Error Warn Info Debug Trace 导出 诊断 advanced application log level export diagnostics"
             }
             Self::About => {
-                "关于 VCLogg2 版本 编译时间 构建目标 commit 提交 技术栈 开源库 作者 zhaiyanqi copyright 版权 Apache 2.0 license Rust GPUI SQLite"
+                "关于 VCLogg2 版本 编译时间 构建目标 commit 提交 技术栈 开源库 GitHub 仓库 repository 源代码 source code 作者 zhaiyanqi copyright 版权 Apache 2.0 license Rust GPUI SQLite"
             }
         };
         let query = query.to_lowercase();
@@ -1688,6 +1691,42 @@ impl SettingsDialog {
                         crate::tr!("系统凭据保护、更新校验与版本比较", "System credential protection, update verification, and version comparison"),
                         1,
                     ),
+                cx,
+            ))
+            .child(about_section(
+                "settings-about-repository",
+                crate::tr!("GitHub 仓库", "GitHub repository"),
+                crate::tr!(
+                    "访问项目源代码、问题追踪与发布版本。",
+                    "Visit the source code, issue tracker, and published releases.",
+                ),
+                DescriptionList::new().small().columns(1).item(
+                    crate::tr!("仓库地址", "Repository URL"),
+                    Link::new("settings-about-github-link")
+                        .href(GITHUB_REPOSITORY_URL)
+                        .open_with(|href, _, _, cx| cx.open_url(href))
+                        .accessibility_label(crate::tr!(
+                            "在浏览器中打开 VCLogg2 GitHub 仓库",
+                            "Open the VCLogg2 GitHub repository in a browser",
+                        ))
+                        .px_1()
+                        .rounded(cx.theme().radius)
+                        .border_1()
+                        .border_color(cx.theme().ring.opacity(0.))
+                        .text_color(cx.theme().link)
+                        .text_decoration_1()
+                        .text_decoration_color(cx.theme().link.opacity(0.5))
+                        .hover(|link| {
+                            link.text_color(cx.theme().link.opacity(0.8))
+                                .text_decoration_color(cx.theme().link)
+                        })
+                        .active(|link| link.text_color(cx.theme().link.opacity(0.6)))
+                        .focus_visible(|link| link.border_color(cx.theme().ring))
+                        .cursor_pointer()
+                        .child(GITHUB_REPOSITORY_URL)
+                        .into_any_element(),
+                    1,
+                ),
                 cx,
             ))
             .child(about_section(

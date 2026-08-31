@@ -97,7 +97,25 @@ macOS 默认快捷键主修饰键为 `Command`，Windows/Linux 为 `Ctrl`。这�
 
 ## 更新发布
 
-客户端从配置服务器根地址派生平台更新源：
+正式发行版默认调用 `https://api.github.com/repos/zhaiyanqi/vclogg2/releases/latest` 获取最新正式 Release，并选择当前平台的唯一清单；如果“设置 → 网络”中存在服务器地址，原有静态目录同时作为第二来源参与检查，两边都有可用更新时选择版本较新的包：
+
+```text
+latest-windows-x86_64.json
+latest-macos-aarch64.json
+latest-linux-x86_64.json
+```
+
+客户端交叉验证 Release 标签、清单版本、仓库资产名称、文件大小和 GitHub 可用的 SHA-256 摘要。GitHub 资产允许的 `302` 仅可落到 GitHub 管理的 HTTPS 域名；普通 HTTP/HTTPS 静态源仍维持禁止重定向。标为 prerelease 的 Release 不由普通客户端自动发现。
+
+发布正式版本前，先修改 workspace 版本并同步 `Cargo.lock`，提交和推送 `main` 后执行：
+
+```bash
+./scripts/publish-github-release.sh
+```
+
+脚本只接受干净且与 `origin/main` 完全一致的 `main`，运行 `scripts/check.sh` 后创建带注释的 `v<版本>` 标签并推送。GitHub Action 收到标签后负责三平台构建与 Release 创建；`--yes` 可跳过交互确认，`--remote <名称>` 可替换默认 `origin`。
+
+自建静态更新源继续受支持，其目录从服务器根地址派生：
 
 ```text
 /updates-vclogg2/windows-x86_64/
@@ -120,9 +138,9 @@ powershell -ExecutionPolicy Bypass -File scripts/publish-update.ps1 `
   -TargetDirectory D:\log-viewer-server\data\updates-vclogg2\windows-x86_64
 ```
 
-Release 构建会在启动 15 秒后检查一次，也可由用户手动触发。下载过程中即时校验分块与整包 SHA-256；用户确认后，独立助手等待应用完成会话保存与正常退出，再调用对应平台安装脚本并重启。
+Release 构建会在启动 15 秒后从 GitHub Releases 检查一次，也可由用户手动触发；未配置云端过滤器服务器也能完成更新，已配置时则额外检查对应静态源。下载过程中即时校验分块与整包 SHA-256；用户确认后，独立助手等待应用完成会话保存与正常退出，再调用对应平台安装脚本并重启。
 
-清单和哈希不提供发布者身份认证。部署环境必须保护更新源并使用 HTTPS；正式公开分发还应对 Windows 二进制进行代码签名，对 macOS 应用进行 Developer ID 签名和公证。
+清单和哈希不提供独立发布者签名；GitHub 模式依赖仓库写权限与 GitHub HTTPS，自建模式依赖更新源访问控制与 HTTPS。正式公开分发还应对 Windows 二进制进行代码签名，对 macOS 应用进行 Developer ID 签名和公证。
 
 ## GitHub Actions
 
@@ -132,7 +150,7 @@ Release 构建会在启动 15 秒后检查一次，也可由用户手动触发�
 - macOS 15 ARM64：`check.sh` + `package-release-macos.sh`；
 - Ubuntu 22.04 x86_64：安装 GPUI 原生依赖后执行 `check.sh` + `package-release-linux.sh`。
 
-工作流在推送或 PR 指向 `main`、推送 `v*` tag 时触发，也支持手动触发。每个平台上传压缩包、blockmap 与 `latest.json`，保留 14 天。普通构建 job 保持 `contents: read`；只有已存在的 `v*` tag 触发且三平台全部成功时，末尾 `release` job 才取得 `contents: write`，下载三份 Artifact 并创建带自动发行说明的 GitHub Release。Release 附件包含三平台安装包与各自 blockmap；同名的三个 `latest.json` 继续留在平台 Artifact 和独立更新目录中，不上传到 Release。
+工作流在推送或 PR 指向 `main`、推送 `v*` tag 时触发，也支持手动触发。每个平台上传压缩包、blockmap 与 `latest.json`，保留 14 天。普通构建 job 保持 `contents: read`；只有已存在的 `v*` tag 触发且三平台全部成功时，末尾 `release` job 才取得 `contents: write`。该 job 验证标签版本、平台/架构、安装包大小与 SHA-256，把三份同名 `latest.json` 复制为唯一的 `latest-<platform>-<architecture>.json`，再连同三平台安装包和 blockmap 创建 GitHub Release。带 `-` 的 SemVer 标签发布为 prerelease，其余版本显式标为 Latest。
 
 ## 验证脚本
 
@@ -140,4 +158,5 @@ Release 构建会在启动 15 秒后检查一次，也可由用户手动触发�
 - `scripts/build-debug.ps1` / `scripts/build-debug.sh`：Debug 二进制；
 - `scripts/build-release.ps1` / `scripts/build-release.sh`：Release 二进制；
 - `scripts/package-release.ps1` / `package-release-macos.sh` / `package-release-linux.sh`：平台 Release 包与更新元数据；
+- `scripts/publish-github-release.sh`：校验本地发布状态，创建并推送触发 GitHub Release 的版本标签；
 - `scripts/publish-update.py`：三平台通用发布；`scripts/publish-update.ps1` 是 Windows 专用包装。

@@ -492,8 +492,12 @@ impl Element for SelectableLogText {
         let hitbox = window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal);
         // gpui-component 的 register 会向当前全部文本选择参与者发布快照。空闲帧若让
         // 每个可见日志行都注册，会形成 O(可见行数²) 的重复遍历；仅保留鼠标所在行
-        // 作为拖选起点，选择激活后再恢复全部可见行，保证跨行拖选仍可连续扩展。
-        if self.selection.activity.is_active() || bounds.contains(&window.mouse_position()) {
+        // 作为拖选起点，跨行选择激活后再恢复全部可见行。双击选词属于参与者本地选择，
+        // 它没有几何快照，必须单独保持当前行注册，否则鼠标离开后帧清理会清掉词选区。
+        if self.selection.activity.is_active()
+            || self.selection.handle.has_local_selection(cx)
+            || bounds.contains(&window.mouse_position())
+        {
             let _performance_scope =
                 crate::ui_performance::scope("SelectableLogText::register_selection");
             self.selection.handle.register(
@@ -565,7 +569,6 @@ impl Element for SelectableLogText {
             GlobalState::suppress_text_selection(cx);
             TextSelection::clear(window, cx);
             selection.state.borrow_mut().custom_range = Some(range);
-            selection.set_active(true);
             selection.handle.set_local_selection(true, cx);
             window.refresh();
         });
@@ -600,5 +603,92 @@ impl Element for SelectableLogText {
         {
             self.paint_selection(&layout, range, window);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{
+        Context, Modifiers, MouseMoveEvent, MouseUpEvent, ParentElement as _, Render, Styled as _,
+        TestAppContext, div, point, px,
+    };
+    use gpui_base::TextSelectionLayer;
+
+    struct SelectableLogTextTestView {
+        text: LogText,
+        selections: TextSelectionCache<usize>,
+    }
+
+    impl Render for SelectableLogTextTestView {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let selection = self.selections.handle(0, &self.text, window, cx);
+            let styled_text = StyledText::new(self.text.display().clone());
+            div().size_full().child(TextSelectionLayer).child(
+                div()
+                    .absolute()
+                    .left(px(10.))
+                    .top(px(10.))
+                    .text_size(px(14.))
+                    .child(SelectableLogText::new(
+                        selection,
+                        0,
+                        self.text.clone(),
+                        styled_text,
+                        gpui::Hsla::default(),
+                    )),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn double_clicked_word_survives_dragging_outside_the_line(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, _| SelectableLogTextTestView {
+            text: LogText::new("alpha beta".into()),
+            selections: TextSelectionCache::default(),
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        let word_position = point(px(20.), px(18.));
+        cx.simulate_event(MouseDownEvent {
+            position: word_position,
+            modifiers: Modifiers::default(),
+            button: MouseButton::Left,
+            click_count: 2,
+            first_mouse: false,
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            let view = view.read(cx);
+            assert!(!view.selections.activity.is_active());
+            assert!(
+                view.selections.entries[&0]
+                    .selection
+                    .handle
+                    .has_local_selection(cx)
+            );
+            assert_eq!(TextSelection::selected_text(window, cx), "alpha");
+        });
+
+        let outside_position = point(px(200.), px(80.));
+        cx.simulate_event(MouseMoveEvent {
+            position: outside_position,
+            pressed_button: Some(MouseButton::Left),
+            modifiers: Modifiers::default(),
+        });
+        cx.simulate_event(MouseUpEvent {
+            position: outside_position,
+            modifiers: Modifiers::default(),
+            button: MouseButton::Left,
+            click_count: 2,
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            window.simulate_next_frame(cx);
+            let _ = window.draw(cx);
+            assert_eq!(TextSelection::selected_text(window, cx), "alpha");
+        });
     }
 }

@@ -195,6 +195,27 @@ Release 可执行文件位于 Windows 的 `target\release\vclogg2.exe` 或 macOS
 
 ## 性能诊断
 
+### 生成大文件测试日志
+
+使用 Python 3 可一次生成 50 MiB、100 MiB、500 MiB 三档日志：
+
+```bash
+python3 scripts/generate-test-data.py
+```
+
+默认输出到 `target/test-data/`。日志内容随机包含不同时间、级别、服务、状态码和延迟；默认约 8% 的行包含 800–2400 个 ASCII 字符的随机 payload，用于测试横向滚动和自动换行。每个文件会精确写入对应档位的字节数。
+
+也可以只生成指定档位、固定随机种子或覆盖已有文件：
+
+```bash
+python3 scripts/generate-test-data.py 50M 100M --seed 20260831
+python3 scripts/generate-test-data.py 500M --force
+```
+
+Windows 可将上述命令中的 `python3` 替换为 `py -3`；使用 `--output-dir <目录>` 可修改输出位置。
+
+### UI 渲染性能诊断
+
 Debug 构建默认启用 UI 渲染线程长任务检测。单个已标记渲染作用域达到 16 ms 时，终端和应用日志会记录作用域、实际耗时、线程信息与 Rust 堆栈；同一作用域的重复堆栈默认每 2 秒最多记录一次。
 
 可在启动前调整 1–60000 ms 范围内的阈值与限频窗口：
@@ -236,7 +257,17 @@ powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 
 三种平台的产物分别写入 `dist/windows-x86_64/`、`dist/macos-aarch64/` 与 `dist/linux-x86_64/`。打包脚本根据实际 runner 架构命名产物；macOS 还会生成临时签名的 `.app`。
 
-仓库中的 [`.github/workflows/release-build.yml`](.github/workflows/release-build.yml) 会在推送或 PR 指向 `main`、推送 `v*` tag 时并行构建 Windows x64、macOS ARM64 和 Linux x86_64，也支持在 GitHub Actions 页面手动执行。构建结果作为 Actions Artifacts 保存 14 天；推送 `v*` tag 且三个构建全部成功后，工作流还会自动创建带生成式发行说明的 GitHub Release，并附加三平台安装包与 blockmap。
+仓库中的 [`.github/workflows/release-build.yml`](.github/workflows/release-build.yml) 会在推送或 PR 指向 `main`、推送 `v*` tag 时并行构建 Windows x64、macOS ARM64 和 Linux x86_64，也支持在 GitHub Actions 页面手动执行。构建结果作为 Actions Artifacts 保存 14 天；推送 `v*` tag 且三个构建全部成功后，工作流会复核标签、三平台清单、文件大小和 SHA-256，再自动创建带生成式发行说明的 GitHub Release。Release 同时包含安装包、blockmap 和客户端可识别的 `latest-<platform>-<architecture>.json`。
+
+正式发行版默认通过 GitHub Releases REST API 检查 `zhaiyanqi/vclogg2` 的最新正式版本，即使“设置 → 网络”没有业务服务器地址也能更新；若已配置服务器，原有静态更新目录会作为第二来源参与检查，两边都有更新时选择版本较新的包。GitHub 返回的仓库、标签、资产名称、大小和可用摘要会先与平台清单交叉验证；资产下载只允许重定向到 GitHub 管理的 HTTPS 域名，落盘前仍逐块及整包验证 SHA-256。标记为 prerelease 的版本不会进入普通客户端的自动更新通道。
+
+发布新版本时，先修改 `Cargo.toml` 的 workspace 版本、同步 `Cargo.lock`，提交并推送干净的 `main`，然后执行：
+
+```bash
+./scripts/publish-github-release.sh
+```
+
+脚本要求本地 `main` 与 `origin/main` 完全一致，运行格式、静态检查和 Clippy 后创建带注释的 `v<版本>` 标签并推送；标签会触发上述 GitHub Action。无人值守调用可追加 `--yes`，非默认远端可使用 `--remote <名称>`。
 
 任一平台的产物都可通过跨平台发布脚本写入对应静态更新目录；脚本先验证清单、大小和 SHA-256，最后原子替换 `latest.json`：
 
@@ -253,7 +284,7 @@ powershell -ExecutionPolicy Bypass -File scripts/publish-update.ps1 `
   -TargetDirectory D:\server\data\updates-vclogg2\windows-x86_64
 ```
 
-三平台发行版使用相同更新协议：验证分块与整包 SHA-256，并在应用正常退出、会话完成保存后交给平台独立助手安装并重启。更新清单本身不做密钥认证，因此更新源的访问控制、HTTPS 以及 Windows 代码签名或 macOS Developer ID 签名/公证由部署环境负责。完整交付边界见 [`doc/delivery.md`](doc/delivery.md)。
+GitHub Releases 与自建静态源使用同一更新协议：验证分块与整包 SHA-256，并在应用正常退出、会话完成保存后交给平台独立助手安装并重启。更新清单本身不做独立数字签名，因此仓库/更新源权限、HTTPS 以及 Windows 代码签名或 macOS Developer ID 签名/公证仍由发布环境负责。完整交付边界见 [`doc/delivery.md`](doc/delivery.md)。
 
 ## 工程结构
 
@@ -261,7 +292,7 @@ powershell -ExecutionPolicy Bypass -File scripts/publish-update.ps1 `
 crates/vclogg-app/     GPUI Component 桌面应用与工作区编排
 crates/vclogg-core/    日志索引、按需读取与搜索核心
 doc/                   架构、界面、功能状态与交付文档
-scripts/               启动、检查、构建、打包和发布脚本
+scripts/               启动、检查、构建、测试数据、打包和发布脚本
 ```
 
 `vclogg-app` 负责应用外壳、界面和后台任务编排；`vclogg-core` 不依赖 GPUI，负责文件快照、行索引、解码与搜索。更完整的职责边界见 [`doc/architecture.md`](doc/architecture.md)。

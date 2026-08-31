@@ -201,16 +201,86 @@ jobs:
           name: vclogg2-linux-x86_64
           path: release-assets/linux-x86_64
 
+      - name: Prepare GitHub update manifests
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import shutil
+          from pathlib import Path
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          if not tag.startswith("v"):
+              raise SystemExit(f"Release tag must start with v: {tag}")
+          version = tag[1:]
+          release_root = Path("release-assets")
+          platforms = (
+              ("windows", "x86_64"),
+              ("macos", "aarch64"),
+              ("linux", "x86_64"),
+          )
+
+          for platform, architecture in platforms:
+              source_directory = release_root / f"{platform}-{architecture}"
+              source_manifest = source_directory / "latest.json"
+              manifest = json.loads(source_manifest.read_text(encoding="utf-8"))
+              expected = {
+                  "schemaVersion": 1,
+                  "product": "VCLogg2",
+                  "version": version,
+                  "platform": platform,
+                  "architecture": architecture,
+              }
+              for key, expected_value in expected.items():
+                  if manifest.get(key) != expected_value:
+                      raise SystemExit(
+                          f"{source_manifest}: {key} must be {expected_value!r}, "
+                          f"got {manifest.get(key)!r}"
+                      )
+
+              archive = source_directory / manifest["artifact"]
+              blockmap = source_directory / manifest["blockmap"]
+              if not archive.is_file() or not blockmap.is_file():
+                  raise SystemExit(f"{source_manifest}: referenced release assets are missing")
+              if archive.stat().st_size != manifest["size"]:
+                  raise SystemExit(f"{archive}: size does not match the update manifest")
+              digest = hashlib.sha256()
+              with archive.open("rb") as stream:
+                  for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              if digest.hexdigest().lower() != manifest["sha256"].lower():
+                  raise SystemExit(f"{archive}: SHA-256 does not match the update manifest")
+
+              target_manifest = release_root / f"latest-{platform}-{architecture}.json"
+              shutil.copyfile(source_manifest, target_manifest)
+          PY
+
       - name: Create GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          release_options=(
+            --verify-tag
+            --generate-notes
+            --title "VCLogg2 $GITHUB_REF_NAME"
+            --latest
+          )
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            release_options=(
+              --verify-tag
+              --generate-notes
+              --title "VCLogg2 $GITHUB_REF_NAME"
+              --prerelease
+              --latest=false
+            )
+          fi
           gh release create "$GITHUB_REF_NAME" \
             release-assets/windows-x86_64/vclogg2-*-windows-x86_64.zip \
             release-assets/macos-aarch64/vclogg2-*-macos-aarch64.zip \
             release-assets/linux-x86_64/vclogg2-*-linux-x86_64.tar.gz \
             release-assets/*/*.blockmap.json \
-            --verify-tag \
-            --generate-notes \
-            --title "VCLogg2 $GITHUB_REF_NAME"
+            release-assets/latest-*.json \
+            "${release_options[@]}"

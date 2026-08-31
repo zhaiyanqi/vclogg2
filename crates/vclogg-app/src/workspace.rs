@@ -3020,9 +3020,7 @@ impl Workspace {
                 .timer(Duration::from_secs(15))
                 .await;
             _ = this.update_in(cx, |this, window, cx| {
-                if matches!(this.update_state, AppUpdateState::Idle)
-                    && !this.cloud_settings.server_url.trim().is_empty()
-                {
+                if matches!(this.update_state, AppUpdateState::Idle) {
                     this.check_for_updates(false, window, cx);
                 }
             });
@@ -5008,30 +5006,19 @@ impl Workspace {
             }
             return;
         }
-        let server_url = self.cloud_settings.server_url.trim().to_string();
-        if server_url.is_empty() {
-            if manual {
-                window.push_notification(
-                    crate::tr!(
-                        "请先在“设置 → 网络”中配置服务器",
-                        "Configure a server in Settings → Network first"
-                    ),
-                    cx,
-                );
-            }
-            return;
-        }
         let Some(client) = self.update_client.clone() else {
             self.update_state = AppUpdateState::Error;
             cx.notify();
             return;
         };
+        let static_server_url = (!self.cloud_settings.server_url.trim().is_empty())
+            .then(|| self.cloud_settings.server_url.trim().to_string());
         self.update_state = AppUpdateState::Checking;
         self.update_task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = cx
-                .background_spawn(
-                    async move { client.check(&server_url, env!("CARGO_PKG_VERSION")) },
-                )
+                .background_spawn(async move {
+                    client.check_latest(env!("CARGO_PKG_VERSION"), static_server_url.as_deref())
+                })
                 .await;
             _ = this.update_in(cx, |this, window, cx| {
                 this.update_task = None;

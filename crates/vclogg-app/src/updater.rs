@@ -23,6 +23,10 @@ const UPDATE_SCHEMA: u32 = 1;
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_BLOCKMAP_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_GITHUB_RELEASE_BYTES: u64 = 1024 * 1024;
+const GITHUB_REPOSITORY: &str = "zhaiyanqi/vclogg2";
+const GITHUB_API_VERSION: &str = "2026-03-10";
+const GITHUB_JSON_MEDIA_TYPE: &str = "application/vnd.github+json";
 
 #[cfg(target_os = "windows")]
 const UPDATE_PLATFORM: &str = "windows";
@@ -60,10 +64,38 @@ struct UpdateBlockmap {
     chunks: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum UpdateAssetSource {
+    StaticFeed,
+    GitHubRelease,
+}
+
+#[derive(Clone, Debug)]
+struct UpdateAsset {
+    url: Url,
+    source: UpdateAssetSource,
+}
+
 #[derive(Clone, Debug)]
 pub struct AvailableUpdate {
     pub manifest: UpdateManifest,
-    feed_url: Url,
+    artifact: UpdateAsset,
+    blockmap: UpdateAsset,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    assets: Vec<GitHubReleaseAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubReleaseAsset {
+    name: String,
+    state: String,
+    size: u64,
+    digest: Option<String>,
+    browser_download_url: String,
 }
 
 #[derive(Clone, Debug)]
@@ -98,6 +130,7 @@ impl UpdateDownloadProgress {
 #[derive(Clone)]
 pub struct UpdateClient {
     client: Client,
+    github_asset_client: Client,
     root: PathBuf,
 }
 
@@ -118,7 +151,17 @@ impl UpdateClient {
             .redirect(Policy::none())
             .user_agent(concat!("VCLogg2/", env!("CARGO_PKG_VERSION")))
             .build()?;
-        Ok(Self { client, root })
+        let github_asset_client = Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(30 * 60))
+            .redirect(github_redirect_policy())
+            .user_agent(concat!("VCLogg2/", env!("CARGO_PKG_VERSION")))
+            .build()?;
+        Ok(Self {
+            client,
+            github_asset_client,
+            root,
+        })
     }
 
     pub fn check(
@@ -146,7 +189,149 @@ impl UpdateClient {
                 "Invalid update-manifest version: {error}"
             ))
         })?;
-        Ok((available > current).then_some(AvailableUpdate { manifest, feed_url }))
+        let artifact_url = feed_url.join(&manifest.artifact)?;
+        let blockmap_url = feed_url.join(&manifest.blockmap)?;
+        Ok((available > current).then_some(AvailableUpdate {
+            manifest,
+            artifact: UpdateAsset {
+                url: artifact_url,
+                source: UpdateAssetSource::StaticFeed,
+            },
+            blockmap: UpdateAsset {
+                url: blockmap_url,
+                source: UpdateAssetSource::StaticFeed,
+            },
+        }))
+    }
+
+    pub fn check_github(&self, current_version: &str) -> anyhow::Result<Option<AvailableUpdate>> {
+        let release_url = Url::parse(&format!(
+            "https://api.github.com/repos/{GITHUB_REPOSITORY}/releases/latest"
+        ))?;
+        let release: GitHubRelease = read_json_response(
+            self.client
+                .get(release_url)
+                .header("Accept", GITHUB_JSON_MEDIA_TYPE)
+                .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
+                .send()?
+                .error_for_status()?,
+            MAX_GITHUB_RELEASE_BYTES,
+        )?;
+        let current = parse_version(
+            current_version,
+            crate::tr!("当前版本格式无效", "Invalid current-version format"),
+        )?;
+        let release_version_text = release.tag_name.strip_prefix('v').ok_or_else(|| {
+            anyhow::anyhow!(crate::tr!(
+                "GitHub Release 标签必须以 v 开头",
+                "The GitHub Release tag must start with v"
+            ))
+        })?;
+        let release_version = parse_version(
+            release_version_text,
+            crate::tr!(
+                "GitHub Release 标签版本格式无效",
+                "The GitHub Release tag has an invalid version"
+            ),
+        )?;
+        if release_version <= current {
+            return Ok(None);
+        }
+
+        let manifest_name = format!("latest-{UPDATE_PLATFORM}-{UPDATE_ARCHITECTURE}.json");
+        let manifest_asset = find_github_asset(&release, &manifest_name)?;
+        if manifest_asset.size == 0 || manifest_asset.size > MAX_MANIFEST_BYTES {
+            anyhow::bail!(crate::tr!(
+                "GitHub 更新清单大小超出安全范围",
+                "The GitHub update manifest exceeds the safety limit"
+            ));
+        }
+        let manifest_url = validate_github_asset_url(manifest_asset, &release.tag_name)?;
+        let manifest_bytes = read_response_bytes(
+            self.github_asset_client
+                .get(manifest_url)
+                .send()?
+                .error_for_status()?,
+            MAX_MANIFEST_BYTES,
+        )?;
+        let manifest: UpdateManifest = serde_json::from_slice(&manifest_bytes)?;
+        validate_manifest(&manifest)?;
+        let manifest_version = parse_version(
+            &manifest.version,
+            crate::tr!(
+                "GitHub 更新清单版本格式无效",
+                "The GitHub update manifest has an invalid version"
+            ),
+        )?;
+        if manifest_version != release_version {
+            anyhow::bail!(crate::tr!(
+                "GitHub Release 标签与更新清单版本不一致",
+                "The GitHub Release tag doesn’t match the update manifest version"
+            ));
+        }
+
+        let artifact_asset = find_github_asset(&release, &manifest.artifact)?;
+        if artifact_asset.size != manifest.size {
+            anyhow::bail!(crate::tr!(
+                "GitHub Release 中的更新包大小与清单不一致",
+                "The GitHub Release asset size doesn’t match the update manifest"
+            ));
+        }
+        if let Some(digest) = artifact_asset.digest.as_deref() {
+            let expected_digest = format!("sha256:{}", manifest.sha256);
+            if !digest.eq_ignore_ascii_case(&expected_digest) {
+                anyhow::bail!(crate::tr!(
+                    "GitHub Release 中的更新包摘要与清单不一致",
+                    "The GitHub Release asset digest doesn’t match the update manifest"
+                ));
+            }
+        }
+        let blockmap_asset = find_github_asset(&release, &manifest.blockmap)?;
+        if blockmap_asset.size == 0 || blockmap_asset.size > MAX_BLOCKMAP_BYTES {
+            anyhow::bail!(crate::tr!(
+                "GitHub Release 中的分块清单大小超出安全范围",
+                "The GitHub Release blockmap exceeds the safety limit"
+            ));
+        }
+
+        Ok(Some(AvailableUpdate {
+            manifest,
+            artifact: UpdateAsset {
+                url: validate_github_asset_url(artifact_asset, &release.tag_name)?,
+                source: UpdateAssetSource::GitHubRelease,
+            },
+            blockmap: UpdateAsset {
+                url: validate_github_asset_url(blockmap_asset, &release.tag_name)?,
+                source: UpdateAssetSource::GitHubRelease,
+            },
+        }))
+    }
+
+    pub fn check_latest(
+        &self,
+        current_version: &str,
+        static_server_url: Option<&str>,
+    ) -> anyhow::Result<Option<AvailableUpdate>> {
+        let github_result = self.check_github(current_version);
+        let Some(static_server_url) = static_server_url.filter(|url| !url.trim().is_empty()) else {
+            return github_result;
+        };
+        let static_result = self.check(static_server_url, current_version);
+        match (github_result, static_result) {
+            (Ok(github), Ok(static_feed)) => select_newer_update(github, static_feed),
+            (Ok(update), Err(error)) => {
+                log::warn!("自建更新源检查失败，继续使用 GitHub Releases 结果：{error:#}");
+                Ok(update)
+            }
+            (Err(error), Ok(update)) => {
+                log::warn!("GitHub Releases 检查失败，继续使用自建更新源结果：{error:#}");
+                Ok(update)
+            }
+            (Err(github_error), Err(static_error)) => anyhow::bail!(crate::tr_args!(
+                "GitHub Releases 与自建更新源均检查失败：GitHub：{github_error:#}；自建源：{static_error:#}",
+                "Both GitHub Releases and the static update feed failed: GitHub: {github_error:#}; static feed: {static_error:#}"
+            )),
+        }
     }
 
     pub fn download(
@@ -156,11 +341,8 @@ impl UpdateClient {
     ) -> anyhow::Result<DownloadedUpdate> {
         let manifest = &update.manifest;
         validate_manifest(manifest)?;
-        let blockmap_url = update.feed_url.join(&manifest.blockmap)?;
-        let blockmap: UpdateBlockmap = read_json_response(
-            self.client.get(blockmap_url).send()?.error_for_status()?,
-            MAX_BLOCKMAP_BYTES,
-        )?;
+        let blockmap: UpdateBlockmap =
+            read_json_response(self.get_update_asset(&update.blockmap)?, MAX_BLOCKMAP_BYTES)?;
         validate_blockmap(&blockmap, manifest)?;
 
         let version_root = self.root.join(format!("v{}", manifest.version));
@@ -186,8 +368,7 @@ impl UpdateClient {
         if temporary_path.is_file() {
             fs::remove_file(&temporary_path)?;
         }
-        let artifact_url = update.feed_url.join(&manifest.artifact)?;
-        let mut response = self.client.get(artifact_url).send()?.error_for_status()?;
+        let mut response = self.get_update_asset(&update.artifact)?;
         if response
             .content_length()
             .is_some_and(|length| length != manifest.size)
@@ -218,6 +399,14 @@ impl UpdateClient {
             version: manifest.version.clone(),
             archive_path: final_path,
         })
+    }
+
+    fn get_update_asset(&self, asset: &UpdateAsset) -> anyhow::Result<Response> {
+        let client = match asset.source {
+            UpdateAssetSource::StaticFeed => &self.client,
+            UpdateAssetSource::GitHubRelease => &self.github_asset_client,
+        };
+        Ok(client.get(asset.url.clone()).send()?.error_for_status()?)
     }
 }
 
@@ -379,6 +568,116 @@ mod performance_tests {
             elapsed / RUNS as u32
         );
     }
+}
+
+fn parse_version(value: &str, description: &str) -> anyhow::Result<Version> {
+    Version::parse(value).map_err(|error| anyhow::anyhow!("{description}: {error}"))
+}
+
+fn select_newer_update(
+    first: Option<AvailableUpdate>,
+    second: Option<AvailableUpdate>,
+) -> anyhow::Result<Option<AvailableUpdate>> {
+    let Some(first) = first else {
+        return Ok(second);
+    };
+    let Some(second) = second else {
+        return Ok(Some(first));
+    };
+    let first_version = parse_version(
+        &first.manifest.version,
+        crate::tr!(
+            "更新清单版本格式无效",
+            "The update manifest has an invalid version"
+        ),
+    )?;
+    let second_version = parse_version(
+        &second.manifest.version,
+        crate::tr!(
+            "更新清单版本格式无效",
+            "The update manifest has an invalid version"
+        ),
+    )?;
+    Ok(Some(if second_version > first_version {
+        second
+    } else {
+        first
+    }))
+}
+
+fn find_github_asset<'a>(
+    release: &'a GitHubRelease,
+    name: &str,
+) -> anyhow::Result<&'a GitHubReleaseAsset> {
+    validate_file_name(name)?;
+    let mut matches = release.assets.iter().filter(|asset| asset.name == name);
+    let asset = matches.next().ok_or_else(|| {
+        anyhow::anyhow!(crate::tr_args!(
+            "GitHub Release 缺少更新文件：{name}",
+            "The GitHub Release is missing update asset: {name}"
+        ))
+    })?;
+    if matches.next().is_some() {
+        anyhow::bail!(crate::tr_args!(
+            "GitHub Release 包含重复更新文件：{name}",
+            "The GitHub Release contains a duplicate update asset: {name}"
+        ));
+    }
+    if asset.state != "uploaded" {
+        anyhow::bail!(crate::tr_args!(
+            "GitHub Release 更新文件尚未上传完成：{name}",
+            "The GitHub Release asset hasn’t finished uploading: {name}"
+        ));
+    }
+    Ok(asset)
+}
+
+fn validate_github_asset_url(asset: &GitHubReleaseAsset, tag_name: &str) -> anyhow::Result<Url> {
+    let url = Url::parse(&asset.browser_download_url)?;
+    let expected_path = format!(
+        "/{GITHUB_REPOSITORY}/releases/download/{tag_name}/{}",
+        asset.name
+    );
+    if url.scheme() != "https"
+        || url.host_str() != Some("github.com")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path() != expected_path
+    {
+        anyhow::bail!(crate::tr_args!(
+            "GitHub Release 返回了无效的更新文件地址：{}",
+            "GitHub returned an invalid update asset URL: {}",
+            asset.name
+        ));
+    }
+    Ok(url)
+}
+
+fn github_redirect_policy() -> Policy {
+    Policy::custom(|attempt| {
+        if attempt.previous().len() >= 5 {
+            return attempt.error("too many GitHub release asset redirects");
+        }
+        let url = attempt.url();
+        let host_allowed = url.host_str().is_some_and(|host| {
+            host == "github.com"
+                || host == "githubusercontent.com"
+                || host.ends_with(".githubusercontent.com")
+        });
+        if url.scheme() == "https"
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.port().is_none()
+            && host_allowed
+        {
+            attempt.follow()
+        } else {
+            attempt.error("GitHub release asset redirected to an untrusted URL")
+        }
+    })
 }
 
 fn build_feed_url(server_url: &str) -> anyhow::Result<Url> {

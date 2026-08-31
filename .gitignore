@@ -10,6 +10,11 @@ dist/
 .env.*
 !.env.example
 
+# Local AI agent skills and installer metadata
+.agent/
+.agents/
+skills-lock.json
+
 # Private keys and local application data
 *.key
 *.pem
