@@ -638,13 +638,13 @@ impl SearchController {
             .is_some_and(|search| search.target == target)
     }
 
-    pub(crate) fn targets_any_document(&self, document_ids: &BTreeSet<u64>) -> bool {
+    pub(crate) fn is_affected_by_removed_documents(&self, document_ids: &BTreeSet<u64>) -> bool {
         self.active
             .as_ref()
             .is_some_and(|search| match search.target {
                 SearchTarget::Document(document_id) => document_ids.contains(&document_id),
                 SearchTarget::AllOpenFiles => !document_ids.is_empty(),
-                SearchTarget::Directory => false,
+                SearchTarget::Directory => !document_ids.is_empty(),
             })
     }
 
@@ -892,7 +892,7 @@ mod state_controller_tests {
     }
 
     #[test]
-    fn document_changes_cancel_open_file_searches_but_not_directory_searches() {
+    fn document_reload_cancels_open_file_searches_but_not_directory_searches() {
         let mut controller = SearchController::default();
         let directory_cancellation = SearchCancellation::default();
         controller.begin(SearchTarget::Directory, 1, directory_cancellation.clone());
@@ -911,6 +911,23 @@ mod state_controller_tests {
         assert!(directory_cancellation.is_cancelled());
         assert!(controller.cancel_for_document(7));
         assert!(open_files_cancellation.is_cancelled());
+    }
+
+    #[test]
+    fn removing_documents_affects_every_search_that_captured_workspace_membership() {
+        let removed = BTreeSet::from([7]);
+        let mut controller = SearchController::default();
+
+        controller.begin(SearchTarget::Directory, 1, SearchCancellation::default());
+        assert!(controller.is_affected_by_removed_documents(&removed));
+
+        controller.begin(SearchTarget::AllOpenFiles, 2, SearchCancellation::default());
+        assert!(controller.is_affected_by_removed_documents(&removed));
+
+        controller.begin(SearchTarget::Document(8), 3, SearchCancellation::default());
+        assert!(!controller.is_affected_by_removed_documents(&removed));
+        controller.begin(SearchTarget::Document(7), 4, SearchCancellation::default());
+        assert!(controller.is_affected_by_removed_documents(&removed));
     }
 
     #[test]

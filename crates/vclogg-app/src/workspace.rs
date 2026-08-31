@@ -7498,7 +7498,10 @@ impl Workspace {
             })
             .collect::<Vec<_>>();
 
-        if self.searches.targets_any_document(&document_ids) {
+        if self
+            .searches
+            .is_affected_by_removed_documents(&document_ids)
+        {
             self.cancel_search();
         }
         for (path, base, session) in sessions {
