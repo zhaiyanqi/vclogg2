@@ -1116,18 +1116,19 @@ impl GlobalSearchTableDelegate {
     }
 
     pub(crate) fn restore_selection(&self, snapshot: &BTreeMap<u64, CompressedRows>) {
-        let selected_indices = (0..self.projection.rows_len).filter(|row_ix| {
-            let Some(FlatRow::Match {
-                group_ix,
-                source_row,
-            }) = self.flat_row(*row_ix)
-            else {
-                return false;
-            };
-            snapshot
-                .get(&self.projection.groups[group_ix].source.document_id)
-                .is_some_and(|rows| rows.contains(source_row))
-        });
+        let mut selected_indices = snapshot
+            .iter()
+            .flat_map(|(document_id, rows)| {
+                rows.iter().filter_map(|source_row| {
+                    self.row_ix_for_key(LogRowKey::Row {
+                        document_id: *document_id,
+                        source_row,
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        selected_indices.sort_unstable();
+        selected_indices.dedup();
         self.interaction
             .row_selection
             .borrow_mut()
@@ -1559,7 +1560,11 @@ impl TableDelegate for GlobalSearchTableDelegate {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        path::PathBuf,
+        sync::Arc,
+    };
 
     use gpui::Bounds;
     use vclogg_core::LogDocument;
@@ -1714,6 +1719,26 @@ mod tests {
             }),
             Some(3)
         );
+    }
+
+    #[test]
+    fn selection_restore_scales_with_selected_rows_and_keeps_display_order() {
+        let mut first = test_group(Arc::new(LogDocument::placeholder("first.log")));
+        first.source.document_id = 20;
+        first.projection.rows = [1, 3].into_iter().collect();
+        let mut second = test_group(Arc::new(LogDocument::placeholder("second.log")));
+        second.source.document_id = 10;
+        second.projection.rows = [2, 4].into_iter().collect();
+        let mut delegate = GlobalSearchTableDelegate::new();
+        delegate.set_groups(vec![first, second], None);
+
+        delegate.restore_selection(&BTreeMap::from([
+            (10, [4].into_iter().collect()),
+            (20, [1].into_iter().collect()),
+            (99, [7].into_iter().collect()),
+        ]));
+
+        assert_eq!(delegate.selected_matches(), vec![(20, 1), (10, 4)]);
     }
 
     #[test]
