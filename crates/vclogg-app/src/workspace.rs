@@ -2587,6 +2587,7 @@ pub struct Workspace {
     result_export_task: Option<Task<()>>,
     result_export_operation: Option<ResultExportOperation>,
     line_copy_task: Option<Task<()>>,
+    line_copy_cancellation: Option<SearchCancellation>,
     line_copy_revision: u64,
     file_drop_visible: bool,
     file_drop_tab_transfer: Option<TabTransferMode>,
@@ -3692,6 +3693,7 @@ impl Workspace {
             result_export_task: None,
             result_export_operation: None,
             line_copy_task: None,
+            line_copy_cancellation: None,
             line_copy_revision: 0,
             file_drop_visible: false,
             file_drop_tab_transfer: None,
@@ -8715,6 +8717,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.line_copy_revision = self.line_copy_revision.saturating_add(1);
+        if let Some(cancellation) = self.line_copy_cancellation.take() {
+            cancellation.cancel();
+        }
         self.line_copy_task = None;
         let revision = self.line_copy_revision;
         if !include_line_number {
@@ -8782,10 +8787,16 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let cancellation = SearchCancellation::default();
+        self.line_copy_cancellation = Some(cancellation.clone());
         self.line_copy_task = Some(cx.spawn_in(window, async move |this, cx| {
             let copied = cx
                 .background_spawn(async move {
-                    collect_log_lines_for_clipboard(documents, include_line_number)
+                    collect_log_lines_for_clipboard(
+                        documents,
+                        include_line_number,
+                        &cancellation,
+                    )
                 })
                 .await;
             _ = this.update_in(cx, |this, window, cx| {
@@ -8793,6 +8804,10 @@ impl Workspace {
                     return;
                 }
                 this.line_copy_task = None;
+                this.line_copy_cancellation = None;
+                let Some(copied) = copied else {
+                    return;
+                };
                 if copied.text.is_empty() {
                     window.push_notification(
                         match scope {
@@ -18554,12 +18569,16 @@ fn directory_search_scan_paths(
 fn collect_log_lines_for_clipboard(
     documents: Vec<(Arc<LogDocument>, CompressedRows)>,
     include_line_number: bool,
-) -> CopiedLogLines {
+    cancellation: &SearchCancellation,
+) -> Option<CopiedLogLines> {
     let mut text = String::new();
     let mut count = 0_usize;
     let mut first_source_row = None;
     for (document, rows) in documents {
         for source_row in rows.iter() {
+            if cancellation.is_cancelled() {
+                return None;
+            }
             let Some(line) = document.line(source_row) else {
                 continue;
             };
@@ -18575,11 +18594,11 @@ fn collect_log_lines_for_clipboard(
             count = count.saturating_add(1);
         }
     }
-    CopiedLogLines {
+    Some(CopiedLogLines {
         text,
         count,
         first_source_row,
-    }
+    })
 }
 
 fn prepare_paths_bounded<T, F>(paths: Vec<PathBuf>, operation: F) -> Vec<(PathBuf, T)>
@@ -18901,12 +18920,32 @@ mod result_snapshot_tests {
         fs::write(&temporary.0, b"alpha\nbeta\ngamma").expect("应能创建复制测试日志");
         let document = Arc::new(LogDocument::open(&temporary.0).expect("应能打开复制测试日志"));
 
-        let copied =
-            collect_log_lines_for_clipboard(vec![(document, [0, 2].into_iter().collect())], true);
+        let copied = collect_log_lines_for_clipboard(
+            vec![(document, [0, 2].into_iter().collect())],
+            true,
+            &SearchCancellation::default(),
+        )
+        .expect("未取消的复制应完成");
 
         assert_eq!(copied.text, "1\talpha\n3\tgamma");
         assert_eq!(copied.count, 2);
         assert_eq!(copied.first_source_row, Some(0));
+    }
+
+    #[test]
+    fn cancelled_clipboard_collection_does_not_read_documents() {
+        let cancellation = SearchCancellation::default();
+        cancellation.cancel();
+        let document = Arc::new(LogDocument::placeholder("cancelled-copy.log"));
+
+        assert!(
+            collect_log_lines_for_clipboard(
+                vec![(document, [0].into_iter().collect())],
+                false,
+                &cancellation,
+            )
+            .is_none()
+        );
     }
 
     #[test]
