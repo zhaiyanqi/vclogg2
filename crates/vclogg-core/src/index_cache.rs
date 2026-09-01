@@ -193,11 +193,38 @@ fn managed_cache_path_kind(path: &Path) -> Option<bool> {
     }
     let name = path.file_name().and_then(|name| name.to_str())?;
     let (hash, temporary) = name.split_once(".tmp-")?;
-    (hash.len() == 16
+    (matches!(hash.len(), 16 | 64)
         && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
         && !temporary.is_empty()
         && temporary
             .bytes()
             .all(|byte| byte.is_ascii_digit() || byte == b'-'))
     .then_some(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::managed_cache_path_kind;
+    use std::path::Path;
+
+    #[test]
+    fn recognizes_current_and_legacy_managed_cache_names() {
+        assert_eq!(
+            managed_cache_path_kind(Path::new(
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.vclog-index"
+            )),
+            Some(false)
+        );
+        assert_eq!(
+            managed_cache_path_kind(Path::new(
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.tmp-12-34"
+            )),
+            Some(true)
+        );
+        assert_eq!(
+            managed_cache_path_kind(Path::new("0123456789abcdef.tmp-12-34")),
+            Some(true)
+        );
+        assert_eq!(managed_cache_path_kind(Path::new("short.tmp-12-34")), None);
+    }
 }

@@ -12,7 +12,7 @@ use std::{
 use std::{os::windows::ffi::OsStrExt as _, os::windows::io::AsRawHandle as _};
 
 #[cfg(unix)]
-use std::os::unix::fs::MetadataExt as _;
+use std::os::unix::{ffi::OsStrExt as _, fs::MetadataExt as _};
 
 use anyhow::{Context as _, Result};
 use chardetng::EncodingDetector;
@@ -35,7 +35,7 @@ use windows_sys::Win32::{
 const APPEND_SAMPLE_BYTES: usize = 64 * 1024;
 const APPEND_INTEGRITY_BLOCK_BYTES: usize = 4 * 1024 * 1024;
 const INDEX_CACHE_MAGIC: &[u8; 8] = b"VCLOGG05";
-const INDEX_CACHE_VERSION: u32 = 2;
+const INDEX_CACHE_VERSION: u32 = 3;
 const INDEX_CACHE_HEADER_BYTES: u64 = 8 + 4 + 4 + 2 + 8 + 8 + 1 + 8 + 16 + 8 + 8 * 7;
 const MAX_CACHE_PATH_BYTES: usize = 32 * 1024;
 const MAX_CACHE_ENCODING_BYTES: usize = 64;
@@ -1062,14 +1062,44 @@ fn map_snapshot(file: &File, file_size: u64, path: &Path) -> Result<DocumentByte
 }
 
 fn index_cache_path(cache_dir: &Path, source_path: &Path) -> PathBuf {
-    let source = source_path.to_string_lossy();
-    let hash = source
-        .as_bytes()
-        .iter()
-        .fold(0xcbf29ce484222325_u64, |hash, byte| {
-            (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
-        });
-    cache_dir.join(format!("{hash:016x}.vclog-index"))
+    let source_identity = index_cache_source_identity(source_path);
+    let digest = Sha256::digest(&source_identity);
+    let mut hash = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut hash, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    cache_dir.join(format!("{hash}.vclog-index"))
+}
+
+fn index_cache_source_identity(source_path: &Path) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        let path = source_path.as_os_str().as_bytes();
+        let mut identity = Vec::with_capacity(path.len() + 1);
+        identity.push(b'U');
+        identity.extend_from_slice(path);
+        identity
+    }
+    #[cfg(windows)]
+    {
+        let mut identity = Vec::new();
+        identity.push(b'W');
+        identity.extend(
+            source_path
+                .as_os_str()
+                .encode_wide()
+                .flat_map(u16::to_le_bytes),
+        );
+        identity
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let path = source_path.to_string_lossy();
+        let mut identity = Vec::with_capacity(path.len() + 1);
+        identity.push(b'O');
+        identity.extend_from_slice(path.as_bytes());
+        identity
+    }
 }
 
 fn system_time_millis(time: Option<SystemTime>) -> u64 {
@@ -1170,7 +1200,7 @@ fn read_index_cache_while(
     }
     let mut cached_path = vec![0_u8; path_len];
     reader.read_exact(&mut cached_path).ok()?;
-    if cached_path != source_path.to_string_lossy().as_bytes() {
+    if cached_path != index_cache_source_identity(source_path) {
         return None;
     }
     let mut cached_encoding = vec![0_u8; encoding_len];
@@ -1227,8 +1257,7 @@ fn read_index_cache_while(
 }
 
 fn write_index_cache(pending: &PendingIndexCacheWrite) -> Result<()> {
-    let source_path = pending.source_path.to_string_lossy();
-    let source_path = source_path.as_bytes();
+    let source_path = index_cache_source_identity(&pending.source_path);
     let path_len = u32::try_from(source_path.len()).context("索引缓存路径过长")?;
     let encoding_name = pending.encoding.name();
     let encoding_name = encoding_name.as_bytes();
@@ -1272,7 +1301,7 @@ fn write_index_cache(pending: &PendingIndexCacheWrite) -> Result<()> {
         writer.write_all(&(pending.longest_completed_line_bytes as u64).to_le_bytes())?;
         writer.write_all(&(pending.longest_line_columns as u64).to_le_bytes())?;
         writer.write_all(&(pending.longest_completed_line_columns as u64).to_le_bytes())?;
-        writer.write_all(source_path)?;
+        writer.write_all(&source_path)?;
         writer.write_all(encoding_name)?;
         let mut previous = 0_u64;
         for offset in pending.line_starts.iter() {
@@ -2085,9 +2114,12 @@ mod line_preview_tests {
 mod index_cache_tests {
     use std::{fs, sync::Arc, time::SystemTime};
 
+    #[cfg(unix)]
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt as _, path::PathBuf};
+
     use super::{
         APPEND_INTEGRITY_BLOCK_BYTES, FileEncoding, FileIdentity, LineStarts,
-        PendingIndexCacheWrite, read_index_cache,
+        PendingIndexCacheWrite, index_cache_path, index_cache_source_identity, read_index_cache,
     };
 
     #[test]
@@ -2109,6 +2141,23 @@ mod index_cache_tests {
 
         assert!(matches!(&starts, LineStarts::Wide(_)));
         assert_eq!(starts.get(1), Some(wide_offset));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_paths_keep_distinct_cache_identities() {
+        let first = PathBuf::from(OsString::from_vec(b"source-\x80.log".to_vec()));
+        let second = PathBuf::from(OsString::from_vec(b"source-\x81.log".to_vec()));
+
+        assert_eq!(first.to_string_lossy(), second.to_string_lossy());
+        assert_ne!(
+            index_cache_source_identity(&first),
+            index_cache_source_identity(&second)
+        );
+        assert_ne!(
+            index_cache_path(PathBuf::from("cache").as_path(), &first),
+            index_cache_path(PathBuf::from("cache").as_path(), &second)
+        );
     }
 
     #[test]
