@@ -98,6 +98,7 @@ struct GlobalSearchProjectionState {
     expanded_result_groups: Vec<usize>,
     rows_len: usize,
     results_count: usize,
+    has_truncated_results: bool,
     max_line_columns: usize,
 }
 
@@ -137,6 +138,7 @@ impl Default for GlobalSearchProjectionState {
             expanded_result_groups: Vec::new(),
             rows_len: 0,
             results_count: 0,
+            has_truncated_results: false,
             max_line_columns: 0,
         }
     }
@@ -583,17 +585,22 @@ impl GlobalSearchTableDelegate {
             debug_assert_eq!(self.projection.group_by_document.len(), groups.len());
         }
         self.projection.groups = groups;
-        self.projection.results_count =
-            self.projection.groups.iter().fold(0_usize, |count, group| {
-                count.saturating_add(group.projection.rows.len())
-            });
-        self.projection.max_line_columns = self
+        let (results_count, has_truncated_results, max_line_columns) = self
             .projection
             .groups
             .iter()
-            .map(|group| group.source.document.metadata().longest_line_columns)
-            .max()
-            .unwrap_or_default();
+            .fold((0_usize, false, 0_usize), |summary, group| {
+                (
+                    summary.0.saturating_add(group.projection.rows.len()),
+                    summary.1 || group.presentation.truncated,
+                    summary
+                        .2
+                        .max(group.source.document.metadata().longest_line_columns),
+                )
+            });
+        self.projection.results_count = results_count;
+        self.projection.has_truncated_results = has_truncated_results;
+        self.projection.max_line_columns = max_line_columns;
         if let Some((selected_rows, active_row, selection_anchor)) = stable_interaction {
             self.interaction.row_bounds.borrow_mut().clear();
             self.rebuild_layout();
@@ -959,10 +966,7 @@ impl GlobalSearchTableDelegate {
     }
 
     pub fn has_truncated_results(&self) -> bool {
-        self.projection
-            .groups
-            .iter()
-            .any(|group| group.presentation.truncated)
+        self.projection.has_truncated_results
     }
 
     pub fn rows_len(&self) -> usize {
@@ -1969,13 +1973,17 @@ mod tests {
 
         delegate.set_groups(vec![group.clone()]);
         assert_eq!(delegate.results_count(), 1_000_000);
+        assert!(!delegate.has_truncated_results());
 
         group.projection.rows = [2, 7].into_iter().collect();
+        group.presentation.truncated = true;
         delegate.set_groups(vec![group]);
         assert_eq!(delegate.results_count(), 2);
+        assert!(delegate.has_truncated_results());
 
         delegate.set_groups(Vec::new());
         assert_eq!(delegate.results_count(), 0);
+        assert!(!delegate.has_truncated_results());
     }
 
     #[test]
