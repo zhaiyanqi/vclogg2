@@ -6489,6 +6489,23 @@ impl Workspace {
             .install(document_id, generation, task);
     }
 
+    fn schedule_log_region_state_save(
+        &mut self,
+        document_id: u64,
+        region: WrappedRegion,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match region {
+            WrappedRegion::Log | WrappedRegion::Results => {
+                self.schedule_checkpoint(document_id, window, cx);
+            }
+            WrappedRegion::GlobalResults => {
+                self.schedule_workspace_search_state_save(window, cx);
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn install_documents(
         &mut self,
@@ -8818,6 +8835,7 @@ impl Workspace {
             cx.notify();
         });
         self.status_surface.update(cx, |_, cx| cx.notify());
+        self.schedule_checkpoint(tab.id, window, cx);
     }
 
     fn copy_file_path(&mut self, _: &CopyFilePath, window: &mut Window, cx: &mut Context<Self>) {
@@ -8957,11 +8975,13 @@ impl Workspace {
                         }
 
                         let source_row = line_number - 1;
+                        let document_id = tab.id;
                         let table = tab.log_table.clone();
                         table.update(cx, |table, cx| {
                             table.set_active_log_row(source_row, cx);
                         });
                         workspace.selected_source_row = Some(source_row);
+                        workspace.schedule_checkpoint(document_id, window, cx);
                         cx.notify();
                         Ok(())
                     });
@@ -9596,7 +9616,7 @@ impl Workspace {
         matcher: SearchMatcher,
         direction: QuickFindDirection,
         incremental: bool,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some((source, row_count, source_version)) = self.quick_find_source(target, cx) else {
@@ -9666,13 +9686,13 @@ impl Workspace {
         self.quick_find.direction = Some(direction);
         self.quick_find.boundary = None;
         cx.notify();
-        self.quick_find.task = Some(cx.spawn(async move |this, cx| {
+        self.quick_find.task = Some(cx.spawn_in(window, async move |this, cx| {
             let matched = cx
                 .background_spawn(async move {
                     Self::find_quick_match(source, target, matcher, direction, start, cancellation)
                 })
                 .await;
-            _ = this.update(cx, |this, cx| {
+            _ = this.update_in(cx, |this, window, cx| {
                 if !this.quick_find.open
                     || this.quick_find.revision != revision
                     || this.quick_find.target != Some(target)
@@ -9703,7 +9723,7 @@ impl Workspace {
                         this.quick_find.matched_source_version = Some(source_version);
                         this.quick_find.no_match = false;
                         this.quick_find.boundary = None;
-                        this.apply_quick_find_match(matched, cx);
+                        this.apply_quick_find_match(matched, window, cx);
                     }
                     None => {
                         this.quick_find.no_match |= incremental;
@@ -9816,7 +9836,12 @@ impl Workspace {
         }
     }
 
-    fn apply_quick_find_match(&mut self, matched: QuickFindMatch, cx: &mut Context<Self>) {
+    fn apply_quick_find_match(
+        &mut self,
+        matched: QuickFindMatch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match matched.target {
             QuickFindTarget::Log(document_id) => {
                 let Some(tab) = self.documents.iter_mut().find(|tab| tab.id == document_id) else {
@@ -9830,6 +9855,7 @@ impl Workspace {
                 tab.log_viewport.center_row(matched.view_row);
                 self.active_log_region = LogRegion::Body;
                 self.selected_source_row = Some(matched.source_row);
+                self.schedule_checkpoint(document_id, window, cx);
             }
             QuickFindTarget::Results(document_id) => {
                 let Some(tab) = self.documents.iter_mut().find(|tab| tab.id == document_id) else {
@@ -9843,6 +9869,7 @@ impl Workspace {
                 tab.result_viewport.center_row(matched.view_row);
                 self.active_log_region = LogRegion::CurrentResults;
                 self.selected_source_row = Some(matched.source_row);
+                self.schedule_checkpoint(document_id, window, cx);
             }
             QuickFindTarget::GlobalResults => {
                 self.global_table.update(cx, |table, cx| {
@@ -9850,6 +9877,7 @@ impl Workspace {
                 });
                 self.global_viewport.center_row(matched.view_row);
                 self.active_log_region = LogRegion::GlobalResults;
+                self.schedule_workspace_search_state_save(window, cx);
             }
         }
     }
@@ -12086,9 +12114,11 @@ impl Workspace {
             );
             return;
         }
+        let document_id = tab.id;
         tab.log_table
             .update(cx, |table, cx| table.set_active_log_row(0, cx));
         self.selected_source_row = Some(0);
+        self.schedule_checkpoint(document_id, window, cx);
         cx.notify();
     }
 
@@ -12136,9 +12166,11 @@ impl Workspace {
             return;
         }
         let last_row = line_count - 1;
+        let document_id = tab.id;
         tab.log_table
             .update(cx, |table, cx| table.set_active_log_row(last_row, cx));
         self.selected_source_row = Some(last_row);
+        self.schedule_checkpoint(document_id, window, cx);
         cx.notify();
     }
 
@@ -15558,6 +15590,7 @@ impl Workspace {
                 cx.notify();
             });
             self.status_surface.update(cx, |_, cx| cx.notify());
+            self.schedule_log_region_state_save(document_id, region, window, cx);
             return;
         }
         let Some(tab) = self.documents.iter().find(|tab| tab.id == document_id) else {
@@ -15573,6 +15606,7 @@ impl Workspace {
             cx.notify();
         });
         self.status_surface.update(cx, |_, cx| cx.notify());
+        self.schedule_log_region_state_save(document_id, region, window, cx);
     }
 
     fn end_all_row_drag_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -15590,6 +15624,7 @@ impl Workspace {
             TextSelection::clear(window, cx);
         }
         let mut ended_selection = false;
+        let mut ended_document_selections = BTreeSet::new();
         for tab in &self.documents {
             for (region, table) in [
                 (WrappedRegion::Log, &tab.log_table),
@@ -15608,6 +15643,7 @@ impl Workspace {
                     continue;
                 }
                 ended_selection = true;
+                ended_document_selections.insert(tab.id);
                 table.update(cx, |table, cx| {
                     table.delegate().end_pointer_selection();
                     cx.notify();
@@ -15630,6 +15666,9 @@ impl Workspace {
         }
         if ended_selection {
             self.status_surface.update(cx, |_, cx| cx.notify());
+        }
+        for document_id in ended_document_selections {
+            self.schedule_checkpoint(document_id, window, cx);
         }
         if ended_global_selection {
             self.schedule_workspace_search_state_save(window, cx);
@@ -16351,6 +16390,7 @@ impl Workspace {
             table.set_active_log_row(row_ix, cx);
         });
         self.selected_source_row = table.read(cx).delegate().source_row(row_ix);
+        self.schedule_log_region_state_save(document_id, region, window, cx);
         cx.notify();
     }
 
@@ -17055,6 +17095,7 @@ impl Workspace {
         direction: i32,
         page: bool,
         edge: Option<bool>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.active_log_region == LogRegion::GlobalResults {
@@ -17087,6 +17128,7 @@ impl Workspace {
                 table.set_active_log_row(target, cx);
                 table.scroll_to_row(target, cx);
             });
+            self.schedule_workspace_search_state_save(window, cx);
             cx.stop_propagation();
             cx.notify();
             return;
@@ -17094,10 +17136,13 @@ impl Workspace {
         let Some(tab) = self.active_document() else {
             return;
         };
-        let table = match self.active_log_region {
-            LogRegion::CurrentResults if tab.results_visible => tab.result_table.clone(),
-            _ => tab.log_table.clone(),
+        let (region, table) = match self.active_log_region {
+            LogRegion::CurrentResults if tab.results_visible => {
+                (WrappedRegion::Results, tab.result_table.clone())
+            }
+            _ => (WrappedRegion::Log, tab.log_table.clone()),
         };
+        let document_id = tab.id;
         let state = table.read(cx);
         let count = state.delegate().row_count();
         if count == 0 {
@@ -17120,6 +17165,7 @@ impl Workspace {
             table.set_active_log_row(target, cx);
             table.scroll_to_row(target, cx);
         });
+        self.schedule_log_region_state_save(document_id, region, window, cx);
         cx.stop_propagation();
         cx.notify();
     }
@@ -17127,55 +17173,55 @@ impl Workspace {
     fn extend_selection_up(
         &mut self,
         _: &ExtendSelectionUp,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.extend_log_selection(-1, false, None, cx);
+        self.extend_log_selection(-1, false, None, window, cx);
     }
 
     fn extend_selection_down(
         &mut self,
         _: &ExtendSelectionDown,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.extend_log_selection(1, false, None, cx);
+        self.extend_log_selection(1, false, None, window, cx);
     }
 
     fn extend_selection_page_up(
         &mut self,
         _: &ExtendSelectionPageUp,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.extend_log_selection(-1, true, None, cx);
+        self.extend_log_selection(-1, true, None, window, cx);
     }
 
     fn extend_selection_page_down(
         &mut self,
         _: &ExtendSelectionPageDown,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.extend_log_selection(1, true, None, cx);
+        self.extend_log_selection(1, true, None, window, cx);
     }
 
     fn extend_selection_first(
         &mut self,
         _: &ExtendSelectionFirst,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.extend_log_selection(-1, false, Some(false), cx);
+        self.extend_log_selection(-1, false, Some(false), window, cx);
     }
 
     fn extend_selection_last(
         &mut self,
         _: &ExtendSelectionLast,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.extend_log_selection(1, false, Some(true), cx);
+        self.extend_log_selection(1, false, Some(true), window, cx);
     }
 
     fn prepare_wrapped_global_context(
@@ -17195,6 +17241,7 @@ impl Workspace {
             }
             table.set_active_log_row(row_ix, cx);
         });
+        self.schedule_log_region_state_save(0, WrappedRegion::GlobalResults, window, cx);
         cx.notify();
     }
 
@@ -17209,6 +17256,7 @@ impl Workspace {
             table.delegate().clear_row_selection();
             table.clear_selection(cx);
         });
+        self.schedule_log_region_state_save(0, WrappedRegion::GlobalResults, window, cx);
         cx.notify();
     }
 
