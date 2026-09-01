@@ -10,8 +10,9 @@ App owns GPUI entities, rendering, commands and user presentation state. Read [d
 ## Route the change
 
 - `workspace.rs`: application/window orchestration and current extraction source; place new code in a named capability module instead of extending this file.
-- `workspace/document_tasks.rs`: bounded path preparation, document preview/index/search preparation, clipboard/color background snapshots and result grouping.
+- `workspace/document_lifecycle.rs`: session snapshots/checkpoints, prepared-document installation, resume state, loading upgrades, reload and auto-follow publication.
 - `workspace/document_opening.rs`: file picker/drop/recent/restore entry points, queued external paths, initial-session overrides and bounded open dispatch.
+- `workspace/document_tasks.rs`: bounded path preparation, document preview/index/search preparation, clipboard/color background snapshots and result grouping.
 - `workspace/log_presentation.rs`: visible log/result rendering, highlight composition, text and row selection, drag gestures, context actions, wrapped tables and viewport anchors.
 - `workspace/preferences.rs`: pinned/history UI, settings dialog and preview, color/filter/cloud preferences, appearance persistence and font-size wheel handling.
 - `workspace/quick_find.rs`: page-local find lifecycle, matcher/highlight presentation, cancellable scans, source-version rejection and viewport navigation.
