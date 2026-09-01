@@ -97,6 +97,7 @@ struct GlobalSearchProjectionState {
     group_starts: Vec<usize>,
     expanded_result_groups: Vec<usize>,
     rows_len: usize,
+    results_count: usize,
     max_line_columns: usize,
 }
 
@@ -135,6 +136,7 @@ impl Default for GlobalSearchProjectionState {
             group_starts: Vec::new(),
             expanded_result_groups: Vec::new(),
             rows_len: 0,
+            results_count: 0,
             max_line_columns: 0,
         }
     }
@@ -581,6 +583,10 @@ impl GlobalSearchTableDelegate {
             debug_assert_eq!(self.projection.group_by_document.len(), groups.len());
         }
         self.projection.groups = groups;
+        self.projection.results_count =
+            self.projection.groups.iter().fold(0_usize, |count, group| {
+                count.saturating_add(group.projection.rows.len())
+            });
         self.projection.max_line_columns = self
             .projection
             .groups
@@ -935,11 +941,7 @@ impl GlobalSearchTableDelegate {
     }
 
     pub fn results_count(&self) -> usize {
-        self.projection
-            .groups
-            .iter()
-            .map(|group| group.projection.rows.len())
-            .sum()
+        self.projection.results_count
     }
 
     /// Result content currently installed in the virtual list, independent of
@@ -1956,6 +1958,24 @@ mod tests {
 
         assert!(delegate.selected_matches().is_empty());
         assert_eq!(delegate.active_log_row(), None);
+    }
+
+    #[test]
+    fn result_count_tracks_installed_projection() {
+        let document = Arc::new(LogDocument::placeholder("result-count.log"));
+        let mut group = test_group(document);
+        group.projection.rows = CompressedRows::from_inclusive_ranges([(0, 999_999)]);
+        let mut delegate = GlobalSearchTableDelegate::new();
+
+        delegate.set_groups(vec![group.clone()]);
+        assert_eq!(delegate.results_count(), 1_000_000);
+
+        group.projection.rows = [2, 7].into_iter().collect();
+        delegate.set_groups(vec![group]);
+        assert_eq!(delegate.results_count(), 2);
+
+        delegate.set_groups(Vec::new());
+        assert_eq!(delegate.results_count(), 0);
     }
 
     #[test]
