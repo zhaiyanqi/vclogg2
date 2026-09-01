@@ -24,6 +24,7 @@ pub(crate) enum LogRowProjection {
 
 const DEFAULT_MAX_LINE_SOURCE_BYTES: usize = 64 * 1024;
 const DEFAULT_MAX_CACHE_RETAINED_BYTES: usize = 32 * 1024 * 1024;
+const MIN_TRUNCATED_PREVIEW_RETAINED_BYTES: usize = '…'.len_utf8();
 /// A source byte can expand to at most one full eight-column tab stop in [`LogText`].
 pub(crate) const MAX_VISIBLE_LINE_COLUMNS: usize = DEFAULT_MAX_LINE_SOURCE_BYTES * 8;
 
@@ -36,6 +37,7 @@ pub(crate) struct VisibleLineLoadRequest<K> {
     revision: u64,
     keys: Vec<K>,
     source_limits: Vec<usize>,
+    retained_limits: Vec<usize>,
 }
 
 impl<K> VisibleLineLoadRequest<K> {
@@ -51,9 +53,10 @@ impl<K> VisibleLineLoadRequest<K> {
             .keys
             .into_iter()
             .zip(self.source_limits)
-            .filter_map(|(key, source_limit)| {
+            .zip(self.retained_limits)
+            .filter_map(|((key, source_limit), retained_limit)| {
                 let preview = load(&key, source_limit)?;
-                Some((key, preview))
+                Some((key, preview, retained_limit))
             })
             .collect();
         VisibleLineLoadResult {
@@ -65,17 +68,17 @@ impl<K> VisibleLineLoadRequest<K> {
 
 pub(crate) struct VisibleLineLoadResult<K> {
     revision: u64,
-    lines: Vec<(K, LinePreview)>,
+    lines: Vec<(K, LinePreview, usize)>,
 }
 
 impl CachedLogLine {
-    fn from_preview(preview: LinePreview) -> Self {
+    fn from_preview(preview: LinePreview, retained_limit: usize) -> Option<Self> {
         let (text, truncated) = preview.into_parts();
-        let text = LogText::preview(text, truncated);
-        Self {
+        let text = LogText::preview_with_retained_limit(text, truncated, retained_limit)?;
+        Some(Self {
             retained_bytes: text.retained_bytes(),
             text,
-        }
+        })
     }
 }
 
@@ -185,32 +188,41 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
         let mut reserved_bytes = 0usize;
         let mut keys = Vec::new();
         let mut source_limits = Vec::new();
+        let mut retained_limits = Vec::new();
         for (key_ix, key) in priority_keys.iter().enumerate() {
             if reserved_bytes >= byte_budget {
                 break;
             }
             let remaining = byte_budget - reserved_bytes;
-            if let Some(line) = previous.remove(key) {
-                if line.retained_bytes <= remaining {
-                    reserved_bytes = reserved_bytes.saturating_add(line.retained_bytes);
-                    next.insert(key.clone(), line);
-                }
+            let remaining_keys = priority_keys.len().saturating_sub(key_ix).max(1);
+            let fair_retained_limit = remaining / remaining_keys;
+            let retained_limit = if fair_retained_limit >= MIN_TRUNCATED_PREVIEW_RETAINED_BYTES {
+                fair_retained_limit
             } else {
-                let remaining_keys = priority_keys.len().saturating_sub(key_ix).max(1);
-                let source_limit = self
-                    .max_line_source_bytes
-                    .get()
-                    .min(remaining.div_ceil(remaining_keys));
-                keys.push(key.clone());
-                source_limits.push(source_limit);
-                reserved_bytes = reserved_bytes.saturating_add(source_limit);
+                remaining
+            };
+            if retained_limit < MIN_TRUNCATED_PREVIEW_RETAINED_BYTES {
+                break;
             }
+            if let Some(line) = previous.remove(key)
+                && line.retained_bytes <= retained_limit
+            {
+                reserved_bytes = reserved_bytes.saturating_add(line.retained_bytes);
+                next.insert(key.clone(), line);
+                continue;
+            }
+            let source_limit = self.max_line_source_bytes.get().min(retained_limit);
+            keys.push(key.clone());
+            source_limits.push(source_limit);
+            retained_limits.push(retained_limit);
+            reserved_bytes = reserved_bytes.saturating_add(retained_limit);
         }
         *self.lines.borrow_mut() = next;
         (!keys.is_empty()).then_some(VisibleLineLoadRequest {
             revision,
             keys,
             source_limits,
+            retained_limits,
         })
     }
 
@@ -221,7 +233,9 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
         let mut loaded = loaded
             .lines
             .into_iter()
-            .map(|(key, preview)| (key, CachedLogLine::from_preview(preview)))
+            .filter_map(|(key, preview, retained_limit)| {
+                Some((key, CachedLogLine::from_preview(preview, retained_limit)?))
+            })
             .collect::<BTreeMap<_, _>>();
         let mut previous = std::mem::take(&mut *self.lines.borrow_mut());
         let mut next = BTreeMap::new();
@@ -344,7 +358,7 @@ mod tests {
             },
         );
 
-        assert_eq!(*loaded.borrow(), [10, 11, 11]);
+        assert_eq!(*loaded.borrow(), [10, 11]);
         assert_eq!(
             cache.lines.borrow().keys().copied().collect::<Vec<_>>(),
             [11]
@@ -407,7 +421,7 @@ mod tests {
             Some(LinePreview::new("line", false))
         });
 
-        assert_eq!(*loaded.borrow(), vec![(1, 2), (0, 1), (2, 1)]);
+        assert_eq!(*loaded.borrow(), vec![(1, 4)]);
         assert_eq!(cache.lines.borrow().len(), 1);
         assert!(cache.lines.borrow().contains_key(&1));
         assert!(
@@ -435,6 +449,30 @@ mod tests {
         let line = cache.line(1);
         assert!(line.is_none());
         assert!(!cache.lines.borrow().contains_key(&1));
+    }
+
+    #[test]
+    fn expanded_tabs_cannot_blank_later_visible_rows() {
+        let cache = VisibleLineStore::<usize>::default();
+        cache.set_overscan(0);
+        cache.max_line_source_bytes.set(64);
+        cache.max_cache_retained_bytes.set(192);
+
+        cache.prepare_visible_rows(0..3, 3, Some, |_, source_limit| {
+            Some(LinePreview::new("\t".repeat(source_limit), true))
+        });
+
+        assert_eq!(cache.lines.borrow().len(), 3);
+        assert!((0..3).all(|row| cache.line(row).is_some()));
+        assert!(
+            cache
+                .lines
+                .borrow()
+                .values()
+                .map(|line| line.retained_bytes)
+                .sum::<usize>()
+                <= 192
+        );
     }
 
     #[test]

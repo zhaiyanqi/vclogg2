@@ -89,6 +89,82 @@ impl LogText {
         Self::new(source.into())
     }
 
+    /// Build the longest preview whose decoded text, tab expansion, and sparse tab map fit in the
+    /// caller's retained-memory budget.
+    pub(crate) fn preview_with_retained_limit(
+        mut source: String,
+        truncated: bool,
+        retained_limit: usize,
+    ) -> Option<Self> {
+        if Self::preview_retained_bytes(&source, truncated) <= retained_limit {
+            return Some(Self::preview(source, truncated));
+        }
+
+        let ellipsis_bytes = '…'.len_utf8();
+        if ellipsis_bytes > retained_limit {
+            return None;
+        }
+        let mut source_bytes = 0usize;
+        let mut display_bytes = 0usize;
+        let mut tab_count = 0usize;
+        let mut column = 0usize;
+        let mut fit_end = 0usize;
+        for (offset, character) in source.char_indices() {
+            source_bytes = source_bytes.saturating_add(character.len_utf8());
+            if character == '\t' {
+                let spaces = TAB_STOP_COLUMNS - column % TAB_STOP_COLUMNS;
+                display_bytes = display_bytes.saturating_add(spaces);
+                column = column.saturating_add(spaces);
+                tab_count = tab_count.saturating_add(1);
+            } else {
+                display_bytes = display_bytes.saturating_add(character.len_utf8());
+                column = column.saturating_add(1);
+            }
+            let retained_bytes = if tab_count == 0 {
+                source_bytes.saturating_add(ellipsis_bytes)
+            } else {
+                source_bytes
+                    .saturating_add(ellipsis_bytes)
+                    .saturating_add(display_bytes)
+                    .saturating_add(ellipsis_bytes)
+                    .saturating_add(tab_count.saturating_mul(std::mem::size_of::<TabExpansion>()))
+            };
+            if retained_bytes > retained_limit {
+                break;
+            }
+            fit_end = offset.saturating_add(character.len_utf8());
+        }
+        source.truncate(fit_end);
+        Some(Self::preview(source, true))
+    }
+
+    fn preview_retained_bytes(source: &str, truncated: bool) -> usize {
+        let ellipsis_bytes = usize::from(truncated).saturating_mul('…'.len_utf8());
+        let tab_count = source.bytes().filter(|byte| *byte == b'\t').count();
+        if tab_count == 0 {
+            return source.len().saturating_add(ellipsis_bytes);
+        }
+
+        let mut display_bytes = 0usize;
+        let mut column = 0usize;
+        for character in source.chars() {
+            if character == '\t' {
+                let spaces = TAB_STOP_COLUMNS - column % TAB_STOP_COLUMNS;
+                display_bytes = display_bytes.saturating_add(spaces);
+                column = column.saturating_add(spaces);
+            } else {
+                display_bytes = display_bytes.saturating_add(character.len_utf8());
+                column = column.saturating_add(1);
+            }
+        }
+        source
+            .len()
+            .saturating_add(ellipsis_bytes)
+            .saturating_add(display_bytes)
+            .saturating_add(ellipsis_bytes)
+            .saturating_add(tab_count.saturating_mul(std::mem::size_of::<TabExpansion>()))
+    }
+
     pub(crate) fn source(&self) -> &SharedString {
         &self.source
     }
@@ -838,6 +914,28 @@ mod tests {
                     .saturating_add(text.display().len())
                     .saturating_add(std::mem::size_of::<TabExpansion>())
         );
+    }
+
+    #[test]
+    fn retained_preview_limit_accounts_for_expanded_tabs() {
+        let text = LogText::preview_with_retained_limit("\t".repeat(64), true, 64)
+            .expect("64 字节应能容纳截断标记");
+
+        assert!(text.retained_bytes() <= 64);
+        assert!(text.source().ends_with('…'));
+        assert!(!text.source().starts_with("\t\t"));
+    }
+
+    #[test]
+    fn preview_retained_size_prediction_matches_actual_storage() {
+        for source in ["", "plain", "a\t中", "\t\t\t", "末尾\t"] {
+            for truncated in [false, true] {
+                assert_eq!(
+                    LogText::preview_retained_bytes(source, truncated),
+                    LogText::preview(source.to_string(), truncated).retained_bytes()
+                );
+            }
+        }
     }
 
     #[test]
