@@ -1,6 +1,7 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::BTreeMap,
+    cmp::Reverse,
+    collections::{BTreeMap, BinaryHeap},
     ops::Range,
     rc::Rc,
     sync::Arc,
@@ -617,17 +618,38 @@ pub(crate) fn combined_match_ranges(
         .collect::<Vec<_>>();
     boundaries.sort_unstable();
     boundaries.dedup();
+    let mut starts = (0..candidates.len()).collect::<Vec<_>>();
+    starts.sort_unstable_by_key(|candidate_ix| (candidates[*candidate_ix].start, *candidate_ix));
+    let mut ends = (0..candidates.len()).collect::<Vec<_>>();
+    ends.sort_unstable_by_key(|candidate_ix| (candidates[*candidate_ix].end, *candidate_ix));
+    let mut start_cursor = 0;
+    let mut end_cursor = 0;
+    let mut active = vec![false; candidates.len()];
+    let mut owners = BinaryHeap::<Reverse<(usize, usize)>>::new();
     let mut ranges: Vec<(Range<usize>, TextHighlight)> = Vec::new();
     for boundary in boundaries.windows(2) {
         let start = boundary[0];
         let end = boundary[1];
-        let Some(owner) = candidates
-            .iter()
-            .filter(|candidate| candidate.start <= start && candidate.end >= end)
-            .min_by_key(|candidate| candidate.priority)
-        else {
+        while end_cursor < ends.len() && candidates[ends[end_cursor]].end <= start {
+            active[ends[end_cursor]] = false;
+            end_cursor += 1;
+        }
+        while start_cursor < starts.len() && candidates[starts[start_cursor]].start <= start {
+            let candidate_ix = starts[start_cursor];
+            active[candidate_ix] = true;
+            owners.push(Reverse((candidates[candidate_ix].priority, candidate_ix)));
+            start_cursor += 1;
+        }
+        while owners
+            .peek()
+            .is_some_and(|Reverse((_, candidate_ix))| !active[*candidate_ix])
+        {
+            owners.pop();
+        }
+        let Some(Reverse((_, owner_ix))) = owners.peek().copied() else {
             continue;
         };
+        let owner = candidates[owner_ix];
         if let Some((previous, highlight)) = ranges.last_mut()
             && previous.end == start
             && *highlight == owner.highlight
@@ -1567,6 +1589,46 @@ mod tests {
         assert_eq!(
             bounded_message_columns(usize::MAX),
             MAX_VISIBLE_LINE_COLUMNS
+        );
+    }
+
+    #[test]
+    fn highlight_sweep_preserves_quick_color_and_search_priority() {
+        let color_rules = crate::color_labels::resolve_color_rules(
+            &[crate::color_labels::KeywordColorRule {
+                label_id: None,
+                keyword: "bcde".to_string(),
+                color: 0xff0000,
+                alpha: u8::MAX,
+                case_sensitive: true,
+                enabled: true,
+            }],
+            &[],
+        );
+        let search = SearchMatcher::literal_phrase("cdef")
+            .expect("search matcher should compile")
+            .expect("search text is non-empty");
+        let quick = SearchMatcher::literal_phrase("d")
+            .expect("quick-find matcher should compile")
+            .expect("quick-find text is non-empty");
+
+        let highlights = combined_match_ranges("abcdef", &color_rules, Some(&search), Some(&quick));
+
+        assert_eq!(
+            highlights
+                .iter()
+                .map(|(range, highlight)| (
+                    range.clone(),
+                    matches!(highlight, TextHighlight::QuickFind),
+                    matches!(highlight, TextHighlight::Search)
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (1..3, false, false),
+                (3..4, true, false),
+                (4..5, false, false),
+                (5..6, false, true),
+            ]
         );
     }
 
