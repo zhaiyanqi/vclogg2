@@ -9791,7 +9791,7 @@ impl Workspace {
         self.quick_find.boundary = None;
         cx.notify();
         self.quick_find.task = Some(cx.spawn(async move |this, cx| {
-            let matched = cx
+            let outcome = cx
                 .background_spawn(async move {
                     Self::find_quick_match(source, target, matcher, direction, start, cancellation)
                 })
@@ -9821,20 +9821,33 @@ impl Workspace {
                 this.quick_find.direction = None;
                 this.quick_find.cancellation = None;
                 this.quick_find.task = None;
-                match matched {
-                    Some(matched) => {
+                match outcome {
+                    DocumentLineTask::Completed(Some(matched)) => {
                         this.quick_find.matched = Some(matched);
                         this.quick_find.matched_source_version = Some(source_version);
                         this.quick_find.no_match = false;
                         this.quick_find.boundary = None;
                         this.apply_quick_find_match(matched, cx);
                     }
-                    None => {
+                    DocumentLineTask::Completed(None) => {
                         this.quick_find.no_match |= incremental;
                         this.quick_find.boundary = Some(match direction {
                             QuickFindDirection::Forward => QuickFindBoundary::End,
                             QuickFindDirection::Backward => QuickFindBoundary::Start,
                         });
+                    }
+                    DocumentLineTask::Cancelled => return,
+                    DocumentLineTask::SourceUnavailable => {
+                        this.quick_find.clear_match();
+                        this.quick_find.no_match = false;
+                        this.quick_find.boundary = None;
+                        this.quick_find.error = Some(
+                            crate::tr!(
+                                "文件内容已改变，请重新加载后再查找",
+                                "The file changed. Reload it before finding."
+                            )
+                            .into(),
+                        );
                     }
                 }
                 cx.notify();
@@ -9849,19 +9862,21 @@ impl Workspace {
         direction: QuickFindDirection,
         start: usize,
         cancellation: SearchCancellation,
-    ) -> Option<QuickFindMatch> {
-        let mut inspected = 0_usize;
-        let mut inspect = |view_row: usize, source_row: usize, document: &Arc<LogDocument>| {
-            inspected = inspected.saturating_add(1);
-            if inspected & 0x3ff == 0 && cancellation.is_cancelled() {
-                return None;
+    ) -> DocumentLineTask<Option<QuickFindMatch>> {
+        let inspect = |view_row: usize, source_row: usize, document: &Arc<LogDocument>| {
+            if cancellation.is_cancelled() {
+                return DocumentLineTask::Cancelled;
             }
-            let line = document.line(source_row)?;
-            (!matcher.matching_ranges(&line).is_empty()).then_some(QuickFindMatch {
-                target,
-                view_row,
-                source_row,
-            })
+            let Some(line) = document.line(source_row) else {
+                return DocumentLineTask::SourceUnavailable;
+            };
+            DocumentLineTask::Completed((!matcher.matching_ranges(&line).is_empty()).then_some(
+                QuickFindMatch {
+                    target,
+                    view_row,
+                    source_row,
+                },
+            ))
         };
 
         match source {
@@ -9873,35 +9888,43 @@ impl Workspace {
                 QuickFindDirection::Forward => {
                     for view_row in start..row_count {
                         if cancellation.is_cancelled() {
-                            return None;
+                            return DocumentLineTask::Cancelled;
                         }
                         let source_row = rows
                             .as_ref()
                             .and_then(|rows| rows.get(view_row))
                             .unwrap_or(view_row);
-                        if let Some(matched) = inspect(view_row, source_row, &document) {
-                            return Some(matched);
+                        match inspect(view_row, source_row, &document) {
+                            DocumentLineTask::Completed(Some(matched)) => {
+                                return DocumentLineTask::Completed(Some(matched));
+                            }
+                            DocumentLineTask::Completed(None) => {}
+                            outcome => return outcome,
                         }
                     }
-                    None
+                    DocumentLineTask::Completed(None)
                 }
                 QuickFindDirection::Backward => {
                     if row_count == 0 {
-                        return None;
+                        return DocumentLineTask::Completed(None);
                     }
                     for view_row in (0..=start.min(row_count - 1)).rev() {
                         if cancellation.is_cancelled() {
-                            return None;
+                            return DocumentLineTask::Cancelled;
                         }
                         let source_row = rows
                             .as_ref()
                             .and_then(|rows| rows.get(view_row))
                             .unwrap_or(view_row);
-                        if let Some(matched) = inspect(view_row, source_row, &document) {
-                            return Some(matched);
+                        match inspect(view_row, source_row, &document) {
+                            DocumentLineTask::Completed(Some(matched)) => {
+                                return DocumentLineTask::Completed(Some(matched));
+                            }
+                            DocumentLineTask::Completed(None) => {}
+                            outcome => return outcome,
                         }
                     }
-                    None
+                    DocumentLineTask::Completed(None)
                 }
             },
             QuickFindSource::Global(groups) => match direction {
@@ -9909,14 +9932,20 @@ impl Workspace {
                     for group in &groups {
                         let first = start.saturating_sub(group.view_start).min(group.rows.len());
                         for result_ix in first..group.rows.len() {
-                            let source_row = group.rows.get(result_ix)?;
+                            let Some(source_row) = group.rows.get(result_ix) else {
+                                continue;
+                            };
                             let view_row = group.view_start.saturating_add(result_ix);
-                            if let Some(matched) = inspect(view_row, source_row, &group.document) {
-                                return Some(matched);
+                            match inspect(view_row, source_row, &group.document) {
+                                DocumentLineTask::Completed(Some(matched)) => {
+                                    return DocumentLineTask::Completed(Some(matched));
+                                }
+                                DocumentLineTask::Completed(None) => {}
+                                outcome => return outcome,
                             }
                         }
                     }
-                    None
+                    DocumentLineTask::Completed(None)
                 }
                 QuickFindDirection::Backward => {
                     for group in groups.iter().rev() {
@@ -9927,14 +9956,20 @@ impl Workspace {
                             .saturating_sub(group.view_start)
                             .min(group.rows.len().saturating_sub(1));
                         for result_ix in (0..=last).rev() {
-                            let source_row = group.rows.get(result_ix)?;
+                            let Some(source_row) = group.rows.get(result_ix) else {
+                                continue;
+                            };
                             let view_row = group.view_start.saturating_add(result_ix);
-                            if let Some(matched) = inspect(view_row, source_row, &group.document) {
-                                return Some(matched);
+                            match inspect(view_row, source_row, &group.document) {
+                                DocumentLineTask::Completed(Some(matched)) => {
+                                    return DocumentLineTask::Completed(Some(matched));
+                                }
+                                DocumentLineTask::Completed(None) => {}
+                                outcome => return outcome,
                             }
                         }
                     }
-                    None
+                    DocumentLineTask::Completed(None)
                 }
             },
         }
@@ -19419,11 +19454,29 @@ mod result_snapshot_tests {
             prepare_color_keywords(
                 ColorKeywordTarget {
                     document_id: 3,
-                    document,
+                    document: document.clone(),
                     selection: ColorKeywordSelection::Rows([0].into_iter().collect()),
                 },
                 true,
                 &SearchCancellation::default(),
+            ),
+            DocumentLineTask::SourceUnavailable
+        ));
+        let matcher = SearchMatcher::quick_find("alpha", true, false, false)
+            .expect("页内查找表达式应有效")
+            .expect("非空页内查找应生成匹配器");
+        assert!(matches!(
+            Workspace::find_quick_match(
+                QuickFindSource::Document {
+                    document,
+                    rows: None,
+                    row_count: 1,
+                },
+                QuickFindTarget::Log(3),
+                matcher,
+                QuickFindDirection::Forward,
+                0,
+                SearchCancellation::default(),
             ),
             DocumentLineTask::SourceUnavailable
         ));
