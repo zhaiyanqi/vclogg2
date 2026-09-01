@@ -6986,6 +6986,7 @@ impl Workspace {
             cx,
         );
         self.complete_pending_directory_result_jump(window, cx);
+        self.persist_workspace_order(window, cx);
     }
 
     fn apply_tab_resume(&mut self, document_ix: usize, cx: &mut Context<Self>) {
