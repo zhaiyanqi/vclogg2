@@ -2373,10 +2373,6 @@ impl DocumentTab {
         });
     }
 
-    fn selected_source_rows(&self, cx: &App) -> Vec<usize> {
-        self.selected_source_rows_compressed(cx).iter().collect()
-    }
-
     fn selected_source_rows_compressed(&self, cx: &App) -> CompressedRows {
         let table = match self.selection_table {
             SelectionTable::Log => &self.log_table,
@@ -8712,8 +8708,12 @@ impl Workspace {
         }
         if self.active_log_region == LogRegion::GlobalResults && self.global_search.results_visible
         {
-            let selected_rows = self.global_table.read(cx).delegate().selected_matches();
-            if selected_rows.is_empty() {
+            let selected_groups = self
+                .global_table
+                .read(cx)
+                .delegate()
+                .selected_match_groups();
+            if selected_groups.is_empty() {
                 window.push_notification(
                     crate::tr!(
                         "请先选择要复制的全局结果行",
@@ -8725,7 +8725,7 @@ impl Workspace {
             }
             let mut text = String::new();
             let mut copied = 0_usize;
-            for (document_id, source_row) in selected_rows {
+            for (document_id, rows) in selected_groups {
                 let document = self
                     .documents
                     .iter()
@@ -8740,18 +8740,20 @@ impl Workspace {
                 let Some(document) = document else {
                     continue;
                 };
-                let Some(line) = document.line(source_row) else {
-                    continue;
-                };
-                if copied > 0 {
-                    text.push('\n');
+                for source_row in rows.iter() {
+                    let Some(line) = document.line(source_row) else {
+                        continue;
+                    };
+                    if copied > 0 {
+                        text.push('\n');
+                    }
+                    if include_line_number {
+                        text.push_str(&(source_row + 1).to_string());
+                        text.push('\t');
+                    }
+                    text.push_str(&line);
+                    copied += 1;
                 }
-                if include_line_number {
-                    text.push_str(&(source_row + 1).to_string());
-                    text.push('\t');
-                }
-                text.push_str(&line);
-                copied += 1;
             }
             if text.is_empty() {
                 window.push_notification(
@@ -8776,7 +8778,7 @@ impl Workspace {
         let Some(tab) = self.active_document() else {
             return;
         };
-        let selected_rows = tab.selected_source_rows(cx);
+        let selected_rows = tab.selected_source_rows_compressed(cx);
         if selected_rows.is_empty() {
             window.push_notification(
                 crate::tr!("请先选择要复制的日志行", "Select log lines to copy first"),
@@ -8786,7 +8788,7 @@ impl Workspace {
         }
         let mut text = String::new();
         let mut copied = 0_usize;
-        for source_row in selected_rows.iter().copied() {
+        for source_row in selected_rows.iter() {
             let Some(line) = tab.document.line(source_row) else {
                 continue;
             };
@@ -8813,7 +8815,11 @@ impl Workspace {
         cx.write_to_clipboard(ClipboardItem::new_string(text));
         if selected_rows.len() == 1 {
             window.push_notification(
-                crate::tr_args!("已复制第 {} 行", "Copied line {}", selected_rows[0] + 1),
+                crate::tr_args!(
+                    "已复制第 {} 行",
+                    "Copied line {}",
+                    selected_rows.first().unwrap_or_default() + 1
+                ),
                 cx,
             );
         } else {
@@ -16411,15 +16417,15 @@ impl Workspace {
         cx: &App,
     ) -> std::result::Result<(usize, BTreeSet<String>), String> {
         if self.active_log_region == LogRegion::GlobalResults {
-            let rows = self.global_table.read(cx).delegate().selected_matches();
-            let document_ids = rows
-                .iter()
-                .map(|(document_id, _)| *document_id)
-                .collect::<BTreeSet<_>>();
-            let Some(&document_id) = document_ids.first() else {
+            let selected_groups = self
+                .global_table
+                .read(cx)
+                .delegate()
+                .selected_match_groups();
+            let Some((document_id, rows)) = selected_groups.first() else {
                 return Err(crate::tr!("请先选择日志行", "Select log lines first").to_string());
             };
-            if document_ids.len() > 1 {
+            if selected_groups.len() > 1 {
                 return Err(crate::tr!(
                     "颜色标签一次只能应用到同一文件的全局结果",
                     "A color label can be applied only to global results from one file at a time"
@@ -16427,7 +16433,7 @@ impl Workspace {
                 .to_string());
             }
             let active_ix = self
-                .presentation_document_ix_for_global_result(document_id)
+                .presentation_document_ix_for_global_result(*document_id)
                 .ok_or_else(|| {
                     if self.global_search.scope == SearchScope::Directory {
                         crate::tr!(
@@ -16447,8 +16453,8 @@ impl Workspace {
                 if let Some(text) = selected_text.map(str::trim).filter(|text| !text.is_empty()) {
                     std::iter::once(text.to_string()).collect()
                 } else {
-                    rows.into_iter()
-                        .filter_map(|(_, row)| self.documents[active_ix].document.line(row))
+                    rows.iter()
+                        .filter_map(|row| self.documents[active_ix].document.line(row))
                         .map(|line| line.trim().to_string())
                         .filter(|line| !line.is_empty())
                         .collect()
@@ -16465,8 +16471,8 @@ impl Workspace {
             crate::tr!("当前没有活动日志文件", "There is no active log file").to_string()
         })?;
         let keywords = self.documents[active_ix]
-            .selected_source_rows(cx)
-            .into_iter()
+            .selected_source_rows_compressed(cx)
+            .iter()
             .filter_map(|row| self.documents[active_ix].document.line(row))
             .map(|line| line.trim().to_string())
             .filter(|line| !line.is_empty())

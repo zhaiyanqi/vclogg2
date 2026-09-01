@@ -1230,35 +1230,31 @@ impl GlobalSearchTableDelegate {
             && self.interaction.row_selection.borrow().contains(row_ix)
     }
 
+    #[cfg(test)]
     pub(crate) fn selected_matches(&self) -> Vec<(u64, usize)> {
-        let selection = self.interaction.row_selection.borrow();
-        selection
-            .selected_indices(self.projection.rows_len)
-            .filter_map(|row_ix| match self.flat_row(row_ix)? {
-                FlatRow::Group { .. } => None,
-                FlatRow::Match {
-                    group_ix,
-                    source_row,
-                } => Some((
-                    self.projection.groups[group_ix].source.document_id,
-                    source_row,
-                )),
+        let mut selected = Vec::new();
+        for (document_id, rows) in self.selected_match_groups() {
+            selected.extend(rows.iter().map(|source_row| (document_id, source_row)));
+        }
+        selected
+    }
+
+    pub(crate) fn selected_match_groups(&self) -> Vec<(u64, CompressedRows)> {
+        let mut position_ranges = self.selected_position_ranges_by_document();
+        self.projection
+            .groups
+            .iter()
+            .filter_map(|group| {
+                let document_id = group.source.document_id;
+                let ranges = position_ranges.remove(&document_id)?;
+                let rows = group.projection.rows.rows_at_position_ranges(ranges);
+                (!rows.is_empty()).then_some((document_id, rows))
             })
             .collect()
     }
 
     pub(crate) fn selection_snapshot(&self) -> BTreeMap<u64, CompressedRows> {
-        self.selected_position_ranges_by_document()
-            .into_iter()
-            .filter_map(|(document_id, ranges)| {
-                let group_ix = *self.projection.group_by_document.get(&document_id)?;
-                let rows = self.projection.groups[group_ix]
-                    .projection
-                    .rows
-                    .rows_at_position_ranges(ranges);
-                (!rows.is_empty()).then_some((document_id, rows))
-            })
-            .collect()
+        self.selected_match_groups().into_iter().collect()
     }
 
     pub(crate) fn restore_selection(&self, snapshot: &BTreeMap<u64, CompressedRows>) {

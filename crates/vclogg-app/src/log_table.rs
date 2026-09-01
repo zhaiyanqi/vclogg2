@@ -536,12 +536,6 @@ impl RowSelection {
         self.pointer_text_selection_allowed = false;
     }
 
-    pub(crate) fn selected_indices(&self, row_count: usize) -> impl Iterator<Item = usize> + '_ {
-        self.ranges
-            .iter()
-            .flat_map(move |(start, end)| *start..=(*end).min(row_count.saturating_sub(1)))
-    }
-
     pub(crate) fn selected_ranges(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
         self.ranges.iter().copied()
     }
