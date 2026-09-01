@@ -1233,14 +1233,15 @@ impl LogTableDelegate {
         self.interaction.row_selection.borrow_mut().clear();
     }
 
+    #[cfg(test)]
     pub fn selected_source_rows(&self) -> Vec<usize> {
+        self.selected_source_rows_compressed().iter().collect()
+    }
+
+    pub(crate) fn selected_source_rows_compressed(&self) -> CompressedRows {
         let selection = self.interaction.row_selection.borrow();
-        selection
-            .ranges
-            .iter()
-            .flat_map(|(start, end)| *start..=(*end).min(self.row_count().saturating_sub(1)))
-            .filter_map(|row_ix| self.source_row(row_ix))
-            .collect()
+        self.source
+            .selected_source_rows(selection.selected_ranges())
     }
 
     pub fn selected_rows_count(&self) -> usize {
@@ -1700,6 +1701,18 @@ mod tests {
                 .collect::<Vec<_>>(),
             [(0, 0), (2, 2)]
         );
+    }
+
+    #[test]
+    fn select_all_snapshot_keeps_large_result_projection_compressed() {
+        let document = Arc::new(LogDocument::placeholder("large-selection.log"));
+        let rows = CompressedRows::from_inclusive_ranges([(0, 999_999)]);
+        let delegate = LogTableDelegate::projected(7, document, rows);
+
+        delegate.select_all_rows();
+        let selected = delegate.selected_source_rows_compressed();
+
+        assert_eq!(selected.len(), 1_000_000);
     }
 
     #[test]

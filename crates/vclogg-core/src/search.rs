@@ -74,6 +74,11 @@ impl CompressedRows {
             .is_some_and(|row| self.rows.contains(row))
     }
 
+    /// Whether every row in `other` is already present.
+    pub fn contains_all(&self, other: &Self) -> bool {
+        other.rows.is_subset(&self.rows)
+    }
+
     pub fn position(&self, row: usize) -> Option<usize> {
         let row = u64::try_from(row).ok()?;
         self.rows
@@ -216,6 +221,22 @@ impl CompressedRows {
             return;
         }
         Arc::make_mut(&mut self.rows).remove_range(upper_bound..);
+    }
+
+    /// Union another compressed row set with at most one copy-on-write detach.
+    pub fn insert_rows(&mut self, rows: &Self) {
+        if self.contains_all(rows) {
+            return;
+        }
+        *Arc::make_mut(&mut self.rows) |= rows.rows.as_ref();
+    }
+
+    /// Subtract another compressed row set with at most one copy-on-write detach.
+    pub fn remove_rows(&mut self, rows: &Self) {
+        if self.rows.intersection_len(&rows.rows) == 0 {
+            return;
+        }
+        *Arc::make_mut(&mut self.rows) -= rows.rows.as_ref();
     }
 
     pub fn union(&self, rows: impl IntoIterator<Item = usize>) -> Self {
@@ -807,13 +828,30 @@ mod performance_tests {
     fn no_op_mutations_reuse_compressed_storage() {
         let original = [2, 5, 9].into_iter().collect::<CompressedRows>();
         let mut unchanged = original.clone();
+        let existing = [2, 9].into_iter().collect();
+        let disjoint = [20, 21].into_iter().collect();
 
         assert!(!unchanged.insert(5));
         assert!(!unchanged.remove(7));
         unchanged.extend([2, 9]);
         unchanged.retain_below(10);
+        unchanged.insert_rows(&existing);
+        unchanged.remove_rows(&disjoint);
 
         assert!(Arc::ptr_eq(&original.rows, &unchanged.rows));
+    }
+
+    #[test]
+    fn compressed_bulk_mutations_preserve_set_semantics() {
+        let mut rows = [2, 5, 9].into_iter().collect::<CompressedRows>();
+        let inserted = [5, 7, 11].into_iter().collect();
+        let removed = [2, 11, 20].into_iter().collect();
+
+        rows.insert_rows(&inserted);
+        assert!(rows.contains_all(&inserted));
+        rows.remove_rows(&removed);
+
+        assert_eq!(rows.iter().collect::<Vec<_>>(), [5, 7, 9]);
     }
 
     #[test]

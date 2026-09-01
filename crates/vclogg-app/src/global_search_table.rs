@@ -1931,6 +1931,20 @@ mod tests {
     }
 
     #[test]
+    fn select_all_snapshot_keeps_large_result_groups_compressed() {
+        let document = Arc::new(LogDocument::placeholder("large-selection.log"));
+        let mut group = test_group(document);
+        group.projection.rows = CompressedRows::from_inclusive_ranges([(0, 999_999)]);
+        let mut delegate = GlobalSearchTableDelegate::new();
+        delegate.set_groups(vec![group]);
+
+        delegate.select_all_rows();
+        let selected = delegate.selection_snapshot();
+
+        assert_eq!(selected.get(&1).map(CompressedRows::len), Some(1_000_000));
+    }
+
+    #[test]
     fn selection_restore_scales_with_selected_rows_and_keeps_display_order() {
         let mut first = test_group(Arc::new(LogDocument::placeholder("first.log")));
         first.source.document_id = 20;

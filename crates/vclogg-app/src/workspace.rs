@@ -2374,18 +2374,22 @@ impl DocumentTab {
     }
 
     fn selected_source_rows(&self, cx: &App) -> Vec<usize> {
+        self.selected_source_rows_compressed(cx).iter().collect()
+    }
+
+    fn selected_source_rows_compressed(&self, cx: &App) -> CompressedRows {
         let table = match self.selection_table {
             SelectionTable::Log => &self.log_table,
             SelectionTable::Results => &self.result_table,
         };
         let state = table.read(cx);
-        let mut rows = state.delegate().selected_source_rows();
+        let mut rows = state.delegate().selected_source_rows_compressed();
         if rows.is_empty()
             && let Some(source_row) = state
                 .active_log_row()
                 .and_then(|row_ix| state.delegate().source_row(row_ix))
         {
-            rows.push(source_row);
+            rows.insert(source_row);
         }
         rows
     }
@@ -6334,9 +6338,8 @@ impl Workspace {
     }
 
     fn file_session_state(&self, tab: &DocumentTab, cx: &App) -> FileSessionState {
-        let marked_rows = tab
-            .marked_rows
-            .union(tab.pending_restore_marked_rows.iter());
+        let mut marked_rows = tab.marked_rows.clone();
+        marked_rows.insert_rows(&tab.pending_restore_marked_rows);
         let selected_row = tab
             .log_table
             .read(cx)
@@ -9138,7 +9141,7 @@ impl Workspace {
     ) {
         if self.active_log_region == LogRegion::GlobalResults && self.global_search.results_visible
         {
-            let selected_matches = self.global_table.read(cx).delegate().selected_matches();
+            let selected_matches = self.global_table.read(cx).delegate().selection_snapshot();
             if selected_matches.is_empty() {
                 window.push_notification(
                     crate::tr!(
@@ -9149,8 +9152,7 @@ impl Workspace {
                 );
                 return;
             }
-            let Some(selected_by_document) =
-                self.resolve_global_mark_targets(selected_matches.iter().copied())
+            let Some(selected_by_document) = self.resolve_global_mark_targets(&selected_matches)
             else {
                 window.push_notification(
                     if self.global_search.scope == SearchScope::Directory {
@@ -9172,7 +9174,7 @@ impl Workspace {
                 self.documents
                     .iter()
                     .find(|tab| tab.id == *document_id)
-                    .is_some_and(|tab| rows.iter().any(|row| !tab.marked_rows.contains(*row)))
+                    .is_some_and(|tab| !tab.marked_rows.contains_all(rows))
             });
             let mut changed_documents = Vec::new();
             let mut changed_rows = 0_usize;
@@ -9183,21 +9185,15 @@ impl Workspace {
                     continue;
                 };
                 let tab = &mut self.documents[tab_ix];
-                let rows = rows
-                    .into_iter()
-                    .filter(|row| tab.document.contains_source_row(*row))
-                    .collect::<Vec<_>>();
                 if rows.is_empty() {
                     continue;
                 }
                 if is_marking {
-                    tab.marked_rows.extend(rows.iter().copied());
-                    tab.pending_restore_marked_rows.extend(rows.iter().copied());
+                    tab.marked_rows.insert_rows(&rows);
+                    tab.pending_restore_marked_rows.insert_rows(&rows);
                 } else {
-                    for source_row in &rows {
-                        tab.marked_rows.remove(*source_row);
-                        tab.pending_restore_marked_rows.remove(*source_row);
-                    }
+                    tab.marked_rows.remove_rows(&rows);
+                    tab.pending_restore_marked_rows.remove_rows(&rows);
                 }
                 changed_rows = changed_rows.saturating_add(rows.len());
                 let marked_rows = tab.marked_rows.clone();
@@ -9234,7 +9230,7 @@ impl Workspace {
         let Some(active_ix) = self.active_ix else {
             return;
         };
-        let selected_rows = self.documents[active_ix].selected_source_rows(cx);
+        let selected_rows = self.documents[active_ix].selected_source_rows_compressed(cx);
         if selected_rows.is_empty() {
             window.push_notification(
                 crate::tr!("请先选择要标记的日志行", "Select log lines to mark first"),
@@ -9245,10 +9241,13 @@ impl Workspace {
         let row_height = self.log_row_height();
         let (document_id, is_marking) = {
             let tab = &mut self.documents[active_ix];
-            if selected_rows
-                .iter()
-                .any(|source_row| !tab.document.contains_source_row(*source_row))
-            {
+            let selection_is_valid = selected_rows.first().is_some_and(|row| {
+                tab.document.contains_source_row(row)
+                    && selected_rows
+                        .get(selected_rows.len().saturating_sub(1))
+                        .is_some_and(|row| tab.document.contains_source_row(row))
+            });
+            if !selection_is_valid {
                 window.push_notification(
                     crate::tr!(
                         "所选日志行已不可用，请重新选择",
@@ -9259,18 +9258,13 @@ impl Workspace {
                 return;
             }
 
-            let is_marking = !selected_rows
-                .iter()
-                .all(|source_row| tab.marked_rows.contains(*source_row));
+            let is_marking = !tab.marked_rows.contains_all(&selected_rows);
             if is_marking {
-                tab.marked_rows.extend(selected_rows.iter().copied());
-                tab.pending_restore_marked_rows
-                    .extend(selected_rows.iter().copied());
+                tab.marked_rows.insert_rows(&selected_rows);
+                tab.pending_restore_marked_rows.insert_rows(&selected_rows);
             } else {
-                for source_row in &selected_rows {
-                    tab.marked_rows.remove(*source_row);
-                    tab.pending_restore_marked_rows.remove(*source_row);
-                }
+                tab.marked_rows.remove_rows(&selected_rows);
+                tab.pending_restore_marked_rows.remove_rows(&selected_rows);
             }
             let marked_rows = tab.marked_rows.clone();
             tab.log_table.update(cx, |table, cx| {
@@ -9297,8 +9291,11 @@ impl Workspace {
             crate::tr!("已取消标记", "Unmarked")
         };
         if selected_rows.len() == 1 {
+            let source_row = selected_rows
+                .first()
+                .expect("a one-row selection has a first row");
             window.push_notification(
-                crate::tr_args!("{action}第 {} 行", "{action} line {}", selected_rows[0] + 1),
+                crate::tr_args!("{action}第 {} 行", "{action} line {}", source_row + 1),
                 cx,
             );
         } else {
@@ -16515,10 +16512,10 @@ impl Workspace {
 
     fn resolve_global_mark_targets(
         &self,
-        selected_rows: impl IntoIterator<Item = (u64, usize)>,
-    ) -> Option<BTreeMap<u64, Vec<usize>>> {
+        selected_rows: &BTreeMap<u64, CompressedRows>,
+    ) -> Option<BTreeMap<u64, CompressedRows>> {
         let directory_results = self.global_search.result_scope == Some(SearchScope::Directory);
-        group_result_rows_by_document(selected_rows, |result_document_id, source_row| {
+        group_result_rows_by_document(selected_rows, |result_document_id, rows| {
             let document_ix = if directory_results {
                 self.presentation_document_ix_for_global_result(result_document_id)?
             } else {
@@ -16527,7 +16524,9 @@ impl Workspace {
                     .position(|tab| tab.id == result_document_id)?
             };
             let tab = self.documents.get(document_ix)?;
-            if !tab.document.contains_source_row(source_row) {
+            let first = rows.first()?;
+            let last = rows.get(rows.len().saturating_sub(1))?;
+            if !tab.document.contains_source_row(first) || !tab.document.contains_source_row(last) {
                 return None;
             }
             Some(tab.id)
@@ -16629,18 +16628,15 @@ impl Workspace {
 
     fn context_mark_label(&self, cx: &App) -> &'static str {
         if self.active_log_region == LogRegion::GlobalResults {
-            let selected = self.global_table.read(cx).delegate().selected_matches();
+            let selected = self.global_table.read(cx).delegate().selection_snapshot();
             if let Some(targets) = (!selected.is_empty())
-                .then(|| self.resolve_global_mark_targets(selected))
+                .then(|| self.resolve_global_mark_targets(&selected))
                 .flatten()
                 && targets.iter().all(|(document_id, rows)| {
                     self.documents
                         .iter()
                         .find(|tab| tab.id == *document_id)
-                        .is_some_and(|tab| {
-                            rows.iter()
-                                .all(|source_row| tab.marked_rows.contains(*source_row))
-                        })
+                        .is_some_and(|tab| tab.marked_rows.contains_all(rows))
                 })
             {
                 crate::tr!("取消标记", "Unmark")
@@ -16648,8 +16644,8 @@ impl Workspace {
                 crate::tr!("标记", "Mark")
             }
         } else if self.active_document().is_some_and(|tab| {
-            let rows = tab.selected_source_rows(cx);
-            !rows.is_empty() && rows.iter().all(|row| tab.marked_rows.contains(*row))
+            let rows = tab.selected_source_rows_compressed(cx);
+            !rows.is_empty() && tab.marked_rows.contains_all(&rows)
         }) {
             crate::tr!("取消标记", "Unmark")
         } else {
@@ -18803,18 +18799,28 @@ fn compute_result_rows(
     match mode {
         ResultMode::MatchesOnly => matched_rows,
         ResultMode::MarksOnly => marked_rows.clone(),
-        ResultMode::MatchesAndMarks => matched_rows.union(marked_rows.iter()),
+        ResultMode::MatchesAndMarks => {
+            let mut rows = matched_rows;
+            rows.insert_rows(marked_rows);
+            rows
+        }
     }
 }
 
 fn group_result_rows_by_document(
-    rows: impl IntoIterator<Item = (u64, usize)>,
-    mut resolve_document_id: impl FnMut(u64, usize) -> Option<u64>,
-) -> Option<BTreeMap<u64, Vec<usize>>> {
-    let mut by_document = BTreeMap::<u64, Vec<usize>>::new();
-    for (result_document_id, source_row) in rows {
-        let document_id = resolve_document_id(result_document_id, source_row)?;
-        by_document.entry(document_id).or_default().push(source_row);
+    rows: &BTreeMap<u64, CompressedRows>,
+    mut resolve_document_id: impl FnMut(u64, &CompressedRows) -> Option<u64>,
+) -> Option<BTreeMap<u64, CompressedRows>> {
+    let mut by_document = BTreeMap::<u64, CompressedRows>::new();
+    for (&result_document_id, rows) in rows {
+        if rows.is_empty() {
+            continue;
+        }
+        let document_id = resolve_document_id(result_document_id, rows)?;
+        by_document
+            .entry(document_id)
+            .or_default()
+            .insert_rows(rows);
     }
     Some(by_document)
 }
@@ -18883,20 +18889,29 @@ mod result_snapshot_tests {
 
     #[test]
     fn result_row_target_resolution_is_atomic_and_groups_by_open_document() {
-        let grouped = group_result_rows_by_document([(101, 2), (102, 4), (101, 7)], |id, _| {
+        let selected = BTreeMap::from([
+            (101, [2, 7].into_iter().collect()),
+            (102, [4].into_iter().collect()),
+        ]);
+        let grouped = group_result_rows_by_document(&selected, |id, _| {
             Some(match id {
                 101 => 1,
                 102 => 2,
                 _ => return None,
             })
+        })
+        .map(|groups| {
+            groups
+                .into_iter()
+                .map(|(document_id, rows)| (document_id, rows.iter().collect::<Vec<_>>()))
+                .collect::<BTreeMap<_, _>>()
         });
         assert_eq!(
             grouped,
             Some(BTreeMap::from([(1, vec![2, 7]), (2, vec![4])]))
         );
 
-        let unresolved =
-            group_result_rows_by_document([(101, 2), (999, 4)], |id, _| (id == 101).then_some(1));
+        let unresolved = group_result_rows_by_document(&selected, |id, _| (id == 101).then_some(1));
         assert!(unresolved.is_none());
     }
 }
