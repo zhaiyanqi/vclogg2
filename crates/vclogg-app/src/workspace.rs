@@ -1617,6 +1617,46 @@ mod scroll_position_tests {
     }
 
     #[test]
+    fn global_measured_heights_follow_rows_after_a_group_collapses() {
+        let mut state = WrappedListState::<LogRowKey>::default();
+        state.prime_measured_heights(5, px(20.), [(1, px(40.)), (4, px(60.))]);
+        let previous_rows = [
+            LogRowKey::FileGroup { document_id: 1 },
+            LogRowKey::Row {
+                document_id: 1,
+                source_row: 10,
+            },
+            LogRowKey::Row {
+                document_id: 1,
+                source_row: 11,
+            },
+            LogRowKey::FileGroup { document_id: 2 },
+            LogRowKey::Row {
+                document_id: 2,
+                source_row: 20,
+            },
+        ];
+        let next_rows = [
+            LogRowKey::FileGroup { document_id: 1 },
+            LogRowKey::FileGroup { document_id: 2 },
+            LogRowKey::Row {
+                document_id: 2,
+                source_row: 20,
+            },
+        ];
+        let measured_heights =
+            state.measured_heights_by_key(|row_ix| previous_rows.get(row_ix).copied());
+
+        state.reset_with_remapped_heights(next_rows.len(), px(20.), measured_heights, |key| {
+            next_rows.iter().position(|row| row == key)
+        });
+
+        assert_eq!(state.item_sizes.borrow()[0].height, px(20.));
+        assert_eq!(state.item_sizes.borrow()[1].height, px(20.));
+        assert_eq!(state.item_sizes.borrow()[2].height, px(60.));
+    }
+
+    #[test]
     fn matches_only_keeps_an_empty_match_set_empty() {
         let rows = compute_result_rows(ResultMode::MatchesOnly, None, &BTreeSet::from([2, 7]));
 
@@ -3208,16 +3248,25 @@ impl Workspace {
                 let Some(row) = table.read(cx).delegate().row(*row_ix) else {
                     return;
                 };
-                let wrapped_group_anchor = if word_wrap {
+                let wrapped_group_state = if word_wrap {
                     match row {
-                        GlobalSearchRow::Group { document_id } => this
-                            .global_viewport
-                            .capture_wrapped_viewport_position(Some(*row_ix))
-                            .map(|position| RowViewportAnchor {
-                                key: LogRowKey::FileGroup { document_id },
-                                viewport_y: position.viewport_y,
-                                fallback_ix: position.row_ix,
-                            }),
+                        GlobalSearchRow::Group { document_id } => {
+                            let anchor = this
+                                .global_viewport
+                                .capture_wrapped_viewport_position(Some(*row_ix))
+                                .map(|position| RowViewportAnchor {
+                                    key: LogRowKey::FileGroup { document_id },
+                                    viewport_y: position.viewport_y,
+                                    fallback_ix: position.row_ix,
+                                });
+                            let table = table.read(cx);
+                            let measured_heights = this
+                                .global_viewport
+                                .wrapped_measured_heights_by_key(|row_ix| {
+                                    table.delegate().row_key(row_ix)
+                                });
+                            Some((anchor, measured_heights))
+                        }
                         GlobalSearchRow::Match { .. } => None,
                     }
                 } else {
@@ -3245,10 +3294,11 @@ impl Workspace {
                                 table.clear_selection(cx);
                                 table.refresh_log_rows(cx);
                             });
-                            if word_wrap {
+                            if let Some((anchor, measured_heights)) = wrapped_group_state {
                                 let base_height = this.log_row_height();
                                 this.prime_global_wrapped_group_toggle(
-                                    wrapped_group_anchor,
+                                    anchor,
+                                    measured_heights,
                                     base_height,
                                     window,
                                     cx,
@@ -12405,16 +12455,25 @@ impl Workspace {
     fn prime_global_wrapped_group_toggle(
         &mut self,
         anchor: Option<RowViewportAnchor<LogRowKey>>,
+        measured_heights: BTreeMap<LogRowKey, Pixels>,
         base_height: Pixels,
         window: &Window,
         cx: &mut Context<Self>,
     ) {
         let count = self.global_table.read(cx).delegate().rows_len();
+        {
+            let table = self.global_table.read(cx);
+            self.global_viewport.reset_wrapped_with_remapped_heights(
+                count,
+                base_height,
+                measured_heights,
+                |key| table.delegate().row_ix_for_key(*key),
+            );
+        }
         if count == 0 {
             return;
         }
 
-        self.global_viewport.wrapped_sizes(count, base_height);
         self.position_global_row_viewport_anchor(anchor, base_height, cx);
 
         let first_visible = self.global_viewport.wrapped_first_visible_row();
