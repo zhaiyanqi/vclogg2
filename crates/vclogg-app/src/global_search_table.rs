@@ -1284,6 +1284,24 @@ impl GlobalSearchTableDelegate {
             .collect()
     }
 
+    pub(crate) fn selected_match_documents(&self) -> Vec<(Arc<LogDocument>, CompressedRows)> {
+        self.selected_match_groups()
+            .into_iter()
+            .filter_map(|(document_id, rows)| {
+                let group_ix = *self.projection.group_by_document.get(&document_id)?;
+                Some((
+                    self.projection
+                        .groups
+                        .get(group_ix)?
+                        .source
+                        .document
+                        .clone(),
+                    rows,
+                ))
+            })
+            .collect()
+    }
+
     pub(crate) fn selection_snapshot(&self) -> BTreeMap<u64, CompressedRows> {
         self.selected_match_groups().into_iter().collect()
     }

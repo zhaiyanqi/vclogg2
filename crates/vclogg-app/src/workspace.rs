@@ -2430,6 +2430,18 @@ enum ResultExportOperation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LineCopyScope {
+    Local,
+    Global,
+}
+
+struct CopiedLogLines {
+    text: String,
+    count: usize,
+    first_source_row: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TabCloseGroup {
     Current,
     Others,
@@ -2574,6 +2586,8 @@ pub struct Workspace {
     searches: SearchController,
     result_export_task: Option<Task<()>>,
     result_export_operation: Option<ResultExportOperation>,
+    line_copy_task: Option<Task<()>>,
+    line_copy_revision: u64,
     file_drop_visible: bool,
     file_drop_tab_transfer: Option<TabTransferMode>,
     cross_window_drop_ix: Option<usize>,
@@ -3677,6 +3691,8 @@ impl Workspace {
             searches: SearchController::default(),
             result_export_task: None,
             result_export_operation: None,
+            line_copy_task: None,
+            line_copy_revision: 0,
             file_drop_visible: false,
             file_drop_tab_transfer: None,
             cross_window_drop_ix: None,
@@ -8698,6 +8714,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.line_copy_revision = self.line_copy_revision.saturating_add(1);
+        self.line_copy_task = None;
+        let revision = self.line_copy_revision;
         if !include_line_number {
             let selected_text = TextSelection::selected_text(window, cx);
             if !selected_text.trim().is_empty() {
@@ -8708,12 +8727,12 @@ impl Workspace {
         }
         if self.active_log_region == LogRegion::GlobalResults && self.global_search.results_visible
         {
-            let selected_groups = self
+            let selected_documents = self
                 .global_table
                 .read(cx)
                 .delegate()
-                .selected_match_groups();
-            if selected_groups.is_empty() {
+                .selected_match_documents();
+            if selected_documents.is_empty() {
                 window.push_notification(
                     crate::tr!(
                         "请先选择要复制的全局结果行",
@@ -8723,54 +8742,12 @@ impl Workspace {
                 );
                 return;
             }
-            let mut text = String::new();
-            let mut copied = 0_usize;
-            for (document_id, rows) in selected_groups {
-                let document = self
-                    .documents
-                    .iter()
-                    .find(|tab| tab.id == document_id)
-                    .map(|tab| tab.document.clone())
-                    .or_else(|| {
-                        self.global_search
-                            .results
-                            .get(&document_id)
-                            .map(|result| result.document.clone())
-                    });
-                let Some(document) = document else {
-                    continue;
-                };
-                for source_row in rows.iter() {
-                    let Some(line) = document.line(source_row) else {
-                        continue;
-                    };
-                    if copied > 0 {
-                        text.push('\n');
-                    }
-                    if include_line_number {
-                        text.push_str(&(source_row + 1).to_string());
-                        text.push('\t');
-                    }
-                    text.push_str(&line);
-                    copied += 1;
-                }
-            }
-            if text.is_empty() {
-                window.push_notification(
-                    crate::tr!(
-                        "所选全局结果已不可用，请重新选择",
-                        "The selected global results are no longer available. Select them again."
-                    ),
-                    cx,
-                );
-                return;
-            }
-            cx.write_to_clipboard(ClipboardItem::new_string(text));
-            window.push_notification(
-                crate::tr_args!(
-                    "已复制 {copied} 条全局结果",
-                    "Copied {copied} global results"
-                ),
+            self.start_line_copy(
+                selected_documents,
+                include_line_number,
+                LineCopyScope::Global,
+                revision,
+                window,
                 cx,
             );
             return;
@@ -8786,48 +8763,71 @@ impl Workspace {
             );
             return;
         }
-        let mut text = String::new();
-        let mut copied = 0_usize;
-        for source_row in selected_rows.iter() {
-            let Some(line) = tab.document.line(source_row) else {
-                continue;
-            };
-            if copied > 0 {
-                text.push('\n');
-            }
-            if include_line_number {
-                text.push_str(&(source_row + 1).to_string());
-                text.push('\t');
-            }
-            text.push_str(&line);
-            copied = copied.saturating_add(1);
-        }
-        if text.is_empty() {
-            window.push_notification(
-                crate::tr!(
-                    "所选日志行已不可用，请重新选择",
-                    "The selected log lines are no longer available. Select them again."
-                ),
-                cx,
-            );
-            return;
-        }
-        cx.write_to_clipboard(ClipboardItem::new_string(text));
-        if selected_rows.len() == 1 {
-            window.push_notification(
-                crate::tr_args!(
-                    "已复制第 {} 行",
-                    "Copied line {}",
-                    selected_rows.first().unwrap_or_default() + 1
-                ),
-                cx,
-            );
-        } else {
-            window.push_notification(
-                crate::tr_args!("已复制 {} 行", "Copied {} lines", selected_rows.len()),
-                cx,
-            );
-        }
+        self.start_line_copy(
+            vec![(tab.document.clone(), selected_rows)],
+            include_line_number,
+            LineCopyScope::Local,
+            revision,
+            window,
+            cx,
+        );
+    }
+
+    fn start_line_copy(
+        &mut self,
+        documents: Vec<(Arc<LogDocument>, CompressedRows)>,
+        include_line_number: bool,
+        scope: LineCopyScope,
+        revision: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.line_copy_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let copied = cx
+                .background_spawn(async move {
+                    collect_log_lines_for_clipboard(documents, include_line_number)
+                })
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                if this.line_copy_revision != revision {
+                    return;
+                }
+                this.line_copy_task = None;
+                if copied.text.is_empty() {
+                    window.push_notification(
+                        match scope {
+                            LineCopyScope::Local => crate::tr!(
+                                "所选日志行已不可用，请重新选择",
+                                "The selected log lines are no longer available. Select them again."
+                            ),
+                            LineCopyScope::Global => crate::tr!(
+                                "所选全局结果已不可用，请重新选择",
+                                "The selected global results are no longer available. Select them again."
+                            ),
+                        },
+                        cx,
+                    );
+                    return;
+                }
+                cx.write_to_clipboard(ClipboardItem::new_string(copied.text));
+                let notification = match scope {
+                    LineCopyScope::Global => crate::tr_args!(
+                        "已复制 {} 条全局结果",
+                        "Copied {} global results",
+                        copied.count
+                    ),
+                    LineCopyScope::Local if copied.count == 1 => crate::tr_args!(
+                        "已复制第 {} 行",
+                        "Copied line {}",
+                        copied.first_source_row.unwrap_or_default() + 1
+                    ),
+                    LineCopyScope::Local => {
+                        crate::tr_args!("已复制 {} 行", "Copied {} lines", copied.count)
+                    }
+                };
+                window.push_notification(notification, cx);
+            });
+        }));
     }
 
     fn select_all_rows(&mut self, _: &SelectAllRows, window: &mut Window, cx: &mut Context<Self>) {
@@ -18551,6 +18551,37 @@ fn directory_search_scan_paths(
         .collect()
 }
 
+fn collect_log_lines_for_clipboard(
+    documents: Vec<(Arc<LogDocument>, CompressedRows)>,
+    include_line_number: bool,
+) -> CopiedLogLines {
+    let mut text = String::new();
+    let mut count = 0_usize;
+    let mut first_source_row = None;
+    for (document, rows) in documents {
+        for source_row in rows.iter() {
+            let Some(line) = document.line(source_row) else {
+                continue;
+            };
+            if count > 0 {
+                text.push('\n');
+            }
+            if include_line_number {
+                text.push_str(&(source_row + 1).to_string());
+                text.push('\t');
+            }
+            text.push_str(&line);
+            first_source_row.get_or_insert(source_row);
+            count = count.saturating_add(1);
+        }
+    }
+    CopiedLogLines {
+        text,
+        count,
+        first_source_row,
+    }
+}
+
 fn prepare_paths_bounded<T, F>(paths: Vec<PathBuf>, operation: F) -> Vec<(PathBuf, T)>
 where
     T: Send,
@@ -18855,6 +18886,27 @@ mod result_snapshot_tests {
         fn drop(&mut self) {
             _ = fs::remove_file(&self.0);
         }
+    }
+
+    #[test]
+    fn clipboard_collection_iterates_compressed_rows_in_document_order() {
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("测试时间应晚于 Unix epoch")
+            .as_nanos();
+        let temporary = TemporaryFile(std::env::temp_dir().join(format!(
+            "vclogg2-line-copy-{}-{nonce}.log",
+            std::process::id()
+        )));
+        fs::write(&temporary.0, b"alpha\nbeta\ngamma").expect("应能创建复制测试日志");
+        let document = Arc::new(LogDocument::open(&temporary.0).expect("应能打开复制测试日志"));
+
+        let copied =
+            collect_log_lines_for_clipboard(vec![(document, [0, 2].into_iter().collect())], true);
+
+        assert_eq!(copied.text, "1\talpha\n3\tgamma");
+        assert_eq!(copied.count, 2);
+        assert_eq!(copied.first_source_row, Some(0));
     }
 
     #[test]
