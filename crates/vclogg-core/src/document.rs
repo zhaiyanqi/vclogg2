@@ -221,6 +221,92 @@ struct IndexedLines {
     longest_completed_line_columns: usize,
 }
 
+/// Immutable line offsets compacted to four bytes whenever the snapshot fits in `u32`.
+///
+/// Index construction and append refreshes still use native `usize` values for arithmetic. The
+/// completed snapshot pays eight bytes per row only for files whose byte offsets actually require
+/// it, while readers keep the same constant-time lookup semantics.
+#[derive(Clone)]
+enum LineStarts {
+    Compact(Arc<[u32]>),
+    Wide(Arc<[usize]>),
+}
+
+impl LineStarts {
+    fn from_native(starts: Vec<usize>) -> Self {
+        let compact_limit = usize::try_from(u32::MAX).unwrap_or(usize::MAX);
+        if starts.last().copied().unwrap_or_default() <= compact_limit {
+            Self::Compact(
+                starts
+                    .into_iter()
+                    .map(|offset| {
+                        u32::try_from(offset)
+                            .expect("line offsets were checked against the compact limit")
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+            )
+        } else {
+            Self::Wide(starts.into())
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Compact(starts) => starts.len(),
+            Self::Wide(starts) => starts.len(),
+        }
+    }
+
+    fn get(&self, row_ix: usize) -> Option<usize> {
+        match self {
+            Self::Compact(starts) => starts.get(row_ix).map(|offset| *offset as usize),
+            Self::Wide(starts) => starts.get(row_ix).copied(),
+        }
+    }
+
+    fn iter(&self) -> LineStartsIter<'_> {
+        match self {
+            Self::Compact(starts) => LineStartsIter::Compact(starts.iter()),
+            Self::Wide(starts) => LineStartsIter::Wide(starts.iter()),
+        }
+    }
+
+    fn to_native_vec(&self) -> Vec<usize> {
+        self.iter().collect()
+    }
+}
+
+enum LineStartsIter<'a> {
+    Compact(std::slice::Iter<'a, u32>),
+    Wide(std::slice::Iter<'a, usize>),
+}
+
+impl Iterator for LineStartsIter<'_> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Compact(starts) => starts.next().map(|offset| *offset as usize),
+            Self::Wide(starts) => starts.next().copied(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl ExactSizeIterator for LineStartsIter<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Compact(starts) => starts.len(),
+            Self::Wide(starts) => starts.len(),
+        }
+    }
+}
+
 struct CachedIndex {
     indexed_lines: IndexedLines,
     encoding: FileEncoding,
@@ -243,7 +329,7 @@ pub struct PendingIndexCacheWrite {
     modified_millis: u64,
     identity: Option<FileIdentity>,
     encoding: FileEncoding,
-    line_starts: Arc<[usize]>,
+    line_starts: LineStarts,
     integrity_blocks: Arc<[[u8; 32]]>,
     longest_line_bytes: usize,
     longest_completed_line_bytes: usize,
@@ -294,7 +380,7 @@ impl PendingIndexCacheWrite {
 /// which lets the application swap generations atomically after background work ends.
 pub struct LogDocument {
     bytes: Arc<DocumentBytes>,
-    line_starts: Arc<[usize]>,
+    line_starts: LineStarts,
     segment_start_row: usize,
     metadata: DocumentMetadata,
     longest_completed_line_bytes: usize,
@@ -730,12 +816,8 @@ impl LogDocument {
     }
 
     fn line_bytes_at_local_row(&self, row_ix: usize) -> Option<&[u8]> {
-        let mut start = *self.line_starts.get(row_ix)?;
-        let end = self
-            .line_starts
-            .get(row_ix + 1)
-            .copied()
-            .unwrap_or(self.bytes.len());
+        let mut start = self.line_starts.get(row_ix)?;
+        let end = self.line_starts.get(row_ix + 1).unwrap_or(self.bytes.len());
         if self.segment_start_row == 0 && row_ix == 0 {
             start = start.saturating_add(self.encoding.bom_len()).min(end);
         }
@@ -783,7 +865,7 @@ impl LogDocument {
 
         let old_size = usize::try_from(old_size)
             .with_context(|| format!("日志文件过大，无法建立索引：{}", path.display()))?;
-        let mut line_starts = self.line_starts.to_vec();
+        let mut line_starts = self.line_starts.to_native_vec();
         let (
             longest_line_bytes,
             longest_completed_line_bytes,
@@ -889,7 +971,7 @@ impl LogDocument {
 
         Self {
             bytes: Arc::new(bytes),
-            line_starts: indexed_lines.starts.into(),
+            line_starts: LineStarts::from_native(indexed_lines.starts),
             segment_start_row: source_rows.start,
             metadata,
             longest_completed_line_bytes: indexed_lines.longest_completed_line_bytes,
@@ -1193,7 +1275,7 @@ fn write_index_cache(pending: &PendingIndexCacheWrite) -> Result<()> {
         writer.write_all(source_path)?;
         writer.write_all(encoding_name)?;
         let mut previous = 0_u64;
-        for offset in pending.line_starts.iter().copied() {
+        for offset in pending.line_starts.iter() {
             let offset = offset as u64;
             write_varint(&mut writer, offset.saturating_sub(previous))?;
             previous = offset;
@@ -1243,9 +1325,9 @@ fn read_i64(reader: &mut impl Read) -> Option<i64> {
     Some(i64::from_le_bytes(bytes))
 }
 
-fn encoded_offsets_len(offsets: &[usize]) -> usize {
+fn encoded_offsets_len(offsets: &LineStarts) -> usize {
     let mut previous = 0_u64;
-    offsets.iter().copied().fold(0, |total, offset| {
+    offsets.iter().fold(0, |total, offset| {
         let offset = offset as u64;
         let delta = offset.saturating_sub(previous);
         previous = offset;
@@ -2004,9 +2086,30 @@ mod index_cache_tests {
     use std::{fs, sync::Arc, time::SystemTime};
 
     use super::{
-        APPEND_INTEGRITY_BLOCK_BYTES, FileEncoding, FileIdentity, PendingIndexCacheWrite,
-        read_index_cache,
+        APPEND_INTEGRITY_BLOCK_BYTES, FileEncoding, FileIdentity, LineStarts,
+        PendingIndexCacheWrite, read_index_cache,
     };
+
+    #[test]
+    fn completed_line_offsets_use_compact_storage_when_possible() {
+        let starts = LineStarts::from_native(vec![0, 11, u32::MAX as usize]);
+
+        assert!(matches!(&starts, LineStarts::Compact(_)));
+        assert_eq!(
+            starts.iter().collect::<Vec<_>>(),
+            [0, 11, u32::MAX as usize]
+        );
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn completed_line_offsets_fall_back_for_files_larger_than_u32() {
+        let wide_offset = u32::MAX as usize + 1;
+        let starts = LineStarts::from_native(vec![0, wide_offset]);
+
+        assert!(matches!(&starts, LineStarts::Wide(_)));
+        assert_eq!(starts.get(1), Some(wide_offset));
+    }
 
     #[test]
     fn cache_round_trip_preserves_encoding_and_integrity_blocks() {
@@ -2035,7 +2138,7 @@ mod index_cache_tests {
             modified_millis,
             identity: Some(identity.clone()),
             encoding: FileEncoding::Utf8Bom,
-            line_starts: Arc::from([0, 11, 23]),
+            line_starts: LineStarts::from_native(vec![0, 11, 23]),
             integrity_blocks: Arc::from([[3; 32], [5; 32]]),
             longest_line_bytes: 12,
             longest_completed_line_bytes: 12,
