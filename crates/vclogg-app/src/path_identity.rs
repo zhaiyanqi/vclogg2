@@ -14,7 +14,7 @@ const ENCODED_PATH_PREFIX: &str = "\0vclogg-path-v1:";
 #[cfg(not(windows))]
 pub(crate) type PathMatchKey = PathBuf;
 #[cfg(windows)]
-pub(crate) type PathMatchKey = String;
+pub(crate) type PathMatchKey = Vec<u16>;
 
 #[cfg(not(windows))]
 pub(crate) fn path_match_key(path: &Path) -> PathMatchKey {
@@ -23,7 +23,13 @@ pub(crate) fn path_match_key(path: &Path) -> PathMatchKey {
 
 #[cfg(windows)]
 pub(crate) fn path_match_key(path: &Path) -> PathMatchKey {
-    path.to_string_lossy().to_ascii_lowercase()
+    path.as_os_str()
+        .encode_wide()
+        .map(|unit| match unit {
+            0x41..=0x5a => unit + 0x20,
+            _ => unit,
+        })
+        .collect()
 }
 
 #[cfg(not(windows))]
@@ -210,6 +216,9 @@ mod tests {
     #[cfg(unix)]
     use std::ffi::OsString;
 
+    #[cfg(windows)]
+    use std::{ffi::OsString, os::windows::ffi::OsStringExt as _};
+
     #[test]
     fn indexes_and_direct_matching_share_platform_path_identity() {
         let stored = Path::new("logs/a.log");
@@ -275,5 +284,34 @@ mod tests {
             decode_persisted_path(&encode_persisted_path(&second)),
             second
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn runtime_keys_preserve_unpaired_utf16_identity() {
+        let first = PathBuf::from(OsString::from_wide(&[
+            b'L' as u16,
+            b'O' as u16,
+            b'G' as u16,
+            0xd800,
+        ]));
+        let same_ascii_case_fold = PathBuf::from(OsString::from_wide(&[
+            b'l' as u16,
+            b'o' as u16,
+            b'g' as u16,
+            0xd800,
+        ]));
+        let distinct_surrogate = PathBuf::from(OsString::from_wide(&[
+            b'l' as u16,
+            b'o' as u16,
+            b'g' as u16,
+            0xd801,
+        ]));
+
+        assert_eq!(
+            path_match_key(&first),
+            path_match_key(&same_ascii_case_fold)
+        );
+        assert_ne!(path_match_key(&first), path_match_key(&distinct_surrogate));
     }
 }
