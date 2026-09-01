@@ -16660,7 +16660,10 @@ impl Workspace {
     }
 
     fn context_color_label_id(&self, selected_text: Option<&str>, cx: &App) -> Option<String> {
-        let (tab_ix, keywords) = self.context_color_target(selected_text, cx).ok()?;
+        let selected_text = selected_text
+            .map(str::trim)
+            .filter(|text| !text.is_empty())?;
+        let (tab_ix, keywords) = self.context_color_target(Some(selected_text), cx).ok()?;
         if keywords.is_empty() {
             return None;
         }
@@ -16737,6 +16740,7 @@ impl Workspace {
         });
         let mark_label = workspace.read(cx).context_mark_label(cx);
         let labels = workspace.read(cx).color_labels.clone();
+        let color_state_known = selected_text.is_some();
         let current_label_id = workspace
             .read(cx)
             .context_color_label_id(selected_text.as_deref(), cx);
@@ -16756,7 +16760,7 @@ impl Workspace {
                     let clear_workspace = color_workspace.clone();
                     let mut menu = menu.check_side(Side::Right).item(
                         PopupMenuItem::new(crate::tr!("无", "None"))
-                            .checked(current_label_id.is_none())
+                            .checked(color_state_known && current_label_id.is_none())
                             .on_click(window.listener_for(
                                 &none_workspace,
                                 move |this, _, window, cx| {
