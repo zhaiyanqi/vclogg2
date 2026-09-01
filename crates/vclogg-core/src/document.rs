@@ -214,7 +214,7 @@ struct AppendFingerprint {
 }
 
 struct IndexedLines {
-    starts: Vec<usize>,
+    starts: MutableLineStarts,
     longest_line_bytes: usize,
     longest_completed_line_bytes: usize,
     longest_line_columns: usize,
@@ -223,9 +223,9 @@ struct IndexedLines {
 
 /// Immutable line offsets compacted to four bytes whenever the snapshot fits in `u32`.
 ///
-/// Index construction and append refreshes still use native `usize` values for arithmetic. The
-/// completed snapshot pays eight bytes per row only for files whose byte offsets actually require
-/// it, while readers keep the same constant-time lookup semantics.
+/// Index construction and append refreshes use the matching mutable width, so common files never
+/// need a transient eight-byte offset table. A compact table promotes only if an append crosses the
+/// `u32` byte boundary, while readers keep the same constant-time lookup semantics.
 #[derive(Clone)]
 enum LineStarts {
     Compact(Arc<[u32]>),
@@ -233,22 +233,9 @@ enum LineStarts {
 }
 
 impl LineStarts {
+    #[cfg(test)]
     fn from_native(starts: Vec<usize>) -> Self {
-        let compact_limit = usize::try_from(u32::MAX).unwrap_or(usize::MAX);
-        if starts.last().copied().unwrap_or_default() <= compact_limit {
-            Self::Compact(
-                starts
-                    .into_iter()
-                    .map(|offset| {
-                        u32::try_from(offset)
-                            .expect("line offsets were checked against the compact limit")
-                    })
-                    .collect::<Vec<_>>()
-                    .into(),
-            )
-        } else {
-            Self::Wide(starts.into())
-        }
+        MutableLineStarts::from_native(starts).into_immutable()
     }
 
     fn len(&self) -> usize {
@@ -271,9 +258,95 @@ impl LineStarts {
             Self::Wide(starts) => LineStartsIter::Wide(starts.iter()),
         }
     }
+}
 
-    fn to_native_vec(&self) -> Vec<usize> {
-        self.iter().collect()
+enum MutableLineStarts {
+    Compact(Vec<u32>),
+    Wide(Vec<usize>),
+}
+
+impl MutableLineStarts {
+    fn with_capacity(max_offset: u64, capacity: usize) -> Self {
+        if max_offset <= u64::from(u32::MAX) {
+            Self::Compact(Vec::with_capacity(capacity))
+        } else {
+            Self::Wide(Vec::with_capacity(capacity))
+        }
+    }
+
+    fn from_native(starts: Vec<usize>) -> Self {
+        let compact_limit = usize::try_from(u32::MAX).unwrap_or(usize::MAX);
+        if starts.last().copied().unwrap_or_default() <= compact_limit {
+            Self::Compact(
+                starts
+                    .into_iter()
+                    .map(|offset| {
+                        u32::try_from(offset)
+                            .expect("line offsets were checked against the compact limit")
+                    })
+                    .collect(),
+            )
+        } else {
+            Self::Wide(starts)
+        }
+    }
+
+    fn from_immutable(starts: &LineStarts) -> Self {
+        match starts {
+            LineStarts::Compact(starts) => Self::Compact(starts.to_vec()),
+            LineStarts::Wide(starts) => Self::Wide(starts.to_vec()),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Compact(starts) => starts.len(),
+            Self::Wide(starts) => starts.len(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn get(&self, row_ix: usize) -> Option<usize> {
+        match self {
+            Self::Compact(starts) => starts.get(row_ix).map(|offset| *offset as usize),
+            Self::Wide(starts) => starts.get(row_ix).copied(),
+        }
+    }
+
+    fn last(&self) -> Option<usize> {
+        self.len().checked_sub(1).and_then(|index| self.get(index))
+    }
+
+    fn push(&mut self, offset: usize) {
+        match self {
+            Self::Compact(starts) => match u32::try_from(offset) {
+                Ok(offset) => starts.push(offset),
+                Err(_) => {
+                    let mut wide = Vec::with_capacity(starts.len().saturating_add(1));
+                    wide.extend(starts.iter().map(|offset| *offset as usize));
+                    wide.push(offset);
+                    *self = Self::Wide(wide);
+                }
+            },
+            Self::Wide(starts) => starts.push(offset),
+        }
+    }
+
+    fn truncate(&mut self, len: usize) {
+        match self {
+            Self::Compact(starts) => starts.truncate(len),
+            Self::Wide(starts) => starts.truncate(len),
+        }
+    }
+
+    fn into_immutable(self) -> LineStarts {
+        match self {
+            Self::Compact(starts) => LineStarts::Compact(starts.into()),
+            Self::Wide(starts) => LineStarts::Wide(starts.into()),
+        }
     }
 }
 
@@ -398,7 +471,7 @@ impl LogDocument {
             path.as_ref().to_path_buf(),
             DocumentBytes::Empty,
             IndexedLines {
-                starts: Vec::new(),
+                starts: MutableLineStarts::Compact(Vec::new()),
                 longest_line_bytes: 0,
                 longest_completed_line_bytes: 0,
                 longest_line_columns: 0,
@@ -664,15 +737,11 @@ impl LogDocument {
         let mut end_row = start_row + window_count;
         let source_size_usize = usize::try_from(source_size)
             .with_context(|| format!("日志文件过大，无法读取缓存预览：{}", path.display()))?;
-        let byte_end_for = |end_row: usize| {
-            cached
-                .starts
-                .get(end_row)
-                .copied()
-                .unwrap_or(source_size_usize)
-        };
+        let byte_end_for = |end_row: usize| cached.starts.get(end_row).unwrap_or(source_size_usize);
         while end_row - start_row > 1
-            && byte_end_for(end_row).saturating_sub(cached.starts[start_row]) > byte_limit
+            && byte_end_for(end_row)
+                .saturating_sub(cached.starts.get(start_row).unwrap_or_default())
+                > byte_limit
         {
             let rows_before_anchor = anchor - start_row;
             let rows_after_anchor = end_row - anchor - 1;
@@ -684,7 +753,7 @@ impl LogDocument {
                 end_row -= 1;
             }
         }
-        let byte_start = cached.starts[start_row];
+        let byte_start = cached.starts.get(start_row).unwrap_or_default();
         let byte_end = byte_end_for(end_row);
         let byte_count = byte_end
             .checked_sub(byte_start)
@@ -697,10 +766,17 @@ impl LogDocument {
         file.read_exact(&mut preview)
             .with_context(|| format!("无法读取缓存日志预览：{}", path.display()))?;
 
-        let starts = cached.starts[start_row..end_row]
-            .iter()
-            .map(|offset| offset - byte_start)
-            .collect();
+        let starts = MutableLineStarts::from_native(
+            (start_row..end_row)
+                .map(|row_ix| {
+                    cached
+                        .starts
+                        .get(row_ix)
+                        .expect("the preview row range was bounded by the cached line count")
+                })
+                .map(|offset| offset - byte_start)
+                .collect(),
+        );
         let indexed_lines = IndexedLines {
             starts,
             longest_line_bytes: cached.longest_line_bytes,
@@ -865,7 +941,7 @@ impl LogDocument {
 
         let old_size = usize::try_from(old_size)
             .with_context(|| format!("日志文件过大，无法建立索引：{}", path.display()))?;
-        let mut line_starts = self.line_starts.to_native_vec();
+        let mut line_starts = MutableLineStarts::from_immutable(&self.line_starts);
         let (
             longest_line_bytes,
             longest_completed_line_bytes,
@@ -971,7 +1047,7 @@ impl LogDocument {
 
         Self {
             bytes: Arc::new(bytes),
-            line_starts: LineStarts::from_native(indexed_lines.starts),
+            line_starts: indexed_lines.starts.into_immutable(),
             segment_start_row: source_rows.start,
             metadata,
             longest_completed_line_bytes: indexed_lines.longest_completed_line_bytes,
@@ -1207,7 +1283,7 @@ fn read_index_cache_while(
     reader.read_exact(&mut cached_encoding).ok()?;
     let encoding = FileEncoding::from_cache_name(&cached_encoding)?;
 
-    let mut starts = Vec::with_capacity(line_count);
+    let mut starts = MutableLineStarts::with_capacity(file_size, line_count);
     let mut previous = 0_u64;
     let mut consumed = 0_usize;
     for line_ix in 0..line_count {
@@ -1224,11 +1300,10 @@ fn read_index_cache_while(
     if consumed != encoded_offsets_len {
         return None;
     }
-    if (!starts.is_empty() && starts[0] != 0)
-        || starts.windows(2).any(|pair| pair[0] >= pair[1])
+    if (!starts.is_empty() && starts.get(0) != Some(0))
         || starts
             .last()
-            .is_some_and(|offset| u64::try_from(*offset).map_or(true, |offset| offset > file_size))
+            .is_some_and(|offset| u64::try_from(offset).map_or(true, |offset| offset > file_size))
     {
         return None;
     }
@@ -1715,7 +1790,7 @@ fn build_line_index_while(
     }
     if bytes.is_empty() {
         return Some(IndexedLines {
-            starts: Vec::new(),
+            starts: MutableLineStarts::Compact(Vec::new()),
             longest_line_bytes: 0,
             longest_completed_line_bytes: 0,
             longest_line_columns: 0,
@@ -1725,7 +1800,7 @@ fn build_line_index_while(
 
     if matches!(encoding, FileEncoding::Binary) {
         let line_count = bytes.len().div_ceil(BINARY_BYTES_PER_LINE);
-        let mut starts = Vec::with_capacity(line_count);
+        let mut starts = MutableLineStarts::with_capacity(bytes.len() as u64, line_count);
         for line_ix in 0..line_count {
             if line_ix % INDEX_CANCELLATION_BATCH_LINES == 0 && is_cancelled() {
                 return None;
@@ -1743,7 +1818,8 @@ fn build_line_index_while(
         });
     }
 
-    let mut line_starts = vec![0];
+    let mut line_starts = MutableLineStarts::with_capacity(bytes.len() as u64, 0);
+    line_starts.push(0);
     let mut longest_completed_line_bytes = 0;
     let mut longest_completed_line_columns = 0;
     let mut current_start = 0;
@@ -1766,7 +1842,7 @@ fn build_line_index_while(
             ));
 
         current_start = line_end + width;
-        if current_start <= bytes.len() && line_starts.last().copied() != Some(current_start) {
+        if current_start <= bytes.len() && line_starts.last() != Some(current_start) {
             line_starts.push(current_start);
         }
         ControlFlow::Continue(())
@@ -1820,7 +1896,7 @@ fn display_columns_encoded(encoding: FileEncoding, bytes: &[u8], first_line: boo
 fn extend_line_index(
     bytes: &[u8],
     old_size: usize,
-    line_starts: &mut Vec<usize>,
+    line_starts: &mut MutableLineStarts,
     mut longest_completed_line_bytes: usize,
     mut longest_completed_line_columns: usize,
 ) -> (usize, usize, usize, usize) {
@@ -1828,12 +1904,12 @@ fn extend_line_index(
         line_starts.push(0);
         0
     } else if bytes.get(old_size - 1) == Some(&b'\n') {
-        if line_starts.last().copied() != Some(old_size) {
+        if line_starts.last() != Some(old_size) {
             line_starts.push(old_size);
         }
         old_size
     } else {
-        line_starts.last().copied().unwrap_or_default()
+        line_starts.last().unwrap_or_default()
     };
 
     for relative_newline_ix in memchr_iter(b'\n', &bytes[old_size..]) {
@@ -1851,7 +1927,7 @@ fn extend_line_index(
         ));
 
         current_start = newline_ix + 1;
-        if current_start <= bytes.len() && line_starts.last().copied() != Some(current_start) {
+        if current_start <= bytes.len() && line_starts.last() != Some(current_start) {
             line_starts.push(current_start);
         }
     }
@@ -2118,7 +2194,7 @@ mod index_cache_tests {
     use std::{ffi::OsString, os::unix::ffi::OsStringExt as _, path::PathBuf};
 
     use super::{
-        APPEND_INTEGRITY_BLOCK_BYTES, FileEncoding, FileIdentity, LineStarts,
+        APPEND_INTEGRITY_BLOCK_BYTES, FileEncoding, FileIdentity, LineStarts, MutableLineStarts,
         PendingIndexCacheWrite, index_cache_path, index_cache_source_identity, read_index_cache,
     };
 
@@ -2131,6 +2207,29 @@ mod index_cache_tests {
             starts.iter().collect::<Vec<_>>(),
             [0, 11, u32::MAX as usize]
         );
+    }
+
+    #[test]
+    fn line_offset_builder_stays_compact_for_common_files() {
+        let mut starts = MutableLineStarts::with_capacity(u64::from(u32::MAX), 2);
+        starts.push(0);
+        starts.push(11);
+
+        assert!(matches!(&starts, MutableLineStarts::Compact(_)));
+        assert!(matches!(starts.into_immutable(), LineStarts::Compact(_)));
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn compact_append_builder_promotes_only_when_required() {
+        let mut starts = MutableLineStarts::from_immutable(&LineStarts::from_native(vec![0, 11]));
+
+        starts.push(u32::MAX as usize + 1);
+
+        assert!(matches!(&starts, MutableLineStarts::Wide(_)));
+        assert_eq!(starts.get(0), Some(0));
+        assert_eq!(starts.get(1), Some(11));
+        assert_eq!(starts.get(2), Some(u32::MAX as usize + 1));
     }
 
     #[cfg(target_pointer_width = "64")]
@@ -2206,7 +2305,12 @@ mod index_cache_tests {
         .expect("索引缓存应能读回");
 
         assert_eq!(cached.encoding.name(), "UTF-8 BOM");
-        assert_eq!(cached.indexed_lines.starts, [0, 11, 23]);
+        assert_eq!(
+            (0..cached.indexed_lines.starts.len())
+                .map(|index| cached.indexed_lines.starts.get(index).unwrap())
+                .collect::<Vec<_>>(),
+            [0, 11, 23]
+        );
         assert_eq!(cached.integrity_blocks.as_ref(), &[[3; 32], [5; 32]]);
         _ = fs::remove_dir_all(directory);
     }
