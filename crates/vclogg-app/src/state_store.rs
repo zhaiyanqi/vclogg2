@@ -7,12 +7,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[cfg(unix)]
-use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
-
-#[cfg(windows)]
-use std::os::windows::ffi::{OsStrExt as _, OsStringExt as _};
-
 use anyhow::{Context as _, Result};
 use rusqlite::{Connection, OptionalExtension as _, params, params_from_iter};
 use vclogg_core::CompressedRows;
@@ -22,6 +16,7 @@ use crate::color_labels::{
     ColorLabel, KeywordColorRule, decode_rules, default_color_labels, encode_rules,
 };
 use crate::i18n::Language;
+use crate::path_identity::{decode_persisted_path, encode_persisted_path};
 use crate::predefined_filters::{
     PredefinedFilter, normalize_predefined_filters, parse_stored_filter,
 };
@@ -40,7 +35,6 @@ pub const DEFAULT_WORD_BOUNDARY_CHARACTERS: &str =
     ".,;:!?()[]{}<>/\\|\"'`~@#$%^&*+-=，。！？；：、（）【】《》“”‘’…—";
 pub const MAX_WORD_BOUNDARY_CHARACTERS: usize = 256;
 const STATE_SCHEMA_VERSION: u32 = 4;
-const ENCODED_PATH_PREFIX: &str = "\0vclogg-path-v1:";
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
 
 #[derive(Clone, Debug)]
@@ -1724,59 +1718,11 @@ fn normalize_optional_hex_color(value: Option<String>) -> Option<String> {
 }
 
 fn path_to_database(path: &Path) -> String {
-    if let Some(path) = path.to_str()
-        && !path.starts_with(ENCODED_PATH_PREFIX)
-    {
-        return path.to_owned();
-    }
-
-    #[cfg(unix)]
-    let (platform, bytes) = ("u:", path.as_os_str().as_bytes().to_vec());
-    #[cfg(windows)]
-    let (platform, bytes) = (
-        "w:",
-        path.as_os_str()
-            .encode_wide()
-            .flat_map(u16::to_le_bytes)
-            .collect::<Vec<_>>(),
-    );
-    #[cfg(not(any(unix, windows)))]
-    let (platform, bytes) = ("o:", path.to_string_lossy().as_bytes().to_vec());
-
-    let mut encoded = String::with_capacity(ENCODED_PATH_PREFIX.len() + 2 + bytes.len() * 2);
-    encoded.push_str(ENCODED_PATH_PREFIX);
-    encoded.push_str(platform);
-    for byte in bytes {
-        write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
-    }
-    encoded
+    encode_persisted_path(path)
 }
 
 fn path_from_database(stored: String) -> PathBuf {
-    #[cfg(unix)]
-    if let Some(encoded) = stored
-        .strip_prefix(ENCODED_PATH_PREFIX)
-        .and_then(|encoded| encoded.strip_prefix("u:"))
-        && let Some(bytes) = decode_hex(encoded)
-    {
-        return PathBuf::from(std::ffi::OsString::from_vec(bytes));
-    }
-    #[cfg(windows)]
-    if let Some(encoded) = stored
-        .strip_prefix(ENCODED_PATH_PREFIX)
-        .and_then(|encoded| encoded.strip_prefix("w:"))
-        && let Some(bytes) = decode_hex(encoded)
-    {
-        let (units, remainder) = bytes.as_slice().as_chunks::<2>();
-        if remainder.is_empty() {
-            let wide = units
-                .iter()
-                .map(|bytes| u16::from_le_bytes(*bytes))
-                .collect::<Vec<_>>();
-            return PathBuf::from(std::ffi::OsString::from_wide(&wide));
-        }
-    }
-    PathBuf::from(stored)
+    decode_persisted_path(&stored)
 }
 
 fn decode_hex(encoded: &str) -> Option<Vec<u8>> {

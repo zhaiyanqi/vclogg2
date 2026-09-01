@@ -93,9 +93,9 @@ use crate::{
         severity_style, text_highlight_style,
     },
     path_identity::{
-        PathMatchKey, deduplicate_paths, path_buf_map_get, path_buf_map_insert,
-        path_buf_map_remove, path_match_key, path_match_map_get, path_match_set_contains,
-        paths_match,
+        PathMatchKey, decode_persisted_path, deduplicate_paths, encode_persisted_path,
+        path_buf_map_get, path_buf_map_insert, path_buf_map_remove, path_match_key,
+        path_match_map_get, path_match_set_contains, paths_match,
     },
     predefined_filters::{PredefinedFilter, query_includes_filter, toggle_filter_in_query},
     predefined_filters_dialog::{PredefinedFiltersDialog, PredefinedFiltersDialogEvent},
@@ -10643,7 +10643,7 @@ impl Workspace {
             .collapsed_document_ids
             .iter()
             .filter_map(|document_id| self.global_context_path(context, *document_id))
-            .map(|path| path.to_string_lossy().into_owned())
+            .map(encode_persisted_path)
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
@@ -10653,7 +10653,7 @@ impl Workspace {
             .filter_map(|(document_id, rows)| {
                 self.global_context_path(context, *document_id)
                     .map(|path| PersistedPathSelection {
-                        path: path.to_string_lossy().into_owned(),
+                        path: encode_persisted_path(path),
                         rows: compress_rows(rows.iter()),
                     })
             })
@@ -10668,7 +10668,7 @@ impl Workspace {
             };
             self.global_context_path(context, document_id)
                 .map(|path| PersistedSearchRowKey {
-                    path: path.to_string_lossy().into_owned(),
+                    path: encode_persisted_path(path),
                     source_row,
                 })
         };
@@ -10730,7 +10730,7 @@ impl Workspace {
                     .directory_options
                     .directory
                     .as_deref()
-                    .map(|path| path.to_string_lossy().into_owned()),
+                    .map(encode_persisted_path),
                 file_type: 0,
                 file_type_filter_enabled: Some(
                     self.global_search
@@ -10823,7 +10823,7 @@ impl Workspace {
                 .directory_options
                 .directory
                 .as_deref()
-                .map(PathBuf::from),
+                .map(decode_persisted_path),
             file_type_filter_enabled: state
                 .directory_options
                 .file_type_filter_enabled
@@ -10892,7 +10892,7 @@ impl Workspace {
     }
 
     fn persisted_path_matches(actual: &std::path::Path, persisted: &str) -> bool {
-        paths_match(actual, std::path::Path::new(persisted))
+        paths_match(actual, &decode_persisted_path(persisted))
     }
 
     fn restore_persisted_global_presentation(
