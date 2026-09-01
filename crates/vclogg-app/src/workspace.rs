@@ -2276,7 +2276,8 @@ impl DocumentTab {
             table.delegate_mut().set_marked_rows(marked_rows);
             table.delegate_mut().set_row_projection(result_rows);
             let active_restored = table.sync_active_log_row(cx);
-            table.refresh_log_rows(cx);
+            table.refresh(cx);
+            cx.notify();
             active_restored
         });
         if !active_restored {
@@ -3446,7 +3447,13 @@ impl Workspace {
                                 table.delegate_mut().toggle_group(document_id);
                                 table.delegate().clear_row_selection();
                                 table.clear_selection(cx);
-                                table.refresh_log_rows(cx);
+                                if word_wrap {
+                                    table.delegate_mut().reset_visible_line_owner();
+                                    table.refresh(cx);
+                                    cx.notify();
+                                } else {
+                                    table.reacquire_visible_log_rows(cx);
+                                }
                             });
                             if let Some((anchor, measured_heights)) = wrapped_group_state {
                                 let base_height = this.log_row_height();
@@ -3458,6 +3465,11 @@ impl Workspace {
                                     cx,
                                 );
                             }
+                            Self::refresh_log_surfaces_atomically(
+                                [this.global_surface.clone()],
+                                window,
+                                cx,
+                            );
                         } else {
                             this.activate_global_group(document_id, window, cx);
                         }
@@ -3494,7 +3506,7 @@ impl Workspace {
                 {
                     this.global_search.results_visible = true;
                 }
-                this.refresh_global_result_rows(cx);
+                this.refresh_global_result_rows(window, cx);
                 this.schedule_workspace_search_state_save(window, cx);
                 cx.notify();
             },
@@ -3686,7 +3698,8 @@ impl Workspace {
                                 .delegate_mut()
                                 .set_highlight_log_levels(app_settings.highlight_log_levels);
                             table.delegate_mut().set_search_matcher(global_matcher);
-                            table.refresh_log_rows(cx);
+                            table.refresh(cx);
+                            cx.notify();
                         });
                         this.history_loading = false;
                         let pending_sessions = std::mem::take(&mut this.persistence.pending_sessions);
@@ -5757,7 +5770,8 @@ impl Workspace {
                 .delegate_mut()
                 .set_highlight_log_levels(settings.highlight_log_levels);
             table.delegate_mut().set_search_matcher(global_matcher);
-            table.refresh_log_rows(cx);
+            table.refresh(cx);
+            cx.notify();
         });
         let source_window = window.window_handle();
         let other_workspaces = cx
@@ -5806,7 +5820,8 @@ impl Workspace {
                         .delegate_mut()
                         .set_highlight_log_levels(shared_settings.highlight_log_levels);
                     table.delegate_mut().set_search_matcher(global_matcher);
-                    table.refresh_log_rows(cx);
+                    table.refresh(cx);
+                    cx.notify();
                 });
                 cx.notify();
             });
@@ -6475,7 +6490,6 @@ impl Workspace {
         let mut cache_writes = Vec::new();
         let mut installed_document_ids = BTreeSet::new();
         let mut global_sources_changed = false;
-        let mut added_selected_document = false;
 
         for (path, result) in opened {
             let mut prepared = match result {
@@ -6569,7 +6583,6 @@ impl Workspace {
             self.next_document_id += 1;
             if self.global_search.preference_for(&path).unwrap_or(true) {
                 self.global_search.selected_documents.insert(document_id);
-                added_selected_document = true;
             }
             let log_table = cx.new(|cx| {
                 let mut delegate = LogTableDelegate::all(document_id, document.clone());
@@ -6731,17 +6744,25 @@ impl Workspace {
                         return;
                     };
                     let row_height = this.log_row_height();
-                    let Some(tab) = this.documents.iter_mut().find(|tab| tab.id == document_id)
-                    else {
-                        return;
-                    };
-                    if tab.result_mode == *mode {
-                        return;
+                    {
+                        let Some(tab) = this.documents.iter_mut().find(|tab| tab.id == document_id)
+                        else {
+                            return;
+                        };
+                        if tab.result_mode == *mode {
+                            return;
+                        }
+                        tab.result_mode = *mode;
+                        tab.refresh_result_rows(row_height, cx);
+                        if mode.includes_marks() && !tab.marked_rows.is_empty() {
+                            tab.results_visible = true;
+                        }
                     }
-                    tab.result_mode = *mode;
-                    tab.refresh_result_rows(row_height, cx);
-                    if mode.includes_marks() && !tab.marked_rows.is_empty() {
-                        tab.results_visible = true;
+                    if this
+                        .active_document()
+                        .is_some_and(|tab| tab.id == document_id)
+                    {
+                        this.refresh_active_document_surfaces_atomically(window, cx);
                     }
                     this.schedule_checkpoint(document_id, window, cx);
                     cx.notify();
@@ -6896,23 +6917,8 @@ impl Workspace {
             self.active_tab_id = workspace_tab_id;
         }
         self.reorder_documents_to_match_tabs();
-        let invalidated_all_open_results = added_selected_document
-            .then(|| self.invalidate_all_open_results())
-            .flatten();
         if global_sources_changed {
-            self.refresh_global_result_rows(cx);
-        }
-        if let Some(visible_results_invalidated) = invalidated_all_open_results {
-            if visible_results_invalidated {
-                window.push_notification(
-                    crate::tr!(
-                        "参与搜索的文件已增加，请重新执行全部打开文件搜索",
-                        "A searched file was added. Run the all-open-files search again."
-                    ),
-                    cx,
-                );
-            }
-            self.schedule_workspace_search_state_save(window, cx);
+            self.refresh_global_result_rows(window, cx);
         }
         if let Some(active_path) = active_path
             && let Some(document_id) = self
@@ -6972,6 +6978,12 @@ impl Workspace {
                     .active_log_row()
                     .and_then(|row_ix| table.delegate().source_row(row_ix))
             });
+        }
+        let active_document_was_installed = self
+            .active_document()
+            .is_some_and(|tab| installed_document_ids.contains(&tab.id));
+        if active_document_was_installed {
+            self.refresh_active_document_surfaces_atomically(window, cx);
         }
         cx.notify();
     }
@@ -7268,6 +7280,9 @@ impl Workspace {
         if prepared.load_state == DocumentLoadState::Ready {
             self.apply_tab_resume(document_ix, cx);
         }
+        if self.active_ix == Some(document_ix) {
+            self.refresh_active_document_surfaces_atomically(window, cx);
+        }
     }
 
     fn auto_follow_candidate(
@@ -7449,8 +7464,14 @@ impl Workspace {
                     }
                 };
                 if reloaded {
+                    if this
+                        .active_document()
+                        .is_some_and(|tab| tab.id == document_id)
+                    {
+                        this.refresh_active_document_surfaces_atomically(window, cx);
+                    }
                     let invalidated = this.invalidate_all_open_results_for_reload(document_id);
-                    this.refresh_global_result_rows(cx);
+                    this.refresh_global_result_rows(window, cx);
                     if let Some(visible_results_invalidated) = invalidated {
                         if visible_results_invalidated {
                             window.push_notification(
@@ -7768,7 +7789,7 @@ impl Workspace {
         self.reorder_documents_to_match_tabs();
         if !document_ids.is_empty() {
             self.global_search.revision = self.global_search.revision.saturating_add(1);
-            self.refresh_global_result_rows(cx);
+            self.refresh_global_result_rows(window, cx);
         }
         self.sync_active_document(window, cx);
         if previous_active_id != self.active_tab_id {
@@ -7802,7 +7823,7 @@ impl Workspace {
         let tab_id = self.tabs.remove(source_ix);
         self.tabs.insert(insert_ix, tab_id);
         self.reorder_documents_to_match_tabs();
-        self.refresh_global_result_rows(cx);
+        self.refresh_global_result_rows(window, cx);
         self.persist_workspace_order(window, cx);
         cx.notify();
     }
@@ -9070,7 +9091,13 @@ impl Workspace {
                 }
                 changed_documents.push(document_id);
             }
-            self.refresh_global_result_rows(cx);
+            self.refresh_global_result_rows(window, cx);
+            if self
+                .active_document()
+                .is_some_and(|tab| changed_documents.contains(&tab.id))
+            {
+                self.refresh_active_document_surfaces_atomically(window, cx);
+            }
             self.schedule_workspace_search_state_save(window, cx);
             for document_id in changed_documents {
                 self.schedule_checkpoint(document_id, window, cx);
@@ -9146,7 +9173,8 @@ impl Workspace {
         {
             self.global_search.results_visible = true;
         }
-        self.refresh_global_result_rows(cx);
+        self.refresh_global_result_rows(window, cx);
+        self.refresh_active_document_surfaces_atomically(window, cx);
         self.schedule_workspace_search_state_save(window, cx);
         let action = if is_marking {
             crate::tr!("已标记", "Marked")
@@ -9911,7 +9939,7 @@ impl Workspace {
             self.global_search.results.clear();
             self.global_search.matcher = None;
             self.global_search.result_scope = None;
-            self.refresh_global_result_rows(cx);
+            self.refresh_global_result_rows(window, cx);
             self.fallback_from_hidden_global_results();
         }
         self.schedule_workspace_search_state_save(window, cx);
@@ -9971,7 +9999,7 @@ impl Workspace {
                     }
                 }));
         }
-        self.refresh_global_result_rows(cx);
+        self.refresh_global_result_rows(window, cx);
         if invalidated_all_open_results == Some(true) {
             window.push_notification(
                 crate::tr!(
@@ -9986,12 +10014,16 @@ impl Workspace {
         cx.notify();
     }
 
-    fn refresh_global_result_rows(&mut self, cx: &mut Context<Self>) {
+    fn refresh_global_result_rows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let groups = match self.global_search.scope {
             SearchScope::AllOpenFiles => self
                 .documents
                 .iter()
-                .filter(|tab| self.global_search.selected_documents.contains(&tab.id))
+                .filter(|tab| {
+                    self.global_search.selected_documents.contains(&tab.id)
+                        && (self.global_search.result_scope != Some(SearchScope::AllOpenFiles)
+                            || self.global_search.results.get(&tab.id).is_some())
+                })
                 .map(|tab| {
                     let result = self.global_search.results.get(&tab.id);
                     let search_result = result.map(|result| &result.search_result);
@@ -10122,6 +10154,7 @@ impl Workspace {
             self.global_viewport.invalidate_wrapped();
         }
         self.restore_global_viewport_anchor(viewport_anchor, row_height, cx);
+        self.refresh_global_result_surface_atomically(window, cx);
     }
 
     fn global_result_matcher(&self) -> Option<SearchMatcher> {
@@ -10141,7 +10174,8 @@ impl Workspace {
             table.delegate_mut().set_groups(groups);
             table.delegate_mut().set_search_matcher(matcher);
             let active_restored = table.sync_active_log_row(cx);
-            table.refresh_log_rows(cx);
+            table.refresh(cx);
+            cx.notify();
             active_restored
         });
         if !active_restored {
@@ -10998,7 +11032,7 @@ impl Workspace {
                     cx,
                 );
             });
-        self.refresh_global_result_rows(cx);
+        self.refresh_global_result_rows(window, cx);
 
         self.global_search.restoring_selection = context.selected_row.is_some();
         let selected_restored = self.global_table.update(cx, |table, cx| {
@@ -11015,7 +11049,8 @@ impl Workspace {
                 table.delegate().set_active_log_row(None);
                 table.clear_selection(cx);
             }
-            table.refresh_log_rows(cx);
+            table.refresh(cx);
+            cx.notify();
             selected_ix.is_some()
         });
         if !selected_restored {
@@ -11035,6 +11070,7 @@ impl Workspace {
         } else if self.active_log_region == LogRegion::GlobalResults {
             self.active_log_region = LogRegion::Body;
         }
+        self.refresh_global_result_surface_atomically(window, cx);
     }
 
     fn set_search_scope(
@@ -11089,7 +11125,7 @@ impl Workspace {
         self.query
             .update(cx, |state, cx| state.set_value(text, window, cx));
         if next_scope == SearchScope::CurrentFile {
-            self.refresh_global_result_rows(cx);
+            self.refresh_global_result_rows(window, cx);
         }
         self.maybe_restore_persisted_search(window, cx);
         self.schedule_workspace_search_state_save(window, cx);
@@ -11313,7 +11349,7 @@ impl Workspace {
                     })
                     .flatten();
 
-                let prime_wrapped_results = match result {
+                let results_changed = match result {
                     Ok((SearchRun::Completed(result), search_matcher)) => {
                         tab.search_query = query;
                         tab.search_result = result;
@@ -11328,10 +11364,9 @@ impl Workspace {
                         );
                         tab.refresh_search_matcher(highlight_matches, cx);
                         tab.results_visible = true;
-                        let word_wrap = tab.result_viewport.is_wrapped();
                         this.activity = Activity::Ready;
                         this.schedule_checkpoint(document_id, window, cx);
-                        word_wrap
+                        true
                     }
                     Ok((SearchRun::Cancelled, _)) => {
                         this.activity = Activity::Ready;
@@ -11349,15 +11384,12 @@ impl Workspace {
                         false
                     }
                 };
-                if prime_wrapped_results {
-                    this.prime_local_wrapped_frame(
-                        tab_ix,
-                        WrappedRegion::Results,
-                        row_height,
-                        false,
-                        window,
-                        cx,
-                    );
+                if results_changed
+                    && this
+                        .active_document()
+                        .is_some_and(|tab| tab.id == document_id)
+                {
+                    this.refresh_active_document_surfaces_atomically(window, cx);
                     Self::position_local_row_viewport_anchor(
                         &this.documents[tab_ix],
                         WrappedRegion::Results,
@@ -11409,7 +11441,7 @@ impl Workspace {
         self.global_search.matcher = completed.matcher;
         self.global_search.result_scope = Some(completed.scope);
 
-        self.refresh_global_result_rows(cx);
+        self.refresh_global_result_rows(window, cx);
         self.position_global_row_viewport_anchor(viewport_anchor, row_height, cx);
         if word_wrap {
             self.prime_global_wrapped_frame(row_height, false, window, cx);
@@ -11904,6 +11936,7 @@ impl Workspace {
         self.query
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.activity = Activity::Ready;
+        self.refresh_active_document_surfaces_atomically(window, cx);
         self.schedule_checkpoint(document_id, window, cx);
         cx.notify();
     }
@@ -11974,7 +12007,7 @@ impl Workspace {
         self.global_search.result_scope = None;
         self.global_search.pending_all_open_restore = None;
         self.global_search.all_open_context = RetainedGlobalSearchContext::default();
-        self.refresh_global_result_rows(cx);
+        self.refresh_global_result_rows(window, cx);
         self.fallback_from_hidden_global_results();
         self.reset_search_history_navigation();
         self.close_search_autocomplete();
@@ -12001,7 +12034,7 @@ impl Workspace {
         self.global_search.pending_directory_restore = None;
         self.global_search.directory_context = RetainedGlobalSearchContext::default();
         self.global_search.clear_directory_document_ids();
-        self.refresh_global_result_rows(cx);
+        self.refresh_global_result_rows(window, cx);
         self.fallback_from_hidden_global_results();
         self.reset_search_history_navigation();
         self.close_search_autocomplete();
@@ -12442,6 +12475,23 @@ impl Workspace {
             }
         }
         Self::refresh_log_surfaces_atomically(surfaces, window, cx);
+    }
+
+    fn refresh_global_result_surface_atomically(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mode = if self.global_viewport.is_wrapped() {
+            LogViewportMode::Wrapped
+        } else {
+            LogViewportMode::Fixed
+        };
+        self.switch_visible_line_owner(0, WrappedRegion::GlobalResults, mode, cx);
+        if mode == LogViewportMode::Wrapped {
+            self.prime_global_wrapped_frame(self.log_row_height(), false, window, cx);
+        }
+        Self::refresh_log_surfaces_atomically([self.global_surface.clone()], window, cx);
     }
 
     fn clear_document_visible_lines(&mut self, document_id: u64, cx: &mut Context<Self>) {
@@ -16884,7 +16934,7 @@ impl Workspace {
             });
         }
         let document_id = self.documents[active_ix].id;
-        self.refresh_global_result_rows(cx);
+        self.refresh_global_result_rows(window, cx);
         self.schedule_checkpoint(document_id, window, cx);
         window.push_notification(notification, cx);
         cx.notify();
