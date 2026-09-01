@@ -24,11 +24,25 @@ $stageRoot = Join-Path ([System.IO.Path]::GetTempPath()) "vclogg2-update-$([guid
 try {
     New-Item -ItemType Directory -Path $stageRoot | Out-Null
     Expand-Archive -LiteralPath $resolvedArchive -DestinationPath $stageRoot
-    $installer = Join-Path $stageRoot 'Install-VCLogg2.ps1'
-    if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
-        throw '更新包不完整：缺少 Install-VCLogg2.ps1。'
+    $sourceExecutable = Join-Path $stageRoot 'vclogg2.exe'
+    if (-not (Test-Path -LiteralPath $sourceExecutable -PathType Leaf)) {
+        throw '更新包不完整：缺少 vclogg2.exe。'
     }
-    & $installer -InstallDirectory $resolvedInstall -Launch:$Launch
+
+    New-Item -ItemType Directory -Path $resolvedInstall -Force | Out-Null
+    $installedExecutable = Join-Path $resolvedInstall 'vclogg2.exe'
+    Copy-Item -LiteralPath $sourceExecutable -Destination $installedExecutable -Force
+
+    foreach ($documentName in @('README.md', 'LICENSE')) {
+        $sourceDocument = Join-Path $stageRoot $documentName
+        if (Test-Path -LiteralPath $sourceDocument -PathType Leaf) {
+            Copy-Item -LiteralPath $sourceDocument -Destination (Join-Path $resolvedInstall $documentName) -Force
+        }
+    }
+
+    if ($Launch) {
+        Start-Process -FilePath $installedExecutable
+    }
 } finally {
     if (Test-Path -LiteralPath $stageRoot) {
         Remove-Item -LiteralPath $stageRoot -Recurse -Force

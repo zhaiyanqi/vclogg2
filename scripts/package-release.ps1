@@ -38,8 +38,15 @@ $releaseExecutable = Join-Path $repositoryRoot 'target\release\vclogg2.exe'
 Copy-Item -LiteralPath $releaseExecutable -Destination (Join-Path $stageDirectory 'vclogg2.exe')
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'README.md') -Destination $stageDirectory
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination $stageDirectory
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Install-VCLogg2.ps1') -Destination $stageDirectory
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Apply-VCLogg2Update.ps1') -Destination $stageDirectory
+
+$expectedPackageEntries = @('LICENSE', 'README.md', 'vclogg2.exe') | Sort-Object
+$actualPackageEntries = @(Get-ChildItem -LiteralPath $stageDirectory -Force | ForEach-Object Name) | Sort-Object
+$packageDifference = @(
+    Compare-Object -ReferenceObject $expectedPackageEntries -DifferenceObject $actualPackageEntries
+)
+if ($packageDifference.Count -ne 0) {
+    throw 'Windows 用户分发包必须且只能包含 LICENSE、README.md 与 vclogg2.exe。'
+}
 
 $archiveName = "vclogg2-$version-windows-x86_64.zip"
 $archivePath = Join-Path $platformDirectory $archiveName

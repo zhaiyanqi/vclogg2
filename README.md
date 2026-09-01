@@ -27,13 +27,9 @@
 .\vclogg2.exe
 ```
 
-需要安装到当前用户目录、创建开始菜单快捷方式并注册 Windows“打开方式”候选时，在解压目录执行：
+Windows 分发包是纯便携包，只包含可执行程序、README 和许可证，不附带 PowerShell 安装或更新脚本，也不会创建开始菜单快捷方式或注册文件关联。应用内更新仍由可执行程序内置的独立更新助手完成。
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\Install-VCLogg2.ps1
-```
-
-默认安装目录为 `%LOCALAPPDATA%\Programs\VCLogg2`。安装脚本只注册 `.log`、`.txt`、`.out`、`.trace`、`.csv` 和 `.json` 的候选应用，不会擅自修改系统默认应用。
+从仍依赖包内安装脚本的旧版本首次迁移到纯便携包时，需要手动解压并替换旧程序；完成这次迁移后，后续纯便携版本可以继续使用应用内更新。
 
 ### macOS
 
@@ -241,7 +237,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run-performance-debug.ps1 `
 
 ## 打包与发布
 
-生成 Windows x64 便携目录、ZIP、安装脚本与更新元数据：
+生成 Windows x64 便携目录、ZIP 与更新元数据：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
@@ -266,7 +262,7 @@ powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 发布新版本时，先修改 `Cargo.toml` 的 workspace 版本、同步 `Cargo.lock`，提交并推送干净的 `main`。标签由发布者创建，再交给脚本校验并推送：
 
 ```bash
-VERSION=2.0.4
+VERSION=2.0.5
 git tag -a "v${VERSION}" -m "VCLogg2 v${VERSION}"
 ./scripts/publish-github-release.sh "v${VERSION}"
 ```

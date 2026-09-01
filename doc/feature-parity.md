@@ -19,7 +19,7 @@
 | 会话、最近/收藏/上一次文件、历史清理与设置持久化 | 已实现 | `crates/vclogg-app/src/state_store.rs`、`history_dialog.rs`；SQLite/WAL、revision 合并、退出事务化 flush |
 | 搜索结果导出、时间戳合并与临时结果回收站 | 已实现 | `crates/vclogg-app/src/result_export.rs`、`trash.rs`；流式输出、同目录原子替换、临时文件隔离 |
 | 预定义过滤器与云端过滤器 | 已实现 | `crates/vclogg-app/src/predefined_filters*.rs`、`cloud_filters.rs`、`settings_dialog.rs`；设置页网络配置与 Cookie 连接测试、本地导入导出、无客户端密钥注册、冲突选择和离线只读目录 |
-| 三平台文件集成与更新交付 | 主路径已实现 | Windows“打开方式”、macOS 文档类型、Linux desktop/MIME、系统废纸篓、平台包、哈希清单和安装助手均已落地；实际更新服务仍需逐平台端到端验收 |
+| 三平台文件集成与更新交付 | 主路径已实现 | Windows 便携包与内置更新助手、macOS 文档类型、Linux desktop/MIME、系统废纸篓、平台包及哈希清单均已落地；Windows Release 不附带安装脚本或自动注册“打开方式”，旧脚本式 Windows 版本到首个纯便携版本需手动迁移，实际更新服务仍需逐平台端到端验收 |
 
 ## 本轮交付
 

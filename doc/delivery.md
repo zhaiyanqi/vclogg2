@@ -29,18 +29,20 @@ powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 
 输出位于 `dist/windows-x86_64/`：
 
-- `vclogg2-<version>-windows-x86_64/`：便携目录，包含程序、安装与更新辅助、README 和许可证；
+- `vclogg2-<version>-windows-x86_64/`：便携目录，仅包含程序、README 和许可证；
 - `vclogg2-<version>-windows-x86_64.zip`：用户分发包；
 - `vclogg2-<version>-windows-x86_64-symbols.zip`：开发侧崩溃分析 PDB；
 - `vclogg2-<version>-windows-x86_64.blockmap.json` 与 `latest.json`：更新校验和版本清单。
 
-安装到当前用户目录并注册开始菜单及“打开方式”候选：
+解压后直接启动：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Install-VCLogg2.ps1 -Launch
+.\vclogg2.exe
 ```
 
-默认目标为 `%LOCALAPPDATA%\Programs\VCLogg2`。安装脚本注册 `.log`、`.txt`、`.out`、`.trace`、`.csv` 和 `.json`，但不会写入 `UserChoice` 或替用户更改默认应用。
+Windows Release 不附带 PowerShell 安装或更新脚本，不创建开始菜单快捷方式，也不注册文件关联。应用内更新助手由可执行程序内置，退出应用后直接从已校验的更新包替换程序与随附文档并重新启动。
+
+旧版 Windows 更新助手会在下载包内查找 `Install-VCLogg2.ps1`，因此从这类旧版本迁移到首个纯三文件版本时不能依赖应用内更新，必须发布为手动替换，或者先发布一个仍含旧安装脚本的过渡版本。用户启动纯三文件版本一次后，后续版本均走新的内置替换流程。
 
 ### macOS aarch64
 
@@ -138,7 +140,7 @@ powershell -ExecutionPolicy Bypass -File scripts/publish-update.ps1 `
   -TargetDirectory D:\log-viewer-server\data\updates-vclogg2\windows-x86_64
 ```
 
-Release 构建会在启动 15 秒后从 GitHub Releases 检查一次，也可由用户手动触发；未配置云端过滤器服务器也能完成更新，已配置时则额外检查对应静态源。下载过程中即时校验分块与整包 SHA-256；用户确认后，独立助手等待应用完成会话保存与正常退出，再调用对应平台安装脚本并重启。
+Release 构建会在启动 15 秒后从 GitHub Releases 检查一次，也可由用户手动触发；未配置云端过滤器服务器也能完成更新，已配置时则额外检查对应静态源。下载过程中即时校验分块与整包 SHA-256；用户确认后，独立助手等待应用完成会话保存与正常退出，再完成平台对应的文件替换或安装流程并重启。
 
 清单和哈希不提供独立发布者签名；GitHub 模式依赖仓库写权限与 GitHub HTTPS，自建模式依赖更新源访问控制与 HTTPS。正式公开分发还应对 Windows 二进制进行代码签名，对 macOS 应用进行 Developer ID 签名和公证。
 
