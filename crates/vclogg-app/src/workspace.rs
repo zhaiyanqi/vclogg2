@@ -7723,6 +7723,8 @@ impl Workspace {
             self.refresh_global_result_rows(cx);
         }
         self.sync_active_document(window, cx);
+        self.persist_workspace_order(window, cx);
+        self.schedule_workspace_search_state_save(window, cx);
         cx.notify();
     }
 
