@@ -2,6 +2,7 @@
 members = [
     "crates/vclogg-app",
     "crates/vclogg-core",
+    "crates/vclogg-data",
 ]
 resolver = "2"
 

@@ -1,3 +1,5 @@
+//! Lifecycle management for on-disk index cache entries.
+
 use std::{
     fs,
     io::ErrorKind,

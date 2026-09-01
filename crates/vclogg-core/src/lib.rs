@@ -2,17 +2,12 @@
 
 mod cancellation;
 mod document;
-mod index_cache;
 mod search;
 
 pub use cancellation::CancellationToken;
 pub use document::{
     DocumentMetadata, DocumentRefreshKind, LinePreview, LinePreviewReader, LineReader, LogDocument,
     PendingIndexCacheWrite,
-};
-pub use index_cache::{
-    IndexCacheCleanupResult, IndexCacheClearResult, IndexCacheInfo, cleanup_index_cache,
-    clear_index_cache, index_cache_info,
 };
 pub use search::{
     CompressedRows, SearchCancellation, SearchMatcher, SearchProgress, SearchProgressSnapshot,

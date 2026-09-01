@@ -40,7 +40,7 @@ use crate::{
         ThemePreference, normalize_search_history,
     },
 };
-use vclogg_core::IndexCacheInfo;
+use vclogg_data::IndexCacheInfo;
 
 const GITHUB_REPOSITORY_URL: &str = "https://github.com/zhaiyanqi/vclogg2";
 
@@ -1119,7 +1119,7 @@ impl SettingsDialog {
         let directory = self.cache_dir.clone();
         self.cache_task = Some(cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { vclogg_core::index_cache_info(directory) })
+                .background_spawn(async move { vclogg_data::index_cache_info(directory) })
                 .await;
             _ = this.update(cx, |this, cx| {
                 this.cache_busy = false;
@@ -1155,7 +1155,7 @@ impl SettingsDialog {
         let directory = self.cache_dir.clone();
         self.cache_task = Some(cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { vclogg_core::clear_index_cache(directory) })
+                .background_spawn(async move { vclogg_data::clear_index_cache(directory) })
                 .await;
             _ = this.update(cx, |this, cx| {
                 this.cache_busy = false;

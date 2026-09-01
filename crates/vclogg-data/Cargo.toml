@@ -1,0 +1,15 @@
+[package]
+name = "vclogg-data"
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+
+[lints]
+workspace = true

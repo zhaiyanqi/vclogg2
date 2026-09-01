@@ -35,6 +35,7 @@ trash.workspace = true
 url.workspace = true
 uuid.workspace = true
 vclogg-core = { path = "../vclogg-core" }
+vclogg-data = { path = "../vclogg-data" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true

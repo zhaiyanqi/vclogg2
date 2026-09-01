@@ -7556,6 +7556,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "vclogg-data"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "vclogg2"
 version = "0.0.0"
 dependencies = [
@@ -7583,6 +7590,7 @@ dependencies = [
  "url",
  "uuid",
  "vclogg-core",
+ "vclogg-data",
  "windows-sys 0.61.2",
 ]
 

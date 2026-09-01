@@ -1,30 +1,27 @@
 # 架构说明
 
-VCLogg2 采用按能力分层的 Rust workspace：
+VCLogg2 采用 `core / data / app` 三层、按能力继续分区的 Rust workspace。依赖只允许从上层指向下层或稳定边界，禁止反向依赖：
 
 ```text
-vclogg-app
-├─ actions：桌面命令与键绑定
-├─ app_log：运行时日志过滤、有界内存缓冲与快照导出
-├─ crash_report：全局 panic hook、强制 Backtrace、本地报告落盘与有界保留
-├─ single_instance：三平台单进程锁、命名管道/Unix socket 请求转交与启动参数编解码
-├─ workspace：窗口、标签、焦点和后台任务编排
-├─ log_table：日志与结果的虚拟化 DataTable delegate
-├─ result_export：结果快照的流式写入、同目录暂存与平台原子替换
-├─ state_store：SQLite/WAL 状态库与事务化最近文件访问
-├─ color_labels：颜色标签定义、文件级规则序列化与预编译匹配器
-├─ predefined_filters：UUID 分支模型、逐字段三方合并、查询段组合、兼容导入与 v5 JSON 导出
-├─ predefined_filters_dialog：retained Input/Switch 草稿、单一二级路由、同步状态、冲突解决与后台文件选择任务
-├─ search_autocomplete：顶层正则分支解析、历史/过滤器候选去重与当前片段替换
-├─ selectable_log_text：StyledText 高亮与 Root 窗口文字选择协议的桥接元素及有界参与者缓存
-├─ gpui-component 组件与主题化呈现
-└─ vclogg-core
-   ├─ document：有界安全预览、分块校验文件快照、强身份索引缓存、行起点索引与按需解码
-   └─ search：保留查询原文的普通多关键词和字节正则搜索
+vclogg-app                    # GPUI 应用外壳、展示状态与交互编排
+├─ workspace                  # 窗口、标签、焦点和后台任务编排
+├─ log/global_search_table    # 虚拟列表、选择、高亮、行高和换行呈现
+├─ dialogs/actions            # 对话框、桌面命令与键绑定
+└─ presentation               # 主题、文字选择和界面性能状态
+        │
+        ├───────────────┐
+        ▼               ▼
+vclogg-core          vclogg-data
+# 文件与搜索逻辑       # 持久化与缓存生命周期
+├─ document           ├─ index_cache
+├─ search             └─ state_store（迁移目标）
+└─ cancellation
 ```
 
-- `vclogg-app` 是应用外壳和界面呈现所有者，对外构建 `vclogg2`，不承载文件扫描算法。
-- `vclogg-core` 是领域行为所有者，不依赖 GPUI，也不包含界面状态。
+- `vclogg-core` 负责文件读取、行索引建立、搜索执行与结果集合运算；它不依赖 GPUI，也不包含持久化或界面状态。
+- `vclogg-data` 负责 SQLite 持久化、缓存生命周期和可恢复状态的存取；它不依赖 GPUI，也不决定界面如何呈现这些状态。
+- `vclogg-app` 是应用外壳和界面呈现所有者，对外构建 `vclogg2`；用户高亮、选择、选词、字号、行高、换行、标记与交互状态都在这一层组合，渲染路径不直接执行文件 I/O。
+- app 可以组合 core 与 data；core 不依赖 data 或 app，data 不依赖 app。跨层传递稳定 DTO、领域 ID、命令结果或小型协议，不共享 GPUI 实体。
 - `crash_report` 在任何单实例、窗口或后台任务初始化之前安装全局 panic hook。每次 Rust panic 都在本机应用数据目录的 `VCLogg2/crashes` 下以 `create_new` 写入独立报告，包含版本、平台、进程、线程、源码位置及不依赖环境变量的完整 Backtrace；报告刷新到磁盘后继续调用原有 hook，保留 Debug 控制台输出。目录不可用时回退系统临时目录，正常启动只保留最近 20 份。发行构建生成最小行号调试信息，交付脚本按版本生成独立符号包供开发侧崩溃分析留存；PDB 不进入用户分发包或安装目录。
 - `app_log` 在其他运行时模块初始化前注册唯一 `log::Log`，以原子等级开关同时控制标准错误输出和内存收集。首次默认值由构建配置决定：Debug 为 Debug，Release 为 Error；用户设置写入 `app_settings` 并可选择 Off/Error/Warn/Info/Debug/Trace。缓冲按 20000 条与 8 MiB 双重上限淘汰旧记录，导出在后台抓取一致快照并写入带版本、构建和本地导出时间的文本文件。
 - `StateStore` 在本机应用数据目录的 `VCLogg2/sessions/vclogg2-state.db` 使用 SQLite WAL。启动查询和写入都在后台执行；数据库不可用只降级持久状态，不阻塞打开日志。成功打开的多文件批次在单一事务内受路径唯一约束并递增 revision；每个标签另持有与当前界面对应的基准快照，检查点以 `BEGIN IMMEDIATE` 读取最新 revision。基准过期时只把“基准到本次界面快照”之间实际变化的字段覆盖到最新记录，然后在同一事务写入下一修订；回执仅以更高 revision 推进本窗口基准，且基准内容保持为本窗口已提交意图，从而不会把未呈现在本窗口的远端字段误当成本地后续编辑。可空 `custom_title` 随文件会话保存并由幂等字段迁移补入旧库，空值始终回退磁盘文件名。能无损表示为 Unicode 的路径继续沿用旧 TEXT 主键；仅对非 Unicode 原生路径使用带平台标记的无损编码，最近文件、工作区恢复、会话和全局搜索参与偏好共用同一编解码边界；Windows 运行期路径键也直接保留原始 UTF-16 单元，只折叠既有的 ASCII 大小写语义，不让非法代理项经有损字符串化合并身份。文件标记从界面快照、冲突合并到 SQLite 字段始终保持 `CompressedRows`，新记录写入带版本前缀的 RoaringTreemap 编码，旧逗号行号列表在读取时直接压入位图，不先展开为行数组。行索引缓存独立存放于系统缓存目录，不进入 SQLite 会话身份。

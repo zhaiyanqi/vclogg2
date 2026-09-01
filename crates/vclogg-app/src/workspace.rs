@@ -3973,7 +3973,7 @@ impl Workspace {
                 };
                 let directory = cache_root.join("VCLogg2").join("index");
                 if let Err(error) = cx
-                    .background_spawn(async move { vclogg_core::cleanup_index_cache(directory) })
+                    .background_spawn(async move { vclogg_data::cleanup_index_cache(directory) })
                     .await
                 {
                     log::warn!("索引缓存自动维护失败：{error:#}");
