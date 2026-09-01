@@ -11740,8 +11740,9 @@ impl Workspace {
                         matcher.is_some(),
                         &open_document_paths,
                     );
-                    let outcomes = prepare_paths_bounded(
+                    let outcomes = prepare_paths_bounded_while(
                         scan_paths,
+                        || !cancellation_for_search.is_cancelled(),
                         |path| -> Result<Option<(Arc<LogDocument>, SearchResult)>> {
                         if cancellation_for_search.is_cancelled() {
                             return Ok(None);
@@ -18549,9 +18550,23 @@ where
     T: Send,
     F: Fn(&std::path::Path) -> T + Sync,
 {
+    prepare_paths_bounded_while(paths, || true, operation)
+}
+
+fn prepare_paths_bounded_while<T, F, C>(
+    paths: Vec<PathBuf>,
+    should_continue: C,
+    operation: F,
+) -> Vec<(PathBuf, T)>
+where
+    T: Send,
+    F: Fn(&std::path::Path) -> T + Sync,
+    C: Fn() -> bool + Sync,
+{
     if paths.len() <= 1 {
         return paths
             .into_iter()
+            .take_while(|_| should_continue())
             .map(|path| {
                 let result = operation(&path);
                 (path, result)
@@ -18569,17 +18584,20 @@ where
     }
     std::thread::scope(|scope| {
         let operation = &operation;
+        let should_continue = &should_continue;
         let handles = worker_paths
             .into_iter()
             .map(|worker_paths| {
                 scope.spawn(move || {
-                    worker_paths
-                        .into_iter()
-                        .map(|(path_ix, path)| {
-                            let result = operation(&path);
-                            (path_ix, path, result)
-                        })
-                        .collect::<Vec<_>>()
+                    let mut prepared = Vec::new();
+                    for (path_ix, path) in worker_paths {
+                        if !should_continue() {
+                            break;
+                        }
+                        let result = operation(&path);
+                        prepared.push((path_ix, path, result));
+                    }
+                    prepared
                 })
             })
             .collect::<Vec<_>>();
@@ -19029,7 +19047,10 @@ mod document_prepare_performance_tests {
 
     use vclogg_core::LogDocument;
 
-    use super::{directory_search_scan_paths, path_match_key, prepare_paths_bounded};
+    use super::{
+        directory_search_scan_paths, path_match_key, prepare_paths_bounded,
+        prepare_paths_bounded_while,
+    };
 
     struct TemporaryDirectory(PathBuf);
 
@@ -19067,6 +19088,23 @@ mod document_prepare_performance_tests {
                 .map(|path| (path.clone(), path))
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn cancelled_path_mapping_does_not_start_pending_work() {
+        let cancellation = vclogg_core::SearchCancellation::default();
+        cancellation.cancel();
+        let paths = (0..100)
+            .map(|index| PathBuf::from(format!("file-{index:03}.log")))
+            .collect::<Vec<_>>();
+
+        let prepared = prepare_paths_bounded_while(
+            paths,
+            || !cancellation.is_cancelled(),
+            |_| panic!("cancelled preparation must not start another file"),
+        );
+
+        assert!(prepared.is_empty());
     }
 
     #[test]
