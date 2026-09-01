@@ -55,8 +55,8 @@ use gpui_component::{
 };
 use rayon::prelude::{IntoParallelIterator as _, ParallelIterator as _};
 use vclogg_core::{
-    CompressedRows, LogDocument, PendingIndexCacheWrite, SearchCancellation, SearchMatcher,
-    SearchQuery, SearchResult, SearchRun, search_with_compiled_matcher,
+    CompressedRows, LinePreviewReader, LogDocument, PendingIndexCacheWrite, SearchCancellation,
+    SearchMatcher, SearchQuery, SearchResult, SearchRun, search_with_compiled_matcher,
 };
 
 use crate::{
@@ -2664,6 +2664,7 @@ pub struct Workspace {
     row_drag_bounds: BTreeMap<(u64, WrappedRegion), Bounds<Pixels>>,
     row_drag_selection: Option<RowDragSelection>,
     row_drag_frame_scheduled: bool,
+    visible_line_tasks: BTreeMap<(u64, WrappedRegion), Task<()>>,
     open_task: Option<Task<()>>,
     pending_external_paths: Vec<PathBuf>,
     searches: SearchController,
@@ -3776,6 +3777,7 @@ impl Workspace {
             row_drag_bounds: BTreeMap::new(),
             row_drag_selection: None,
             row_drag_frame_scheduled: false,
+            visible_line_tasks: BTreeMap::new(),
             open_task: None,
             pending_external_paths: Vec::new(),
             searches: SearchController::default(),
@@ -7978,6 +7980,8 @@ impl Workspace {
         self.documents.retain(|tab| !document_ids.contains(&tab.id));
         self.row_drag_bounds
             .retain(|(tab_id, _), _| !document_ids.contains(tab_id));
+        self.visible_line_tasks
+            .retain(|(document_id, _), _| *document_id == 0 || !document_ids.contains(document_id));
         if self.tabs.is_empty() {
             self.document_tab_scroll = ScrollHandle::new();
             self.pending_document_tab_reveal.set(None);
@@ -12453,6 +12457,92 @@ impl Workspace {
         }
     }
 
+    fn schedule_local_visible_lines(
+        &mut self,
+        document_id: u64,
+        region: WrappedRegion,
+        visible_range: Range<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.documents.iter().find(|tab| tab.id == document_id) else {
+            return;
+        };
+        let table = if region == WrappedRegion::Results {
+            tab.result_table.clone()
+        } else {
+            tab.log_table.clone()
+        };
+        let (request, document) = {
+            let table = table.read(cx);
+            let delegate = table.delegate();
+            let Some(request) = delegate.request_visible_rows(visible_range) else {
+                return;
+            };
+            (request, delegate.visible_document())
+        };
+        let task = cx.spawn(async move |this, cx| {
+            let loaded = cx
+                .background_spawn(async move {
+                    let mut reader = LinePreviewReader::default();
+                    request.load(|source_row, max_bytes| {
+                        reader.line_preview(&document, *source_row, max_bytes)
+                    })
+                })
+                .await;
+            _ = this.update(cx, |_, cx| {
+                table.update(cx, |table, cx| {
+                    if table.delegate().install_visible_lines(loaded) {
+                        cx.notify();
+                    }
+                });
+                cx.notify();
+            });
+        });
+        self.visible_line_tasks.insert((document_id, region), task);
+    }
+
+    fn schedule_global_visible_lines(
+        &mut self,
+        visible_range: Range<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        let table = self.global_table.clone();
+        let (request, documents) = {
+            let table = table.read(cx);
+            let delegate = table.delegate();
+            let Some(request) = delegate.request_visible_rows(visible_range) else {
+                return;
+            };
+            let documents = delegate.visible_documents(&request);
+            (request, documents)
+        };
+        let task = cx.spawn(async move |this, cx| {
+            let loaded = cx
+                .background_spawn(async move {
+                    let mut readers = BTreeMap::<u64, LinePreviewReader>::new();
+                    request.load(|(document_id, source_row), max_bytes| {
+                        let document = documents.get(document_id)?;
+                        readers.entry(*document_id).or_default().line_preview(
+                            document,
+                            *source_row,
+                            max_bytes,
+                        )
+                    })
+                })
+                .await;
+            _ = this.update(cx, |_, cx| {
+                table.update(cx, |table, cx| {
+                    if table.delegate().install_visible_lines(loaded) {
+                        cx.notify();
+                    }
+                });
+                cx.notify();
+            });
+        });
+        self.visible_line_tasks
+            .insert((0, WrappedRegion::GlobalResults), task);
+    }
+
     fn prime_local_wrapped_frame(
         &mut self,
         tab_ix: usize,
@@ -12495,14 +12585,19 @@ impl Workspace {
                 table.read(cx).delegate().row_count(),
             )
         });
-        let (count, content_revision, outer_width, font_size, font_family, rows) = {
+        let (count, range) = {
             let table = table.read(cx);
             let delegate = table.delegate();
             let count = delegate.row_count();
             let range = wrapped_range.unwrap_or_else(|| {
                 Self::first_wrapped_frame_range(table.visible_range().rows().clone(), count)
             });
-            delegate.prepare_visible_rows(range.clone());
+            (count, range)
+        };
+        self.schedule_local_visible_lines(document_id, region, range.clone(), cx);
+        let (content_revision, outer_width, font_size, font_family, rows) = {
+            let table = table.read(cx);
+            let delegate = table.delegate();
             let font_size = delegate.log_font_size();
             let line_number_width = if delegate.show_line_numbers() {
                 px(delegate.line_number_width() as f32)
@@ -12520,7 +12615,6 @@ impl Workspace {
                 })
                 .collect::<Vec<_>>();
             (
-                count,
                 delegate.content_revision(),
                 outer_width,
                 font_size,
@@ -12594,14 +12688,19 @@ impl Workspace {
                 self.global_table.read(cx).delegate().rows_len(),
             )
         });
-        let (count, content_revision, outer_width, font_size, font_family, rows) = {
+        let (count, range) = {
             let table = self.global_table.read(cx);
             let delegate = table.delegate();
             let count = delegate.rows_len();
             let range = wrapped_range.unwrap_or_else(|| {
                 Self::first_wrapped_frame_range(table.visible_range().rows().clone(), count)
             });
-            delegate.prepare_visible_rows(range.clone());
+            (count, range)
+        };
+        self.schedule_global_visible_lines(range.clone(), cx);
+        let (content_revision, outer_width, font_size, font_family, rows) = {
+            let table = self.global_table.read(cx);
+            let delegate = table.delegate();
             let font_size = delegate.log_font_size();
             let outer_width = bounds.map_or(px(0.), |bounds| {
                 (bounds.size.width
@@ -12616,7 +12715,6 @@ impl Workspace {
                 })
                 .collect::<Vec<_>>();
             (
-                count,
                 delegate.content_revision(),
                 outer_width,
                 font_size,
@@ -12690,10 +12788,10 @@ impl Workspace {
             base_height,
             count,
         );
+        self.schedule_global_visible_lines(visible_range.clone(), cx);
         let (outer_width, font_size, font_family, rows) = {
             let table = self.global_table.read(cx);
             let delegate = table.delegate();
-            delegate.prepare_visible_rows(visible_range.clone());
             let font_size = delegate.log_font_size();
             let outer_width = if let Some(width) = self.global_viewport.wrapped_layout_width() {
                 width
@@ -16177,10 +16275,7 @@ impl Workspace {
         } else {
             self.documents[tab_ix].log_table.clone()
         };
-        table
-            .read(cx)
-            .delegate()
-            .prepare_visible_rows(visible_range.clone());
+        self.schedule_local_visible_lines(document_id, region, visible_range.clone(), cx);
         let (
             show_line_numbers,
             show_row_separators,
@@ -17542,10 +17637,7 @@ impl Workspace {
     ) -> Vec<AnyElement> {
         let _performance_scope =
             crate::ui_performance::scope("Workspace::render_wrapped_global_rows");
-        self.global_table
-            .read(cx)
-            .delegate()
-            .prepare_visible_rows(visible_range.clone());
+        self.schedule_global_visible_lines(visible_range.clone(), cx);
         let (
             font_size,
             font_family,

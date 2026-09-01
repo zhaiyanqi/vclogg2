@@ -32,6 +32,42 @@ struct CachedLogLine {
     retained_bytes: usize,
 }
 
+pub(crate) struct VisibleLineLoadRequest<K> {
+    revision: u64,
+    keys: Vec<K>,
+    source_limits: Vec<usize>,
+}
+
+impl<K> VisibleLineLoadRequest<K> {
+    pub(crate) fn keys(&self) -> &[K] {
+        &self.keys
+    }
+
+    pub(crate) fn load(
+        self,
+        mut load: impl FnMut(&K, usize) -> Option<LinePreview>,
+    ) -> VisibleLineLoadResult<K> {
+        let lines = self
+            .keys
+            .into_iter()
+            .zip(self.source_limits)
+            .filter_map(|(key, source_limit)| {
+                let preview = load(&key, source_limit)?;
+                Some((key, preview))
+            })
+            .collect();
+        VisibleLineLoadResult {
+            revision: self.revision,
+            lines,
+        }
+    }
+}
+
+pub(crate) struct VisibleLineLoadResult<K> {
+    revision: u64,
+    lines: Vec<(K, LinePreview)>,
+}
+
 impl CachedLogLine {
     fn from_preview(preview: LinePreview) -> Self {
         let (text, truncated) = preview.into_parts();
@@ -47,10 +83,10 @@ impl CachedLogLine {
 ///
 /// Highlighting, selection, markers, typography, and wrapping are deliberately excluded so a
 /// presentation-only change never causes the source file to be read again. Direct consumers such
-/// as copy commands read the authoritative document directly. Visible rows are loaded before
-/// overscan rows, and retained preview payloads never exceed the cache byte budget. The prepared
-/// window is also the only source-read authority: incidental queries outside that window return
-/// no text, while an uncached row inside it may still return a bounded transient preview.
+/// as copy commands read the authoritative document directly. The UI thread only publishes a
+/// revisioned visible-window request; background tasks load visible rows before overscan rows and
+/// install them if that revision is still current. Retained preview payloads never exceed the
+/// cache byte budget, and incidental queries never trigger source I/O.
 pub(crate) struct VisibleLineStore<K> {
     lines: RefCell<BTreeMap<K, CachedLogLine>>,
     prepared_keys: RefCell<BTreeSet<K>>,
@@ -59,6 +95,7 @@ pub(crate) struct VisibleLineStore<K> {
     overscan: Cell<usize>,
     max_line_source_bytes: Cell<usize>,
     max_cache_retained_bytes: Cell<usize>,
+    revision: Cell<u64>,
 }
 
 impl<K> Default for VisibleLineStore<K> {
@@ -71,6 +108,7 @@ impl<K> Default for VisibleLineStore<K> {
             overscan: Cell::new(12),
             max_line_source_bytes: Cell::new(DEFAULT_MAX_LINE_SOURCE_BYTES),
             max_cache_retained_bytes: Cell::new(DEFAULT_MAX_CACHE_RETAINED_BYTES),
+            revision: Cell::new(1),
         }
     }
 }
@@ -83,6 +121,7 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
     }
 
     pub(crate) fn invalidate_window(&self) {
+        self.revision.set(self.revision.get().saturating_add(1));
         self.window.set(None);
         self.prepared_keys.borrow_mut().clear();
         self.prepared_priority.borrow_mut().clear();
@@ -98,29 +137,19 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
         self.invalidate_window();
     }
 
-    pub(crate) fn line(
-        &self,
-        key: K,
-        load: impl FnOnce(usize) -> Option<LinePreview>,
-    ) -> Option<LogText> {
+    pub(crate) fn line(&self, key: K) -> Option<LogText> {
         if !self.prepared_keys.borrow().contains(&key) {
             return None;
         }
-        if let Some(line) = self.lines.borrow().get(&key) {
-            return Some(line.text.clone());
-        }
-        let byte_budget = self.max_cache_retained_bytes.get();
-        let source_limit = self.max_line_source_bytes.get().min(byte_budget);
-        Some(CachedLogLine::from_preview(load(source_limit)?).text)
+        self.lines.borrow().get(&key).map(|line| line.text.clone())
     }
 
-    pub(crate) fn prepare_visible_rows(
+    pub(crate) fn request_visible_rows(
         &self,
         visible_range: Range<usize>,
         row_count: usize,
         mut key_for_row: impl FnMut(usize) -> Option<K>,
-        mut load: impl FnMut(&K, usize) -> Option<LinePreview>,
-    ) {
+    ) -> Option<VisibleLineLoadRequest<K>> {
         let visible_start = visible_range.start.min(row_count);
         let visible_end = visible_range.end.min(row_count).max(visible_start);
         let start = visible_start.saturating_sub(self.overscan.get());
@@ -142,8 +171,10 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
             }
         }
         if self.window.get() == Some(window) && *self.prepared_priority.borrow() == priority_keys {
-            return;
+            return None;
         }
+        let revision = self.revision.get().saturating_add(1);
+        self.revision.set(revision);
         self.window.set(Some(window));
         *self.prepared_priority.borrow_mut() = priority_keys.clone();
         *self.prepared_keys.borrow_mut() = priority_keys.iter().cloned().collect();
@@ -151,25 +182,80 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
         let byte_budget = self.max_cache_retained_bytes.get();
         let mut previous = std::mem::take(&mut *self.lines.borrow_mut());
         let mut next = BTreeMap::new();
+        let mut reserved_bytes = 0usize;
+        let mut keys = Vec::new();
+        let mut source_limits = Vec::new();
+        for (key_ix, key) in priority_keys.iter().enumerate() {
+            if reserved_bytes >= byte_budget {
+                break;
+            }
+            let remaining = byte_budget - reserved_bytes;
+            if let Some(line) = previous.remove(key) {
+                if line.retained_bytes <= remaining {
+                    reserved_bytes = reserved_bytes.saturating_add(line.retained_bytes);
+                    next.insert(key.clone(), line);
+                }
+            } else {
+                let remaining_keys = priority_keys.len().saturating_sub(key_ix).max(1);
+                let source_limit = self
+                    .max_line_source_bytes
+                    .get()
+                    .min(remaining.div_ceil(remaining_keys));
+                keys.push(key.clone());
+                source_limits.push(source_limit);
+                reserved_bytes = reserved_bytes.saturating_add(source_limit);
+            }
+        }
+        *self.lines.borrow_mut() = next;
+        (!keys.is_empty()).then_some(VisibleLineLoadRequest {
+            revision,
+            keys,
+            source_limits,
+        })
+    }
+
+    pub(crate) fn install_loaded(&self, loaded: VisibleLineLoadResult<K>) -> bool {
+        if loaded.revision != self.revision.get() {
+            return false;
+        }
+        let mut loaded = loaded
+            .lines
+            .into_iter()
+            .map(|(key, preview)| (key, CachedLogLine::from_preview(preview)))
+            .collect::<BTreeMap<_, _>>();
+        let mut previous = std::mem::take(&mut *self.lines.borrow_mut());
+        let mut next = BTreeMap::new();
+        let byte_budget = self.max_cache_retained_bytes.get();
         let mut retained_bytes = 0usize;
-        for key in priority_keys {
+        for key in self.prepared_priority.borrow().iter() {
             if retained_bytes >= byte_budget {
                 break;
             }
             let remaining = byte_budget - retained_bytes;
-            let line = previous.remove(&key).or_else(|| {
-                let source_limit = self.max_line_source_bytes.get().min(remaining);
-                load(&key, source_limit).map(CachedLogLine::from_preview)
-            });
+            let line = previous.remove(key).or_else(|| loaded.remove(key));
             let Some(line) = line else {
                 continue;
             };
             if line.retained_bytes <= remaining {
                 retained_bytes = retained_bytes.saturating_add(line.retained_bytes);
-                next.insert(key, line);
+                next.insert(key.clone(), line);
             }
         }
         *self.lines.borrow_mut() = next;
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prepare_visible_rows(
+        &self,
+        visible_range: Range<usize>,
+        row_count: usize,
+        key_for_row: impl FnMut(usize) -> Option<K>,
+        load: impl FnMut(&K, usize) -> Option<LinePreview>,
+    ) {
+        if let Some(request) = self.request_visible_rows(visible_range, row_count, key_for_row) {
+            self.install_loaded(request.load(load));
+        }
     }
 }
 
@@ -258,7 +344,7 @@ mod tests {
             },
         );
 
-        assert_eq!(*loaded.borrow(), [10, 11]);
+        assert_eq!(*loaded.borrow(), [10, 11, 11]);
         assert_eq!(
             cache.lines.borrow().keys().copied().collect::<Vec<_>>(),
             [11]
@@ -275,9 +361,7 @@ mod tests {
             Some(LinePreview::new("abcd", true))
         });
 
-        let line = cache
-            .line(0, |_| panic!("the prepared row must be cached"))
-            .expect("the preview should load");
+        let line = cache.line(0).expect("the preview should load");
 
         assert_eq!(line.source().as_ref(), "abcd…");
         assert!(line.source().ends_with('…'));
@@ -297,13 +381,7 @@ mod tests {
         });
         assert_eq!(*loaded.borrow(), vec![10, 11]);
 
-        assert!(
-            cache
-                .line(0, |_| panic!(
-                    "a row outside the virtual window must not be read"
-                ))
-                .is_none()
-        );
+        assert!(cache.line(0).is_none());
         assert_eq!(
             cache.lines.borrow().keys().copied().collect::<Vec<_>>(),
             [10, 11]
@@ -311,7 +389,7 @@ mod tests {
 
         for key in [10, 11] {
             cache
-                .line(key, |_| panic!("prepared rows must remain cached"))
+                .line(key)
                 .expect("the prepared row should remain available");
         }
     }
@@ -329,7 +407,7 @@ mod tests {
             Some(LinePreview::new("line", false))
         });
 
-        assert_eq!(*loaded.borrow(), vec![(1, 4)]);
+        assert_eq!(*loaded.borrow(), vec![(1, 2), (0, 1), (2, 1)]);
         assert_eq!(cache.lines.borrow().len(), 1);
         assert!(cache.lines.borrow().contains_key(&1));
         assert!(
@@ -344,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn uncached_rows_inside_the_prepared_window_can_read_a_transient_preview() {
+    fn uncached_rows_inside_the_prepared_window_wait_for_async_installation() {
         let cache = VisibleLineStore::<usize>::default();
         cache.set_overscan(0);
         cache.max_line_source_bytes.set(4);
@@ -354,13 +432,32 @@ mod tests {
             Some(LinePreview::new(format!("row {source_row}"), false))
         });
 
-        let line = cache
-            .line(1, |limit| {
-                assert_eq!(limit, 4);
-                Some(LinePreview::new("next", true))
-            })
-            .expect("the visible row may be read without entering the cache");
-        assert_eq!(line.source().as_ref(), "next…");
+        let line = cache.line(1);
+        assert!(line.is_none());
         assert!(!cache.lines.borrow().contains_key(&1));
+    }
+
+    #[test]
+    fn stale_background_results_cannot_replace_a_newer_visible_window() {
+        let cache = VisibleLineStore::<usize>::default();
+        cache.set_overscan(0);
+        let first = cache
+            .request_visible_rows(0..1, 2, Some)
+            .expect("首个窗口应请求正文");
+        let first =
+            first.load(|source_row, _| Some(LinePreview::new(format!("line {source_row}"), false)));
+        let second = cache
+            .request_visible_rows(1..2, 2, Some)
+            .expect("滚动后的窗口应请求正文");
+
+        assert!(!cache.install_loaded(first));
+        assert!(cache.line(0).is_none());
+        assert!(cache.install_loaded(second.load(|source_row, _| {
+            Some(LinePreview::new(format!("line {source_row}"), false))
+        })));
+        assert_eq!(
+            cache.line(1).expect("新窗口正文应被安装").source().as_ref(),
+            "line 1"
+        );
     }
 }

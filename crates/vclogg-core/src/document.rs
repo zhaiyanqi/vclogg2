@@ -687,6 +687,16 @@ pub struct LinePreview {
     truncated: bool,
 }
 
+/// Task-local reader for a sequence of visible line previews.
+///
+/// It retains at most the current verified source block, so adjacent rows from transient
+/// directory-search snapshots share one positional read without growing document-owned caches.
+#[derive(Default)]
+pub struct LinePreviewReader {
+    content_digest: Option<[u8; 32]>,
+    verified_block: Option<(usize, Option<Arc<[u8]>>)>,
+}
+
 impl LinePreview {
     pub fn new(text: impl Into<String>, truncated: bool) -> Self {
         Self {
@@ -706,6 +716,100 @@ impl LinePreview {
     pub fn into_parts(self) -> (String, bool) {
         (self.text, self.truncated)
     }
+}
+
+impl LinePreviewReader {
+    pub fn line_preview(
+        &mut self,
+        document: &LogDocument,
+        source_row: usize,
+        max_bytes: usize,
+    ) -> Option<LinePreview> {
+        if self.content_digest != Some(document.content_digest) {
+            self.content_digest = Some(document.content_digest);
+            self.verified_block = None;
+        }
+        let row_ix = document.local_row(source_row)?;
+        let range = document.line_byte_range_at_local_row(row_ix)?;
+        let read_end = range
+            .end
+            .min(range.start.saturating_add(max_bytes).saturating_add(4));
+        let complete_line = read_end == range.end;
+        match document.bytes.as_ref() {
+            DocumentBytes::Empty => {
+                (range.is_empty()).then(|| decode_line_preview(document, &[], max_bytes, true))
+            }
+            DocumentBytes::Owned(bytes) => Some(decode_line_preview(
+                document,
+                bytes.get(range.start..read_end)?,
+                max_bytes,
+                complete_line,
+            )),
+            DocumentBytes::Verified(bytes) => {
+                if range.start == read_end {
+                    return Some(decode_line_preview(document, &[], max_bytes, complete_line));
+                }
+                let first_block = range.start / APPEND_INTEGRITY_BLOCK_BYTES;
+                let last_block = (read_end - 1) / APPEND_INTEGRITY_BLOCK_BYTES;
+                if first_block == last_block {
+                    let block = self.load_verified_block(bytes, first_block)?;
+                    let block_start = first_block.saturating_mul(APPEND_INTEGRITY_BLOCK_BYTES);
+                    return Some(decode_line_preview(
+                        document,
+                        block.get(range.start - block_start..read_end - block_start)?,
+                        max_bytes,
+                        complete_line,
+                    ));
+                }
+
+                let mut joined = Vec::with_capacity(read_end - range.start);
+                for block_ix in first_block..=last_block {
+                    let block = self.load_verified_block(bytes, block_ix)?;
+                    let block_start = block_ix.saturating_mul(APPEND_INTEGRITY_BLOCK_BYTES);
+                    let start = range.start.saturating_sub(block_start).min(block.len());
+                    let end = read_end.saturating_sub(block_start).min(block.len());
+                    joined.extend_from_slice(block.get(start..end)?);
+                }
+                Some(decode_line_preview(
+                    document,
+                    &joined,
+                    max_bytes,
+                    complete_line,
+                ))
+            }
+        }
+    }
+
+    fn load_verified_block(
+        &mut self,
+        bytes: &VerifiedFileBytes,
+        block_ix: usize,
+    ) -> Option<Arc<[u8]>> {
+        if self
+            .verified_block
+            .as_ref()
+            .is_none_or(|(cached_ix, _)| *cached_ix != block_ix)
+        {
+            self.verified_block = Some((block_ix, bytes.load_verified_block(block_ix, false)));
+        }
+        self.verified_block.as_ref()?.1.clone()
+    }
+}
+
+fn decode_line_preview(
+    document: &LogDocument,
+    bytes: &[u8],
+    max_bytes: usize,
+    complete_line: bool,
+) -> LinePreview {
+    let bytes = if complete_line {
+        document.encoding.trim_line_bytes(bytes)
+    } else {
+        bytes
+    };
+    let mut preview = document.encoding.decode_preview(bytes, max_bytes);
+    preview.truncated |= !complete_line;
+    preview
 }
 
 impl PendingIndexCacheWrite {
@@ -1316,19 +1420,7 @@ impl LogDocument {
 
     /// Decode a bounded prefix of one logical line for interactive display.
     pub fn line_preview(&self, source_row: usize, max_bytes: usize) -> Option<LinePreview> {
-        let row_ix = self.local_row(source_row)?;
-        let range = self.line_byte_range_at_local_row(row_ix)?;
-        let read_end = range
-            .end
-            .min(range.start.saturating_add(max_bytes).saturating_add(4));
-        let mut bytes = self.bytes.read_range(range.start..read_end)?;
-        if read_end == range.end {
-            let trimmed_len = self.encoding.trim_line_bytes(&bytes).len();
-            bytes.truncate(trimmed_len);
-        }
-        let mut preview = self.encoding.decode_preview(&bytes, max_bytes);
-        preview.truncated |= read_end < range.end;
-        Some(preview)
+        LinePreviewReader::default().line_preview(self, source_row, max_bytes)
     }
 
     pub(crate) fn line_bytes(&self, source_row: usize) -> Option<DocumentLineBytes<'_>> {
@@ -2781,7 +2873,7 @@ mod source_snapshot_tests {
 
     use super::{
         APPEND_INTEGRITY_BLOCK_BYTES, DocumentBytes, DocumentRefreshKind, FileEncoding,
-        LogDocument, build_file_index_with_integrity_while, build_line_index,
+        LinePreviewReader, LogDocument, build_file_index_with_integrity_while, build_line_index,
         build_line_index_while, calculate_integrity_blocks, read_file_identity,
     };
 
@@ -3082,6 +3174,32 @@ mod source_snapshot_tests {
         assert_eq!(projected.line(2).as_deref(), Some("gamma"));
         assert!(projected.same_source_snapshot(&document));
         assert_eq!(projected.line_ends.as_ref().map(|ends| ends.len()), Some(2));
+        _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn task_local_preview_reader_reuses_a_transient_verified_block() {
+        let directory = test_directory("task-local-preview-block");
+        let path = directory.join("source.log");
+        fs::write(&path, b"alpha\nbeta\n").expect("应能写入预览读取器测试日志");
+        let document = LogDocument::open(&path).expect("应能打开预览读取器测试日志");
+        document.release_source_handle();
+        let mut reader = LinePreviewReader::default();
+
+        assert_eq!(
+            reader
+                .line_preview(&document, 0, 64)
+                .map(|preview| preview.into_parts()),
+            Some(("alpha".to_string(), false))
+        );
+        fs::remove_file(&path).expect("首行读取后应已关闭瞬时源句柄");
+        assert_eq!(
+            reader
+                .line_preview(&document, 1, 64)
+                .map(|preview| preview.into_parts()),
+            Some(("beta".to_string(), false))
+        );
+        assert!(document.line_preview(1, 64).is_none());
         _ = fs::remove_dir_all(directory);
     }
 

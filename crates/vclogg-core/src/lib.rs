@@ -7,7 +7,8 @@ mod search;
 
 pub use cancellation::CancellationToken;
 pub use document::{
-    DocumentMetadata, DocumentRefreshKind, LinePreview, LogDocument, PendingIndexCacheWrite,
+    DocumentMetadata, DocumentRefreshKind, LinePreview, LinePreviewReader, LogDocument,
+    PendingIndexCacheWrite,
 };
 pub use index_cache::{
     IndexCacheCleanupResult, IndexCacheClearResult, IndexCacheInfo, cleanup_index_cache,

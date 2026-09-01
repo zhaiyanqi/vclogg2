@@ -8,10 +8,10 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, Bounds, Context, Div, Element, GlobalElementId, Hsla, InspectorElementId,
-    InteractiveElement as _, IntoElement, LayoutId, MouseButton, MouseDownEvent,
-    ParentElement as _, Pixels, RenderOnce, SharedString, Stateful, Styled as _, StyledText,
-    Window, div, prelude::FluentBuilder as _, px, svg,
+    AnyElement, App, AppContext as _, Bounds, Context, Div, Element, GlobalElementId, Hsla,
+    InspectorElementId, InteractiveElement as _, IntoElement, LayoutId, MouseButton,
+    MouseDownEvent, ParentElement as _, Pixels, RenderOnce, SharedString, Stateful, Styled as _,
+    StyledText, Task, Window, div, prelude::FluentBuilder as _, px, svg,
 };
 use gpui_base::{GlobalState, TextSelection};
 use gpui_component::{
@@ -20,7 +20,7 @@ use gpui_component::{
     theme::try_parse_color,
     v_flex,
 };
-use vclogg_core::{CompressedRows, LogDocument, SearchMatcher};
+use vclogg_core::{CompressedRows, LinePreviewReader, LogDocument, SearchMatcher};
 
 use crate::color_labels::ResolvedColorRules;
 use crate::log_table::{
@@ -32,7 +32,9 @@ use crate::log_table::{
 use crate::selectable_log_text::{LogText, SelectableLogText, TextSelectionCache};
 use crate::state_store::{AppSettings, DEFAULT_WORD_BOUNDARY_CHARACTERS, LogFontFamily};
 use crate::ui_theme;
-use crate::virtual_log_lines::{LogRowKey, VisibleLineStore};
+use crate::virtual_log_lines::{
+    LogRowKey, VisibleLineLoadRequest, VisibleLineLoadResult, VisibleLineStore,
+};
 
 #[derive(Clone)]
 pub struct GlobalSearchGroup {
@@ -87,6 +89,7 @@ pub struct GlobalSearchTableDelegate {
     presenter: GlobalRowPresenter,
     visible_lines: VisibleLineStore<(u64, usize)>,
     interaction: GlobalInteractionState,
+    visible_line_task: Option<Task<()>>,
 }
 
 struct GlobalSearchProjectionState {
@@ -513,6 +516,7 @@ impl GlobalSearchTableDelegate {
             presenter: GlobalRowPresenter::default(),
             visible_lines: VisibleLineStore::default(),
             interaction: GlobalInteractionState::default(),
+            visible_line_task: None,
         }
     }
 
@@ -1055,11 +1059,14 @@ impl GlobalSearchTableDelegate {
         }
     }
 
-    pub(crate) fn prepare_visible_rows(&self, visible_range: Range<usize>) {
-        self.visible_lines.prepare_visible_rows(
-            visible_range,
-            self.projection.rows_len,
-            |row_ix| match self.flat_row(row_ix) {
+    pub(crate) fn request_visible_rows(
+        &self,
+        visible_range: Range<usize>,
+    ) -> Option<VisibleLineLoadRequest<(u64, usize)>> {
+        self.visible_lines
+            .request_visible_rows(visible_range, self.projection.rows_len, |row_ix| match self
+                .flat_row(row_ix)
+            {
                 Some(FlatRow::Match {
                     group_ix,
                     source_row,
@@ -1069,23 +1076,66 @@ impl GlobalSearchTableDelegate {
                     .get(group_ix)
                     .map(|group| (group.source.document_id, source_row)),
                 _ => None,
-            },
-            |(document_id, source_row), max_bytes| {
-                self.projection
-                    .group_by_document
-                    .get(document_id)
-                    .and_then(|group_ix| self.projection.groups.get(*group_ix))
-                    .and_then(|group| group.source.document.line_preview(*source_row, max_bytes))
-            },
-        );
+            })
+    }
+
+    pub(crate) fn visible_documents(
+        &self,
+        request: &VisibleLineLoadRequest<(u64, usize)>,
+    ) -> BTreeMap<u64, Arc<LogDocument>> {
+        request
+            .keys()
+            .iter()
+            .filter_map(|(document_id, _)| {
+                let group_ix = self.projection.group_by_document.get(document_id)?;
+                let group = self.projection.groups.get(*group_ix)?;
+                Some((*document_id, group.source.document.clone()))
+            })
+            .collect()
+    }
+
+    pub(crate) fn install_visible_lines(
+        &self,
+        loaded: VisibleLineLoadResult<(u64, usize)>,
+    ) -> bool {
+        self.visible_lines.install_loaded(loaded)
+    }
+
+    fn schedule_visible_rows(
+        &mut self,
+        visible_range: Range<usize>,
+        cx: &mut Context<TableState<Self>>,
+    ) {
+        let Some(request) = self.request_visible_rows(visible_range) else {
+            return;
+        };
+        let documents = self.visible_documents(&request);
+        self.visible_line_task = Some(cx.spawn(async move |table, cx| {
+            let loaded = cx
+                .background_spawn(async move {
+                    let mut readers = BTreeMap::<u64, LinePreviewReader>::new();
+                    request.load(|(document_id, source_row), max_bytes| {
+                        let document = documents.get(document_id)?;
+                        readers.entry(*document_id).or_default().line_preview(
+                            document,
+                            *source_row,
+                            max_bytes,
+                        )
+                    })
+                })
+                .await;
+            _ = table.update(cx, |table, cx| {
+                if table.delegate().install_visible_lines(loaded) {
+                    cx.notify();
+                }
+            });
+        }));
     }
 
     fn line_text(&self, group_ix: usize, source_row: usize) -> Option<LogText> {
         let group = self.projection.groups.get(group_ix)?;
         self.visible_lines
-            .line((group.source.document_id, source_row), |max_bytes| {
-                group.source.document.line_preview(source_row, max_bytes)
-            })
+            .line((group.source.document_id, source_row))
     }
 
     fn row_presentation(
@@ -1424,8 +1474,12 @@ impl LogTableCursor for GlobalSearchTableDelegate {
 }
 
 impl LogTableRows for GlobalSearchTableDelegate {
-    fn prepare_visible_log_rows(&self, visible_range: Range<usize>) {
-        self.prepare_visible_rows(visible_range);
+    fn schedule_visible_log_rows(
+        &mut self,
+        visible_range: Range<usize>,
+        cx: &mut Context<TableState<Self>>,
+    ) {
+        self.schedule_visible_rows(visible_range, cx);
     }
 }
 
@@ -1741,13 +1795,13 @@ impl TableDelegate for GlobalSearchTableDelegate {
         &mut self,
         visible_range: Range<usize>,
         _: &mut Window,
-        _: &mut Context<TableState<Self>>,
+        cx: &mut Context<TableState<Self>>,
     ) {
         self.interaction
             .row_bounds
             .borrow_mut()
             .retain(|row_ix, _| visible_range.contains(row_ix));
-        self.prepare_visible_rows(visible_range);
+        self.schedule_visible_rows(visible_range, cx);
     }
 
     fn cell_text(&self, row_ix: usize, col_ix: usize, _: &App) -> String {
@@ -1845,9 +1899,7 @@ mod tests {
 
         let reused = delegate
             .visible_lines
-            .line((1, 0), |_| {
-                Some(vclogg_core::LinePreview::new("reloaded global line", false))
-            })
+            .line((1, 0))
             .expect("the cached line should remain available");
         assert_eq!(reused.source().as_ref(), "cached global line");
 
@@ -1855,9 +1907,7 @@ mod tests {
         assert_eq!(delegate.projection.groups[0].source.title, "renamed.log");
         let reused = delegate
             .visible_lines
-            .line((1, 0), |_| {
-                panic!("a title change must not reload log text")
-            })
+            .line((1, 0))
             .expect("the cached line should remain available");
         assert_eq!(reused.source().as_ref(), "cached global line");
 
@@ -1866,14 +1916,7 @@ mod tests {
         delegate.set_groups(vec![replacement]);
         assert!(delegate.content_revision() > initial_revision);
         assert_eq!(delegate.layout_revision(), initial_layout_revision);
-        assert!(
-            delegate
-                .visible_lines
-                .line((1, 0), |_| {
-                    panic!("an invalidated virtual window must not read the replacement document")
-                })
-                .is_none()
-        );
+        assert!(delegate.visible_lines.line((1, 0)).is_none());
         delegate.visible_lines.prepare_visible_rows(
             0..1,
             1,
@@ -1882,7 +1925,7 @@ mod tests {
         );
         let reloaded = delegate
             .visible_lines
-            .line((1, 0), |_| panic!("the prepared line must be cached"))
+            .line((1, 0))
             .expect("the prepared replacement line should be available");
         assert_eq!(reloaded.source().as_ref(), "reloaded global line");
     }

@@ -8,10 +8,10 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, Bounds, Context, Div, HighlightStyle, Hsla, InteractiveElement as _,
-    IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Pixels, SharedString, Stateful,
-    Styled as _, StyledText, Window, div, linear_color_stop, linear_gradient, point,
-    prelude::FluentBuilder as _, px,
+    AnyElement, App, AppContext as _, Bounds, Context, Div, HighlightStyle, Hsla,
+    InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Pixels,
+    SharedString, Stateful, Styled as _, StyledText, Task, Window, div, linear_color_stop,
+    linear_gradient, point, prelude::FluentBuilder as _, px,
 };
 use gpui_base::{GlobalState, TextSelection};
 use gpui_component::{
@@ -20,7 +20,7 @@ use gpui_component::{
     theme::try_parse_color,
     v_flex,
 };
-use vclogg_core::{CompressedRows, LogDocument, SearchMatcher};
+use vclogg_core::{CompressedRows, LinePreviewReader, LogDocument, SearchMatcher};
 
 #[cfg(test)]
 use vclogg_core::LinePreview;
@@ -30,7 +30,8 @@ use crate::selectable_log_text::{LogSeverity, LogText, SelectableLogText, TextSe
 use crate::state_store::{AppSettings, DEFAULT_WORD_BOUNDARY_CHARACTERS, LogFontFamily};
 use crate::ui_theme;
 use crate::virtual_log_lines::{
-    LogRowKey, LogRowProjection, MAX_VISIBLE_LINE_COLUMNS, VisibleLineStore,
+    LogRowKey, LogRowProjection, MAX_VISIBLE_LINE_COLUMNS, VisibleLineLoadRequest,
+    VisibleLineLoadResult, VisibleLineStore,
 };
 
 pub(crate) fn log_cell_horizontal_padding(cx: &App) -> Pixels {
@@ -269,7 +270,12 @@ pub(crate) trait LogTableCursor {
 }
 
 pub(crate) trait LogTableRows {
-    fn prepare_visible_log_rows(&self, visible_range: Range<usize>);
+    fn schedule_visible_log_rows(
+        &mut self,
+        visible_range: Range<usize>,
+        cx: &mut Context<TableState<Self>>,
+    ) where
+        Self: Sized + TableDelegate;
 }
 
 pub(crate) trait LogTableStateExt {
@@ -328,7 +334,8 @@ where
 
     fn refresh_log_rows(&mut self, cx: &mut Context<Self>) {
         let visible_range = self.visible_range().rows().clone();
-        self.delegate().prepare_visible_log_rows(visible_range);
+        self.delegate_mut()
+            .schedule_visible_log_rows(visible_range, cx);
         self.refresh(cx);
     }
 }
@@ -677,6 +684,7 @@ pub struct LogTableDelegate {
     source: LogRowSource,
     presenter: LogRowPresenter,
     interaction: LogInteractionState,
+    visible_line_task: Option<Task<()>>,
 }
 
 struct LogRowSource {
@@ -821,19 +829,18 @@ impl LogRowSource {
         projection.position_ranges_for_subset(selected_rows)
     }
 
-    fn prepare_visible_rows(&self, visible_range: Range<usize>) {
-        self.visible_lines.prepare_visible_rows(
-            visible_range,
-            self.row_count(),
-            |row_ix| self.source_row(row_ix),
-            |source_row, max_bytes| self.document.line_preview(*source_row, max_bytes),
-        );
+    fn request_visible_rows(
+        &self,
+        visible_range: Range<usize>,
+    ) -> Option<VisibleLineLoadRequest<usize>> {
+        self.visible_lines
+            .request_visible_rows(visible_range, self.row_count(), |row_ix| {
+                self.source_row(row_ix)
+            })
     }
 
     fn line_text(&self, source_row: usize) -> Option<LogText> {
-        self.visible_lines.line(source_row, |max_bytes| {
-            self.document.line_preview(source_row, max_bytes)
-        })
+        self.visible_lines.line(source_row)
     }
 }
 
@@ -916,6 +923,7 @@ impl LogTableDelegate {
                 crate::tr!("文件中没有日志行", "The file has no log lines").into(),
             ),
             interaction: LogInteractionState::default(),
+            visible_line_task: None,
         }
     }
 
@@ -934,6 +942,7 @@ impl LogTableDelegate {
                 crate::tr!("没有匹配的日志行", "No log lines match").into(),
             ),
             interaction: LogInteractionState::default(),
+            visible_line_task: None,
         }
     }
 
@@ -1112,8 +1121,45 @@ impl LogTableDelegate {
         })
     }
 
-    pub(crate) fn prepare_visible_rows(&self, visible_range: Range<usize>) {
-        self.source.prepare_visible_rows(visible_range);
+    pub(crate) fn request_visible_rows(
+        &self,
+        visible_range: Range<usize>,
+    ) -> Option<VisibleLineLoadRequest<usize>> {
+        self.source.request_visible_rows(visible_range)
+    }
+
+    pub(crate) fn visible_document(&self) -> Arc<LogDocument> {
+        self.source.document.clone()
+    }
+
+    pub(crate) fn install_visible_lines(&self, loaded: VisibleLineLoadResult<usize>) -> bool {
+        self.source.visible_lines.install_loaded(loaded)
+    }
+
+    fn schedule_visible_rows(
+        &mut self,
+        visible_range: Range<usize>,
+        cx: &mut Context<TableState<Self>>,
+    ) {
+        let Some(request) = self.request_visible_rows(visible_range) else {
+            return;
+        };
+        let document = self.visible_document();
+        self.visible_line_task = Some(cx.spawn(async move |table, cx| {
+            let loaded = cx
+                .background_spawn(async move {
+                    let mut reader = LinePreviewReader::default();
+                    request.load(|source_row, max_bytes| {
+                        reader.line_preview(&document, *source_row, max_bytes)
+                    })
+                })
+                .await;
+            _ = table.update(cx, |table, cx| {
+                if table.delegate().install_visible_lines(loaded) {
+                    cx.notify();
+                }
+            });
+        }));
     }
 
     fn line_text(&self, source_row: usize) -> Option<LogText> {
@@ -1304,8 +1350,12 @@ impl LogTableCursor for LogTableDelegate {
 }
 
 impl LogTableRows for LogTableDelegate {
-    fn prepare_visible_log_rows(&self, visible_range: Range<usize>) {
-        self.prepare_visible_rows(visible_range);
+    fn schedule_visible_log_rows(
+        &mut self,
+        visible_range: Range<usize>,
+        cx: &mut Context<TableState<Self>>,
+    ) {
+        self.schedule_visible_rows(visible_range, cx);
     }
 }
 
@@ -1552,13 +1602,13 @@ impl TableDelegate for LogTableDelegate {
         &mut self,
         visible_range: Range<usize>,
         _: &mut Window,
-        _: &mut Context<TableState<Self>>,
+        cx: &mut Context<TableState<Self>>,
     ) {
         self.interaction
             .row_bounds
             .borrow_mut()
             .retain(|row_ix, _| visible_range.contains(row_ix));
-        self.prepare_visible_rows(visible_range);
+        self.schedule_visible_rows(visible_range, cx);
     }
 
     fn cell_text(&self, row_ix: usize, col_ix: usize, _: &App) -> String {
@@ -1689,7 +1739,7 @@ mod tests {
         let cached = delegate
             .source
             .visible_lines
-            .line(7, |_| panic!("the prepared line should be cached"))
+            .line(7)
             .expect("the test line should be cached");
         assert!(
             delegate
@@ -1712,7 +1762,7 @@ mod tests {
         let reused = delegate
             .source
             .visible_lines
-            .line(7, |_| Some(LinePreview::new("reloaded line", false)))
+            .line(7)
             .expect("the cached line should remain available");
         assert_eq!(reused.source(), cached.source());
         assert_eq!(reused.source().as_ref(), "cached line");
@@ -1838,9 +1888,7 @@ mod tests {
         let reused = delegate
             .source
             .visible_lines
-            .line(3, |_| {
-                panic!("an equivalent projection must keep visible rows cached")
-            })
+            .line(3)
             .expect("the prepared row should remain cached");
         assert_eq!(reused.source().as_ref(), "line 3");
     }
