@@ -1068,6 +1068,12 @@ struct RowDragSelection {
     mode: RowDragMode,
 }
 
+impl RowDragSelection {
+    fn changed_row_selection(self) -> bool {
+        self.mode == RowDragMode::Lines && self.target_row != self.start_row
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RowDragMode {
     Text,
@@ -1328,6 +1334,22 @@ mod scroll_position_tests {
         update(&mut next);
         assert!(state.invalidate_for_layout(next));
         assert!(state.item_sizes.borrow().is_empty());
+    }
+
+    #[test]
+    fn only_cross_row_line_drag_changes_selection_after_the_initial_table_event() {
+        let drag = |target_row, mode| RowDragSelection {
+            document_id: 1,
+            region: WrappedRegion::GlobalResults,
+            pointer: Point::default(),
+            start_row: 3,
+            target_row,
+            mode,
+        };
+
+        assert!(!drag(3, RowDragMode::Lines).changed_row_selection());
+        assert!(!drag(4, RowDragMode::Text).changed_row_selection());
+        assert!(drag(4, RowDragMode::Lines).changed_row_selection());
     }
 
     #[test]
@@ -15561,6 +15583,9 @@ impl Workspace {
         if active_drag {
             self.advance_row_drag_selection(cx);
         }
+        let changed_row_selection = self.row_drag_selection.is_some_and(|drag| {
+            drag.document_id == document_id && drag.region == region && drag.changed_row_selection()
+        });
         let clear_text_selection = self.row_drag_selection.is_some_and(|drag| {
             drag.document_id == document_id
                 && drag.region == region
@@ -15576,7 +15601,9 @@ impl Workspace {
                 cx.notify();
             });
             self.status_surface.update(cx, |_, cx| cx.notify());
-            self.schedule_log_region_state_save(document_id, region, window, cx);
+            if changed_row_selection {
+                self.schedule_log_region_state_save(document_id, region, window, cx);
+            }
             return;
         }
         let Some(tab) = self.documents.iter().find(|tab| tab.id == document_id) else {
@@ -15602,6 +15629,9 @@ impl Workspace {
         // Result replacement clears the delegate's pointer anchor before MouseUp. Keep the
         // workspace-owned drag target so its text-selection suppression is still released.
         let active_drag = self.row_drag_selection;
+        let changed_global_row_selection = active_drag.is_some_and(|drag| {
+            drag.region == WrappedRegion::GlobalResults && drag.changed_row_selection()
+        });
         let clear_text_selection = self
             .row_drag_selection
             .is_some_and(|drag| drag.mode == RowDragMode::Lines);
@@ -15656,7 +15686,7 @@ impl Workspace {
         for document_id in ended_document_selections {
             self.schedule_checkpoint(document_id, window, cx);
         }
-        if ended_global_selection {
+        if ended_global_selection && changed_global_row_selection {
             self.schedule_workspace_search_state_save(window, cx);
         }
     }
