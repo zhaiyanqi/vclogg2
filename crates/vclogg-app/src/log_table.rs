@@ -975,17 +975,22 @@ impl LogTableDelegate {
     }
 
     pub fn replace_with_all(&mut self, document: Arc<LogDocument>) {
-        let (selected_rows, active_row, selection_anchor) = self.stable_interaction_rows();
-        self.source.replace(document, LogRowProjection::All);
-        self.interaction.text_selections.clear();
-        self.restore_stable_interaction_rows(selected_rows, active_row, selection_anchor);
+        self.replace_source(document, LogRowProjection::All);
     }
 
     pub fn replace_with_rows(&mut self, document: Arc<LogDocument>, source_rows: CompressedRows) {
+        self.replace_source(document, LogRowProjection::SourceRows(source_rows));
+    }
+
+    fn replace_source(&mut self, document: Arc<LogDocument>, row_projection: LogRowProjection) {
+        self.interaction
+            .row_selection
+            .borrow_mut()
+            .end_pointer_selection();
         let (selected_rows, active_row, selection_anchor) = self.stable_interaction_rows();
-        self.source
-            .replace(document, LogRowProjection::SourceRows(source_rows));
+        self.source.replace(document, row_projection);
         self.interaction.text_selections.clear();
+        self.interaction.row_bounds.borrow_mut().clear();
         self.restore_stable_interaction_rows(selected_rows, active_row, selection_anchor);
     }
 
@@ -1675,6 +1680,30 @@ mod tests {
 
         delegate.replace_with_all(Arc::new(LogDocument::placeholder("second.log")));
         assert!(delegate.content_revision() > initial_revision);
+    }
+
+    #[test]
+    fn document_replacement_drops_source_bound_geometry_and_pointer_gesture() {
+        let mut delegate = LogTableDelegate::projected(
+            1,
+            Arc::new(LogDocument::placeholder("first.log")),
+            [3, 9].into_iter().collect(),
+        );
+        delegate.begin_pointer_selection(0, false, false, 1);
+        delegate
+            .interaction
+            .row_bounds
+            .borrow_mut()
+            .insert(0, Bounds::default());
+        assert!(delegate.is_pointer_selecting());
+
+        delegate.replace_with_rows(
+            Arc::new(LogDocument::placeholder("second.log")),
+            [3, 9].into_iter().collect(),
+        );
+
+        assert!(!delegate.is_pointer_selecting());
+        assert!(delegate.interaction.row_bounds.borrow().is_empty());
     }
 
     #[test]
