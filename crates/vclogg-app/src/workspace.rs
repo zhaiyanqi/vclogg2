@@ -35,8 +35,7 @@ use gpui_base::{
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, ElementExt as _, FocusableExt as _, Icon, IconName,
-    IndexPath, Root, Selectable as _, Side, Sizable as _, StyledExt as _, TitleBar,
-    VirtualListScrollHandle, WindowExt as _,
+    IndexPath, Root, Selectable as _, Side, Sizable as _, StyledExt as _, TitleBar, WindowExt as _,
     animation::ease_out_cubic,
     button::{Button, ButtonCustomVariant, ButtonRounded, ButtonVariant, ButtonVariants as _},
     checkbox::Checkbox,
@@ -52,7 +51,7 @@ use gpui_component::{
     tab::{Tab, TabBar},
     table::{DataTable, TableDelegate, TableEvent, TableState},
     theme::ThemeMode,
-    v_flex, v_virtual_list,
+    v_flex,
 };
 use rayon::prelude::{IntoParallelIterator as _, ParallelIterator as _};
 use vclogg_core::{
@@ -114,6 +113,10 @@ use crate::{
     selectable_log_text::{LogText, LogTextSelection, SelectableLogText, TextSelectionCache},
     settings_dialog::{
         SettingsCategory, SettingsDialog, SettingsDialogEvent, SettingsNetworkSnapshot,
+    },
+    sparse_virtual_list::{
+        SparseListMeasurements, SparseVirtualListScrollHandle, prefix_height_for,
+        row_for_absolute_y, sparse_v_virtual_list,
     },
     state_store::{
         AppSettings, CloudSettings, FileSessionState, LastWorkspaceFile, RecentFile,
@@ -643,12 +646,13 @@ enum WrappedRegion {
 }
 
 struct WrappedListState<K> {
-    item_sizes: Rc<RefCell<Rc<Vec<Size<Pixels>>>>>,
+    item_count: Rc<Cell<usize>>,
     base_height: Rc<Cell<Pixels>>,
+    measured_heights: Rc<RefCell<BTreeMap<usize, Pixels>>>,
     pending_heights: RefCell<BTreeMap<usize, Pixels>>,
     measured_rows: RefCell<VecDeque<usize>>,
     height_corrections: Rc<RefCell<Vec<(usize, Pixels)>>>,
-    scroll_handle: VirtualListScrollHandle,
+    scroll_handle: SparseVirtualListScrollHandle,
     text_selections: RefCell<TextSelectionCache<K>>,
     measurement_anchor: Rc<Cell<Option<RowViewportPosition>>>,
     scrollbar_measurement_pending: Rc<Cell<bool>>,
@@ -912,7 +916,7 @@ impl<K: Clone + Ord> LogViewportState<K> {
         self.wrapped.scroll_handle.bounds().size.height
     }
 
-    fn wrapped_scroll_handle(&self) -> VirtualListScrollHandle {
+    fn wrapped_scroll_handle(&self) -> SparseVirtualListScrollHandle {
         self.wrapped.scroll_handle.clone()
     }
 
@@ -933,7 +937,7 @@ impl<K: Clone + Ord> LogViewportState<K> {
             .handle(key, text, window, cx)
     }
 
-    fn wrapped_sizes(&self, count: usize, base_height: Pixels) -> Rc<Vec<Size<Pixels>>> {
+    fn wrapped_sizes(&self, count: usize, base_height: Pixels) -> SparseListMeasurements {
         self.wrapped.sizes(count, base_height)
     }
 
@@ -1128,8 +1132,8 @@ impl LogRegionSurface {
 
 #[derive(Clone)]
 struct LogicalVirtualScrollHandle {
-    handle: VirtualListScrollHandle,
-    item_sizes: Rc<RefCell<Rc<Vec<Size<Pixels>>>>>,
+    handle: SparseVirtualListScrollHandle,
+    measured_heights: Rc<RefCell<BTreeMap<usize, Pixels>>>,
     height_corrections: Rc<RefCell<Vec<(usize, Pixels)>>>,
     measurement_anchor: Rc<Cell<Option<RowViewportPosition>>>,
     scrollbar_measurement_pending: Rc<Cell<bool>>,
@@ -1156,10 +1160,11 @@ impl ScrollbarHandle for LogicalVirtualScrollHandle {
                 row_for_absolute_y(self.item_count, self.slot_height, &corrections, actual_top);
             let actual_row_top = prefix_height_for(self.slot_height, &corrections, row);
             let actual_row_height = self
-                .item_sizes
+                .measured_heights
                 .borrow()
-                .get(row)
-                .map_or(self.slot_height, |item| item.height)
+                .get(&row)
+                .copied()
+                .unwrap_or(self.slot_height)
                 .max(self.slot_height);
             let fraction = ((actual_top - actual_row_top) / actual_row_height).clamp(0., 1.);
             (self.slot_height * row as f32 + self.slot_height * fraction).clamp(px(0.), logical_max)
@@ -1184,10 +1189,11 @@ impl ScrollbarHandle for LogicalVirtualScrollHandle {
             let corrections = self.height_corrections.borrow();
             let actual_row_top = prefix_height_for(self.slot_height, &corrections, row);
             let actual_row_height = self
-                .item_sizes
+                .measured_heights
                 .borrow()
-                .get(row)
-                .map_or(self.slot_height, |item| item.height)
+                .get(&row)
+                .copied()
+                .unwrap_or(self.slot_height)
                 .max(self.slot_height);
             actual_row_top + actual_row_height * fraction
         };
@@ -1201,38 +1207,6 @@ impl ScrollbarHandle for LogicalVirtualScrollHandle {
             self.slot_height * self.item_count as f32,
         )
     }
-}
-
-fn prefix_height_for(
-    base_height: Pixels,
-    corrections: &[(usize, Pixels)],
-    row_ix: usize,
-) -> Pixels {
-    let base = base_height * row_ix as f32;
-    let correction_ix = corrections.partition_point(|(measured_row, _)| *measured_row < row_ix);
-    base + correction_ix
-        .checked_sub(1)
-        .and_then(|ix| corrections.get(ix).map(|(_, correction)| *correction))
-        .unwrap_or(px(0.))
-}
-
-fn row_for_absolute_y(
-    count: usize,
-    base_height: Pixels,
-    corrections: &[(usize, Pixels)],
-    target: Pixels,
-) -> usize {
-    let mut low = 0usize;
-    let mut high = count;
-    while low < high {
-        let middle = low + (high - low) / 2;
-        if prefix_height_for(base_height, corrections, middle.saturating_add(1)) > target {
-            high = middle;
-        } else {
-            low = middle.saturating_add(1);
-        }
-    }
-    low.min(count.saturating_sub(1))
 }
 
 fn centered_scroll_top(
@@ -1328,12 +1302,12 @@ mod scroll_position_tests {
         let current = wrapped_layout_key_for_test();
         assert!(state.invalidate_for_layout(current.clone()));
         state.prime_measured_heights(2, current.base_height, [(0, px(57.))]);
-        assert_eq!(state.item_sizes.borrow()[0].height, px(57.));
+        assert_eq!(state.measured_heights.borrow().get(&0), Some(&px(57.)));
 
         let mut next = current;
         update(&mut next);
         assert!(state.invalidate_for_layout(next));
-        assert!(state.item_sizes.borrow().is_empty());
+        assert!(state.measured_heights.borrow().is_empty());
     }
 
     #[test]
@@ -1493,7 +1467,7 @@ mod scroll_position_tests {
         let mut next = current;
         next.width += px(0.25);
         assert!(!state.invalidate_for_layout(next));
-        assert_eq!(state.item_sizes.borrow()[0].height, px(57.));
+        assert_eq!(state.measured_heights.borrow().get(&0), Some(&px(57.)));
     }
 
     #[test]
@@ -1608,11 +1582,22 @@ mod scroll_position_tests {
         state.scroll_row_to_viewport_y(40, px(7.));
 
         assert!(state.pending_heights.borrow().is_empty());
-        assert_eq!(state.item_sizes.borrow()[40].height, px(60.));
+        assert_eq!(state.measured_heights.borrow().get(&40), Some(&px(60.)));
         assert_eq!(
             state.prefix_height(40) + state.scroll_handle.offset().y,
             px(7.)
         );
+    }
+
+    #[test]
+    fn wrapped_state_keeps_only_sparse_measurements_for_large_lists() {
+        let state = WrappedListState::<usize>::default();
+
+        let measurements = state.sizes(10_000_000, px(20.));
+
+        assert_eq!(measurements.item_count, 10_000_000);
+        assert!(measurements.measured_heights.borrow().is_empty());
+        assert!(measurements.cumulative_corrections.borrow().is_empty());
     }
 
     #[test]
@@ -1633,9 +1618,9 @@ mod scroll_position_tests {
         );
 
         assert!(state.pending_heights.borrow().is_empty());
-        assert_eq!(state.item_sizes.borrow()[0].height, px(60.));
-        assert_eq!(state.item_sizes.borrow()[1].height, px(40.));
-        assert_eq!(state.item_sizes.borrow()[2].height, px(20.));
+        assert_eq!(state.measured_heights.borrow().get(&0), Some(&px(60.)));
+        assert_eq!(state.measured_heights.borrow().get(&1), Some(&px(40.)));
+        assert_eq!(state.measured_heights.borrow().get(&2), None);
     }
 
     #[test]
@@ -1673,9 +1658,9 @@ mod scroll_position_tests {
             next_rows.iter().position(|row| row == key)
         });
 
-        assert_eq!(state.item_sizes.borrow()[0].height, px(20.));
-        assert_eq!(state.item_sizes.borrow()[1].height, px(20.));
-        assert_eq!(state.item_sizes.borrow()[2].height, px(60.));
+        assert_eq!(state.measured_heights.borrow().get(&0), None);
+        assert_eq!(state.measured_heights.borrow().get(&1), None);
+        assert_eq!(state.measured_heights.borrow().get(&2), Some(&px(60.)));
     }
 
     #[test]
@@ -1784,12 +1769,13 @@ mod scroll_position_tests {
 impl<K> Default for WrappedListState<K> {
     fn default() -> Self {
         Self {
-            item_sizes: Rc::new(RefCell::new(Rc::new(Vec::new()))),
+            item_count: Rc::new(Cell::new(0)),
             base_height: Rc::new(Cell::new(px(0.))),
+            measured_heights: Rc::new(RefCell::new(BTreeMap::new())),
             pending_heights: RefCell::new(BTreeMap::new()),
             measured_rows: RefCell::new(VecDeque::new()),
             height_corrections: Rc::new(RefCell::new(Vec::new())),
-            scroll_handle: VirtualListScrollHandle::new(),
+            scroll_handle: SparseVirtualListScrollHandle::new(),
             text_selections: RefCell::default(),
             measurement_anchor: Rc::new(Cell::new(None)),
             scrollbar_measurement_pending: Rc::new(Cell::new(false)),
@@ -1807,7 +1793,7 @@ impl<K: Clone + Ord> WrappedListState<K> {
     ) -> LogicalVirtualScrollHandle {
         LogicalVirtualScrollHandle {
             handle: self.scroll_handle.clone(),
-            item_sizes: self.item_sizes.clone(),
+            measured_heights: self.measured_heights.clone(),
             height_corrections: self.height_corrections.clone(),
             measurement_anchor: self.measurement_anchor.clone(),
             scrollbar_measurement_pending: self.scrollbar_measurement_pending.clone(),
@@ -1815,10 +1801,11 @@ impl<K: Clone + Ord> WrappedListState<K> {
             slot_height,
         }
     }
-    fn sizes(&self, count: usize, base_height: Pixels) -> Rc<Vec<Size<Pixels>>> {
-        if self.item_sizes.borrow().len() != count || self.base_height.get() != base_height {
+    fn sizes(&self, count: usize, base_height: Pixels) -> SparseListMeasurements {
+        if self.item_count.get() != count || self.base_height.get() != base_height {
+            self.item_count.set(count);
             self.base_height.set(base_height);
-            *self.item_sizes.borrow_mut() = Rc::new(vec![size(px(0.), base_height); count]);
+            self.measured_heights.borrow_mut().clear();
             self.pending_heights.borrow_mut().clear();
             self.measured_rows.borrow_mut().clear();
             self.height_corrections.borrow_mut().clear();
@@ -1843,30 +1830,28 @@ impl<K: Clone + Ord> WrappedListState<K> {
                     viewport_y: self.prefix_height(row) - old_top,
                 }
             });
-            let mut next = self.item_sizes.borrow().as_ref().clone();
+            let mut next = self.measured_heights.borrow().clone();
             let mut measured_rows = self.measured_rows.borrow_mut();
             for (row_ix, height) in pending {
-                let Some(item) = next.get_mut(row_ix) else {
+                if row_ix >= count {
                     continue;
-                };
-                item.height = height.max(base_height);
+                }
+                next.insert(row_ix, height.max(base_height));
                 if let Some(old_ix) = measured_rows.iter().position(|row| *row == row_ix) {
                     measured_rows.remove(old_ix);
                 }
                 measured_rows.push_back(row_ix);
             }
             while measured_rows.len() > WRAPPED_HEIGHT_CACHE_LIMIT {
-                if let Some(evicted) = measured_rows.pop_front()
-                    && let Some(item) = next.get_mut(evicted)
-                {
-                    item.height = base_height;
+                if let Some(evicted) = measured_rows.pop_front() {
+                    next.remove(&evicted);
                 }
             }
             let mut corrections = measured_rows
                 .iter()
                 .filter_map(|row_ix| {
-                    next.get(*row_ix)
-                        .map(|item| (*row_ix, item.height - base_height))
+                    next.get(row_ix)
+                        .map(|height| (*row_ix, *height - base_height))
                 })
                 .collect::<Vec<_>>();
             corrections.sort_by_key(|(row_ix, _)| *row_ix);
@@ -1876,14 +1861,19 @@ impl<K: Clone + Ord> WrappedListState<K> {
                 *correction = cumulative;
             }
             *self.height_corrections.borrow_mut() = corrections;
-            *self.item_sizes.borrow_mut() = Rc::new(next);
+            *self.measured_heights.borrow_mut() = next;
             if explicit_anchor.is_none() && was_at_bottom {
                 self.scroll_handle.scroll_to_bottom();
             } else {
                 self.set_row_viewport_y(anchor.row_ix, anchor.viewport_y);
             }
         }
-        self.item_sizes.borrow().clone()
+        SparseListMeasurements {
+            item_count: count,
+            base_height,
+            measured_heights: self.measured_heights.clone(),
+            cumulative_corrections: self.height_corrections.clone(),
+        }
     }
 
     fn queue_measured_height(&self, row_ix: usize, height: Pixels, base_height: Pixels) -> bool {
@@ -1893,7 +1883,8 @@ impl<K: Clone + Ord> WrappedListState<K> {
             .borrow()
             .get(&row_ix)
             .copied()
-            .or_else(|| self.item_sizes.borrow().get(row_ix).map(|size| size.height));
+            .or_else(|| self.measured_heights.borrow().get(&row_ix).copied())
+            .or_else(|| (row_ix < self.item_count.get()).then_some(base_height));
         let Some(current_height) = current_height else {
             return false;
         };
@@ -1921,7 +1912,7 @@ impl<K: Clone + Ord> WrappedListState<K> {
         &self,
         key_for_row: impl Fn(usize) -> Option<T>,
     ) -> BTreeMap<T, Pixels> {
-        let item_sizes = self.item_sizes.borrow();
+        let measured_heights = self.measured_heights.borrow();
         let pending_heights = self.pending_heights.borrow();
         let mut measured_rows = self
             .measured_rows
@@ -1939,7 +1930,7 @@ impl<K: Clone + Ord> WrappedListState<K> {
                 let height = pending_heights
                     .get(&row_ix)
                     .copied()
-                    .or_else(|| item_sizes.get(row_ix).map(|size| size.height))?;
+                    .or_else(|| measured_heights.get(&row_ix).copied())?;
                 Some((key, height))
             })
             .collect()
@@ -1960,8 +1951,9 @@ impl<K: Clone + Ord> WrappedListState<K> {
     }
 
     fn invalidate(&mut self) {
-        *self.item_sizes.borrow_mut() = Rc::new(Vec::new());
+        self.item_count.set(0);
         self.base_height.set(px(0.));
+        self.measured_heights.borrow_mut().clear();
         self.pending_heights.borrow_mut().clear();
         self.measured_rows.borrow_mut().clear();
         self.height_corrections.borrow_mut().clear();
@@ -1975,8 +1967,9 @@ impl<K: Clone + Ord> WrappedListState<K> {
             return false;
         }
         self.layout_key.replace(Some(key));
-        *self.item_sizes.borrow_mut() = Rc::new(Vec::new());
+        self.item_count.set(0);
         self.base_height.set(px(0.));
+        self.measured_heights.borrow_mut().clear();
         self.pending_heights.borrow_mut().clear();
         self.measured_rows.borrow_mut().clear();
         self.height_corrections.borrow_mut().clear();
@@ -2003,7 +1996,7 @@ impl<K: Clone + Ord> WrappedListState<K> {
         &self,
         preferred_row: Option<usize>,
     ) -> Option<RowViewportPosition> {
-        let count = self.item_sizes.borrow().len();
+        let count = self.item_count.get();
         if count == 0 {
             return None;
         }
@@ -2013,10 +2006,11 @@ impl<K: Clone + Ord> WrappedListState<K> {
         let row_ix = viewport_anchor_row(count, first, preferred_row, |row_ix| {
             let row_top = self.prefix_height(row_ix);
             let row_height = self
-                .item_sizes
+                .measured_heights
                 .borrow()
-                .get(row_ix)
-                .map_or(self.base_height.get(), |item| item.height);
+                .get(&row_ix)
+                .copied()
+                .unwrap_or(self.base_height.get());
             row_intersects_viewport(row_top - top, row_height, viewport_height)
         });
         Some(RowViewportPosition {
@@ -2051,7 +2045,7 @@ impl<K: Clone + Ord> WrappedListState<K> {
     }
 
     fn reset_scroll_for_mode_switch(&mut self) {
-        self.scroll_handle = VirtualListScrollHandle::new();
+        self.scroll_handle = SparseVirtualListScrollHandle::new();
         self.clear_measurement_anchor();
         self.scrollbar_measurement_pending.set(false);
     }
@@ -2066,7 +2060,7 @@ impl<K: Clone + Ord> WrappedListState<K> {
 
     fn first_visible_row(&self) -> usize {
         let top = -self.scroll_handle.offset().y;
-        let count = self.item_sizes.borrow().len();
+        let count = self.item_count.get();
         row_for_absolute_y(
             count,
             self.base_height.get(),
@@ -2083,29 +2077,32 @@ impl<K: Clone + Ord> WrappedListState<K> {
 
     fn center_row(&self, row_ix: usize) {
         self.clear_measurement_anchor();
-        let item_sizes = self.item_sizes.borrow();
-        let Some(row_height) = item_sizes.get(row_ix).map(|item| item.height) else {
-            drop(item_sizes);
+        let count = self.item_count.get();
+        if row_ix >= count {
             self.scroll_handle
                 .scroll_to_item(row_ix, ScrollStrategy::Center);
             return;
-        };
+        }
+        let row_height = self
+            .measured_heights
+            .borrow()
+            .get(&row_ix)
+            .copied()
+            .unwrap_or(self.base_height.get());
         let viewport_height = self.scroll_handle.bounds().size.height;
         if viewport_height <= px(0.) {
-            drop(item_sizes);
             self.scroll_handle
                 .scroll_to_item(row_ix, ScrollStrategy::Center);
             return;
         }
         let row_top = self.prefix_height(row_ix);
-        let content_height = self.prefix_height(item_sizes.len());
+        let content_height = self.prefix_height(count);
         let top = centered_scroll_top(
             row_top,
             row_height,
             viewport_height,
             content_height - viewport_height,
         );
-        drop(item_sizes);
         self.restore_viewport(row_ix, row_top - top, false);
     }
 
@@ -16294,19 +16291,24 @@ impl Workspace {
                         "WrappedLogVirtualList::request_layout",
                         "WrappedLogVirtualList::prepaint",
                         "WrappedLogVirtualList::paint",
-                        v_virtual_list(surface, list_id, sizes, move |_, range, window, cx| {
-                            workspace
-                                .update(cx, |workspace, cx| {
-                                    workspace.render_wrapped_log_rows(
-                                        document_id,
-                                        region,
-                                        range,
-                                        window,
-                                        cx,
-                                    )
-                                })
-                                .unwrap_or_default()
-                        })
+                        sparse_v_virtual_list(
+                            surface,
+                            list_id,
+                            sizes,
+                            move |_, range, window, cx| {
+                                workspace
+                                    .update(cx, |workspace, cx| {
+                                        workspace.render_wrapped_log_rows(
+                                            document_id,
+                                            region,
+                                            range,
+                                            window,
+                                            cx,
+                                        )
+                                    })
+                                    .unwrap_or_default()
+                            },
+                        )
                         .track_scroll(&list_scroll)
                         .size_full(),
                     ))
@@ -17551,7 +17553,7 @@ impl Workspace {
                     .min_h_0()
                     .key_context("DataTable")
                     .child(
-                        v_virtual_list(
+                        sparse_v_virtual_list(
                             surface,
                             "wrapped-global-results",
                             sizes,

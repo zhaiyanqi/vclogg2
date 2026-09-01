@@ -28,6 +28,7 @@ mod search_context;
 mod selectable_log_text;
 mod settings_dialog;
 mod single_instance;
+mod sparse_virtual_list;
 mod state_store;
 mod tab_resume;
 mod trash;
