@@ -10,6 +10,7 @@ use std::{
 use anyhow::{Context as _, Result};
 use rusqlite::{Connection, OptionalExtension as _, params, params_from_iter};
 use vclogg_core::CompressedRows;
+pub use vclogg_data::{CloudSettings, DatabaseInfo, HistorySession, LastWorkspaceFile, RecentFile};
 
 use crate::app_log::AppLogLevel;
 use crate::color_labels::{
@@ -36,39 +37,6 @@ pub const DEFAULT_WORD_BOUNDARY_CHARACTERS: &str =
 pub const MAX_WORD_BOUNDARY_CHARACTERS: usize = 256;
 const STATE_SCHEMA_VERSION: u32 = 4;
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
-
-#[derive(Clone, Debug)]
-pub struct RecentFile {
-    pub id: i64,
-    pub path: PathBuf,
-    pub last_opened_at: i64,
-}
-
-#[derive(Clone, Debug)]
-pub struct HistorySession {
-    pub id: i64,
-    pub path: PathBuf,
-    pub last_opened_at: i64,
-    pub revision: i64,
-    pub selected_row: Option<usize>,
-    pub query_text: String,
-    pub marked_rows_count: usize,
-    pub pinned: bool,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct DatabaseInfo {
-    pub byte_size: u64,
-    pub session_count: usize,
-}
-
-#[derive(Clone, Debug)]
-pub struct LastWorkspaceFile {
-    pub id: i64,
-    pub path: PathBuf,
-    pub last_opened_at: i64,
-    pub was_active: bool,
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileSessionState {
@@ -263,12 +231,6 @@ pub struct AppSettings {
     pub default_case_sensitive: bool,
     pub default_use_regex: bool,
     pub shortcuts: ShortcutSettings,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct CloudSettings {
-    pub server_url: String,
-    pub display_name: String,
 }
 
 impl Default for AppSettings {
