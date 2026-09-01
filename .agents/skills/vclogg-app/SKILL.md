@@ -11,6 +11,7 @@ App owns GPUI entities, rendering, commands and user presentation state. Read [d
 
 - `workspace.rs`: application/window orchestration and current extraction source; place new code in a named capability module instead of extending this file.
 - `workspace/document_tasks.rs`: bounded path preparation, document preview/index/search preparation, clipboard/color background snapshots and result grouping.
+- `workspace/result_export_flow.rs`: capture immutable local/global result projections and orchestrate save, timestamp-merge and open-in-new-tab export flows.
 - `workspace/window_registry.rs`: window registration/focus order, cross-window tab drag state, external open routing and process-quit persistence snapshots.
 - `workspace/*_tests.rs`: capability-focused workspace regression suites kept outside the production orchestration file.
 - `workspace_state.rs`: retained controllers, task registries and presentation/search coordination state.
