@@ -16,6 +16,8 @@ pub(crate) enum PersistedLogRegion {
 pub(crate) struct ViewportBookmark {
     pub anchor_source_row: usize,
     pub anchor_viewport_y_milli: i64,
+    /// Measured wrapped height of the anchor row. Older bookmarks leave this at zero.
+    pub anchor_row_height_milli: i64,
     pub horizontal_offset_milli: i64,
     pub at_end: bool,
 }
@@ -30,13 +32,24 @@ impl ViewportBookmark {
         Self {
             anchor_source_row,
             anchor_viewport_y_milli: encode_pixels(anchor_viewport_y),
+            anchor_row_height_milli: 0,
             horizontal_offset_milli: encode_pixels(horizontal_offset),
             at_end,
         }
     }
 
+    pub fn with_anchor_row_height(mut self, anchor_row_height: f32) -> Self {
+        self.anchor_row_height_milli = encode_pixels(anchor_row_height);
+        self
+    }
+
     pub fn anchor_viewport_y(self) -> f32 {
         decode_pixels(self.anchor_viewport_y_milli)
+    }
+
+    pub fn anchor_row_height(self) -> Option<f32> {
+        let height = decode_pixels(self.anchor_row_height_milli);
+        (height > 0.).then_some(height)
     }
 
     pub fn horizontal_offset(self) -> f32 {

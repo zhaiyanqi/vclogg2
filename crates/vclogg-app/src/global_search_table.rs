@@ -1273,10 +1273,6 @@ impl GlobalSearchTableDelegate {
         self.visible_lines.install_staged(loaded);
     }
 
-    pub(crate) fn visible_line_revision(&self) -> u64 {
-        self.visible_lines.revision()
-    }
-
     pub(crate) fn reset_visible_line_owner(&mut self) {
         self.visible_line_task = None;
         self.visible_lines.invalidate_window();
