@@ -52,7 +52,6 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Pipes",
     "Win32_System_Threading",
 ] }
-zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [patch.crates-io]
 # block 0.1.6 models an extern static with an uninhabited type. Keep its

@@ -35,10 +35,7 @@ mod tab_resume;
 mod trash;
 mod ui_performance;
 mod ui_theme;
-mod updater;
 mod virtual_log_lines;
-#[cfg(windows)]
-mod windows_update_helper;
 mod workspace;
 mod workspace_state;
 
@@ -142,14 +139,6 @@ fn external_request_listener(
 }
 
 fn main() {
-    #[cfg(windows)]
-    {
-        if windows_update_helper::run_if_requested() {
-            return;
-        }
-        windows_update_helper::finish_previous_update();
-    }
-
     app_log::init();
     app_paths::log_development_override();
     crash_report::install_panic_hook();

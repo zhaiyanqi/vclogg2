@@ -2,7 +2,7 @@
 
 使用 Rust 与 GPUI Component 构建的桌面日志查看器，专注于大文件浏览、实时跟随、多范围检索、筛选与结果导出。
 
-> Windows 10/11 x64、macOS 15 ARM64 与 Ubuntu 22.04 x86_64 是同等支持的桌面平台。三者共享日志浏览、单实例多窗口、系统废纸篓、文件打开集成和应用内更新能力；平台差异仅限原生安装格式、快捷键修饰键与系统运行库。功能实现状态以 [`doc/migration-status.md`](doc/migration-status.md) 为准。
+> Windows 10/11 x64、macOS 15 ARM64 与 Ubuntu 22.04 x86_64 是同等支持的桌面平台。三者共享日志浏览、单实例多窗口、系统废纸篓和文件打开集成；“帮助 → 更新”统一在系统浏览器中打开 GitHub Releases。平台差异仅限原生安装格式、快捷键修饰键与系统运行库。功能实现状态以 [`doc/migration-status.md`](doc/migration-status.md) 为准。
 
 [功能亮点](#功能亮点) · [快速开始](#快速开始) · [搜索与筛选](#搜索与筛选) · [快捷键](#常用快捷键) · [从源码构建](#从源码构建) · [项目文档](#项目文档) · [参与贡献](#参与贡献) · [鸣谢](#鸣谢)
 
@@ -27,9 +27,7 @@
 .\vclogg2.exe
 ```
 
-Windows 分发包是纯便携包，只包含可执行程序、README 和许可证，不附带 PowerShell 安装或更新脚本，也不会创建开始菜单快捷方式或注册文件关联。应用内更新由可执行程序的原生助手模式完成，不内嵌、生成或调用 PowerShell 脚本。
-
-从仍依赖包内安装脚本的旧版本首次迁移到纯便携包时，需要手动解压并替换旧程序；完成这次迁移后，后续纯便携版本可以继续使用应用内更新。
+Windows 分发包是纯便携包，只包含可执行程序、README 和许可证，不附带 PowerShell 安装或更新脚本，也不会创建开始菜单快捷方式或注册文件关联。发布流水线默认允许生成未签名包，也可按需启用 Authenticode 签名和 RFC 3161 时间戳。应用不会联网检查、下载或自行安装新版本，也不会复制自身到临时目录；需要更新时使用“帮助 → 更新”打开 [GitHub Releases](https://github.com/zhaiyanqi/vclogg2/releases)，下载新包后手动解压替换。
 
 ### macOS
 
@@ -125,7 +123,7 @@ vclogg2 <service.log> <worker.trace>
 ### 环境要求
 
 - 所有平台：Rust stable、Git；首次解析 GPUI 与 gpui-component 依赖时需要访问 GitHub
-- Windows：MSVC Rust 工具链，以及包含“使用 C++ 的桌面开发”和 Windows SDK 的 Visual Studio 2022 Build Tools
+- Windows：MSVC Rust 工具链，以及包含“使用 C++ 的桌面开发”和 Windows SDK 的 Visual Studio 2022 Build Tools；代码签名是可选能力，启用时还需要 PFX、硬件/HSM 或云签名身份以及 RFC 3161 时间戳服务
 - macOS：Xcode 和 Xcode Command Line Tools
 - Linux：Clang、CMake、Fontconfig、Vulkan、Wayland、X11/XCB 与 xkbcommon 开发库；GitHub Actions 使用 Ubuntu 22.04
 
@@ -237,13 +235,62 @@ powershell -ExecutionPolicy Bypass -File scripts/run-performance-debug.ps1 `
 
 ## 打包与发布
 
-生成 Windows x64 便携目录、ZIP 与更新元数据：
+`package-release.ps1` 默认使用 `None` 模式构建未签名 Windows 发行包，不要求证书或时间戳配置：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 ```
 
-生成 macOS ARM64 `.app` ZIP 或 Linux x86_64 便携 TAR.GZ；两者同样包含安装脚本、整包/分块哈希与更新清单：
+需要签名时可显式选择 `Pfx` 或 `PreSigned`。`Pfx` 模式负责构建、签名和打包；`PreSigned` 模式只接受已经由硬件令牌、HSM 或云签名服务处理的 `target\release\vclogg2.exe`，并且必须与 `-SkipBuild` 同时使用，避免重新编译覆盖签名。
+
+适用于可合法导出证书的本地 PFX 模式：
+
+```powershell
+$env:VCLOGG2_WINDOWS_SIGNING_CERTIFICATE_PATH = 'C:\secure\vclogg2-code-signing.pfx'
+$env:VCLOGG2_WINDOWS_SIGNING_CERTIFICATE_PASSWORD = '<由本机凭据管理器注入的 PFX 密码>'
+$env:VCLOGG2_WINDOWS_TIMESTAMP_URL = 'https://<证书颁发机构提供的 RFC 3161 地址>'
+powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1 `
+  -SigningMode Pfx
+```
+
+外部 HSM 或云签名服务先完成构建与签名，再进入仅验证和打包阶段：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1
+# 使用证书供应商的硬件、HSM 或云签名工具签名 target\release\vclogg2.exe 并添加 RFC 3161 时间戳
+powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1 `
+  -SigningMode PreSigned -SkipBuild
+```
+
+仅在 `Pfx` 或 `PreSigned` 模式下，`package-release.ps1` 才会在压缩前后调用 `Get-AuthenticodeSignature`；证书不受信任、签名无效或没有时间戳时不会生成发布 ZIP。PFX 模式还会调用 Windows SDK `SignTool`，使用 SHA-256 Authenticode 签名并通过 `/tr`、`/td SHA256` 获取 RFC 3161 时间戳，再执行 SignTool 验证。`None` 模式不执行签名校验并允许分发未签名包。
+
+公开 GitHub Release 推荐使用 Microsoft Artifact Signing：私钥保留在合规 HSM 中，GitHub Actions 通过 OIDC 获取短期身份，不保存代码签名私钥。配置以下仓库变量：
+
+- `WINDOWS_SIGNING_PROVIDER=artifact-signing`；
+- `WINDOWS_ARTIFACT_SIGNING_ENDPOINT`；
+- `WINDOWS_ARTIFACT_SIGNING_ACCOUNT_NAME`；
+- `WINDOWS_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME`。
+
+同时配置 `AZURE_CLIENT_ID`、`AZURE_TENANT_ID`、`AZURE_SUBSCRIPTION_ID` Secrets，为对应身份建立 GitHub OIDC 联合凭据，并授予 Artifact Signing Certificate Profile Signer 角色。工作流使用 `azure/login@v3` 和 `azure/artifact-signing-action@v2`，对 EXE 执行 SHA-256 签名，并使用 Microsoft RFC 3161 时间戳服务。
+
+未配置 `WINDOWS_SIGNING_PROVIDER` 时，GitHub Actions 默认使用 `unsigned`，无需任何签名 Secrets 即可生成 Windows 包和 GitHub Release。旧有可导出 PFX 或企业内部证书可以使用 PFX 后端：将 `WINDOWS_SIGNING_PROVIDER` 显式设为 `pfx`，并配置两个加密 Secrets 和一个可选仓库变量：
+
+- `WINDOWS_SIGNING_CERTIFICATE_BASE64`：代码签名 PFX 的 Base64 内容；
+- `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`：PFX 密码；
+- `WINDOWS_TIMESTAMP_URL`：证书颁发机构提供的 RFC 3161 地址；未配置时使用工作流内的 DigiCert 默认地址。
+
+可在 PowerShell 中写入仓库 Secrets；`gh secret set WINDOWS_SIGNING_CERTIFICATE_PASSWORD` 会交互读取密码，不要把真实密码写进命令历史或仓库文件：
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes('C:\secure\vclogg2-code-signing.pfx')) |
+  gh secret set WINDOWS_SIGNING_CERTIFICATE_BASE64
+gh secret set WINDOWS_SIGNING_CERTIFICATE_PASSWORD
+gh variable set WINDOWS_TIMESTAMP_URL --body 'https://<证书颁发机构提供的 RFC 3161 地址>'
+```
+
+工作流仅在 Windows runner 的临时目录还原 PFX，打包结束或失败后均会删除该临时文件。GitHub 单个 Secret 的上限为 48 KB；Base64 后超过该限制的证书不应使用此后端。PFX、P12、PEM 与私钥文件已由 `.gitignore` 排除，禁止提交到仓库。根据 CA/Browser Forum 规则，2023 年 6 月以后新签发的公开受信任代码签名证书通常不能导出为 PFX，应使用 Artifact Signing 或证书供应商提供的硬件/HSM 签名服务。
+
+生成 macOS ARM64 `.app` ZIP 或 Linux x86_64 便携 TAR.GZ；两者包含当前用户安装脚本：
 
 ```bash
 # 在 macOS 上执行
@@ -253,11 +300,13 @@ powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 ./scripts/package-release-linux.sh
 ```
 
-三种平台的产物分别写入 `dist/windows-x86_64/`、`dist/macos-aarch64/` 与 `dist/linux-x86_64/`。打包脚本根据当前提交上的 `v<SemVer>` tag 和实际 runner 架构命名产物，并把同一版本写入可执行文件、更新清单和 macOS 应用信息；macOS 还会生成临时签名的 `.app`。未打 tag 的手动构建使用 `0.0.0-dev+g<commit>`，也可通过 `VCLOGG2_BUILD_VERSION` 显式覆盖。
+三种平台的产物分别写入 `dist/windows-x86_64/`、`dist/macos-aarch64/` 与 `dist/linux-x86_64/`。打包脚本根据当前提交上的 `v<SemVer>` tag 和实际 runner 架构命名产物，并把同一版本写入可执行文件和 macOS 应用信息；Windows 默认生成未签名包，配置签名后才强制校验 Authenticode 与 RFC 3161 时间戳，macOS 当前生成临时签名的 `.app`。未打 tag 的手动构建使用 `0.0.0-dev+g<commit>`，也可通过 `VCLOGG2_BUILD_VERSION` 显式覆盖。
 
-仓库中的 [`.github/workflows/release-build.yml`](.github/workflows/release-build.yml) 会在推送 `v*` tag 时并行构建 Windows x64、macOS ARM64 和 Linux x86_64，也支持在 GitHub Actions 页面手动执行仅构建产物。构建结果作为 Actions Artifacts 保存 14 天；推送 `v*` tag 且三个构建全部成功后，工作流会复核标签、三平台清单、文件大小和 SHA-256，再自动创建带生成式发行说明的 GitHub Release。Release 同时包含安装包、blockmap 和客户端可识别的 `latest-<platform>-<architecture>.json`。
+仓库中的 [`.github/workflows/release-build.yml`](.github/workflows/release-build.yml) 会在推送 `v*` tag 时并行构建 Windows x64、macOS ARM64 和 Linux x86_64，也支持在 GitHub Actions 页面手动执行仅构建产物。构建结果作为 Actions Artifacts 保存 14 天；推送 `v*` tag 且三个构建全部成功后，工作流会核对标签对应的三平台包名，再自动创建带生成式发行说明的 GitHub Release。
 
-正式发行版默认通过 GitHub Releases REST API 检查 `zhaiyanqi/vclogg2` 的最新正式版本，即使“设置 → 网络”没有业务服务器地址也能更新；若已配置服务器，原有静态更新目录会作为第二来源参与检查，两边都有更新时选择版本较新的包。GitHub 返回的仓库、标签、资产名称、大小和可用摘要会先与平台清单交叉验证；资产下载只允许重定向到 GitHub 管理的 HTTPS 域名，落盘前仍逐块及整包验证 SHA-256。标记为 prerelease 的版本不会进入普通客户端的自动更新通道。
+普通 `git push` 到 `main` 只触发 CI，不会创建 Release。要自动出包并发布 GitHub Release，必须推送 `v<SemVer>` 标签；在 Actions 页面手动运行只生成可下载的工作流 Artifacts，不执行最终 Release 发布 job。
+
+应用不包含版本检测、后台下载或自更新状态机。“帮助 → 更新”只是打开 `https://github.com/zhaiyanqi/vclogg2/releases`；用户自行选择版本和平台包，并按对应平台安装说明完成更新。
 
 发布新版本时不需要修改 `Cargo.toml` 或 `Cargo.lock` 中的版本号。提交并推送干净的 `main` 后，创建一个 `v<SemVer>` 标签，再交给脚本校验并推送：
 
@@ -269,22 +318,7 @@ git tag -a "v${VERSION}" -m "VCLogg2 v${VERSION}"
 
 脚本不会创建或修改标签。它要求标签是合法的 `v<SemVer>`、已存在并指向当前 `main`，同时要求本地 `main` 与 `origin/main` 完全一致；运行格式、静态检查和 Clippy 后只推送该标签，标签会触发上述 GitHub Action。无人值守调用可追加 `--yes`，非默认远端可使用 `--remote <名称>`。
 
-任一平台的产物都可通过跨平台发布脚本写入对应静态更新目录；脚本先验证清单、大小和 SHA-256，最后原子替换 `latest.json`：
-
-```bash
-./scripts/publish-update.py \
-  --source dist/macos-aarch64 \
-  --target /srv/vclogg2/updates-vclogg2/macos-aarch64
-```
-
-Windows 也可继续使用 PowerShell 包装脚本：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/publish-update.ps1 `
-  -TargetDirectory D:\server\data\updates-vclogg2\windows-x86_64
-```
-
-GitHub Releases 与自建静态源使用同一更新协议：验证分块与整包 SHA-256，并在应用正常退出、会话完成保存后交给平台独立助手安装并重启。更新清单本身不做独立数字签名，因此仓库/更新源权限、HTTPS 以及 Windows 代码签名或 macOS Developer ID 签名/公证仍由发布环境负责。完整交付边界见 [`doc/delivery.md`](doc/delivery.md)。
+GitHub 仓库权限属于发布信任边界。Windows 未签名模式不提供发布者身份校验；启用签名后流水线会强制验证 Authenticode 签名与 RFC 3161 时间戳。macOS Developer ID 签名和公证仍由正式发布环境负责。完整交付边界见 [`doc/delivery.md`](doc/delivery.md)。
 
 ## 工程结构
 
@@ -316,7 +350,7 @@ scripts/               启动、检查、构建、测试数据、打包和发布
 | [`doc/feature-parity.md`](doc/feature-parity.md) | 已实现能力证据、待确认差异与验收步骤 |
 | [`doc/architecture.md`](doc/architecture.md) | 模块职责、状态边界与关键实现约束 |
 | [`doc/ui-layout.md`](doc/ui-layout.md) | UI 控件层级、稳定编号与交互说明 |
-| [`doc/delivery.md`](doc/delivery.md) | 三平台构建、安装、更新与发布交付 |
+| [`doc/delivery.md`](doc/delivery.md) | 三平台构建、安装与发布交付 |
 | [`doc/ui-polish-acceptance.md`](doc/ui-polish-acceptance.md) | 界面细节与手工视觉验收清单 |
 
 ## 参与贡献

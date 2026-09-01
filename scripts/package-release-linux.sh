@@ -59,18 +59,8 @@ install -m 644 \
 install -m 755 \
   "$script_directory/Install-VCLogg2-linux.sh" \
   "$stage_directory/Install-VCLogg2-linux.sh"
-install -m 755 \
-  "$script_directory/Apply-VCLogg2Update.sh" \
-  "$stage_directory/Apply-VCLogg2Update.sh"
 
 tar -C "$output_directory" -czf "$archive_path" "$stage_name"
-"$script_directory/write-update-metadata.py" \
-  --archive "$archive_path" \
-  --platform linux \
-  --architecture "$architecture" \
-  --version "$version" \
-  --blockmap-name "$stage_name.blockmap.json"
 
 echo "Linux portable directory: $stage_directory"
 echo "Linux release package: $archive_path"
-echo "Linux update feed: $output_directory/latest.json"

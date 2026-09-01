@@ -20,7 +20,6 @@ use crate::{
     path_identity::{PathMatchKey, path_match_key},
     search_context::{PersistedGlobalSearchContext, WorkspaceSearchState},
     state_store::{CloudSettings, FileSessionState, StateStore},
-    updater::{AvailableUpdate, DownloadedUpdate, UpdateClient},
     virtual_log_lines::LogRowKey,
 };
 
@@ -262,77 +261,6 @@ impl RetainedGlobalSearchContext {
         }) {
             self.viewport = None;
         }
-    }
-}
-
-#[derive(Clone)]
-pub(crate) enum AppUpdateState {
-    Unsupported,
-    Idle,
-    Checking,
-    Current,
-    Available(Box<AvailableUpdate>),
-    Downloading { version: String },
-    Downloaded(DownloadedUpdate),
-    Error,
-}
-
-impl AppUpdateState {
-    fn button_label(&self, transferred: u64, total: u64) -> String {
-        match self {
-            Self::Unsupported => {
-                crate::tr!("更新（开发版）", "Updates (development build)").to_string()
-            }
-            Self::Idle => crate::tr!("检查更新", "Check for updates").to_string(),
-            Self::Checking => crate::tr!("检查更新中…", "Checking for updates…").to_string(),
-            Self::Current => crate::tr!("已是最新版", "Up to date").to_string(),
-            Self::Available(update) => {
-                crate::tr_args!("下载 {}", "Download {}", update.manifest.version)
-            }
-            Self::Downloading { version } if total > 0 => crate::tr_args!(
-                "下载 {version} · {:.0}%",
-                "Downloading {version} · {:.0}%",
-                transferred as f64 / total as f64 * 100.,
-            ),
-            Self::Downloading { version } => {
-                crate::tr_args!("下载 {version}…", "Downloading {version}…")
-            }
-            Self::Downloaded(update) => crate::tr_args!("安装 {}", "Install {}", update.version),
-            Self::Error => crate::tr!("重试更新", "Retry update").to_string(),
-        }
-    }
-}
-
-pub(crate) struct UpdateController {
-    pub(crate) client: Option<UpdateClient>,
-    pub(crate) state: AppUpdateState,
-    pub(crate) transferred: u64,
-    pub(crate) total: u64,
-    pub(crate) task: Option<Task<()>>,
-    pub(crate) progress_task: Option<Task<()>>,
-}
-
-impl UpdateController {
-    pub(crate) fn new(state: AppUpdateState) -> Self {
-        Self {
-            client: None,
-            state,
-            transferred: 0,
-            total: 0,
-            task: None,
-            progress_task: None,
-        }
-    }
-
-    pub(crate) fn button_label(&self) -> String {
-        self.state.button_label(self.transferred, self.total)
-    }
-
-    pub(crate) fn is_busy(&self) -> bool {
-        matches!(
-            self.state,
-            AppUpdateState::Checking | AppUpdateState::Downloading { .. }
-        )
     }
 }
 

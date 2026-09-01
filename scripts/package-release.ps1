@@ -1,11 +1,33 @@
 ﻿param(
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\dist')
+    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\dist'),
+    [string]$SigningCertificatePath = $env:VCLOGG2_WINDOWS_SIGNING_CERTIFICATE_PATH,
+    [string]$TimestampUrl = $env:VCLOGG2_WINDOWS_TIMESTAMP_URL,
+    [ValidateSet('None', 'Pfx', 'PreSigned')]
+    [string]$SigningMode = 'None',
+    [switch]$SkipBuild
 )
 
 $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $resolvedOutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
+if ($SigningMode -eq 'Pfx') {
+    if ([string]::IsNullOrWhiteSpace($SigningCertificatePath)) {
+        throw 'PFX 签名模式必须提供代码签名证书；请设置 VCLOGG2_WINDOWS_SIGNING_CERTIFICATE_PATH。'
+    }
+    if ([string]::IsNullOrWhiteSpace($TimestampUrl)) {
+        throw 'PFX 签名模式必须提供 RFC 3161 时间戳地址；请设置 VCLOGG2_WINDOWS_TIMESTAMP_URL。'
+    }
+    if ([string]::IsNullOrEmpty($env:VCLOGG2_WINDOWS_SIGNING_CERTIFICATE_PASSWORD)) {
+        throw 'PFX 签名模式必须提供受密码保护的证书；请设置 VCLOGG2_WINDOWS_SIGNING_CERTIFICATE_PASSWORD。'
+    }
+    $resolvedSigningCertificate = [System.IO.Path]::GetFullPath($SigningCertificatePath)
+    if (-not (Test-Path -LiteralPath $resolvedSigningCertificate -PathType Leaf)) {
+        throw "Windows 代码签名证书不存在：$resolvedSigningCertificate"
+    }
+} elseif ($SigningMode -eq 'PreSigned' -and -not $SkipBuild) {
+    throw 'PreSigned 模式必须与 -SkipBuild 同时使用，避免重新编译覆盖外部签名结果。'
+}
 
 Push-Location -LiteralPath $repositoryRoot
 $version = $env:VCLOGG2_BUILD_VERSION
@@ -33,8 +55,10 @@ if ($version -notmatch $semverPattern) {
 }
 $env:VCLOGG2_BUILD_VERSION = $version
 
-& (Join-Path $PSScriptRoot 'build-release.ps1')
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if (-not $SkipBuild) {
+    & (Join-Path $PSScriptRoot 'build-release.ps1')
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 
 New-Item -ItemType Directory -Path $resolvedOutputDirectory -Force | Out-Null
 $platformDirectory = [System.IO.Path]::GetFullPath(
@@ -54,20 +78,34 @@ if (Test-Path -LiteralPath $stageDirectory) {
 New-Item -ItemType Directory -Path $stageDirectory -Force | Out-Null
 
 $releaseExecutable = Join-Path $repositoryRoot 'target\release\vclogg2.exe'
-$releaseExecutableText = [System.Text.Encoding]::UTF8.GetString(
-    [System.IO.File]::ReadAllBytes($releaseExecutable)
-)
-foreach ($forbiddenMarker in @(
-    'Apply-VCLogg2Update.ps1',
-    'Expand-Archive -LiteralPath',
-    '-ExecutionPolicyBypass'
-)) {
-    if ($releaseExecutableText.Contains($forbiddenMarker)) {
-        throw "Windows 可执行文件仍包含已禁用的 PowerShell 更新脚本特征：$forbiddenMarker"
+if (-not (Test-Path -LiteralPath $releaseExecutable -PathType Leaf)) {
+    throw "Windows Release 可执行文件不存在：$releaseExecutable"
+}
+if ($SigningMode -eq 'Pfx') {
+    & (Join-Path $PSScriptRoot 'sign-windows.ps1') `
+        -ExecutablePath $releaseExecutable `
+        -CertificatePath $resolvedSigningCertificate `
+        -TimestampUrl $TimestampUrl
+}
+
+if ($SigningMode -ne 'None') {
+    $releaseSignature = Get-AuthenticodeSignature -LiteralPath $releaseExecutable
+    if ($releaseSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+        $null -eq $releaseSignature.SignerCertificate -or
+        $null -eq $releaseSignature.TimeStamperCertificate) {
+        throw '已启用签名时，Windows Release 可执行文件必须包含有效且受信任的 Authenticode 签名和 RFC 3161 时间戳。'
     }
 }
-$releaseExecutableText = $null
-Copy-Item -LiteralPath $releaseExecutable -Destination (Join-Path $stageDirectory 'vclogg2.exe')
+
+$packagedExecutable = Join-Path $stageDirectory 'vclogg2.exe'
+Copy-Item -LiteralPath $releaseExecutable -Destination $packagedExecutable
+if ($SigningMode -ne 'None') {
+    $packagedSignature = Get-AuthenticodeSignature -LiteralPath $packagedExecutable
+    if ($packagedSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+        $null -eq $packagedSignature.TimeStamperCertificate) {
+        throw 'Windows 发布目录中的 vclogg2.exe 未保留有效的 Authenticode 签名和时间戳。'
+    }
+}
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'README.md') -Destination $stageDirectory
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination $stageDirectory
 
@@ -95,62 +133,7 @@ if (Test-Path -LiteralPath $symbolsArchivePath) {
 }
 Compress-Archive -LiteralPath $releaseSymbols -DestinationPath $symbolsArchivePath -CompressionLevel Optimal
 
-$chunkSize = 1024 * 1024
-$stream = [System.IO.File]::OpenRead($archivePath)
-$chunkHashes = [System.Collections.Generic.List[string]]::new()
-try {
-    $buffer = New-Object byte[] $chunkSize
-    while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
-        $sha = [System.Security.Cryptography.SHA256]::Create()
-        try {
-            $hex = [BitConverter]::ToString($sha.ComputeHash($buffer, 0, $read))
-            $chunkHashes.Add($hex.Replace('-', '').ToLowerInvariant())
-        } finally {
-            $sha.Dispose()
-        }
-    }
-} finally {
-    $stream.Dispose()
-}
-
-$blockmapName = "vclogg2-$version-windows-x86_64.blockmap.json"
-$blockmapPath = Join-Path $platformDirectory $blockmapName
-$blockmapJson = [ordered]@{
-    schemaVersion = 1
-    algorithm = 'sha256'
-    chunkSize = $chunkSize
-    file = $archiveName
-    chunks = $chunkHashes
-} | ConvertTo-Json -Depth 4
-[System.IO.File]::WriteAllText(
-    $blockmapPath,
-    $blockmapJson + [Environment]::NewLine,
-    [System.Text.UTF8Encoding]::new($false)
-)
-
-$archiveInfo = Get-Item -LiteralPath $archivePath
-$archiveHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-$manifestPath = Join-Path $platformDirectory 'latest.json'
-$manifestJson = [ordered]@{
-    schemaVersion = 1
-    product = 'VCLogg2'
-    version = $version
-    platform = 'windows'
-    architecture = 'x86_64'
-    artifact = $archiveName
-    sha256 = $archiveHash
-    size = $archiveInfo.Length
-    blockmap = $blockmapName
-} | ConvertTo-Json
-[System.IO.File]::WriteAllText(
-    $manifestPath,
-    $manifestJson + [Environment]::NewLine,
-    [System.Text.UTF8Encoding]::new($false)
-)
-
 Write-Output "便携目录：$stageDirectory"
 Write-Output "发布压缩包：$archivePath"
 Write-Output "调试符号包（不向用户分发）：$symbolsArchivePath"
-Write-Output "更新清单：$manifestPath"
-Write-Output "分块清单：$blockmapPath"
 Pop-Location

@@ -63,9 +63,6 @@ install -m 644 "$repository_root/LICENSE" "$stage_directory/LICENSE"
 install -m 755 \
   "$script_directory/Install-VCLogg2-macos.sh" \
   "$stage_directory/Install-VCLogg2-macos.sh"
-install -m 755 \
-  "$script_directory/Apply-VCLogg2Update.sh" \
-  "$stage_directory/Apply-VCLogg2Update.sh"
 
 sips -z 16 16 "$source_icon" --out "$iconset_directory/icon_16x16.png" >/dev/null
 sips -z 32 32 "$source_icon" --out "$iconset_directory/icon_16x16@2x.png" >/dev/null
@@ -160,13 +157,5 @@ EOF
 plutil -lint "$contents_directory/Info.plist"
 codesign --force --sign - "$app_directory"
 ditto -c -k --sequesterRsrc --keepParent "$stage_directory" "$archive_path"
-"$script_directory/write-update-metadata.py" \
-  --archive "$archive_path" \
-  --platform macos \
-  --architecture "$architecture" \
-  --version "$version" \
-  --blockmap-name "$stage_name.blockmap.json"
-
 echo "macOS application bundle: $app_directory"
 echo "macOS release package: $archive_path"
-echo "macOS update feed: $output_directory/latest.json"

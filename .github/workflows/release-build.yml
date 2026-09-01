@@ -22,6 +22,11 @@ jobs:
     name: Windows x64
     runs-on: windows-2022
     timeout-minutes: 90
+    env:
+      WINDOWS_SIGNING_PROVIDER: ${{ vars.WINDOWS_SIGNING_PROVIDER || 'unsigned' }}
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
       - name: Checkout repository
@@ -38,18 +43,102 @@ jobs:
         with:
           cache-targets: false
 
-      - name: Build Windows release package
+      - name: Validate Windows signing provider
         shell: powershell
-        run: powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
+        run: |
+          if ($env:WINDOWS_SIGNING_PROVIDER -notin @('unsigned', 'pfx', 'artifact-signing')) {
+            throw 'WINDOWS_SIGNING_PROVIDER must be unsigned, pfx, or artifact-signing.'
+          }
+
+      - name: Build unsigned Windows release package
+        if: env.WINDOWS_SIGNING_PROVIDER == 'unsigned'
+        shell: powershell
+        run: >-
+          powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
+          -SigningMode None
+
+      - name: Build Windows release executable
+        if: env.WINDOWS_SIGNING_PROVIDER == 'artifact-signing'
+        shell: powershell
+        run: powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1
+
+      - name: Sign in to Azure with OIDC
+        if: env.WINDOWS_SIGNING_PROVIDER == 'artifact-signing'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign Windows executable with Artifact Signing
+        if: env.WINDOWS_SIGNING_PROVIDER == 'artifact-signing'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.WINDOWS_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.WINDOWS_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.WINDOWS_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files: ${{ github.workspace }}\target\release\vclogg2.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: VCLogg2
+          description-url: https://github.com/zhaiyanqi/vclogg2
+
+      - name: Package Artifact Signed Windows release
+        if: env.WINDOWS_SIGNING_PROVIDER == 'artifact-signing'
+        shell: powershell
+        run: >-
+          powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
+          -SigningMode PreSigned -SkipBuild
+
+      - name: Restore Windows signing certificate
+        if: env.WINDOWS_SIGNING_PROVIDER == 'pfx'
+        shell: powershell
+        env:
+          VCLOGG2_WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+        run: |
+          $encodedCertificate = $env:VCLOGG2_WINDOWS_SIGNING_CERTIFICATE_BASE64
+          if ([string]::IsNullOrWhiteSpace($encodedCertificate)) {
+            throw 'The WINDOWS_SIGNING_CERTIFICATE_BASE64 secret is required.'
+          }
+          try {
+            $certificateBytes = [Convert]::FromBase64String($encodedCertificate)
+          } catch {
+            throw 'WINDOWS_SIGNING_CERTIFICATE_BASE64 is not valid Base64.'
+          }
+          if ($certificateBytes.Length -eq 0) {
+            throw 'WINDOWS_SIGNING_CERTIFICATE_BASE64 decoded to an empty file.'
+          }
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'vclogg2-signing.pfx'
+          [System.IO.File]::WriteAllBytes($certificatePath, $certificateBytes)
+          $encodedCertificate = $null
+          $certificateBytes = $null
+
+      - name: Build and sign Windows release package with PFX
+        if: env.WINDOWS_SIGNING_PROVIDER == 'pfx'
+        shell: powershell
+        env:
+          VCLOGG2_WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+          VCLOGG2_WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL || 'http://timestamp.digicert.com' }}
+        run: >-
+          powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
+          -SigningMode Pfx
+          -SigningCertificatePath "$env:RUNNER_TEMP\vclogg2-signing.pfx"
+
+      - name: Remove Windows signing certificate
+        if: always() && env.WINDOWS_SIGNING_PROVIDER == 'pfx'
+        shell: powershell
+        run: |
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'vclogg2-signing.pfx'
+          if (Test-Path -LiteralPath $certificatePath -PathType Leaf) {
+            Remove-Item -LiteralPath $certificatePath -Force
+          }
 
       - name: Upload Windows release package
         uses: actions/upload-artifact@v7
         with:
           name: vclogg2-windows-x86_64
-          path: |
-            dist/windows-x86_64/vclogg2-*-windows-x86_64.zip
-            dist/windows-x86_64/vclogg2-*-windows-x86_64.blockmap.json
-            dist/windows-x86_64/latest.json
+          path: dist/windows-x86_64/vclogg2-*-windows-x86_64.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -80,10 +169,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: vclogg2-macos-aarch64
-          path: |
-            dist/macos-aarch64/vclogg2-*-macos-aarch64.zip
-            dist/macos-aarch64/vclogg2-*-macos-aarch64.blockmap.json
-            dist/macos-aarch64/latest.json
+          path: dist/macos-aarch64/vclogg2-*-macos-aarch64.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -132,10 +218,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: vclogg2-linux-x86_64
-          path: |
-            dist/linux-x86_64/vclogg2-*-linux-x86_64.tar.gz
-            dist/linux-x86_64/vclogg2-*-linux-x86_64.blockmap.json
-            dist/linux-x86_64/latest.json
+          path: dist/linux-x86_64/vclogg2-*-linux-x86_64.tar.gz
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -169,61 +252,18 @@ jobs:
           name: vclogg2-linux-x86_64
           path: release-assets/linux-x86_64
 
-      - name: Prepare GitHub update manifests
+      - name: Validate GitHub Release packages
         shell: bash
         run: |
-          python3 - <<'PY'
-          import hashlib
-          import json
-          import os
-          import shutil
-          from pathlib import Path
-
-          tag = os.environ["GITHUB_REF_NAME"]
-          if not tag.startswith("v"):
-              raise SystemExit(f"Release tag must start with v: {tag}")
-          version = tag[1:]
-          release_root = Path("release-assets")
-          platforms = (
-              ("windows", "x86_64"),
-              ("macos", "aarch64"),
-              ("linux", "x86_64"),
+          version="${GITHUB_REF_NAME#v}"
+          packages=(
+            "release-assets/windows-x86_64/vclogg2-${version}-windows-x86_64.zip"
+            "release-assets/macos-aarch64/vclogg2-${version}-macos-aarch64.zip"
+            "release-assets/linux-x86_64/vclogg2-${version}-linux-x86_64.tar.gz"
           )
-
-          for platform, architecture in platforms:
-              source_directory = release_root / f"{platform}-{architecture}"
-              source_manifest = source_directory / "latest.json"
-              manifest = json.loads(source_manifest.read_text(encoding="utf-8"))
-              expected = {
-                  "schemaVersion": 1,
-                  "product": "VCLogg2",
-                  "version": version,
-                  "platform": platform,
-                  "architecture": architecture,
-              }
-              for key, expected_value in expected.items():
-                  if manifest.get(key) != expected_value:
-                      raise SystemExit(
-                          f"{source_manifest}: {key} must be {expected_value!r}, "
-                          f"got {manifest.get(key)!r}"
-                      )
-
-              archive = source_directory / manifest["artifact"]
-              blockmap = source_directory / manifest["blockmap"]
-              if not archive.is_file() or not blockmap.is_file():
-                  raise SystemExit(f"{source_manifest}: referenced release assets are missing")
-              if archive.stat().st_size != manifest["size"]:
-                  raise SystemExit(f"{archive}: size does not match the update manifest")
-              digest = hashlib.sha256()
-              with archive.open("rb") as stream:
-                  for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                      digest.update(chunk)
-              if digest.hexdigest().lower() != manifest["sha256"].lower():
-                  raise SystemExit(f"{archive}: SHA-256 does not match the update manifest")
-
-              target_manifest = release_root / f"latest-{platform}-{architecture}.json"
-              shutil.copyfile(source_manifest, target_manifest)
-          PY
+          for package in "${packages[@]}"; do
+            test -s "$package"
+          done
 
       - name: Create GitHub Release
         shell: bash
@@ -249,6 +289,4 @@ jobs:
             release-assets/windows-x86_64/vclogg2-*-windows-x86_64.zip \
             release-assets/macos-aarch64/vclogg2-*-macos-aarch64.zip \
             release-assets/linux-x86_64/vclogg2-*-linux-x86_64.tar.gz \
-            release-assets/*/*.blockmap.json \
-            release-assets/latest-*.json \
             "${release_options[@]}"

@@ -125,16 +125,13 @@ use crate::{
     },
     tab_resume::{PersistedLogRegion, TabResumeState, ViewportBookmark},
     ui_theme,
-    updater::{
-        AvailableUpdate, DownloadedUpdate, UpdateClient, UpdateDownloadProgress, launch_installer,
-    },
     virtual_log_lines::LogRowKey,
     workspace_state::{
-        AppUpdateState, CloudController, GlobalSearchDocumentResult, GlobalSearchResults,
-        GlobalSearchState, PersistenceController, QuickFindBoundary, QuickFindDirection,
-        QuickFindMatch, QuickFindSource, QuickFindSourceVersion, QuickFindState, QuickFindTarget,
-        ResultMode, RetainedGlobalSearchContext, RowViewportAnchor, SearchController, SearchScope,
-        SearchTarget, UpdateController, ViewportAnchor,
+        CloudController, GlobalSearchDocumentResult, GlobalSearchResults, GlobalSearchState,
+        PersistenceController, QuickFindBoundary, QuickFindDirection, QuickFindMatch,
+        QuickFindSource, QuickFindSourceVersion, QuickFindState, QuickFindTarget, ResultMode,
+        RetainedGlobalSearchContext, RowViewportAnchor, SearchController, SearchScope,
+        SearchTarget, ViewportAnchor,
     },
 };
 
@@ -143,6 +140,7 @@ const PREVIEW_BYTE_LIMIT: usize = 1024 * 1024;
 const PREVIEW_LINE_LIMIT: usize = 200;
 const MAX_DOCUMENT_PREPARE_WORKERS: usize = 4;
 const SEARCH_SUGGESTION_ROW_HEIGHT_REMS: f32 = 3.25;
+const GITHUB_RELEASES_URL: &str = "https://github.com/zhaiyanqi/vclogg2/releases";
 const SEARCH_SUGGESTION_MAX_VISIBLE_ROWS: usize = 5;
 const SEARCH_CONTROL_HEIGHT: Pixels = px(34.);
 const SEARCH_BAR_VERTICAL_INSET: Pixels = px(8.);
@@ -2664,7 +2662,6 @@ pub struct Workspace {
     search_history: Vec<String>,
     predefined_filters: Vec<PredefinedFilter>,
     cloud: CloudController,
-    updates: UpdateController,
     search_history_ix: Option<usize>,
     search_history_draft: Option<String>,
     search_autocomplete_mode: SearchAutocompleteMode,
@@ -2723,9 +2720,7 @@ pub struct Workspace {
     search_panel_resize_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     file_watch_task: Option<Task<()>>,
     deactivated_input_focus: Option<FocusHandle>,
-    _update_client_bootstrap_task: Task<()>,
     _cloud_client_bootstrap_task: Task<()>,
-    _automatic_update_task: Task<()>,
     persistence: PersistenceController,
     last_workspace_files: Vec<LastWorkspaceFile>,
     pinned_files: Vec<RecentFile>,
@@ -3507,29 +3502,6 @@ impl Workspace {
         let focus_handle = cx.focus_handle().tab_stop(true);
         let focus_on_start = focus_handle.clone();
         window.defer(cx, move |window, cx| focus_on_start.focus(window, cx));
-        let update_state = if cfg!(debug_assertions) {
-            AppUpdateState::Unsupported
-        } else {
-            AppUpdateState::Idle
-        };
-        let update_client_bootstrap_task = cx.spawn_in(window, async move |this, cx| {
-            if cfg!(debug_assertions) {
-                return;
-            }
-            let client = cx
-                .background_spawn(async move { UpdateClient::open_default() })
-                .await;
-            _ = this.update_in(cx, |this, _, cx| {
-                match client {
-                    Ok(client) => {
-                        this.updates.client = Some(client);
-                        this.updates.state = AppUpdateState::Idle;
-                    }
-                    Err(_) => this.updates.state = AppUpdateState::Error,
-                }
-                cx.notify();
-            });
-        });
         let cloud_client_bootstrap_task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
@@ -3566,19 +3538,6 @@ impl Workspace {
                     log::warn!("索引缓存自动维护失败：{error:#}");
                 }
             })
-        });
-        let automatic_update_task = cx.spawn_in(window, async move |this, cx| {
-            if !primary_window || cfg!(debug_assertions) {
-                return;
-            }
-            cx.background_executor()
-                .timer(Duration::from_secs(15))
-                .await;
-            _ = this.update_in(cx, |this, window, cx| {
-                if matches!(this.updates.state, AppUpdateState::Idle) {
-                    this.check_for_updates(false, window, cx);
-                }
-            });
         });
         let state_bootstrap_task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
@@ -3777,7 +3736,6 @@ impl Workspace {
             search_history: Vec::new(),
             predefined_filters: Vec::new(),
             cloud: CloudController::default(),
-            updates: UpdateController::new(update_state),
             search_history_ix: None,
             search_history_draft: None,
             search_autocomplete_mode: SearchAutocompleteMode::Closed,
@@ -3836,9 +3794,7 @@ impl Workspace {
             search_panel_resize_bounds: Rc::new(Cell::new(None)),
             file_watch_task: None,
             deactivated_input_focus: None,
-            _update_client_bootstrap_task: update_client_bootstrap_task,
             _cloud_client_bootstrap_task: cloud_client_bootstrap_task,
-            _automatic_update_task: automatic_update_task,
             persistence,
             last_workspace_files: Vec::new(),
             pinned_files: Vec::new(),
@@ -5621,251 +5577,6 @@ impl Workspace {
                     });
                 }
             }));
-    }
-
-    fn check_for_updates(&mut self, manual: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.updates.task.is_some() {
-            return;
-        }
-        if cfg!(debug_assertions) {
-            if manual {
-                window.push_notification(crate::tr!("开发构建不执行应用更新，请使用发行版验证更新流程", "Development builds don’t install updates. Use a release build to verify the update flow."), cx);
-            }
-            return;
-        }
-        let Some(client) = self.updates.client.clone() else {
-            self.updates.state = AppUpdateState::Error;
-            cx.notify();
-            return;
-        };
-        let static_server_url = (!self.cloud.settings.server_url.trim().is_empty())
-            .then(|| self.cloud.settings.server_url.trim().to_string());
-        self.updates.state = AppUpdateState::Checking;
-        self.updates.task = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    client.check_latest(crate::build_info::VERSION, static_server_url.as_deref())
-                })
-                .await;
-            _ = this.update_in(cx, |this, window, cx| {
-                this.updates.task = None;
-                match result {
-                    Ok(Some(update)) => {
-                        this.updates.state = AppUpdateState::Available(Box::new(update.clone()));
-                        this.confirm_update_download(update, window, cx);
-                    }
-                    Ok(None) => {
-                        this.updates.state = AppUpdateState::Current;
-                        if manual {
-                            window.push_notification(
-                                crate::tr_args!(
-                                    "VCLogg2 {} 已是最新版本",
-                                    "VCLogg2 {} is up to date",
-                                    crate::build_info::VERSION
-                                ),
-                                cx,
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        this.updates.state = AppUpdateState::Error;
-                        if manual {
-                            window.push_notification(
-                                crate::tr_args!(
-                                    "检查更新失败：{error}",
-                                    "Couldn’t check for updates: {error}"
-                                ),
-                                cx,
-                            );
-                        }
-                    }
-                }
-                cx.notify();
-            });
-        }));
-        cx.notify();
-    }
-
-    fn confirm_update_download(
-        &mut self,
-        update: AvailableUpdate,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let version = update.manifest.version.clone();
-        let size = format_bytes(update.manifest.size);
-        let workspace = cx.entity();
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let workspace = workspace.clone();
-            let update = update.clone();
-            alert
-                .title(crate::tr_args!("发现 VCLogg2 {version}", "VCLogg2 {version} is available"))
-                .description(crate::tr_args!(
-                    "更新包大小 {size}。下载后将验证整包和每个分块的 SHA-256。",
-                    "The update is {size}. After downloading, SHA-256 will verify the package and every chunk.",
-                ))
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text(crate::tr!("下载更新", "Download update"))
-                        .cancel_text(crate::tr!("稍后", "Later"))
-                        .show_cancel(true),
-                )
-                .on_ok(move |_, window, cx| {
-                    workspace.update(cx, |this, cx| {
-                        this.download_update(update.clone(), window, cx)
-                    });
-                    true
-                })
-        });
-    }
-
-    fn download_update(
-        &mut self,
-        update: AvailableUpdate,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.updates.task.is_some() {
-            return;
-        }
-        let Some(client) = self.updates.client.clone() else {
-            return;
-        };
-        let progress = UpdateDownloadProgress::default();
-        let progress_for_download = progress.clone();
-        let version = update.manifest.version.clone();
-        self.updates.transferred = 0;
-        self.updates.total = update.manifest.size;
-        self.updates.state = AppUpdateState::Downloading {
-            version: version.clone(),
-        };
-        self.updates.progress_task = Some(cx.spawn_in(window, async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(100))
-                    .await;
-                let snapshot = progress.snapshot();
-                let keep_polling = this
-                    .update_in(cx, |this, _, cx| {
-                        let keep_polling =
-                            matches!(this.updates.state, AppUpdateState::Downloading { .. });
-                        if keep_polling
-                            && (this.updates.transferred, this.updates.total) != snapshot
-                        {
-                            this.updates.transferred = snapshot.0;
-                            this.updates.total = snapshot.1;
-                            cx.notify();
-                        }
-                        keep_polling
-                    })
-                    .unwrap_or(false);
-                if !keep_polling {
-                    break;
-                }
-            }
-        }));
-        self.updates.task = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = cx
-                .background_spawn(async move { client.download(&update, &progress_for_download) })
-                .await;
-            _ = this.update_in(cx, |this, window, cx| {
-                this.updates.task = None;
-                this.updates.progress_task.take();
-                match result {
-                    Ok(downloaded) => {
-                        this.updates.transferred = this.updates.total;
-                        this.updates.state = AppUpdateState::Downloaded(downloaded.clone());
-                        this.confirm_update_install(downloaded, window, cx);
-                    }
-                    Err(error) => {
-                        this.updates.state = AppUpdateState::Error;
-                        window.push_notification(
-                            crate::tr_args!(
-                                "下载更新失败：{error}",
-                                "Couldn’t download the update: {error}"
-                            ),
-                            cx,
-                        );
-                    }
-                }
-                cx.notify();
-            });
-        }));
-        cx.notify();
-    }
-
-    fn confirm_update_install(
-        &mut self,
-        update: DownloadedUpdate,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let version = update.version.clone();
-        let workspace = cx.entity();
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let workspace = workspace.clone();
-            let update = update.clone();
-            alert
-                .title(crate::tr_args!("安装 VCLogg2 {version}？", "Install VCLogg2 {version}?"))
-                .description(crate::tr!("应用会先按正常退出流程保存所有窗口状态，退出后由独立助手完成当前用户安装并重新启动。", "The application will save all window state and exit normally. A separate helper will install the update for the current user and restart VCLogg2."))
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text(crate::tr!("退出并安装", "Quit and install"))
-                        .cancel_text(crate::tr!("稍后", "Later"))
-                        .show_cancel(true),
-                )
-                .on_ok(move |_, window, cx| {
-                    workspace.update(cx, |this, cx| {
-                        this.start_update_install(update.clone(), window, cx)
-                    });
-                    true
-                })
-        });
-    }
-
-    fn start_update_install(
-        &mut self,
-        update: DownloadedUpdate,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.updates.task.is_some() {
-            return;
-        }
-        self.updates.task = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = cx
-                .background_spawn(async move { launch_installer(&update) })
-                .await;
-            _ = this.update_in(cx, |this, window, cx| match result {
-                Ok(()) => cx.quit(),
-                Err(error) => {
-                    this.updates.task = None;
-                    this.updates.state = AppUpdateState::Error;
-                    window.push_notification(
-                        crate::tr_args!(
-                            "无法启动更新安装助手：{error}",
-                            "Couldn’t start the update installer: {error}"
-                        ),
-                        cx,
-                    );
-                    cx.notify();
-                }
-            });
-        }));
-    }
-
-    fn handle_update_button(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.updates.state.clone() {
-            AppUpdateState::Unsupported => {
-                window.push_notification(crate::tr!("开发构建不执行应用更新，请使用发行版验证更新流程", "Development builds don’t install updates. Use a release build to verify the update flow."), cx)
-            }
-            AppUpdateState::Available(update) => self.confirm_update_download(*update, window, cx),
-            AppUpdateState::Downloaded(update) => self.confirm_update_install(update, window, cx),
-            AppUpdateState::Downloading { .. } | AppUpdateState::Checking => {}
-            AppUpdateState::Idle | AppUpdateState::Current | AppUpdateState::Error => {
-                self.check_for_updates(true, window, cx)
-            }
-        }
     }
 
     fn apply_search_defaults(&mut self, case_sensitive: bool, regex: bool) {
@@ -13371,8 +13082,6 @@ impl Workspace {
         let case_sensitive = self.case_sensitive;
         let regex = self.regex;
         let tab_count = self.tabs.len();
-        let update_button_label = self.updates.button_label();
-        let update_busy = self.updates.is_busy();
         let active_encoding = self.active_document().map(|tab| {
             (
                 tab.id,
@@ -13881,8 +13590,8 @@ impl Workspace {
             .dropdown_menu(move |menu, window, cx| {
                 let menu =
                     Self::popup_menu_with_workspace_action_context(menu, &help_workspace, cx);
-                let check_update = window.listener_for(&help_workspace, |this, _, window, cx| {
-                    this.handle_update_button(window, cx);
+                let open_releases = window.listener_for(&help_workspace, |_, _, _, cx| {
+                    cx.open_url(GITHUB_RELEASES_URL);
                 });
                 let about = window.listener_for(&help_workspace, |this, _, window, cx| {
                     this.open_settings_dialog(Some(SettingsCategory::About), window, cx);
@@ -13896,16 +13605,16 @@ impl Workspace {
                         .disabled(settings_saving)
                         .on_click(shortcuts),
                 )
-                .item(
-                    PopupMenuItem::new(update_button_label.clone())
-                        .disabled(update_busy)
-                        .on_click(check_update),
-                )
+                .item(PopupMenuItem::new(crate::tr!("更新", "Updates")).on_click(open_releases))
                 .separator()
                 .item(
-                    PopupMenuItem::new(crate::tr!("关于", "About"))
-                        .disabled(settings_saving)
-                        .on_click(about),
+                    PopupMenuItem::new(format!(
+                        "{} ver.{}",
+                        crate::tr!("关于", "About"),
+                        crate::build_info::VERSION
+                    ))
+                    .disabled(settings_saving)
+                    .on_click(about),
                 )
             });
 

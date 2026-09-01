@@ -1641,11 +1641,7 @@ impl SettingsDialog {
                     .item(crate::tr!("语言与工具链", "Language & toolchain"), "Rust 2024 Edition · Cargo · native toolchain", 1)
                     .item(crate::tr!("界面", "Interface"), "GPUI · gpui-component · gpui-base", 1)
                     .item(crate::tr!("数据与检索", "Data & search"), crate::tr!("SQLite/WAL · 内存映射 · 正则与多模式匹配", "SQLite/WAL · memory mapping · regex and multi-pattern matching"), 1)
-                    .item(
-                        crate::tr!("网络与更新", "Network & updates"),
-                        crate::tr!("HTTP/HTTPS · rustls · SHA-256 · 语义化版本", "HTTP/HTTPS · rustls · SHA-256 · semantic versioning"),
-                        1,
-                    )
+                    .item(crate::tr!("网络", "Networking"), "HTTP/HTTPS · rustls", 1)
                     .item(crate::tr!("平台集成", "Platform integration"), crate::tr!("系统回收站、凭据库、文件打开关联、单实例与原生窗口", "System trash, credential storage, file-opening associations, single-instance routing, and native windows"), 1),
                 cx,
             ))
@@ -1672,7 +1668,7 @@ impl SettingsDialog {
                     .item("rusqlite / SQLite", crate::tr!("设置、历史与会话状态的本地持久化", "Local persistence for settings, history, and session state"), 1)
                     .item(
                         "reqwest / rustls",
-                        crate::tr!("云端过滤器与应用更新所需的 HTTPS 通信", "HTTPS communication for cloud filters and application updates"),
+                        crate::tr!("云端过滤器所需的 HTTPS 通信", "HTTPS communication for cloud filters"),
                         1,
                     )
                     .item("serde / serde_json", crate::tr!("配置、会话与交换格式的序列化", "Serialization for configuration, sessions, and exchange formats"), 1)
@@ -1687,8 +1683,8 @@ impl SettingsDialog {
                         1,
                     )
                     .item(
-                        "keyring / sha2 / semver",
-                        crate::tr!("系统凭据保护、更新校验与版本比较", "System credential protection, update verification, and version comparison"),
+                        "keyring / sha2",
+                        crate::tr!("系统凭据保护与安全摘要", "System credential protection and secure digests"),
                         1,
                     ),
                 cx,
