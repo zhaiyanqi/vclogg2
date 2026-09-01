@@ -999,7 +999,7 @@ impl LogTableDelegate {
             .retain(|source_row| source_rows.contains(*source_row));
         self.source.row_projection = LogRowProjection::SourceRows(source_rows);
         self.interaction.row_bounds.borrow_mut().clear();
-        self.restore_stable_interaction_rows(selected_rows, active_row, selection_anchor);
+        self.restore_stable_interaction_rows(selected_rows, active_row, selection_anchor, true);
     }
 
     pub fn set_marked_rows(&mut self, marked_rows: CompressedRows) {
@@ -1084,7 +1084,7 @@ impl LogTableDelegate {
         self.source.replace(document, row_projection);
         self.interaction.text_selections.clear();
         self.interaction.row_bounds.borrow_mut().clear();
-        self.restore_stable_interaction_rows(selected_rows, active_row, selection_anchor);
+        self.restore_stable_interaction_rows(selected_rows, active_row, selection_anchor, false);
     }
 
     fn stable_interaction_rows(&self) -> (CompressedRows, Option<LogRowKey>, Option<LogRowKey>) {
@@ -1108,6 +1108,7 @@ impl LogTableDelegate {
         selected_rows: CompressedRows,
         active_row: Option<LogRowKey>,
         selection_anchor: Option<LogRowKey>,
+        retain_nearest_active_row: bool,
     ) {
         let selected_ranges = self
             .source
@@ -1117,9 +1118,14 @@ impl LogTableDelegate {
             .row_selection
             .borrow_mut()
             .replace_ranges_with_anchor(selected_ranges, anchor);
-        self.interaction
-            .active_row
-            .set(active_row.and_then(|key| self.source.row_ix(key)));
+        let active_row = active_row.and_then(|key| {
+            self.source.row_ix(key).or_else(|| {
+                retain_nearest_active_row
+                    .then(|| self.nearest_row_ix_for_key(key))
+                    .flatten()
+            })
+        });
+        self.interaction.active_row.set(active_row);
     }
 
     pub fn source_row(&self, row_ix: usize) -> Option<usize> {
@@ -1132,6 +1138,26 @@ impl LogTableDelegate {
 
     pub(crate) fn row_ix_for_key(&self, key: LogRowKey) -> Option<usize> {
         self.source.row_ix(key)
+    }
+
+    pub(crate) fn nearest_row_ix_for_key(&self, key: LogRowKey) -> Option<usize> {
+        if let Some(row_ix) = self.source.row_ix(key) {
+            return Some(row_ix);
+        }
+        let LogRowKey::Row {
+            document_id,
+            source_row,
+        } = key
+        else {
+            return None;
+        };
+        if document_id != self.source.document_id {
+            return None;
+        }
+        let LogRowProjection::SourceRows(rows) = &self.source.row_projection else {
+            return None;
+        };
+        rows.nearest_position(source_row)
     }
 
     pub(crate) fn projected_rows(&self) -> Option<&CompressedRows> {
@@ -1963,6 +1989,23 @@ mod tests {
         delegate.set_row_projection([1, 30].into_iter().collect());
 
         assert!(delegate.selected_source_rows().is_empty());
+        assert_eq!(delegate.active_log_row(), Some(0));
+        assert_eq!(delegate.source_row(0), Some(1));
+    }
+
+    #[test]
+    fn projection_updates_choose_the_nearest_source_row_as_the_new_active_anchor() {
+        let document = Arc::new(LogDocument::placeholder("nearest-projection-anchor.log"));
+        let mut delegate =
+            LogTableDelegate::projected(7, document, [10, 20, 30].into_iter().collect());
+        delegate.set_active_log_row(Some(1));
+
+        delegate.set_row_projection([4, 18, 22, 40].into_iter().collect());
+
+        assert_eq!(delegate.active_log_row(), Some(1));
+        assert_eq!(delegate.source_row(1), Some(18));
+
+        delegate.set_row_projection(CompressedRows::default());
         assert_eq!(delegate.active_log_row(), None);
     }
 

@@ -621,10 +621,18 @@ impl GlobalSearchTableDelegate {
         self.projection.results_count = results_count;
         self.projection.has_truncated_results = has_truncated_results;
         self.projection.max_line_columns = max_line_columns;
-        if let Some((selected_rows, active_row, selection_anchor)) = stable_interaction {
+        if let Some((selected_rows, active_row, active_row_ix, selection_anchor)) =
+            stable_interaction
+        {
             self.interaction.row_bounds.borrow_mut().clear();
             self.rebuild_layout();
-            self.restore_stable_interaction_rows(selected_rows, active_row, selection_anchor);
+            self.restore_stable_interaction_rows(
+                selected_rows,
+                active_row,
+                active_row_ix,
+                selection_anchor,
+                true,
+            );
         }
     }
 
@@ -790,6 +798,32 @@ impl GlobalSearchTableDelegate {
         }
     }
 
+    pub(crate) fn nearest_row_ix_for_key(&self, key: LogRowKey) -> Option<usize> {
+        if let Some(row_ix) = self.row_ix_for_key(key) {
+            return Some(row_ix);
+        }
+        let LogRowKey::Row {
+            document_id,
+            source_row,
+        } = key
+        else {
+            return None;
+        };
+        if self.interaction.collapsed_documents.contains(&document_id) {
+            return None;
+        }
+        let group_ix = *self.projection.group_by_document.get(&document_id)?;
+        let position = self.projection.groups[group_ix]
+            .projection
+            .rows
+            .nearest_position(source_row)?;
+        self.projection
+            .group_starts
+            .get(group_ix)
+            .copied()?
+            .checked_add(position.saturating_add(1))
+    }
+
     pub(crate) fn row_bounds_handle(&self) -> Rc<RefCell<BTreeMap<usize, Bounds<Pixels>>>> {
         self.interaction.row_bounds.clone()
     }
@@ -882,6 +916,7 @@ impl GlobalSearchTableDelegate {
     ) -> (
         BTreeMap<u64, CompressedRows>,
         Option<LogRowKey>,
+        Option<usize>,
         Option<LogRowKey>,
     ) {
         let selected_rows = self
@@ -898,19 +933,18 @@ impl GlobalSearchTableDelegate {
             .collect();
         let selection = self.interaction.row_selection.borrow();
         let selection_anchor = selection.anchor().and_then(|row_ix| self.row_key(row_ix));
-        let active_row = self
-            .interaction
-            .active_row
-            .get()
-            .and_then(|row_ix| self.row_key(row_ix));
-        (selected_rows, active_row, selection_anchor)
+        let active_row_ix = self.interaction.active_row.get();
+        let active_row = active_row_ix.and_then(|row_ix| self.row_key(row_ix));
+        (selected_rows, active_row, active_row_ix, selection_anchor)
     }
 
     fn restore_stable_interaction_rows(
         &self,
         selected_rows: BTreeMap<u64, CompressedRows>,
         active_row: Option<LogRowKey>,
+        active_row_ix: Option<usize>,
         selection_anchor: Option<LogRowKey>,
+        retain_nearest_active_row: bool,
     ) {
         let selected_ranges = self.position_ranges_for_selected_rows(&selected_rows);
         let anchor = selection_anchor.and_then(|key| self.row_ix_for_key(key));
@@ -918,9 +952,20 @@ impl GlobalSearchTableDelegate {
             .row_selection
             .borrow_mut()
             .replace_ranges_with_anchor(selected_ranges, anchor);
-        self.interaction
-            .active_row
-            .set(active_row.and_then(|key| self.row_ix_for_key(key)));
+        let active_row = active_row
+            .and_then(|key| {
+                self.row_ix_for_key(key).or_else(|| {
+                    retain_nearest_active_row
+                        .then(|| self.nearest_row_ix_for_key(key))
+                        .flatten()
+                })
+            })
+            .or_else(|| {
+                retain_nearest_active_row
+                    .then(|| active_row_ix.and_then(|row_ix| self.closest_match_row(row_ix)))
+                    .flatten()
+            });
+        self.interaction.active_row.set(active_row);
     }
 
     pub fn collapsed_document_ids(&self) -> BTreeSet<u64> {
@@ -945,6 +990,8 @@ impl GlobalSearchTableDelegate {
             stable_interaction.0,
             stable_interaction.1,
             stable_interaction.2,
+            stable_interaction.3,
+            false,
         );
     }
 
@@ -965,6 +1012,8 @@ impl GlobalSearchTableDelegate {
             stable_interaction.0,
             stable_interaction.1,
             stable_interaction.2,
+            stable_interaction.3,
+            false,
         );
     }
 
@@ -1078,6 +1127,8 @@ impl GlobalSearchTableDelegate {
             stable_interaction.0,
             stable_interaction.1,
             stable_interaction.2,
+            stable_interaction.3,
+            false,
         );
         true
     }
@@ -1443,6 +1494,23 @@ impl GlobalSearchTableDelegate {
             after.or(before)
         } else {
             before.or(after)
+        }
+    }
+
+    pub(crate) fn closest_match_row(&self, row_ix: usize) -> Option<usize> {
+        let before = self.nearest_match_row(row_ix, false);
+        let after = self.nearest_match_row(row_ix, true);
+        match (before, after) {
+            (Some(before), Some(after)) => {
+                Some(if row_ix.abs_diff(before) <= row_ix.abs_diff(after) {
+                    before
+                } else {
+                    after
+                })
+            }
+            (Some(before), None) => Some(before),
+            (None, Some(after)) => Some(after),
+            (None, None) => None,
         }
     }
 
@@ -2318,6 +2386,7 @@ mod tests {
         );
         assert_eq!(delegate.nearest_match_row(3, false), Some(2));
         assert_eq!(delegate.nearest_match_row(3, true), Some(5));
+        assert_eq!(delegate.closest_match_row(3), Some(2));
         assert_eq!(delegate.nearest_match_row(usize::MAX, true), Some(6));
     }
 
@@ -2370,6 +2439,44 @@ mod tests {
         delegate.set_groups(vec![group]);
 
         assert!(delegate.selected_matches().is_empty());
+        assert_eq!(delegate.active_log_row(), Some(1));
+        assert_eq!(
+            delegate.row(
+                delegate
+                    .active_log_row()
+                    .expect("nearest row should be active")
+            ),
+            Some(GlobalSearchRow::Match {
+                document_id: 1,
+                source_row: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn group_projection_updates_choose_a_nearby_match_when_the_active_group_disappears() {
+        let mut first = test_group(Arc::new(LogDocument::placeholder("first.log")));
+        first.source.document_id = 11;
+        first.projection.rows = [2, 5].into_iter().collect();
+        let mut second = test_group(Arc::new(LogDocument::placeholder("second.log")));
+        second.source.document_id = 22;
+        second.projection.rows = [7].into_iter().collect();
+        let mut delegate = GlobalSearchTableDelegate::new();
+        delegate.set_groups(vec![first, second.clone()]);
+        delegate.set_active_log_row(Some(2));
+
+        delegate.set_groups(vec![second]);
+
+        assert_eq!(delegate.active_log_row(), Some(1));
+        assert_eq!(
+            delegate.row(1),
+            Some(GlobalSearchRow::Match {
+                document_id: 22,
+                source_row: 7,
+            })
+        );
+
+        delegate.set_groups(Vec::new());
         assert_eq!(delegate.active_log_row(), None);
     }
 

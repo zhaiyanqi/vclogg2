@@ -87,6 +87,32 @@ impl CompressedRows {
             .and_then(|rank| usize::try_from(rank).ok())
     }
 
+    /// Return the positional index whose source row is closest to `row`.
+    ///
+    /// Ties prefer the preceding source row so a disappearing anchor does not
+    /// unexpectedly advance past an equally close result.
+    pub fn nearest_position(&self, row: usize) -> Option<usize> {
+        let row_u64 = u64::try_from(row).ok()?;
+        let after_position = usize::try_from(self.rows.rank(row_u64)).ok()?;
+        let before_position = after_position.checked_sub(1);
+        let after_position = (after_position < self.len()).then_some(after_position);
+
+        match (before_position, after_position) {
+            (Some(before), Some(after)) => {
+                let before_row = self.get(before)?;
+                let after_row = self.get(after)?;
+                Some(if row.abs_diff(before_row) <= row.abs_diff(after_row) {
+                    before
+                } else {
+                    after
+                })
+            }
+            (Some(before), None) => Some(before),
+            (None, Some(after)) => Some(after),
+            (None, None) => None,
+        }
+    }
+
     /// Keep rows selected by inclusive ranges in this set's positional space.
     ///
     /// The mask is built from source-row intervals and intersected with the
@@ -911,6 +937,18 @@ mod performance_tests {
         let selected = rows.rows_at_position_ranges([(1, 3), (5, 5)]);
 
         assert_eq!(selected.iter().collect::<Vec<_>>(), [5, 9, 20, 30]);
+    }
+
+    #[test]
+    fn nearest_position_uses_source_distance_and_prefers_the_previous_row_on_ties() {
+        let rows = [2, 8, 14].into_iter().collect::<CompressedRows>();
+
+        assert_eq!(rows.nearest_position(0), Some(0));
+        assert_eq!(rows.nearest_position(2), Some(0));
+        assert_eq!(rows.nearest_position(5), Some(0));
+        assert_eq!(rows.nearest_position(6), Some(1));
+        assert_eq!(rows.nearest_position(30), Some(2));
+        assert_eq!(CompressedRows::default().nearest_position(5), None);
     }
 
     #[test]
