@@ -146,11 +146,69 @@ struct TimestampResolutionState {
 }
 
 pub(crate) fn save_timestamp_merged_to_unique_temp(export: &ResultExport) -> Result<PathBuf> {
+    let export = prepare_timestamp_merge_export(export)?;
     save_to_unique_temp_with(
-        export,
+        &export,
         "global-search-merged-results.log",
         write_timestamp_merged_export,
     )
+}
+
+fn prepare_timestamp_merge_export(export: &ResultExport) -> Result<ResultExport> {
+    let ResultExport::Global { groups } = export else {
+        bail!(crate::tr!(
+            "只有全局搜索结果可以按时间戳合并",
+            "Only global search results can be merged by timestamp"
+        ));
+    };
+    let groups = prepare_timestamp_merge_groups(groups, |path| {
+        let (document, pending_cache_write) =
+            if let Some(cache_root) = crate::app_paths::cache_dir() {
+                LogDocument::open_with_index_cache(path, cache_root.join("VCLogg2").join("index"))?
+            } else {
+                (LogDocument::open(path)?, None)
+            };
+        if let Some(cache_write) = pending_cache_write {
+            _ = cache_write.persist();
+        }
+        Ok(document)
+    })?;
+    Ok(ResultExport::Global {
+        groups: groups.into(),
+    })
+}
+
+fn prepare_timestamp_merge_groups(
+    groups: &[ExportGroup],
+    mut open_complete: impl FnMut(&Path) -> Result<LogDocument>,
+) -> Result<Vec<ExportGroup>> {
+    groups
+        .iter()
+        .map(|group| {
+            if group.document.has_complete_line_index() {
+                return Ok(group.clone());
+            }
+            let document = open_complete(group.document.path()).with_context(|| {
+                crate::tr_args!(
+                    "无法为时间戳合并读取 {} 的完整行索引",
+                    "Couldn’t read the complete line index for {} during timestamp merge",
+                    group.path.display()
+                )
+            })?;
+            if !group.document.same_source_snapshot(&document) {
+                bail!(crate::tr_args!(
+                    "{} 的内容在搜索后已改变，请重新搜索后再合并",
+                    "{} changed after the search; search again before merging",
+                    group.path.display()
+                ));
+            }
+            Ok(ExportGroup {
+                path: group.path.clone(),
+                document: Arc::new(document),
+                rows: group.rows.clone(),
+            })
+        })
+        .collect()
 }
 
 fn save_to_unique_temp_with(
@@ -470,9 +528,37 @@ fn commit_staging(staging: &Path, target: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use std::{cell::RefCell, fs, path::PathBuf, sync::Arc, time::SystemTime};
 
-    use super::{TimestampResolutionState, resolve_row_timestamp_with};
+    use vclogg_core::LogDocument;
+
+    use super::{
+        ExportGroup, TimestampResolutionState, prepare_timestamp_merge_groups,
+        resolve_row_timestamp_with,
+    };
+
+    struct TemporaryFile(PathBuf);
+
+    impl TemporaryFile {
+        fn new(name: &str, contents: &[u8]) -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("测试时间应晚于 Unix epoch")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "vclogg2-result-export-{name}-{}-{nonce}.log",
+                std::process::id()
+            ));
+            fs::write(&path, contents).expect("应能创建结果导出测试日志");
+            Self(path)
+        }
+    }
+
+    impl Drop for TemporaryFile {
+        fn drop(&mut self) {
+            _ = fs::remove_file(&self.0);
+        }
+    }
 
     #[test]
     fn timestamp_resolution_scans_a_timestamp_free_source_only_once() {
@@ -515,6 +601,53 @@ mod tests {
 
         assert!(result.is_err());
         assert!(!state.timestamps_absent);
+    }
+
+    #[test]
+    fn timestamp_merge_materializes_sparse_sources_only_when_needed() {
+        let file = TemporaryFile::new(
+            "sparse-timestamp",
+            b"01-01 00:00:00.001 first\ncontinuation\n01-01 00:00:00.002 second\n",
+        );
+        let complete = LogDocument::open(&file.0).expect("应能打开时间戳测试日志");
+        let rows = [1, 2].into_iter().collect();
+        let sparse = Arc::new(complete.project_source_rows(&rows));
+        let groups = [ExportGroup {
+            path: file.0.clone(),
+            document: sparse,
+            rows,
+        }];
+        let mut opens = 0;
+
+        let prepared = prepare_timestamp_merge_groups(&groups, |path| {
+            opens += 1;
+            LogDocument::open(path)
+        })
+        .expect("稀疏结果应能重建同快照的完整索引");
+
+        assert_eq!(opens, 1);
+        assert!(prepared[0].document.has_complete_line_index());
+        assert_eq!(
+            prepared[0].document.line(0).as_deref(),
+            Some("01-01 00:00:00.001 first")
+        );
+    }
+
+    #[test]
+    fn timestamp_merge_rejects_a_changed_sparse_source() {
+        let file = TemporaryFile::new("changed-timestamp", b"first\nsecond\nthird\n");
+        let complete = LogDocument::open(&file.0).expect("应能打开时间戳测试日志");
+        let rows = [1].into_iter().collect();
+        let groups = [ExportGroup {
+            path: file.0.clone(),
+            document: Arc::new(complete.project_source_rows(&rows)),
+            rows,
+        }];
+        fs::write(&file.0, b"FIRST\nsecond\nthird\n").expect("应能修改时间戳测试日志");
+
+        let result = prepare_timestamp_merge_groups(&groups, |path| LogDocument::open(path));
+
+        assert!(result.is_err());
     }
 }
 

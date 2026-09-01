@@ -1244,6 +1244,16 @@ impl LogDocument {
         self.local_row(source_row).is_some()
     }
 
+    /// Whether this snapshot can resolve every logical source row.
+    ///
+    /// Complete open documents satisfy this. Cached previews and sparse directory-result
+    /// projections do not, even when they share the complete byte identity of the source.
+    pub fn has_complete_line_index(&self) -> bool {
+        self.source_rows.is_none()
+            && self.segment_start_row == 0
+            && self.line_count() == self.source_line_count()
+    }
+
     /// Whether both values represent the same immutable complete byte snapshot.
     ///
     /// This deliberately does not establish path identity; callers associating
