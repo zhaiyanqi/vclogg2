@@ -52,6 +52,7 @@ impl CachedLogLine {
 pub(crate) struct VisibleLineStore<K> {
     lines: RefCell<BTreeMap<K, CachedLogLine>>,
     prepared_keys: RefCell<BTreeSet<K>>,
+    prepared_priority: RefCell<Vec<K>>,
     window: Cell<Option<(usize, usize, usize, usize)>>,
     overscan: Cell<usize>,
     max_line_source_bytes: Cell<usize>,
@@ -63,6 +64,7 @@ impl<K> Default for VisibleLineStore<K> {
         Self {
             lines: RefCell::default(),
             prepared_keys: RefCell::default(),
+            prepared_priority: RefCell::default(),
             window: Cell::default(),
             overscan: Cell::new(12),
             max_line_source_bytes: Cell::new(DEFAULT_MAX_LINE_SOURCE_BYTES),
@@ -81,6 +83,7 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
     pub(crate) fn invalidate_window(&self) {
         self.window.set(None);
         self.prepared_keys.borrow_mut().clear();
+        self.prepared_priority.borrow_mut().clear();
     }
 
     pub(crate) fn clear(&self) {
@@ -123,9 +126,6 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
             .saturating_add(self.overscan.get())
             .min(row_count);
         let window = (visible_start, visible_end, start, end);
-        if self.window.replace(Some(window)) == Some(window) {
-            return;
-        }
 
         let mut seen = BTreeSet::new();
         let mut priority_keys = Vec::new();
@@ -139,6 +139,11 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
                 priority_keys.push(key);
             }
         }
+        if self.window.get() == Some(window) && *self.prepared_priority.borrow() == priority_keys {
+            return;
+        }
+        self.window.set(Some(window));
+        *self.prepared_priority.borrow_mut() = priority_keys.clone();
         *self.prepared_keys.borrow_mut() = priority_keys.iter().cloned().collect();
 
         let byte_budget = self.max_cache_retained_bytes.get();
@@ -221,6 +226,40 @@ mod tests {
         assert_eq!(
             cache.lines.borrow().keys().copied().collect::<Vec<_>>(),
             [100, 101]
+        );
+    }
+
+    #[test]
+    fn stable_row_order_change_reprepares_the_same_viewport_coordinates() {
+        let cache = VisibleLineStore::<usize>::default();
+        cache.set_overscan(1);
+        cache.max_line_source_bytes.set(4);
+        cache.max_cache_retained_bytes.set(4);
+        let loaded = RefCell::new(Vec::new());
+
+        cache.prepare_visible_rows(
+            0..1,
+            2,
+            |row_ix| [10, 11].get(row_ix).copied(),
+            |source_row, _| {
+                loaded.borrow_mut().push(*source_row);
+                Some(LinePreview::new("line", false))
+            },
+        );
+        cache.prepare_visible_rows(
+            0..1,
+            2,
+            |row_ix| [11, 10].get(row_ix).copied(),
+            |source_row, _| {
+                loaded.borrow_mut().push(*source_row);
+                Some(LinePreview::new("line", false))
+            },
+        );
+
+        assert_eq!(*loaded.borrow(), [10, 11]);
+        assert_eq!(
+            cache.lines.borrow().keys().copied().collect::<Vec<_>>(),
+            [11]
         );
     }
 
