@@ -374,7 +374,7 @@ impl StateStore {
         Ok(value
             .as_deref()
             .and_then(|value| serde_json::from_str(value).ok())
-            .filter(WorkspaceSearchState::is_compatible)
+            .and_then(WorkspaceSearchState::migrated)
             .unwrap_or_default())
     }
 
@@ -846,6 +846,28 @@ mod session_load_tests {
         assert_eq!(loaded[&first].query_text, "first");
         assert_eq!(loaded[&second].query_text, "second");
         assert!(!loaded.contains_key(&missing));
+    }
+
+    #[test]
+    fn file_search_session_round_trips_its_own_match_options() {
+        let database = TemporaryDatabase::new("file-search-options");
+        let store = StateStore::open(database.0.clone()).expect("应能打开测试状态库");
+        let path = database.0.with_file_name("search.log");
+        let mut expected = session("error-[0-9]+");
+        expected.case_sensitive = true;
+        expected.regex = true;
+
+        store
+            .save_sessions(&[(path.clone(), expected.clone())])
+            .expect("应能保存文件搜索会话");
+        let restored = store
+            .load_session(&path)
+            .expect("应能读取文件搜索会话")
+            .expect("文件搜索会话应存在");
+
+        assert_eq!(restored.query_text, expected.query_text);
+        assert!(restored.case_sensitive);
+        assert!(restored.regex);
     }
 
     #[test]

@@ -110,7 +110,7 @@ impl Workspace {
         _ = this.update_in(cx, |this, window, cx| {
             let remains_stale = this.documents.iter().any(|tab| {
                 tab.id == document_id
-                    && tab.auto_follow
+                    && tab.view.auto_follow
                     && (tab.document.metadata().file_size != current_size
                         || tab.document.metadata().modified != current_modified)
             });

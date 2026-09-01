@@ -1,6 +1,33 @@
 use super::*;
 
 impl Workspace {
+    /// Rebinds the stable display hosts to the table entities backing the active projections.
+    /// This keeps ordinary table notifications repainting the shared surface after a tab or
+    /// search-session switch.
+    pub(super) fn bind_active_display_tables(&mut self, cx: &mut Context<Self>) {
+        let Some(tab_ix) = self.active_ix else {
+            return;
+        };
+        let log_table = self.documents[tab_ix].log_table.clone();
+        self.log_viewer
+            .surface
+            .update(cx, |surface, cx| surface.bind_table(&log_table, cx));
+        match self.global_search.scope {
+            SearchScope::CurrentFile => {
+                let result_table = self.documents[tab_ix].result_table.clone();
+                self.search_results_viewer
+                    .surface
+                    .update(cx, |surface, cx| surface.bind_table(&result_table, cx));
+            }
+            SearchScope::AllOpenFiles | SearchScope::Directory => {
+                let result_table = self.global_table.clone();
+                self.search_results_viewer
+                    .surface
+                    .update(cx, |surface, cx| surface.bind_table(&result_table, cx));
+            }
+        }
+    }
+
     /// 正文、当前结果和全局结果共用的一行日志高度。
     ///
     /// 固定行高表格把行高交给布局引擎对齐到设备像素，换行列表则要自己按同一规则对齐，
@@ -433,6 +460,7 @@ impl Workspace {
         let Some(tab_ix) = self.active_ix else {
             return;
         };
+        self.bind_active_display_tables(cx);
         let row_height = self.log_row_height();
         let (document_id, log_mode, result_mode, surfaces) = {
             let tab = &self.documents[tab_ix];
@@ -448,7 +476,10 @@ impl Workspace {
                 } else {
                     LogViewportMode::Fixed
                 },
-                [tab.log_surface.clone(), tab.result_surface.clone()],
+                [
+                    self.log_viewer.surface.clone(),
+                    self.search_results_viewer.surface.clone(),
+                ],
             )
         };
 
@@ -472,13 +503,17 @@ impl Workspace {
         let Some(tab_ix) = self.active_ix else {
             return;
         };
+        self.bind_active_display_tables(cx);
         let row_height = self.log_row_height();
         let (log_wrapped, result_wrapped, surfaces) = {
             let tab = &self.documents[tab_ix];
             (
                 tab.log_viewport.is_wrapped(),
                 tab.result_viewport.is_wrapped(),
-                [tab.log_surface.clone(), tab.result_surface.clone()],
+                [
+                    self.log_viewer.surface.clone(),
+                    self.search_results_viewer.surface.clone(),
+                ],
             )
         };
 
@@ -511,6 +546,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.bind_active_display_tables(cx);
         let mode = if self.global_viewport.is_wrapped() {
             LogViewportMode::Wrapped
         } else {
@@ -520,7 +556,89 @@ impl Workspace {
         if mode == LogViewportMode::Wrapped {
             self.prime_global_wrapped_frame(self.log_row_height(), false, window, cx);
         }
-        Self::refresh_log_surfaces_atomically([self.global_surface.clone()], window, cx);
+        Self::refresh_log_surfaces_atomically(
+            [self.search_results_viewer.surface.clone()],
+            window,
+            cx,
+        );
+    }
+
+    /// Rebinds the two visible workspace regions as one foreground transaction. Scope changes
+    /// must never leave the log body painted with one session while the result panel already
+    /// presents another.
+    pub(super) fn refresh_active_search_surfaces_atomically(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab_ix) = self.active_ix else {
+            return;
+        };
+        self.bind_active_display_tables(cx);
+        let row_height = self.log_row_height();
+        let (document_id, log_mode, log_surface) = {
+            let tab = &self.documents[tab_ix];
+            (
+                tab.id,
+                if tab.log_viewport.is_wrapped() {
+                    LogViewportMode::Wrapped
+                } else {
+                    LogViewportMode::Fixed
+                },
+                self.log_viewer.surface.clone(),
+            )
+        };
+        self.switch_visible_line_owner(document_id, WrappedRegion::Log, log_mode, cx);
+        if log_mode == LogViewportMode::Wrapped {
+            self.prime_local_wrapped_frame(
+                tab_ix,
+                WrappedRegion::Log,
+                row_height,
+                false,
+                window,
+                cx,
+            );
+        }
+
+        let result_surface = match self.global_search.scope {
+            SearchScope::CurrentFile => {
+                let result_mode = if self.documents[tab_ix].result_viewport.is_wrapped() {
+                    LogViewportMode::Wrapped
+                } else {
+                    LogViewportMode::Fixed
+                };
+                self.switch_visible_line_owner(
+                    document_id,
+                    WrappedRegion::Results,
+                    result_mode,
+                    cx,
+                );
+                if result_mode == LogViewportMode::Wrapped {
+                    self.prime_local_wrapped_frame(
+                        tab_ix,
+                        WrappedRegion::Results,
+                        row_height,
+                        false,
+                        window,
+                        cx,
+                    );
+                }
+                self.search_results_viewer.surface.clone()
+            }
+            SearchScope::AllOpenFiles | SearchScope::Directory => {
+                let result_mode = if self.global_viewport.is_wrapped() {
+                    LogViewportMode::Wrapped
+                } else {
+                    LogViewportMode::Fixed
+                };
+                self.switch_visible_line_owner(0, WrappedRegion::GlobalResults, result_mode, cx);
+                if result_mode == LogViewportMode::Wrapped {
+                    self.prime_global_wrapped_frame(row_height, false, window, cx);
+                }
+                self.search_results_viewer.surface.clone()
+            }
+        };
+        Self::refresh_log_surfaces_atomically([log_surface, result_surface], window, cx);
     }
 
     pub(super) fn commit_global_group_toggle(
@@ -554,7 +672,11 @@ impl Workspace {
                 cx,
             );
         }
-        Self::refresh_log_surfaces_atomically([self.global_surface.clone()], window, cx);
+        Self::refresh_log_surfaces_atomically(
+            [self.search_results_viewer.surface.clone()],
+            window,
+            cx,
+        );
         self.schedule_workspace_search_state_save(window, cx);
         cx.notify();
         true
@@ -1097,7 +1219,7 @@ impl Workspace {
             }
             self.global_viewport.set_word_wrap(enabled);
             self.position_global_row_viewport_anchor(anchor, row_height, cx);
-            refreshed_surfaces.push(self.global_surface.clone());
+            refreshed_surfaces.push(self.search_results_viewer.surface.clone());
             self.schedule_workspace_search_state_save(window, cx);
         }
 
@@ -1131,6 +1253,7 @@ impl Workspace {
                     let tab = &mut self.documents[active_ix];
                     tab.log_viewport.set_word_wrap(enabled);
                     tab.result_viewport.set_word_wrap(enabled);
+                    tab.view.word_wrap = enabled;
                     tab.id
                 };
                 let tab = &self.documents[active_ix];
@@ -1148,7 +1271,10 @@ impl Workspace {
                     row_height,
                     cx,
                 );
-                refreshed_surfaces.extend([tab.log_surface.clone(), tab.result_surface.clone()]);
+                refreshed_surfaces.extend([
+                    self.log_viewer.surface.clone(),
+                    self.search_results_viewer.surface.clone(),
+                ]);
                 self.schedule_checkpoint(document_id, window, cx);
             }
         }
@@ -1176,7 +1302,7 @@ impl Workspace {
         }
         Some((
             tab.id,
-            if tab.selection_table == SelectionTable::Results && tab.results_visible {
+            if tab.view.selection_table == SelectionTable::Results && tab.results_visible {
                 WrappedRegion::Results
             } else {
                 WrappedRegion::Log

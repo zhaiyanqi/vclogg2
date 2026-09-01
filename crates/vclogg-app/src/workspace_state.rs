@@ -188,7 +188,8 @@ impl FromIterator<(u64, GlobalSearchDocumentResult)> for GlobalSearchResults {
 }
 
 #[derive(Clone)]
-pub(crate) struct RetainedGlobalSearchContext {
+pub(crate) struct SearchSessionState {
+    pub(crate) query: SearchQuery,
     pub(crate) initialized: bool,
     pub(crate) results: GlobalSearchResults,
     pub(crate) matcher: Option<SearchMatcher>,
@@ -203,9 +204,10 @@ pub(crate) struct RetainedGlobalSearchContext {
     pub(crate) active: bool,
 }
 
-impl Default for RetainedGlobalSearchContext {
+impl Default for SearchSessionState {
     fn default() -> Self {
         Self {
+            query: SearchQuery::default(),
             initialized: false,
             results: GlobalSearchResults::default(),
             matcher: None,
@@ -222,7 +224,7 @@ impl Default for RetainedGlobalSearchContext {
     }
 }
 
-impl RetainedGlobalSearchContext {
+impl SearchSessionState {
     pub(crate) fn invalidate_results(&mut self) {
         self.initialized = false;
         self.results.clear();
@@ -443,8 +445,8 @@ pub(crate) struct GlobalSearchState {
     pub(crate) results: GlobalSearchResults,
     pub(crate) matcher: Option<SearchMatcher>,
     pub(crate) result_scope: Option<SearchScope>,
-    pub(crate) all_open_context: RetainedGlobalSearchContext,
-    pub(crate) directory_context: RetainedGlobalSearchContext,
+    pub(crate) all_open_context: SearchSessionState,
+    pub(crate) directory_context: SearchSessionState,
     pub(crate) pending_all_open_restore: Option<PersistedGlobalSearchContext>,
     pub(crate) pending_directory_restore: Option<PersistedGlobalSearchContext>,
     pub(crate) restoring_selection: bool,
@@ -535,8 +537,8 @@ impl GlobalSearchState {
             results: GlobalSearchResults::default(),
             matcher: None,
             result_scope: None,
-            all_open_context: RetainedGlobalSearchContext::default(),
-            directory_context: RetainedGlobalSearchContext::default(),
+            all_open_context: SearchSessionState::default(),
+            directory_context: SearchSessionState::default(),
             pending_all_open_restore: None,
             pending_directory_restore: None,
             restoring_selection: false,
@@ -865,7 +867,13 @@ mod state_controller_tests {
 
     #[test]
     fn retained_global_context_drops_closed_documents_and_interactions() {
-        let mut context = RetainedGlobalSearchContext {
+        let mut context = SearchSessionState {
+            query: SearchQuery {
+                text: "needle".into(),
+                case_sensitive: true,
+                regex: false,
+                max_results: None,
+            },
             initialized: true,
             results: [
                 (9, global_result("nine.log")),
@@ -912,7 +920,13 @@ mod state_controller_tests {
 
     #[test]
     fn invalidating_retained_results_preserves_presentation_preferences() {
-        let mut context = RetainedGlobalSearchContext {
+        let mut context = SearchSessionState {
+            query: SearchQuery {
+                text: "needle".into(),
+                case_sensitive: true,
+                regex: false,
+                max_results: None,
+            },
             initialized: true,
             results: [(3, global_result("a.log"))].into_iter().collect(),
             matcher: SearchMatcher::literal_phrase("needle").expect("matcher should compile"),
@@ -940,6 +954,8 @@ mod state_controller_tests {
 
         context.invalidate_results();
 
+        assert_eq!(context.query.text, "needle");
+        assert!(context.query.case_sensitive);
         assert!(!context.initialized);
         assert!(context.results.is_empty());
         assert!(context.matcher.is_none());

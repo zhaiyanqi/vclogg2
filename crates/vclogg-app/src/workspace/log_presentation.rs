@@ -14,17 +14,14 @@ impl Workspace {
 
     pub(super) fn log_region_surface(
         &self,
-        document_id: u64,
+        _document_id: u64,
         region: WrappedRegion,
     ) -> Option<Entity<LogRegionSurface>> {
-        if region == WrappedRegion::GlobalResults {
-            return Some(self.global_surface.clone());
-        }
-        let tab = self.documents.iter().find(|tab| tab.id == document_id)?;
-        Some(if region == WrappedRegion::Results {
-            tab.result_surface.clone()
-        } else {
-            tab.log_surface.clone()
+        Some(match region {
+            WrappedRegion::Log => self.log_viewer.surface.clone(),
+            WrappedRegion::Results | WrappedRegion::GlobalResults => {
+                self.search_results_viewer.surface.clone()
+            }
         })
     }
 
@@ -98,9 +95,9 @@ impl Workspace {
             return;
         };
         let focus = if region == WrappedRegion::Results {
-            self.documents[tab_ix].result_focus_handle.clone()
+            self.search_results_viewer.focus_handle.clone()
         } else {
-            self.documents[tab_ix].log_focus_handle.clone()
+            self.log_viewer.focus_handle.clone()
         };
         focus.focus(window, cx);
         self.remember_user_log_region(if region == WrappedRegion::Results {
@@ -483,8 +480,8 @@ impl Workspace {
         });
         let source_row = table.read(cx).delegate().source_row(target);
         let tab = &mut self.documents[tab_ix];
-        tab.auto_follow = false;
-        tab.selection_table = if drag.region == WrappedRegion::Results {
+        tab.view.auto_follow = false;
+        tab.view.selection_table = if drag.region == WrappedRegion::Results {
             SelectionTable::Results
         } else {
             SelectionTable::Log
@@ -1097,7 +1094,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.global_results_focus_handle.focus(window, cx);
+        self.search_results_viewer.focus_handle.focus(window, cx);
         self.remember_user_log_region(LogRegion::GlobalResults);
         let is_match = matches!(
             self.global_table.read(cx).delegate().row(row_ix),
@@ -1148,12 +1145,12 @@ impl Workspace {
             return;
         };
         let focus = if region == WrappedRegion::Results {
-            tab.result_focus_handle.clone()
+            self.search_results_viewer.focus_handle.clone()
         } else {
-            tab.log_focus_handle.clone()
+            self.log_viewer.focus_handle.clone()
         };
         focus.focus(window, cx);
-        tab.selection_table = if region == WrappedRegion::Results {
+        tab.view.selection_table = if region == WrappedRegion::Results {
             SelectionTable::Results
         } else {
             SelectionTable::Log
@@ -1275,7 +1272,7 @@ impl Workspace {
             );
             return;
         };
-        let rules = tab.keyword_color_rules.clone();
+        let rules = tab.file.keyword_color_rules.clone();
         let labels = self.color_labels.clone();
         let last_color_label_id = self.last_color_label_id.clone();
         let cancellation = SearchCancellation::default();
@@ -1345,7 +1342,7 @@ impl Workspace {
             );
             return;
         };
-        if self.documents[active_ix].keyword_color_rules != prepared.expected_rules
+        if self.documents[active_ix].file.keyword_color_rules != prepared.expected_rules
             || self.color_labels != prepared.expected_labels
         {
             window.push_notification(
@@ -1415,8 +1412,8 @@ impl Workspace {
             );
             return;
         };
-        self.documents[active_ix].keyword_color_rules = prepared.rules;
-        self.documents[active_ix].resolved_color_rules = resolved.clone();
+        self.documents[active_ix].file.keyword_color_rules = prepared.rules;
+        self.documents[active_ix].file.resolved_color_rules = resolved.clone();
         self.last_color_label_id = prepared.last_color_label_id;
         for table in [
             self.documents[active_ix].log_table.clone(),
@@ -1518,7 +1515,7 @@ impl Workspace {
                     self.documents
                         .iter()
                         .find(|tab| tab.id == *document_id)
-                        .is_some_and(|tab| tab.marked_rows.contains_all(rows))
+                        .is_some_and(|tab| tab.file.marked_rows.contains_all(rows))
                 })
             {
                 crate::tr!("取消标记", "Unmark")
@@ -1527,7 +1524,7 @@ impl Workspace {
             }
         } else if self.active_document().is_some_and(|tab| {
             let rows = tab.selected_source_rows_compressed(cx);
-            !rows.is_empty() && tab.marked_rows.contains_all(&rows)
+            !rows.is_empty() && tab.file.marked_rows.contains_all(&rows)
         }) {
             crate::tr!("取消标记", "Unmark")
         } else {
@@ -1545,6 +1542,7 @@ impl Workspace {
             .filter(|text| !text.is_empty())?;
         let (tab_ix, _) = self.context_color_target(Some(selected_text), cx).ok()?;
         self.documents[tab_ix]
+            .file
             .keyword_color_rules
             .iter()
             .find(|rule| {
@@ -2137,7 +2135,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.global_results_focus_handle.focus(window, cx);
+        self.search_results_viewer.focus_handle.focus(window, cx);
         self.remember_user_log_region(LogRegion::GlobalResults);
         self.global_table.update(cx, |table, cx| {
             if matches!(
@@ -2156,7 +2154,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.global_results_focus_handle.focus(window, cx);
+        self.search_results_viewer.focus_handle.focus(window, cx);
         self.remember_user_log_region(LogRegion::GlobalResults);
         self.global_table.update(cx, |table, cx| {
             table.delegate().clear_row_selection();
@@ -2759,7 +2757,7 @@ impl Workspace {
         let log_context_workspace = cx.entity();
         let document_id = tab.id;
         let marker_width = line_marker_column_width();
-        let local_line_number_width = if tab.show_line_numbers {
+        let local_line_number_width = if tab.view.show_line_numbers {
             px(tab.log_table.read(cx).delegate().line_number_width() as f32)
         } else {
             px(0.)
@@ -2779,23 +2777,19 @@ impl Workspace {
                         .flex_1()
                         .min_h_0()
                         .key_context(LOG_TABLE_CONTEXT)
-                        .track_focus(&tab.result_focus_handle)
+                        .track_focus(&self.search_results_viewer.focus_handle)
                         .tab_index(0)
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                                if let Some(tab) = this.active_document() {
-                                    tab.result_focus_handle.focus(window, cx);
-                                }
+                                this.search_results_viewer.focus_handle.focus(window, cx);
                                 this.remember_user_log_region(LogRegion::CurrentResults);
                             }),
                         )
                         .on_mouse_down(
                             MouseButton::Right,
                             cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                                if let Some(tab) = this.active_document() {
-                                    tab.result_focus_handle.focus(window, cx);
-                                }
+                                this.search_results_viewer.focus_handle.focus(window, cx);
                                 this.remember_user_log_region(LogRegion::CurrentResults);
                             }),
                         )
@@ -2829,7 +2823,7 @@ impl Workspace {
                             document_id,
                             WrappedRegion::Results,
                         ))
-                        .child(tab.result_surface.clone())
+                        .child(self.search_results_viewer.surface.clone())
                         .when(
                             self.quick_find.open
                                 && self.quick_find.target
@@ -2850,7 +2844,7 @@ impl Workspace {
                                 cx,
                             )
                         })
-                        .text_selection_scope(tab.result_text_selection_scope),
+                        .text_selection_scope(self.search_results_viewer.text_selection_scope),
                 )
                 .into_any_element(),
             SearchScope::AllOpenFiles | SearchScope::Directory => v_flex()
@@ -2865,19 +2859,19 @@ impl Workspace {
                         .flex_1()
                         .min_h_0()
                         .key_context(LOG_TABLE_CONTEXT)
-                        .track_focus(&self.global_results_focus_handle)
+                        .track_focus(&self.search_results_viewer.focus_handle)
                         .tab_index(0)
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                                this.global_results_focus_handle.focus(window, cx);
+                                this.search_results_viewer.focus_handle.focus(window, cx);
                                 this.remember_user_log_region(LogRegion::GlobalResults);
                             }),
                         )
                         .on_mouse_down(
                             MouseButton::Right,
                             cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                                this.global_results_focus_handle.focus(window, cx);
+                                this.search_results_viewer.focus_handle.focus(window, cx);
                                 this.remember_user_log_region(LogRegion::GlobalResults);
                             }),
                         )
@@ -2911,7 +2905,7 @@ impl Workspace {
                             document_id,
                             WrappedRegion::GlobalResults,
                         ))
-                        .child(self.global_surface.clone())
+                        .child(self.search_results_viewer.surface.clone())
                         .when(
                             self.quick_find.open
                                 && self.quick_find.target == Some(QuickFindTarget::GlobalResults),
@@ -2931,7 +2925,7 @@ impl Workspace {
                                 cx,
                             )
                         })
-                        .text_selection_scope(self.global_text_selection_scope),
+                        .text_selection_scope(self.search_results_viewer.text_selection_scope),
                 )
                 .into_any_element(),
         };
@@ -3001,23 +2995,19 @@ impl Workspace {
                                 .size_full()
                                 .min_h_0()
                                 .key_context(LOG_TABLE_CONTEXT)
-                                .track_focus(&tab.log_focus_handle)
+                                .track_focus(&self.log_viewer.focus_handle)
                                 .tab_index(0)
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                                        if let Some(tab) = this.active_document() {
-                                            tab.log_focus_handle.focus(window, cx);
-                                        }
+                                        this.log_viewer.focus_handle.focus(window, cx);
                                         this.remember_user_log_region(LogRegion::Body);
                                     }),
                                 )
                                 .on_mouse_down(
                                     MouseButton::Right,
                                     cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                                        if let Some(tab) = this.active_document() {
-                                            tab.log_focus_handle.focus(window, cx);
-                                        }
+                                        this.log_viewer.focus_handle.focus(window, cx);
                                         this.remember_user_log_region(LogRegion::Body);
                                     }),
                                 )
@@ -3053,7 +3043,7 @@ impl Workspace {
                                     document_id,
                                     WrappedRegion::Log,
                                 ))
-                                .child(tab.log_surface.clone())
+                                .child(self.log_viewer.surface.clone())
                                 .when(
                                     self.quick_find.open
                                         && self.quick_find.target
@@ -3074,7 +3064,7 @@ impl Workspace {
                                         cx,
                                     )
                                 })
-                                .text_selection_scope(tab.log_text_selection_scope),
+                                .text_selection_scope(self.log_viewer.text_selection_scope),
                         ),
                     )
                     .child(
@@ -3093,7 +3083,7 @@ impl Workspace {
         let _performance_scope = crate::ui_performance::scope("Workspace::render_status_bar");
         let marked_count = self
             .active_document()
-            .map_or(0, |tab| tab.marked_rows.len());
+            .map_or(0, |tab| tab.file.marked_rows.len());
         let selected_count = if self.active_log_region == LogRegion::GlobalResults
             && self.global_search.results_visible
         {

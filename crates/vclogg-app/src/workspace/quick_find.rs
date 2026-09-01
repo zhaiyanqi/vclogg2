@@ -71,22 +71,12 @@ impl Workspace {
         let target = self.quick_find.close();
         self.refresh_quick_find_highlights(cx);
         match target {
-            Some(QuickFindTarget::Log(document_id)) => self
-                .documents
-                .iter()
-                .find(|tab| tab.id == document_id)
-                .map(|tab| tab.log_focus_handle.clone())
-                .unwrap_or_else(|| self.focus_handle.clone())
-                .focus(window, cx),
-            Some(QuickFindTarget::Results(document_id)) => self
-                .documents
-                .iter()
-                .find(|tab| tab.id == document_id)
-                .map(|tab| tab.result_focus_handle.clone())
-                .unwrap_or_else(|| self.focus_handle.clone())
-                .focus(window, cx),
+            Some(QuickFindTarget::Log(_)) => self.log_viewer.focus_handle.focus(window, cx),
+            Some(QuickFindTarget::Results(_)) => {
+                self.search_results_viewer.focus_handle.focus(window, cx)
+            }
             Some(QuickFindTarget::GlobalResults) => {
-                self.global_results_focus_handle.focus(window, cx)
+                self.search_results_viewer.focus_handle.focus(window, cx)
             }
             None => self.focus_handle.focus(window, cx),
         }
@@ -603,8 +593,8 @@ impl Workspace {
                 let Some(tab) = self.documents.iter_mut().find(|tab| tab.id == document_id) else {
                     return;
                 };
-                tab.auto_follow = false;
-                tab.selection_table = SelectionTable::Log;
+                tab.view.auto_follow = false;
+                tab.view.selection_table = SelectionTable::Log;
                 tab.log_table.update(cx, |table, cx| {
                     table.set_active_log_row(matched.view_row, cx);
                 });
@@ -616,8 +606,8 @@ impl Workspace {
                 let Some(tab) = self.documents.iter_mut().find(|tab| tab.id == document_id) else {
                     return;
                 };
-                tab.auto_follow = false;
-                tab.selection_table = SelectionTable::Results;
+                tab.view.auto_follow = false;
+                tab.view.selection_table = SelectionTable::Results;
                 tab.result_table.update(cx, |table, cx| {
                     table.set_active_log_row(matched.view_row, cx);
                 });

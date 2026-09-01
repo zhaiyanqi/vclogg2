@@ -282,12 +282,13 @@ impl Workspace {
     }
 
     pub(super) fn sync_active_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (title, query, selected_row) = self
+        let (title, query, search_options, selected_row) = self
             .active_document()
             .map(|tab| {
                 (
-                    format!("{} — VCLogg2", tab.title),
+                    format!("{} — VCLogg2", tab.file.title),
                     tab.search_query.text.clone(),
+                    (tab.search_query.case_sensitive, tab.search_query.regex),
                     {
                         let table = tab.log_table.read(cx);
                         table
@@ -300,6 +301,10 @@ impl Workspace {
                 (
                     crate::tr!("新标签页 — VCLogg2", "New tab — VCLogg2").to_string(),
                     String::new(),
+                    (
+                        self.app_settings.default_case_sensitive,
+                        self.app_settings.default_use_regex,
+                    ),
                     None,
                 )
             });
@@ -307,6 +312,10 @@ impl Workspace {
         window.set_window_title(&title);
         if self.global_search.scope == SearchScope::CurrentFile {
             self.reset_search_history_navigation();
+            self.view_state.active_search = self
+                .active_document()
+                .map(|tab| SearchSessionKey::CurrentFile(tab.id));
+            (self.case_sensitive, self.regex) = search_options;
             self.query
                 .update(cx, |state, cx| state.set_value(query, window, cx));
         }
@@ -388,7 +397,7 @@ impl Workspace {
                 .documents
                 .iter()
                 .find(|tab| document_ids.contains(&tab.id))
-                .map(|tab| tab.title.to_string())
+                .map(|tab| tab.file.title.to_string())
                 .unwrap_or_else(|| crate::tr!("当前日志", "Current log").to_string());
             crate::tr_args!(
                 "确定关闭“{label}”吗？日志文件不会被删除，当前会话会在后台保存。",
@@ -828,7 +837,7 @@ impl Workspace {
             return;
         };
         let path = tab.document.path().to_path_buf();
-        let file_name = tab.title.clone();
+        let file_name = tab.file.title.clone();
         let session = self.file_session_state(tab, cx);
         let transient = path_match_set_contains(&self.transient_paths, &path);
         let mut initial = match mode {
@@ -908,7 +917,7 @@ impl Workspace {
             .documents
             .iter()
             .find(|tab| tab.id == document_id)
-            .map(|tab| tab.title.to_string())
+            .map(|tab| tab.file.title.to_string())
         else {
             return;
         };
@@ -957,17 +966,20 @@ impl Workspace {
         let Some(tab) = self.documents.iter_mut().find(|tab| tab.id == document_id) else {
             return;
         };
-        if tab.title.as_ref() == title {
+        if tab.file.title.as_ref() == title {
             return;
         }
-        tab.title = title.clone().into();
-        tab.custom_title = Some(title.clone());
+        tab.file.title = title.clone().into();
+        tab.file.custom_title = Some(title.clone());
         self.global_table.update(cx, |table, cx| {
             table
                 .delegate_mut()
                 .update_group_title(document_id, title.clone().into());
             table.refresh(cx);
         });
+        // Directory results use a search-snapshot document id, so rebuild their active
+        // projection from FileState instead of relying only on the open-tab id update above.
+        self.refresh_global_result_rows(window, cx);
         if self
             .active_document()
             .is_some_and(|tab| tab.id == document_id)
@@ -991,18 +1003,19 @@ impl Workspace {
         let Some(tab) = self.documents.iter_mut().find(|tab| tab.id == document_id) else {
             return;
         };
-        if tab.custom_title.is_none() {
+        if tab.file.custom_title.is_none() {
             return;
         }
         let original_title = tab.document.file_name();
-        tab.title = original_title.clone().into();
-        tab.custom_title = None;
+        tab.file.title = original_title.clone().into();
+        tab.file.custom_title = None;
         self.global_table.update(cx, |table, cx| {
             table
                 .delegate_mut()
                 .update_group_title(document_id, original_title.clone().into());
             table.refresh(cx);
         });
+        self.refresh_global_result_rows(window, cx);
         if self
             .active_document()
             .is_some_and(|tab| tab.id == document_id)

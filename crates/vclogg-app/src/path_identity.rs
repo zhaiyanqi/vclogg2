@@ -126,6 +126,34 @@ pub(crate) fn paths_match(left: &Path, right: &Path) -> bool {
     }
 }
 
+/// Produces a stable directory-session identity without touching the filesystem. Dialogs usually
+/// return canonical absolute paths, but persisted state may still contain `.` or `..` components.
+pub(crate) fn normalized_path_match_key(path: &Path) -> PathMatchKey {
+    use std::path::Component;
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let can_pop = normalized
+                    .components()
+                    .next_back()
+                    .is_some_and(|last| matches!(last, Component::Normal(_)));
+                if can_pop {
+                    normalized.pop();
+                } else {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    path_match_key(&normalized)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,6 +207,14 @@ mod tests {
         assert_eq!(
             path_buf_map_get(&map, &replacement),
             if cfg!(windows) { None } else { Some(&8) }
+        );
+    }
+
+    #[test]
+    fn directory_session_keys_normalize_lexical_components() {
+        assert_eq!(
+            normalized_path_match_key(Path::new("logs/./archive/../today")),
+            normalized_path_match_key(Path::new("logs/today"))
         );
     }
 

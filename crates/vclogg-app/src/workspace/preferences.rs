@@ -640,7 +640,7 @@ impl Workspace {
             .map(|tab| ColorRuleResolutionInput {
                 document_id: tab.id,
                 document: tab.document.clone(),
-                rules: tab.keyword_color_rules.clone(),
+                rules: tab.file.keyword_color_rules.clone(),
             })
             .collect();
         let cancellation = SearchCancellation::default();
@@ -668,11 +668,11 @@ impl Workspace {
                     let Some(tab) = this.documents.iter_mut().find(|tab| {
                         tab.id == prepared.document_id
                             && Arc::ptr_eq(&tab.document, &prepared.document)
-                            && tab.keyword_color_rules == prepared.rules
+                            && tab.file.keyword_color_rules == prepared.rules
                     }) else {
                         continue;
                     };
-                    tab.resolved_color_rules = prepared.resolved.clone();
+                    tab.file.resolved_color_rules = prepared.resolved.clone();
                     for table in [tab.log_table.clone(), tab.result_table.clone()] {
                         table.update(cx, |table, cx| {
                             table
@@ -704,7 +704,7 @@ impl Workspace {
             .map(|tab| {
                 (
                     path_match_key(tab.document.path()),
-                    (tab.document.clone(), tab.resolved_color_rules.clone()),
+                    (tab.document.clone(), tab.file.resolved_color_rules.clone()),
                 )
             })
             .collect::<BTreeMap<_, _>>();
@@ -1059,20 +1059,18 @@ impl Workspace {
     }
 
     pub(super) fn apply_search_defaults(&mut self, case_sensitive: bool, regex: bool) {
-        if self.case_sensitive != case_sensitive || self.regex != regex {
-            self.cancel_search();
-        }
-        self.case_sensitive = case_sensitive;
-        self.regex = regex;
         self.app_settings.default_case_sensitive = case_sensitive;
         self.app_settings.default_use_regex = regex;
-        self.global_search.query.case_sensitive = case_sensitive;
-        self.global_search.query.regex = regex;
-        self.global_search.directory_query.case_sensitive = case_sensitive;
-        self.global_search.directory_query.regex = regex;
-        for tab in &mut self.documents {
-            tab.search_query.case_sensitive = case_sensitive;
-            tab.search_query.regex = regex;
+        if self.documents.is_empty()
+            && self.global_search.query.text.is_empty()
+            && self.global_search.directory_query.text.is_empty()
+        {
+            self.case_sensitive = case_sensitive;
+            self.regex = regex;
+            self.global_search.query.case_sensitive = case_sensitive;
+            self.global_search.query.regex = regex;
+            self.global_search.directory_query.case_sensitive = case_sensitive;
+            self.global_search.directory_query.regex = regex;
         }
         self.search_defaults_modified = true;
     }
@@ -1128,32 +1126,6 @@ impl Workspace {
             }));
     }
 
-    pub(super) fn set_search_defaults(
-        &mut self,
-        case_sensitive: bool,
-        regex: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.apply_search_defaults(case_sensitive, regex);
-        let source_window = window.window_handle();
-        let other_workspaces = cx
-            .global::<WorkspaceWindowRegistry>()
-            .windows
-            .iter()
-            .filter(|entry| entry.window != source_window)
-            .map(|entry| entry.workspace.clone())
-            .collect::<Vec<_>>();
-        for workspace in other_workspaces {
-            workspace.update(cx, |workspace, cx| {
-                workspace.apply_search_defaults(case_sensitive, regex);
-                cx.notify();
-            });
-        }
-        self.queue_app_settings_save(self.app_settings.clone(), false, window, cx);
-        cx.notify();
-    }
-
     pub(super) fn refresh_localized_input_copy(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.query.update(cx, |input, cx| {
             input.set_placeholder(crate::tr!("搜索", "Search"), window, cx);
@@ -1206,9 +1178,9 @@ impl Workspace {
             self.apply_search_defaults(settings.default_case_sensitive, settings.default_use_regex);
             let document_id = self.active_ix.map(|active_ix| {
                 let tab = &mut self.documents[active_ix];
-                tab.show_line_numbers = settings.default_show_line_numbers;
-                tab.show_row_separators = settings.default_show_row_separators;
-                tab.uses_default_view_options = true;
+                tab.view.show_line_numbers = settings.default_show_line_numbers;
+                tab.view.show_row_separators = settings.default_show_row_separators;
+                tab.view.uses_default_view_options = true;
                 tab.refresh_view_options(cx);
                 tab.id
             });
@@ -1485,7 +1457,7 @@ impl Workspace {
         }
 
         let auto_follow_changed = region == WrappedRegion::Log
-            && std::mem::replace(&mut self.documents[document_ix].auto_follow, false);
+            && std::mem::replace(&mut self.documents[document_ix].view.auto_follow, false);
         let row_height = self.log_row_height();
         let line_count = usize::from(self.app_settings.mouse_wheel_scroll_lines.max(1));
         let row_count = match region {
@@ -1557,9 +1529,9 @@ impl Workspace {
             self.pending_log_scroll_frames
                 .request(key, LogScrollFrameTarget::Viewport(offset));
             let surface = match region {
-                WrappedRegion::Log => self.documents[document_ix].log_surface.clone(),
-                WrappedRegion::Results => self.documents[document_ix].result_surface.clone(),
-                WrappedRegion::GlobalResults => self.global_surface.clone(),
+                WrappedRegion::Log => self.log_viewer.surface.clone(),
+                WrappedRegion::Results => self.search_results_viewer.surface.clone(),
+                WrappedRegion::GlobalResults => self.search_results_viewer.surface.clone(),
             };
             Self::refresh_log_surfaces_atomically([surface], window, cx);
         }

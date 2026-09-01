@@ -185,7 +185,7 @@ impl Workspace {
         let Some(tab) = self.active_document() else {
             return;
         };
-        let table = match tab.selection_table {
+        let table = match tab.view.selection_table {
             SelectionTable::Log => tab.log_table.clone(),
             SelectionTable::Results => tab.result_table.clone(),
         };
@@ -426,7 +426,7 @@ impl Workspace {
                 self.documents
                     .iter()
                     .find(|tab| tab.id == *document_id)
-                    .is_some_and(|tab| !tab.marked_rows.contains_all(rows))
+                    .is_some_and(|tab| !tab.file.marked_rows.contains_all(rows))
             });
             let mut changed_documents = Vec::new();
             let mut changed_rows = 0_usize;
@@ -441,14 +441,14 @@ impl Workspace {
                     continue;
                 }
                 if is_marking {
-                    tab.marked_rows.insert_rows(&rows);
-                    tab.pending_restore_marked_rows.insert_rows(&rows);
+                    tab.file.marked_rows.insert_rows(&rows);
+                    tab.file.pending_restore_marked_rows.insert_rows(&rows);
                 } else {
-                    tab.marked_rows.remove_rows(&rows);
-                    tab.pending_restore_marked_rows.remove_rows(&rows);
+                    tab.file.marked_rows.remove_rows(&rows);
+                    tab.file.pending_restore_marked_rows.remove_rows(&rows);
                 }
                 changed_rows = changed_rows.saturating_add(rows.len());
-                let marked_rows = tab.marked_rows.clone();
+                let marked_rows = tab.file.marked_rows.clone();
                 tab.log_table.update(cx, |table, cx| {
                     table.delegate_mut().set_marked_rows(marked_rows);
                     table.refresh(cx);
@@ -516,15 +516,19 @@ impl Workspace {
                 return;
             }
 
-            let is_marking = !tab.marked_rows.contains_all(&selected_rows);
+            let is_marking = !tab.file.marked_rows.contains_all(&selected_rows);
             if is_marking {
-                tab.marked_rows.insert_rows(&selected_rows);
-                tab.pending_restore_marked_rows.insert_rows(&selected_rows);
+                tab.file.marked_rows.insert_rows(&selected_rows);
+                tab.file
+                    .pending_restore_marked_rows
+                    .insert_rows(&selected_rows);
             } else {
-                tab.marked_rows.remove_rows(&selected_rows);
-                tab.pending_restore_marked_rows.remove_rows(&selected_rows);
+                tab.file.marked_rows.remove_rows(&selected_rows);
+                tab.file
+                    .pending_restore_marked_rows
+                    .remove_rows(&selected_rows);
             }
-            let marked_rows = tab.marked_rows.clone();
+            let marked_rows = tab.file.marked_rows.clone();
             tab.log_table.update(cx, |table, cx| {
                 table.delegate_mut().set_marked_rows(marked_rows);
                 table.refresh(cx);
@@ -590,7 +594,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.set_search_defaults(!self.case_sensitive, self.regex, window, cx);
+        self.set_active_search_options(!self.case_sensitive, self.regex, window, cx);
     }
 
     pub(super) fn toggle_regex(
@@ -599,7 +603,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.set_search_defaults(self.case_sensitive, !self.regex, window, cx);
+        self.set_active_search_options(self.case_sensitive, !self.regex, window, cx);
     }
 
     pub(super) fn jump_to_start(
@@ -699,14 +703,14 @@ impl Workspace {
             );
             return;
         }
-        tab.auto_follow = !tab.auto_follow;
-        if tab.auto_follow && tab.document.line_count() > 0 {
+        tab.view.auto_follow = !tab.view.auto_follow;
+        if tab.view.auto_follow && tab.document.line_count() > 0 {
             let last_row = tab.document.line_count() - 1;
             tab.log_table
                 .update(cx, |table, cx| table.set_active_log_row(last_row, cx));
             self.selected_source_row = Some(last_row);
             window.push_notification(crate::tr!("已开启末尾跟随", "Follow end enabled"), cx);
-        } else if !tab.auto_follow {
+        } else if !tab.view.auto_follow {
             window.push_notification(crate::tr!("已关闭末尾跟随", "Follow end disabled"), cx);
         }
         let document_id = tab.id;
@@ -720,8 +724,8 @@ impl Workspace {
         };
         let document_id = {
             let tab = &mut self.documents[active_ix];
-            tab.show_line_numbers = !tab.show_line_numbers;
-            tab.uses_default_view_options = false;
+            tab.view.show_line_numbers = !tab.view.show_line_numbers;
+            tab.view.uses_default_view_options = false;
             tab.refresh_view_options(cx);
             tab.id
         };
@@ -735,8 +739,8 @@ impl Workspace {
         };
         let document_id = {
             let tab = &mut self.documents[active_ix];
-            tab.show_row_separators = !tab.show_row_separators;
-            tab.uses_default_view_options = false;
+            tab.view.show_row_separators = !tab.view.show_row_separators;
+            tab.view.uses_default_view_options = false;
             tab.refresh_view_options(cx);
             tab.id
         };

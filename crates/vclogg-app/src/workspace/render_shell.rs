@@ -53,21 +53,22 @@ impl Workspace {
             self.selected_source_row.is_some()
         };
         let active_file_is_pinned = self.active_file_is_pinned();
-        let auto_follow = self.active_document().is_some_and(|tab| tab.auto_follow);
+        let auto_follow = self
+            .active_document()
+            .is_some_and(|tab| tab.view.auto_follow);
         let show_line_numbers = self
             .active_document()
-            .is_none_or(|tab| tab.show_line_numbers);
+            .is_none_or(|tab| tab.view.show_line_numbers);
         let show_row_separators = self
             .active_document()
-            .is_some_and(|tab| tab.show_row_separators);
+            .is_some_and(|tab| tab.view.show_row_separators);
         let word_wrap = if self.active_log_region == LogRegion::GlobalResults
             && self.global_search.results_visible
             && self.global_search.scope.owns_global_word_wrap()
         {
             self.global_viewport.is_wrapped()
         } else {
-            self.active_document()
-                .is_some_and(|tab| tab.log_viewport.is_wrapped())
+            self.active_document().is_some_and(|tab| tab.view.word_wrap)
         };
         let show_full_path = self.app_settings.show_full_path;
         let highlight_log_levels = self.app_settings.highlight_log_levels;
@@ -808,7 +809,7 @@ impl Workspace {
                                 if self.app_settings.show_full_path {
                                     tab.document.path().display().to_string()
                                 } else {
-                                    tab.title.to_string()
+                                    tab.file.title.to_string()
                                 }
                             },
                         ),
@@ -937,7 +938,7 @@ impl Workspace {
                 self.documents
                     .iter()
                     .find(|tab| tab.id == document_id)
-                    .is_some_and(|tab| tab.custom_title.is_some())
+                    .is_some_and(|tab| tab.file.custom_title.is_some())
             });
             let dragged_tab = DraggedTab::new(tab_id, tab_title.clone(), source_workspace.clone());
             let tab_menu_state = TabMenuState {

@@ -97,21 +97,22 @@ impl Workspace {
     }
 
     pub(super) fn file_session_state(&self, tab: &DocumentTab, cx: &App) -> FileSessionState {
-        let mut marked_rows = tab.marked_rows.clone();
-        marked_rows.insert_rows(&tab.pending_restore_marked_rows);
+        let mut marked_rows = tab.file.marked_rows.clone();
+        marked_rows.insert_rows(&tab.file.pending_restore_marked_rows);
         let selected_row = tab
             .log_table
             .read(cx)
             .active_log_row()
             .and_then(|row_ix| tab.log_table.read(cx).delegate().source_row(row_ix))
-            .or(tab.pending_restore_row);
+            .or(tab.view.pending_restore_row);
         let (selected_result_ix, selected_result_source_row) = {
             let result_table = tab.result_table.read(cx);
             let selected_result_ix = result_table.active_log_row();
             let selected_result_source_row = selected_result_ix
                 .and_then(|row_ix| result_table.delegate().source_row(row_ix))
                 .or_else(|| {
-                    tab.pending_resume
+                    tab.view
+                        .pending_resume
                         .as_ref()
                         .and_then(|resume| resume.current_search.selected_source_row)
                 });
@@ -119,34 +120,34 @@ impl Workspace {
         };
 
         let row_height = self.log_row_height();
-        let mut resume = tab.pending_resume.clone().unwrap_or_default();
+        let mut resume = tab.view.pending_resume.clone().unwrap_or_default();
         resume.viewer.viewport =
             Self::capture_persisted_local_viewport(tab, WrappedRegion::Log, row_height, cx)
                 .or(resume.viewer.viewport);
-        resume.viewer.auto_follow = tab.auto_follow;
+        resume.viewer.auto_follow = tab.view.auto_follow;
         resume.current_search.results_visible = tab.results_visible;
         resume.current_search.selected_source_row = selected_result_source_row;
         resume.current_search.selected_result_ix = selected_result_ix;
         resume.current_search.viewport =
             Self::capture_persisted_local_viewport(tab, WrappedRegion::Results, row_height, cx)
                 .or(resume.current_search.viewport);
-        resume.active_region = match tab.selection_table {
+        resume.active_region = match tab.view.selection_table {
             SelectionTable::Log => PersistedLogRegion::Body,
             SelectionTable::Results => PersistedLogRegion::CurrentResults,
         };
         FileSessionState {
             revision: tab.session_base.revision,
-            custom_title: tab.custom_title.clone(),
+            custom_title: tab.file.custom_title.clone(),
             selected_row,
             query_text: tab.search_query.text.clone(),
             case_sensitive: tab.search_query.case_sensitive,
             regex: tab.search_query.regex,
             result_mode: tab.result_mode.database_value(),
             marked_rows,
-            show_line_numbers: tab.show_line_numbers,
-            show_row_separators: tab.show_row_separators,
-            word_wrap: tab.log_viewport.is_wrapped(),
-            keyword_color_rules: tab.keyword_color_rules.clone(),
+            show_line_numbers: tab.view.show_line_numbers,
+            show_row_separators: tab.view.show_row_separators,
+            word_wrap: tab.view.word_wrap,
+            keyword_color_rules: tab.file.keyword_color_rules.clone(),
             resume,
         }
     }
@@ -373,6 +374,8 @@ impl Workspace {
 
             let uses_default_view_options = prepared.session.is_none();
             let session = prepared.session.unwrap_or_else(|| FileSessionState {
+                case_sensitive: self.app_settings.default_case_sensitive,
+                regex: self.app_settings.default_use_regex,
                 show_line_numbers: self.app_settings.default_show_line_numbers,
                 show_row_separators: self.app_settings.default_show_row_separators,
                 ..FileSessionState::default()
@@ -387,8 +390,8 @@ impl Workspace {
                 .map(str::to_owned);
             let search_query = SearchQuery {
                 text: session.query_text.clone(),
-                case_sensitive: self.app_settings.default_case_sensitive,
-                regex: self.app_settings.default_use_regex,
+                case_sensitive: session.case_sensitive,
+                regex: session.regex,
                 max_results: self.app_settings.search_result_limit(),
             };
             let result_mode = ResultMode::from_database(session.result_mode);
@@ -491,17 +494,17 @@ impl Workspace {
                     };
                     this.selected_source_row = source_row;
                     this.active_log_region = LogRegion::Body;
+                    if !keep_quick_find_focus {
+                        this.log_viewer.focus_handle.focus(window, cx);
+                    }
                     if let Some(tab) = this.documents.iter_mut().find(|tab| tab.id == document_id) {
                         tab.log_jump_revision = tab.log_jump_revision.saturating_add(1);
                         tab.log_jump_task.take();
-                        if !keep_quick_find_focus {
-                            tab.log_focus_handle.focus(window, cx);
-                        }
-                        tab.pending_restore_row = None;
-                        tab.selection_table = SelectionTable::Log;
+                        tab.view.pending_restore_row = None;
+                        tab.view.selection_table = SelectionTable::Log;
                         if source_row.is_some_and(|row| row + 1 < tab.document.source_line_count())
                         {
-                            tab.auto_follow = false;
+                            tab.view.auto_follow = false;
                         }
                     }
                     this.schedule_checkpoint(document_id, window, cx);
@@ -545,7 +548,7 @@ impl Workspace {
                     else {
                         return;
                     };
-                    this.documents[tab_ix].auto_follow = false;
+                    this.documents[tab_ix].view.auto_follow = false;
                     if !this.select_and_center_log_source_row_atomically(
                         document_id,
                         source_row,
@@ -555,9 +558,9 @@ impl Workspace {
                         return;
                     }
                     if !keep_quick_find_focus {
-                        this.documents[tab_ix].result_focus_handle.focus(window, cx);
+                        this.search_results_viewer.focus_handle.focus(window, cx);
                     }
-                    this.documents[tab_ix].selection_table = SelectionTable::Results;
+                    this.documents[tab_ix].view.selection_table = SelectionTable::Results;
                     this.active_log_region = LogRegion::CurrentResults;
                     this.selected_source_row = Some(source_row);
                     this.schedule_checkpoint(document_id, window, cx);
@@ -582,7 +585,7 @@ impl Workspace {
                         }
                         tab.result_mode = *mode;
                         tab.refresh_result_rows(row_height, cx);
-                        if mode.includes_marks() && !tab.marked_rows.is_empty() {
+                        if mode.includes_marks() && !tab.file.marked_rows.is_empty() {
                             tab.results_visible = true;
                         }
                     }
@@ -611,52 +614,6 @@ impl Workspace {
                 .clone()
                 .unwrap_or_else(|| document.file_name())
                 .into();
-            let log_focus_handle = cx.focus_handle().tab_stop(true);
-            let result_focus_handle = cx.focus_handle().tab_stop(true);
-            cx.on_focus_in(
-                &log_focus_handle,
-                window,
-                move |this: &mut Workspace, _, cx| {
-                    this.active_log_region = LogRegion::Body;
-                    if let Some(tab) = this.documents.iter_mut().find(|tab| tab.id == document_id) {
-                        tab.selection_table = SelectionTable::Log;
-                    }
-                    cx.notify();
-                },
-            )
-            .detach();
-            cx.on_focus_in(
-                &result_focus_handle,
-                window,
-                move |this: &mut Workspace, _, cx| {
-                    this.active_log_region = LogRegion::CurrentResults;
-                    if let Some(tab) = this.documents.iter_mut().find(|tab| tab.id == document_id) {
-                        tab.selection_table = SelectionTable::Results;
-                    }
-                    cx.notify();
-                },
-            )
-            .detach();
-            let log_surface = {
-                let workspace = cx.weak_entity();
-                let table = log_table.clone();
-                cx.new(move |cx| {
-                    LogRegionSurface::new(workspace, document_id, WrappedRegion::Log, &table, cx)
-                })
-            };
-            let result_surface = {
-                let workspace = cx.weak_entity();
-                let table = result_table.clone();
-                cx.new(move |cx| {
-                    LogRegionSurface::new(
-                        workspace,
-                        document_id,
-                        WrappedRegion::Results,
-                        &table,
-                        cx,
-                    )
-                })
-            };
             let log_viewport = {
                 let table = log_table.read(cx);
                 LogViewportState::new(
@@ -676,14 +633,38 @@ impl Workspace {
             self.documents.push(DocumentTab {
                 id: document_id,
                 opened_at: Local::now().timestamp(),
-                title,
-                custom_title,
+                file: FileState {
+                    title,
+                    custom_title,
+                    marked_rows,
+                    pending_restore_marked_rows: if prepared.load_state != DocumentLoadState::Ready
+                    {
+                        restored_marked_rows
+                    } else {
+                        CompressedRows::default()
+                    },
+                    keyword_color_rules,
+                    resolved_color_rules,
+                },
+                view: FileViewState {
+                    auto_follow: false,
+                    show_line_numbers: session.show_line_numbers,
+                    show_row_separators: session.show_row_separators,
+                    word_wrap: session.word_wrap,
+                    selection_table: restored_selection_table(
+                        session.resume.active_region,
+                        results_visible,
+                    ),
+                    uses_default_view_options,
+                    pending_restore_row: (prepared.load_state != DocumentLoadState::Ready)
+                        .then_some(pending_restore_row)
+                        .flatten(),
+                    pending_resume,
+                },
                 document,
                 session_base,
                 log_table,
                 result_table,
-                log_surface,
-                result_surface,
                 log_viewport,
                 result_viewport,
                 search_query,
@@ -696,31 +677,7 @@ impl Workspace {
                 log_jump_task: None,
                 results_visible,
                 restoring_result_selection: false,
-                marked_rows,
-                pending_restore_marked_rows: if prepared.load_state != DocumentLoadState::Ready {
-                    restored_marked_rows
-                } else {
-                    CompressedRows::default()
-                },
-                keyword_color_rules,
-                resolved_color_rules,
-                log_text_selection_scope: TextSelectionScopeId::default(),
-                result_text_selection_scope: TextSelectionScopeId::default(),
-                log_focus_handle,
-                result_focus_handle,
-                auto_follow: false,
-                show_line_numbers: session.show_line_numbers,
-                show_row_separators: session.show_row_separators,
-                selection_table: restored_selection_table(
-                    session.resume.active_region,
-                    results_visible,
-                ),
-                uses_default_view_options,
                 load_state: prepared.load_state,
-                pending_restore_row: (prepared.load_state != DocumentLoadState::Ready)
-                    .then_some(pending_restore_row)
-                    .flatten(),
-                pending_resume,
             });
             global_sources_changed = true;
             installed_document_ids.insert(document_id);
@@ -872,18 +829,19 @@ impl Workspace {
         }
         let row_height = self.log_row_height();
         let resume = self.documents[document_ix]
+            .view
             .pending_resume
             .take()
             .unwrap_or_else(|| self.documents[document_ix].session_base.resume.clone());
         {
             let tab = &mut self.documents[document_ix];
-            tab.auto_follow = resume.viewer.auto_follow;
+            tab.view.auto_follow = resume.viewer.auto_follow;
             tab.results_visible = restored_results_visible(
                 resume.current_search.results_visible,
                 tab.result_mode,
-                !tab.marked_rows.is_empty(),
+                !tab.file.marked_rows.is_empty(),
             );
-            tab.selection_table =
+            tab.view.selection_table =
                 restored_selection_table(resume.active_region, tab.results_visible);
 
             let result_count = tab.result_table.read(cx).delegate().row_count();
@@ -954,8 +912,8 @@ impl Workspace {
         let Some(tab) = self.documents.get_mut(document_ix) else {
             return;
         };
-        tab.auto_follow = false;
-        tab.selection_table = SelectionTable::Log;
+        tab.view.auto_follow = false;
+        tab.view.selection_table = SelectionTable::Log;
         if !tab.select_and_center_log_source_row(pending.source_row, cx) {
             window.push_notification(
                 crate::tr!(
@@ -989,13 +947,14 @@ impl Workspace {
         if previous_state == DocumentLoadState::Opening
             && let Some(session) = prepared.session.as_ref()
         {
-            tab.custom_title = session
+            tab.file.custom_title = session
                 .custom_title
                 .as_deref()
                 .map(str::trim)
                 .filter(|title| !title.is_empty())
                 .map(str::to_owned);
-            tab.title = tab
+            tab.file.title = tab
+                .file
                 .custom_title
                 .clone()
                 .unwrap_or_else(|| prepared.document.file_name())
@@ -1014,34 +973,35 @@ impl Workspace {
                     cx,
                 );
             });
-            tab.pending_restore_marked_rows = session.marked_rows.clone();
-            tab.pending_restore_row = session.selected_row;
-            tab.pending_resume = Some(session.resume.clone());
-            tab.keyword_color_rules = session.keyword_color_rules.clone();
-            tab.resolved_color_rules = installable_color_rules(
+            tab.file.pending_restore_marked_rows = session.marked_rows.clone();
+            tab.view.pending_restore_row = session.selected_row;
+            tab.view.pending_resume = Some(session.resume.clone());
+            tab.file.keyword_color_rules = session.keyword_color_rules.clone();
+            tab.file.resolved_color_rules = installable_color_rules(
                 prepared.color_labels_snapshot.as_deref(),
                 prepared.resolved_color_rules.clone(),
-                &tab.keyword_color_rules,
+                &tab.file.keyword_color_rules,
                 &self.color_labels,
             );
-            tab.show_line_numbers = session.show_line_numbers;
-            tab.show_row_separators = session.show_row_separators;
+            tab.view.show_line_numbers = session.show_line_numbers;
+            tab.view.show_row_separators = session.show_row_separators;
             tab.log_viewport.set_word_wrap(session.word_wrap);
             tab.result_viewport.set_word_wrap(session.word_wrap);
-            tab.uses_default_view_options = false;
+            tab.view.word_wrap = session.word_wrap;
+            tab.view.uses_default_view_options = false;
             tab.results_visible = restored_results_visible(
                 session.resume.current_search.results_visible,
                 tab.result_mode,
-                !tab.pending_restore_marked_rows.is_empty(),
+                !tab.file.pending_restore_marked_rows.is_empty(),
             );
-            tab.selection_table =
+            tab.view.selection_table =
                 restored_selection_table(session.resume.active_region, tab.results_visible);
             tab.refresh_view_options(cx);
             for table in [tab.log_table.clone(), tab.result_table.clone()] {
                 table.update(cx, |table, cx| {
                     table
                         .delegate_mut()
-                        .set_color_rules(tab.resolved_color_rules.clone());
+                        .set_color_rules(tab.file.resolved_color_rules.clone());
                     table.refresh(cx);
                 });
             }
@@ -1050,12 +1010,14 @@ impl Workspace {
         tab.search_result = prepared.search_result;
         tab.search_matcher = prepared.search_matcher;
         if prepared.load_state == DocumentLoadState::Ready {
-            let pending_marks = std::mem::take(&mut tab.pending_restore_marked_rows);
-            tab.marked_rows.extend(pending_marks.iter());
-            tab.marked_rows
+            let pending_marks = std::mem::take(&mut tab.file.pending_restore_marked_rows);
+            tab.file.marked_rows.extend(pending_marks.iter());
+            tab.file
+                .marked_rows
                 .retain_below(tab.document.source_line_count());
         } else {
-            tab.marked_rows = tab
+            tab.file.marked_rows = tab
+                .file
                 .pending_restore_marked_rows
                 .iter()
                 .filter(|row| tab.document.contains_source_row(*row))
@@ -1065,7 +1027,7 @@ impl Workspace {
         tab.log_viewport.invalidate_wrapped();
         tab.result_viewport.invalidate_wrapped();
 
-        let marked_rows = tab.marked_rows.clone();
+        let marked_rows = tab.file.marked_rows.clone();
         tab.log_table.update(cx, |table, cx| {
             table.delegate_mut().replace_with_all(tab.document.clone());
             table.delegate_mut().set_marked_rows(marked_rows.clone());
@@ -1096,9 +1058,9 @@ impl Workspace {
         });
 
         let restore_row = if prepared.load_state == DocumentLoadState::Ready {
-            tab.pending_restore_row.take().or(selected_source_row)
+            tab.view.pending_restore_row.take().or(selected_source_row)
         } else {
-            tab.pending_restore_row.or(selected_source_row)
+            tab.view.pending_restore_row.or(selected_source_row)
         };
         if let Some(row) = restore_row.and_then(|row| tab.document.local_row(row)) {
             tab.log_table
@@ -1121,13 +1083,13 @@ impl Workspace {
             return None;
         }
         let tab = self.documents.get_mut(self.active_ix?)?;
-        if tab.load_state != DocumentLoadState::Ready || !tab.auto_follow {
+        if tab.load_state != DocumentLoadState::Ready || !tab.view.auto_follow {
             return None;
         }
 
         let visible_rows = tab.log_table.read(cx).visible_range().rows().clone();
         if visible_rows.end > 0 && visible_rows.end < tab.document.line_count() {
-            tab.auto_follow = false;
+            tab.view.auto_follow = false;
             cx.notify();
             return None;
         }
@@ -1169,7 +1131,7 @@ impl Workspace {
         };
         self.cancel_search_for(document_id);
         let tab = &mut self.documents[document_ix];
-        let follow_end = follow_end || tab.auto_follow;
+        let follow_end = follow_end || tab.view.auto_follow;
         tab.search_revision += 1;
         let revision = tab.search_revision;
         let previous_document = tab.document.clone();
@@ -1222,13 +1184,14 @@ impl Workspace {
                         tab.search_query.max_results = search_result_limit;
                         tab.search_result = search_result;
                         tab.search_matcher = search_matcher;
-                        let pending_marks = std::mem::take(&mut tab.pending_restore_marked_rows);
-                        tab.marked_rows.extend(pending_marks.iter());
-                        tab.marked_rows.retain_below(tab.document.line_count());
+                        let pending_marks =
+                            std::mem::take(&mut tab.file.pending_restore_marked_rows);
+                        tab.file.marked_rows.extend(pending_marks.iter());
+                        tab.file.marked_rows.retain_below(tab.document.line_count());
                         let result_rows = tab.compute_result_rows();
                         tab.log_viewport.invalidate_wrapped();
                         tab.result_viewport.invalidate_wrapped();
-                        let marked_rows = tab.marked_rows.clone();
+                        let marked_rows = tab.file.marked_rows.clone();
                         let selected_result_row = (!follow_end)
                             .then(|| {
                                 selected_source_row
@@ -1270,7 +1233,7 @@ impl Workspace {
                         });
                         tab.results_visible = results_visible;
                         tab.load_state = DocumentLoadState::Ready;
-                        tab.pending_restore_row = None;
+                        tab.view.pending_restore_row = None;
 
                         if tab.document.line_count() > 0 {
                             let row = if follow_end {
@@ -1288,7 +1251,7 @@ impl Workspace {
                     }
                     Err(error) => {
                         if follow_end {
-                            tab.auto_follow = false;
+                            tab.view.auto_follow = false;
                         }
                         let message: SharedString = error.to_string().into();
                         window.push_notification(message.clone(), cx);

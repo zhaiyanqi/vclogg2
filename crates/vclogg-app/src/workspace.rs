@@ -95,8 +95,8 @@ use crate::{
     },
     path_identity::{
         PathMatchKey, decode_persisted_path, deduplicate_paths, encode_persisted_path,
-        path_buf_map_get, path_buf_map_insert, path_buf_map_remove, path_match_key,
-        path_match_map_get, path_match_set_contains, paths_match,
+        normalized_path_match_key, path_buf_map_get, path_buf_map_insert, path_buf_map_remove,
+        path_match_key, path_match_map_get, path_match_set_contains, paths_match,
     },
     predefined_filters::{PredefinedFilter, query_includes_filter, toggle_filter_in_query},
     predefined_filters_dialog::{PredefinedFiltersDialog, PredefinedFiltersDialogEvent},
@@ -107,9 +107,9 @@ use crate::{
         search_autocomplete_needle, search_autocomplete_suggestions,
     },
     search_context::{
-        PersistedDirectorySearchOptions, PersistedGlobalSearchContext, PersistedPathSelection,
-        PersistedSearchQuery, PersistedSearchRowKey, PersistedSearchScope, PersistedSearchViewport,
-        WorkspaceSearchState,
+        PersistedDirectorySearchOptions, PersistedDirectorySearchSession,
+        PersistedGlobalSearchContext, PersistedPathSelection, PersistedSearchQuery,
+        PersistedSearchRowKey, PersistedSearchScope, PersistedSearchViewport, WorkspaceSearchState,
     },
     selectable_log_text::{LogText, LogTextSelection, SelectableLogText, TextSelectionCache},
     settings_dialog::{
@@ -130,8 +130,8 @@ use crate::{
         CloudController, GlobalSearchDocumentResult, GlobalSearchResults, GlobalSearchState,
         PersistenceController, QuickFindBoundary, QuickFindDirection, QuickFindMatch,
         QuickFindSource, QuickFindSourceVersion, QuickFindState, QuickFindTarget, ResultMode,
-        RetainedGlobalSearchContext, RowViewportAnchor, SearchController, SearchScope,
-        SearchTarget, ViewportAnchor,
+        RowViewportAnchor, SearchController, SearchScope, SearchSessionState, SearchTarget,
+        ViewportAnchor,
     },
 };
 
@@ -603,14 +603,12 @@ struct RowViewportPosition {
 struct DocumentTab {
     id: u64,
     opened_at: i64,
-    title: SharedString,
-    custom_title: Option<String>,
+    file: FileState,
+    view: FileViewState,
     document: Arc<LogDocument>,
     session_base: FileSessionState,
     log_table: Entity<TableState<LogTableDelegate>>,
     result_table: Entity<TableState<LogTableDelegate>>,
-    log_surface: Entity<LogRegionSurface>,
-    result_surface: Entity<LogRegionSurface>,
     log_viewport: LogViewportState<usize>,
     result_viewport: LogViewportState<usize>,
     search_query: SearchQuery,
@@ -623,22 +621,7 @@ struct DocumentTab {
     log_jump_task: Option<Task<()>>,
     results_visible: bool,
     restoring_result_selection: bool,
-    marked_rows: CompressedRows,
-    pending_restore_marked_rows: CompressedRows,
-    keyword_color_rules: Vec<KeywordColorRule>,
-    resolved_color_rules: Arc<ResolvedColorRules>,
-    log_text_selection_scope: TextSelectionScopeId,
-    result_text_selection_scope: TextSelectionScopeId,
-    log_focus_handle: FocusHandle,
-    result_focus_handle: FocusHandle,
-    auto_follow: bool,
-    show_line_numbers: bool,
-    show_row_separators: bool,
-    selection_table: SelectionTable,
-    uses_default_view_options: bool,
     load_state: DocumentLoadState,
-    pending_restore_row: Option<usize>,
-    pending_resume: Option<TabResumeState>,
 }
 
 struct PreparedTabFrame {
@@ -1334,9 +1317,24 @@ enum RowDragMode {
 
 struct LogRegionSurface {
     workspace: WeakEntity<Workspace>,
-    document_id: u64,
-    region: WrappedRegion,
-    _table_subscription: Subscription,
+    role: DisplayRegion,
+    _workspace_subscription: Subscription,
+    _table_subscription: Option<Subscription>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DisplayRegion {
+    Log,
+    SearchResults,
+}
+
+/// Stable retained host for one half of the main split. Session changes replace the projected
+/// data behind this host; they do not replace the GPUI surface, focus identity, or selection
+/// scope.
+struct SharedDisplayState {
+    surface: Entity<LogRegionSurface>,
+    focus_handle: FocusHandle,
+    text_selection_scope: TextSelectionScopeId,
 }
 
 struct WorkspaceStatusSurface {
@@ -1358,23 +1356,24 @@ impl WorkspaceStatusSurface {
 }
 
 impl LogRegionSurface {
-    fn new<D>(
-        workspace: WeakEntity<Workspace>,
-        document_id: u64,
-        region: WrappedRegion,
-        table: &Entity<TableState<D>>,
-        cx: &mut Context<Self>,
-    ) -> Self
+    fn new(workspace: WeakEntity<Workspace>, role: DisplayRegion, cx: &mut Context<Self>) -> Self {
+        let workspace_entity = workspace
+            .upgrade()
+            .expect("workspace is alive while creating its display surface");
+        let workspace_subscription = cx.observe(&workspace_entity, |_, _, cx| cx.notify());
+        Self {
+            workspace,
+            role,
+            _workspace_subscription: workspace_subscription,
+            _table_subscription: None,
+        }
+    }
+
+    fn bind_table<D>(&mut self, table: &Entity<TableState<D>>, cx: &mut Context<Self>)
     where
         D: TableDelegate + 'static,
     {
-        let table_subscription = cx.observe(table, |_, _, cx| cx.notify());
-        Self {
-            workspace,
-            document_id,
-            region,
-            _table_subscription: table_subscription,
-        }
+        self._table_subscription = Some(cx.observe(table, |_, _, cx| cx.notify()));
     }
 }
 
@@ -2024,7 +2023,7 @@ impl DocumentTab {
         compute_result_rows(
             self.result_mode,
             Some(&self.search_result),
-            &self.marked_rows,
+            &self.file.marked_rows,
         )
     }
 
@@ -2045,9 +2044,9 @@ impl DocumentTab {
 
     fn install_result_rows(&mut self, result_rows: CompressedRows, cx: &mut App) {
         self.restoring_result_selection = true;
-        let marked_rows = self.marked_rows.clone();
+        let marked_rows = self.file.marked_rows.clone();
         let active_restored = self.result_table.update(cx, |table, cx| {
-            if self.auto_follow {
+            if self.view.auto_follow {
                 table.delegate().set_active_log_row(None);
             }
             table
@@ -2110,8 +2109,8 @@ impl DocumentTab {
     }
 
     fn refresh_view_options(&self, cx: &mut App) {
-        let show_line_numbers = self.show_line_numbers;
-        let show_row_separators = self.show_row_separators;
+        let show_line_numbers = self.view.show_line_numbers;
+        let show_row_separators = self.view.show_row_separators;
         self.log_table.update(cx, |table, cx| {
             table
                 .delegate_mut()
@@ -2188,7 +2187,7 @@ impl DocumentTab {
     }
 
     fn selected_source_rows_compressed(&self, cx: &App) -> CompressedRows {
-        let table = match self.selection_table {
+        let table = match self.view.selection_table {
             SelectionTable::Log => &self.log_table,
             SelectionTable::Results => &self.result_table,
         };
@@ -2205,7 +2204,7 @@ impl DocumentTab {
     }
 
     fn selected_rows_count(&self, cx: &App) -> usize {
-        let table = match self.selection_table {
+        let table = match self.view.selection_table {
             SelectionTable::Log => &self.log_table,
             SelectionTable::Results => &self.result_table,
         };
@@ -2449,12 +2448,12 @@ pub struct Workspace {
     search_suggestion_ix: Option<usize>,
     search_suggestion_scroll: UniformListScrollHandle,
     quick_find: QuickFindState,
+    view_state: WorkspaceViewState,
     global_search: GlobalSearchState,
     global_table: Entity<TableState<GlobalSearchTableDelegate>>,
-    global_surface: Entity<LogRegionSurface>,
+    log_viewer: SharedDisplayState,
+    search_results_viewer: SharedDisplayState,
     global_viewport: LogViewportState<(u64, usize)>,
-    global_text_selection_scope: TextSelectionScopeId,
-    global_results_focus_handle: FocusHandle,
     active_log_region: LogRegion,
     last_user_log_region: LogRegion,
     transient_paths: BTreeSet<PathMatchKey>,
@@ -2542,8 +2541,10 @@ mod render_shell;
 mod result_export_flow;
 mod search_orchestration;
 mod tab_lifecycle;
+mod view_state;
 mod viewport_orchestration;
 mod window_registry;
+use view_state::*;
 
 impl Workspace {
     pub fn new(
@@ -2579,25 +2580,46 @@ impl Workspace {
                 table.delegate().row_bounds_handle(),
             )
         };
-        let global_surface = {
+        let log_surface = {
             let workspace = cx.weak_entity();
-            let table = global_table.clone();
-            cx.new(move |cx| {
-                LogRegionSurface::new(workspace, 0, WrappedRegion::GlobalResults, &table, cx)
-            })
+            cx.new(move |cx| LogRegionSurface::new(workspace, DisplayRegion::Log, cx))
         };
-        let global_text_selection_scope = TextSelectionScopeId::default();
-        let global_results_focus_handle = cx.focus_handle().tab_stop(true);
+        let search_results_surface = {
+            let workspace = cx.weak_entity();
+            cx.new(move |cx| LogRegionSurface::new(workspace, DisplayRegion::SearchResults, cx))
+        };
+        let log_text_selection_scope = TextSelectionScopeId::default();
+        let search_results_text_selection_scope = TextSelectionScopeId::default();
+        let log_focus_handle = cx.focus_handle().tab_stop(true);
+        let search_results_focus_handle = cx.focus_handle().tab_stop(true);
         let search_panel_state = cx.new(|_| ResizableState::default());
+        cx.on_focus_in(&log_focus_handle, window, |this: &mut Workspace, _, cx| {
+            this.active_log_region = LogRegion::Body;
+            cx.notify();
+        })
+        .detach();
         cx.on_focus_in(
-            &global_results_focus_handle,
+            &search_results_focus_handle,
             window,
             |this: &mut Workspace, _, cx| {
-                this.active_log_region = LogRegion::GlobalResults;
+                this.active_log_region = match this.global_search.scope {
+                    SearchScope::CurrentFile => LogRegion::CurrentResults,
+                    SearchScope::AllOpenFiles | SearchScope::Directory => LogRegion::GlobalResults,
+                };
                 cx.notify();
             },
         )
         .detach();
+        let log_viewer = SharedDisplayState {
+            surface: log_surface,
+            focus_handle: log_focus_handle,
+            text_selection_scope: log_text_selection_scope,
+        };
+        let search_results_viewer = SharedDisplayState {
+            surface: search_results_surface,
+            focus_handle: search_results_focus_handle,
+            text_selection_scope: search_results_text_selection_scope,
+        };
         let global_result_mode_select = cx.new(|cx| {
             SelectState::new(
                 ResultMode::ALL.to_vec(),
@@ -2726,7 +2748,7 @@ impl Workspace {
                     } => this.jump_to_global_result(document_id, source_row, window, cx),
                 }
                 if !keep_quick_find_focus {
-                    this.global_results_focus_handle.focus(window, cx);
+                    this.search_results_viewer.focus_handle.focus(window, cx);
                 }
                 this.active_log_region = LogRegion::GlobalResults;
                 if save_search_state_immediately {
@@ -2749,7 +2771,7 @@ impl Workspace {
                 if mode.includes_marks()
                     && this.documents.iter().any(|tab| {
                         this.global_search.selected_documents.contains(&tab.id)
-                            && !tab.marked_rows.is_empty()
+                            && !tab.file.marked_rows.is_empty()
                     })
                 {
                     this.global_search.results_visible = true;
@@ -2918,10 +2940,10 @@ impl Workspace {
                         for tab in this
                             .documents
                             .iter_mut()
-                            .filter(|tab| tab.uses_default_view_options)
+                            .filter(|tab| tab.view.uses_default_view_options)
                         {
-                            tab.show_line_numbers = app_settings.default_show_line_numbers;
-                            tab.show_row_separators = app_settings.default_show_row_separators;
+                            tab.view.show_line_numbers = app_settings.default_show_line_numbers;
+                            tab.view.show_row_separators = app_settings.default_show_row_separators;
                             tab.refresh_view_options(cx);
                         }
                         for tab in &this.documents {
@@ -3003,12 +3025,12 @@ impl Workspace {
             search_suggestion_ix: None,
             search_suggestion_scroll: UniformListScrollHandle::new(),
             quick_find: QuickFindState::new(quick_find_query),
+            view_state: WorkspaceViewState::default(),
             global_search: GlobalSearchState::new(global_result_mode_select),
             global_table,
-            global_surface,
+            log_viewer,
+            search_results_viewer,
             global_viewport,
-            global_text_selection_scope,
-            global_results_focus_handle,
             active_log_region: LogRegion::Body,
             last_user_log_region: LogRegion::Body,
             transient_paths: BTreeSet::new(),
@@ -3101,7 +3123,7 @@ impl Workspace {
                 .documents
                 .iter()
                 .find(|tab| tab.id == document_id)
-                .map(|tab| tab.title.clone())
+                .map(|tab| tab.file.title.clone())
                 .unwrap_or_else(|| crate::tr!("日志", "Log").into()),
             WorkspaceTabId::New(_) => crate::tr!("新标签页", "New tab").into(),
         }
@@ -3220,11 +3242,27 @@ impl Render for LogRegionSurface {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _performance_scope = crate::ui_performance::scope("LogRegionSurface::render");
         let workspace = self.workspace.clone();
-        let document_id = self.document_id;
-        let region = self.region;
+        let role = self.role;
         let surface = cx.entity();
         let element = workspace
             .update(cx, |workspace, cx| {
+                let Some(document_id) = workspace.active_document().map(|tab| tab.id) else {
+                    return div().into_any_element();
+                };
+                let region = match role {
+                    DisplayRegion::Log => WrappedRegion::Log,
+                    DisplayRegion::SearchResults => match workspace.global_search.scope {
+                        SearchScope::CurrentFile => WrappedRegion::Results,
+                        SearchScope::AllOpenFiles | SearchScope::Directory => {
+                            WrappedRegion::GlobalResults
+                        }
+                    },
+                };
+                let document_id = if region == WrappedRegion::GlobalResults {
+                    0
+                } else {
+                    document_id
+                };
                 workspace.render_log_region_surface(document_id, region, surface, window, cx)
             })
             .unwrap_or_else(|_| div().into_any_element());

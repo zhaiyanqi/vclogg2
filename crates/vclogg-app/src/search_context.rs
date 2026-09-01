@@ -1,7 +1,13 @@
+use std::{cmp::Reverse, collections::BTreeSet};
+
 use serde::{Deserialize, Serialize};
 use vclogg_core::CompressedRows;
 
-pub(crate) const SEARCH_CONTEXT_VERSION: u32 = 1;
+use crate::path_identity::{decode_persisted_path, normalized_path_match_key};
+
+pub(crate) const SEARCH_CONTEXT_VERSION: u32 = 2;
+const LEGACY_SEARCH_CONTEXT_VERSION: u32 = 1;
+pub(crate) const MAX_DIRECTORY_SEARCH_SESSIONS: usize = 20;
 const PIXEL_SCALE: f32 = 1_000.;
 const COMPRESSED_ROWS_PREFIX: &str = "rb1:";
 
@@ -150,6 +156,15 @@ pub(crate) struct PersistedDirectorySearchOptions {
     pub include_hidden_directories: bool,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct PersistedDirectorySearchSession {
+    pub directory: String,
+    pub options: PersistedDirectorySearchOptions,
+    pub context: PersistedGlobalSearchContext,
+    pub last_used: u64,
+}
+
 impl Default for PersistedDirectorySearchOptions {
     fn default() -> Self {
         Self {
@@ -169,8 +184,12 @@ pub(crate) struct WorkspaceSearchState {
     pub version: u32,
     pub active_scope: PersistedSearchScope,
     pub all_open: PersistedGlobalSearchContext,
+    /// Version-1 compatibility fields. Version 2 writes the active directory here as well so a
+    /// downgrade still recovers the most recently used directory search.
     pub directory: PersistedGlobalSearchContext,
     pub directory_options: PersistedDirectorySearchOptions,
+    pub active_directory: Option<String>,
+    pub directories: Vec<PersistedDirectorySearchSession>,
 }
 
 impl Default for WorkspaceSearchState {
@@ -181,15 +200,73 @@ impl Default for WorkspaceSearchState {
             all_open: PersistedGlobalSearchContext::default(),
             directory: PersistedGlobalSearchContext::default(),
             directory_options: PersistedDirectorySearchOptions::default(),
+            active_directory: None,
+            directories: Vec::new(),
         }
     }
 }
 
 impl WorkspaceSearchState {
-    pub fn is_compatible(&self) -> bool {
-        self.version == SEARCH_CONTEXT_VERSION
-            && self.all_open.version == SEARCH_CONTEXT_VERSION
-            && self.directory.version == SEARCH_CONTEXT_VERSION
+    pub fn migrated(mut self) -> Option<Self> {
+        match self.version {
+            LEGACY_SEARCH_CONTEXT_VERSION => {
+                self.version = SEARCH_CONTEXT_VERSION;
+                self.all_open.version = SEARCH_CONTEXT_VERSION;
+                self.directory.version = SEARCH_CONTEXT_VERSION;
+                if let Some(directory) = self.directory_options.directory.clone() {
+                    self.active_directory = Some(directory.clone());
+                    self.directories.push(PersistedDirectorySearchSession {
+                        directory,
+                        options: self.directory_options.clone(),
+                        context: self.directory.clone(),
+                        last_used: 1,
+                    });
+                }
+            }
+            SEARCH_CONTEXT_VERSION => {}
+            _ => return None,
+        }
+        if self.all_open.version != SEARCH_CONTEXT_VERSION {
+            return None;
+        }
+        self.directory.version = SEARCH_CONTEXT_VERSION;
+        for session in &mut self.directories {
+            if !matches!(
+                session.context.version,
+                LEGACY_SEARCH_CONTEXT_VERSION | SEARCH_CONTEXT_VERSION
+            ) {
+                return None;
+            }
+            session.context.version = SEARCH_CONTEXT_VERSION;
+            session.options.directory = Some(session.directory.clone());
+        }
+        self.normalize_directory_sessions();
+        Some(self)
+    }
+
+    pub(crate) fn normalize_directory_sessions(&mut self) {
+        self.directories
+            .sort_by_key(|session| Reverse(session.last_used));
+        let mut seen = BTreeSet::new();
+        self.directories.retain(|session| {
+            !session.directory.is_empty()
+                && seen.insert(normalized_path_match_key(&decode_persisted_path(
+                    &session.directory,
+                )))
+        });
+        self.directories.truncate(MAX_DIRECTORY_SEARCH_SESSIONS);
+
+        if let Some(active) = self.active_directory.as_deref() {
+            let active_key = normalized_path_match_key(&decode_persisted_path(active));
+            if !self.directories.iter().any(|session| {
+                normalized_path_match_key(&decode_persisted_path(&session.directory)) == active_key
+            }) {
+                self.active_directory = self
+                    .directories
+                    .first()
+                    .map(|session| session.directory.clone());
+            }
+        }
     }
 }
 
@@ -268,5 +345,123 @@ mod tests {
         .expect("legacy selection should deserialize");
 
         assert_eq!(selection.decoded_rows(), [3, 4, 5, 9].into_iter().collect());
+    }
+
+    #[test]
+    fn version_one_directory_state_migrates_to_a_keyed_session() {
+        let legacy = WorkspaceSearchState {
+            version: LEGACY_SEARCH_CONTEXT_VERSION,
+            active_scope: PersistedSearchScope::Directory,
+            directory: PersistedGlobalSearchContext {
+                version: LEGACY_SEARCH_CONTEXT_VERSION,
+                results_visible: true,
+                ..PersistedGlobalSearchContext::default()
+            },
+            directory_options: PersistedDirectorySearchOptions {
+                directory: Some("logs".into()),
+                ..PersistedDirectorySearchOptions::default()
+            },
+            ..WorkspaceSearchState::default()
+        };
+
+        let migrated = legacy.migrated().expect("version one should migrate");
+        assert_eq!(migrated.version, SEARCH_CONTEXT_VERSION);
+        assert_eq!(migrated.active_directory.as_deref(), Some("logs"));
+        assert_eq!(migrated.directories.len(), 1);
+        assert!(migrated.directories[0].context.results_visible);
+    }
+
+    #[test]
+    fn directory_sessions_are_deduplicated_and_lru_bounded() {
+        let mut state = WorkspaceSearchState {
+            directories: (0..=MAX_DIRECTORY_SEARCH_SESSIONS)
+                .map(|ix| PersistedDirectorySearchSession {
+                    directory: format!("logs/{ix}"),
+                    last_used: ix as u64,
+                    ..PersistedDirectorySearchSession::default()
+                })
+                .chain([PersistedDirectorySearchSession {
+                    directory: format!("logs/archive/../{}", MAX_DIRECTORY_SEARCH_SESSIONS),
+                    last_used: 100,
+                    ..PersistedDirectorySearchSession::default()
+                }])
+                .collect(),
+            ..WorkspaceSearchState::default()
+        };
+
+        state.normalize_directory_sessions();
+
+        assert_eq!(state.directories.len(), MAX_DIRECTORY_SEARCH_SESSIONS);
+        assert_eq!(
+            state.directories[0].directory,
+            format!("logs/archive/../{}", MAX_DIRECTORY_SEARCH_SESSIONS)
+        );
+        assert_eq!(
+            state
+                .directories
+                .iter()
+                .filter(|session| normalized_path_match_key(&decode_persisted_path(
+                    &session.directory
+                )) == normalized_path_match_key(std::path::Path::new(&format!(
+                    "logs/{}",
+                    MAX_DIRECTORY_SEARCH_SESSIONS
+                ))))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn serialized_scopes_keep_independent_query_and_presentation_state() {
+        let state = WorkspaceSearchState {
+            active_scope: PersistedSearchScope::Directory,
+            all_open: PersistedGlobalSearchContext {
+                query: PersistedSearchQuery {
+                    text: "all open".into(),
+                    case_sensitive: true,
+                    regex: false,
+                },
+                result_mode: 2,
+                word_wrap: true,
+                ..PersistedGlobalSearchContext::default()
+            },
+            active_directory: Some("logs/x".into()),
+            directories: vec![PersistedDirectorySearchSession {
+                directory: "logs/x".into(),
+                context: PersistedGlobalSearchContext {
+                    query: PersistedSearchQuery {
+                        text: "directory".into(),
+                        case_sensitive: false,
+                        regex: true,
+                    },
+                    result_mode: 1,
+                    results_visible: true,
+                    collapsed_paths: vec!["logs/x/a.log".into()],
+                    word_wrap: false,
+                    ..PersistedGlobalSearchContext::default()
+                },
+                last_used: 4,
+                ..PersistedDirectorySearchSession::default()
+            }],
+            ..WorkspaceSearchState::default()
+        };
+
+        let json = serde_json::to_string(&state).expect("workspace search state should serialize");
+        let restored: WorkspaceSearchState =
+            serde_json::from_str(&json).expect("workspace search state should deserialize");
+        let restored = restored
+            .migrated()
+            .expect("version two should be compatible");
+
+        assert_eq!(restored.all_open.query.text, "all open");
+        assert!(restored.all_open.query.case_sensitive);
+        assert!(restored.all_open.word_wrap);
+        assert_eq!(restored.directories[0].context.query.text, "directory");
+        assert!(restored.directories[0].context.query.regex);
+        assert!(restored.directories[0].context.results_visible);
+        assert_eq!(
+            restored.directories[0].context.collapsed_paths,
+            ["logs/x/a.log"]
+        );
     }
 }
