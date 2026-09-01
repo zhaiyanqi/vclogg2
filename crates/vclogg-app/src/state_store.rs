@@ -15,6 +15,7 @@ use std::os::windows::ffi::{OsStrExt as _, OsStringExt as _};
 
 use anyhow::{Context as _, Result};
 use rusqlite::{Connection, OptionalExtension as _, params, params_from_iter};
+use vclogg_core::CompressedRows;
 
 use crate::app_log::AppLogLevel;
 use crate::color_labels::{
@@ -40,6 +41,7 @@ pub const DEFAULT_WORD_BOUNDARY_CHARACTERS: &str =
 pub const MAX_WORD_BOUNDARY_CHARACTERS: usize = 256;
 const STATE_SCHEMA_VERSION: u32 = 4;
 const ENCODED_PATH_PREFIX: &str = "\0vclogg-path-v1:";
+const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
 
 #[derive(Clone, Debug)]
 pub struct RecentFile {
@@ -83,7 +85,7 @@ pub struct FileSessionState {
     pub case_sensitive: bool,
     pub regex: bool,
     pub result_mode: i64,
-    pub marked_rows: Vec<usize>,
+    pub marked_rows: CompressedRows,
     pub show_line_numbers: bool,
     pub show_row_separators: bool,
     pub word_wrap: bool,
@@ -328,7 +330,7 @@ impl Default for FileSessionState {
             case_sensitive: false,
             regex: false,
             result_mode: 0,
-            marked_rows: Vec::new(),
+            marked_rows: CompressedRows::default(),
             show_line_numbers: true,
             show_row_separators: false,
             word_wrap: false,
@@ -1441,11 +1443,7 @@ fn file_session_from_row(
     let selected_row = row
         .get::<_, Option<i64>>(offset + 2)?
         .and_then(|row| usize::try_from(row).ok());
-    let marked_rows = row
-        .get::<_, String>(offset + 7)?
-        .split(',')
-        .filter_map(|value| value.parse::<usize>().ok())
-        .collect::<Vec<_>>();
+    let marked_rows = decode_marked_rows(&row.get::<_, String>(offset + 7)?);
     let query_text = row.get::<_, String>(offset + 3)?;
     let result_mode = row.get::<_, i64>(offset + 6)?;
     let resume_state = row.get::<_, String>(offset + 12)?;
@@ -1520,12 +1518,7 @@ fn merge_session_changes(
 
 fn save_session_row(connection: &Connection, path: &Path, state: &FileSessionState) -> Result<()> {
     let selected_row = state.selected_row.and_then(|row| i64::try_from(row).ok());
-    let marked_rows = state
-        .marked_rows
-        .iter()
-        .map(usize::to_string)
-        .collect::<Vec<_>>()
-        .join(",");
+    let marked_rows = encode_marked_rows(&state.marked_rows);
     let keyword_color_rules = encode_rules(&state.keyword_color_rules);
     let resume_state = serde_json::to_string(&state.resume).context("无法序列化标签恢复状态")?;
     connection
@@ -1803,11 +1796,32 @@ fn decode_hex(encoded: &str) -> Option<Vec<u8>> {
 }
 
 fn count_marked_rows(marked_rows: &str) -> usize {
-    if marked_rows.is_empty() {
-        0
-    } else {
-        marked_rows.split(',').count()
+    decode_marked_rows(marked_rows).len()
+}
+
+fn encode_marked_rows(rows: &CompressedRows) -> String {
+    if rows.is_empty() {
+        return String::new();
     }
+    let bytes = rows.to_portable_bytes();
+    let mut encoded = String::with_capacity(COMPRESSED_MARKED_ROWS_PREFIX.len() + bytes.len() * 2);
+    encoded.push_str(COMPRESSED_MARKED_ROWS_PREFIX);
+    for byte in bytes {
+        write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    encoded
+}
+
+fn decode_marked_rows(stored: &str) -> CompressedRows {
+    if let Some(encoded) = stored.strip_prefix(COMPRESSED_MARKED_ROWS_PREFIX) {
+        return decode_hex(encoded)
+            .and_then(|bytes| CompressedRows::from_portable_bytes(&bytes))
+            .unwrap_or_default();
+    }
+    stored
+        .split(',')
+        .filter_map(|value| value.parse::<usize>().ok())
+        .collect()
 }
 
 fn unix_timestamp() -> i64 {
@@ -1824,7 +1838,11 @@ mod session_load_tests {
     #[cfg(unix)]
     use std::{ffi::OsString, os::unix::ffi::OsStringExt as _};
 
-    use super::{FileSessionState, StateStore, path_from_database, path_to_database};
+    use super::{
+        COMPRESSED_MARKED_ROWS_PREFIX, FileSessionState, StateStore, count_marked_rows,
+        decode_marked_rows, encode_marked_rows, path_from_database, path_to_database,
+    };
+    use vclogg_core::CompressedRows;
 
     struct TemporaryDatabase(PathBuf);
 
@@ -1853,7 +1871,7 @@ mod session_load_tests {
         FileSessionState {
             query_text: query.into(),
             selected_row: Some(42),
-            marked_rows: vec![3, 9],
+            marked_rows: [3, 9].into_iter().collect(),
             ..FileSessionState::default()
         }
     }
@@ -1885,6 +1903,53 @@ mod session_load_tests {
         assert_eq!(loaded[&first].query_text, "first");
         assert_eq!(loaded[&second].query_text, "second");
         assert!(!loaded.contains_key(&missing));
+    }
+
+    #[test]
+    fn marked_rows_use_compressed_storage_and_accept_legacy_lists() {
+        let rows = CompressedRows::from_inclusive_ranges([(0, 999_999), (2_000_000, 2_000_010)]);
+
+        let encoded = encode_marked_rows(&rows);
+
+        assert!(encoded.starts_with(COMPRESSED_MARKED_ROWS_PREFIX));
+        assert!(encoded.len() < 2048);
+        assert_eq!(decode_marked_rows(&encoded), rows);
+        assert_eq!(count_marked_rows(&encoded), 1_000_011);
+        assert_eq!(
+            decode_marked_rows("3,9,10"),
+            [3, 9, 10].into_iter().collect()
+        );
+
+        let database = TemporaryDatabase::new("compressed-marked-rows");
+        let path = database.0.with_file_name("dense-marks.log");
+        let store = StateStore::open(database.0.clone()).expect("应能打开测试状态库");
+        let mut state = session("dense");
+        state.marked_rows = rows.clone();
+        store
+            .save_sessions(&[(path.clone(), state)])
+            .expect("应能保存压缩标记会话");
+        let persisted = store
+            .lock()
+            .expect("应能锁定测试状态库")
+            .query_row(
+                "SELECT marked_rows FROM file_sessions WHERE path = ?1",
+                [path_to_database(&path)],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("应能读取原始标记字段");
+        assert_eq!(persisted, encoded);
+        assert_eq!(
+            store
+                .load_session(&path)
+                .expect("应能读取压缩标记会话")
+                .expect("压缩标记会话应存在")
+                .marked_rows,
+            rows
+        );
+        assert_eq!(
+            store.session_history().expect("应能读取压缩标记历史")[0].marked_rows_count,
+            1_000_011
+        );
     }
 
     #[cfg(unix)]

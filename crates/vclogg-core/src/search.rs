@@ -1,4 +1,5 @@
 use std::{
+    io::Cursor,
     ops::Range,
     sync::{
         Arc,
@@ -174,6 +175,29 @@ impl CompressedRows {
 
     pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
         self.rows.iter().filter_map(|row| usize::try_from(row).ok())
+    }
+
+    /// Serialize the compressed set without expanding individual source rows.
+    pub fn to_portable_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(self.rows.serialized_size());
+        self.rows
+            .serialize_into(&mut bytes)
+            .expect("serializing a roaring treemap into Vec cannot fail");
+        bytes
+    }
+
+    /// Restore a set serialized by [`Self::to_portable_bytes`].
+    pub fn from_portable_bytes(bytes: &[u8]) -> Option<Self> {
+        let mut reader = Cursor::new(bytes);
+        let rows = RoaringTreemap::deserialize_from(&mut reader).ok()?;
+        if reader.position() != u64::try_from(bytes.len()).ok()?
+            || rows.max().is_some_and(|row| usize::try_from(row).is_err())
+        {
+            return None;
+        }
+        Some(Self {
+            rows: Arc::new(rows),
+        })
     }
 
     /// Insert one source row while preserving cheap clone semantics.
@@ -839,6 +863,19 @@ mod performance_tests {
         unchanged.remove_rows(&disjoint);
 
         assert!(Arc::ptr_eq(&original.rows, &unchanged.rows));
+    }
+
+    #[test]
+    fn portable_rows_round_trip_without_expanding_dense_ranges() {
+        let rows = CompressedRows::from_inclusive_ranges([(0, 999_999), (2_000_000, 2_000_010)]);
+
+        let bytes = rows.to_portable_bytes();
+        let restored =
+            CompressedRows::from_portable_bytes(&bytes).expect("rows should deserialize");
+
+        assert_eq!(restored, rows);
+        assert!(bytes.len() < 1024);
+        assert!(CompressedRows::from_portable_bytes(&[0, 1, 2]).is_none());
     }
 
     #[test]

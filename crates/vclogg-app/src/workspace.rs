@@ -6383,7 +6383,7 @@ impl Workspace {
             case_sensitive: tab.search_query.case_sensitive,
             regex: tab.search_query.regex,
             result_mode: tab.result_mode.database_value(),
-            marked_rows: marked_rows.iter().collect(),
+            marked_rows,
             show_line_numbers: tab.show_line_numbers,
             show_row_separators: tab.show_row_separators,
             word_wrap: tab.log_viewport.is_wrapped(),
@@ -6634,11 +6634,7 @@ impl Workspace {
                 max_results: self.app_settings.search_result_limit(),
             };
             let result_mode = ResultMode::from_database(session.result_mode);
-            let restored_marked_rows = session
-                .marked_rows
-                .iter()
-                .copied()
-                .collect::<CompressedRows>();
+            let restored_marked_rows = session.marked_rows.clone();
             let marked_rows = restored_marked_rows
                 .iter()
                 .filter(|row| document.contains_source_row(*row))
@@ -7243,7 +7239,7 @@ impl Workspace {
                     cx,
                 );
             });
-            tab.pending_restore_marked_rows = session.marked_rows.iter().copied().collect();
+            tab.pending_restore_marked_rows = session.marked_rows.clone();
             tab.pending_restore_row = session.selected_row;
             tab.pending_resume = Some(session.resume.clone());
             tab.keyword_color_rules = session.keyword_color_rules.clone();
