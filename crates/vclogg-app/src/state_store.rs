@@ -1,16 +1,16 @@
 use std::{
     collections::{BTreeMap, HashSet},
     fmt::Write as _,
-    fs,
     path::{Path, PathBuf},
-    sync::{Mutex, MutexGuard},
 };
 
 use anyhow::{Context as _, Result};
-use rusqlite::{Connection, OptionalExtension as _, params};
 use vclogg_core::CompressedRows;
+use vclogg_data::{
+    AppSettingsRecord, ColorLabelRecord, FileSessionRecord, PredefinedFilterRecord,
+    StateMigrationDefaults, StateRepository,
+};
 pub use vclogg_data::{CloudSettings, DatabaseInfo, HistorySession, LastWorkspaceFile, RecentFile};
-use vclogg_data::{ColorLabelRecord, FileSessionRecord, PredefinedFilterRecord, StateRepository};
 
 use crate::app_log::AppLogLevel;
 use crate::color_labels::{
@@ -34,7 +34,6 @@ pub(crate) fn normalize_search_history(history: impl IntoIterator<Item = String>
 pub const DEFAULT_WORD_BOUNDARY_CHARACTERS: &str =
     ".,;:!?()[]{}<>/\\|\"'`~@#$%^&*+-=，。！？；：、（）【】《》“”‘’…—";
 pub const MAX_WORD_BOUNDARY_CHARACTERS: usize = 256;
-const STATE_SCHEMA_VERSION: u32 = 4;
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -296,7 +295,6 @@ impl Default for FileSessionState {
 }
 
 pub struct StateStore {
-    connection: Mutex<Connection>,
     repository: StateRepository,
 }
 
@@ -312,148 +310,19 @@ impl StateStore {
     }
 
     fn open(database_path: PathBuf) -> Result<Self> {
-        let sessions_dir = database_path.parent().context("状态库路径没有父目录")?;
-        fs::create_dir_all(sessions_dir)
-            .with_context(|| format!("无法创建状态目录：{}", sessions_dir.display()))?;
-        let connection = Connection::open(&database_path)
-            .with_context(|| format!("无法打开状态库：{}", database_path.display()))?;
-        connection
-            .busy_timeout(std::time::Duration::from_secs(5))
-            .context("无法设置状态库忙等待")?;
-        connection
-            .execute_batch("PRAGMA foreign_keys = ON;")
-            .context("无法启用状态库外键")?;
-        let schema_version = connection
-            .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
-            .context("无法读取状态库版本")?;
-        if schema_version > STATE_SCHEMA_VERSION {
-            anyhow::bail!("状态库版本 {schema_version} 高于当前支持的 {STATE_SCHEMA_VERSION}");
-        }
-        if schema_version < STATE_SCHEMA_VERSION {
-            connection
-            .execute_batch(
-                "PRAGMA journal_mode = WAL;
-                 CREATE TABLE IF NOT EXISTS file_sessions (
-                     id INTEGER PRIMARY KEY,
-                     path TEXT NOT NULL UNIQUE,
-                     custom_title TEXT,
-                     last_opened_at INTEGER NOT NULL,
-                     revision INTEGER NOT NULL DEFAULT 1,
-                     selected_row INTEGER,
-                     query_text TEXT NOT NULL DEFAULT '',
-                     case_sensitive INTEGER NOT NULL DEFAULT 0,
-                     regex INTEGER NOT NULL DEFAULT 0,
-                     result_mode INTEGER NOT NULL DEFAULT 0,
-                     marked_rows TEXT NOT NULL DEFAULT '',
-                     show_line_numbers INTEGER NOT NULL DEFAULT 1,
-                     show_row_separators INTEGER NOT NULL DEFAULT 0,
-                     word_wrap INTEGER NOT NULL DEFAULT 0,
-                     keyword_color_rules TEXT NOT NULL DEFAULT '[]',
-                     resume_state TEXT NOT NULL DEFAULT '',
-                     pinned INTEGER NOT NULL DEFAULT 0
-                 );
-                 CREATE INDEX IF NOT EXISTS idx_file_sessions_recent
-                     ON file_sessions(last_opened_at DESC);
-                 CREATE TABLE IF NOT EXISTS last_workspace_files (
-                     position INTEGER PRIMARY KEY,
-                     file_session_id INTEGER NOT NULL UNIQUE
-                         REFERENCES file_sessions(id) ON DELETE CASCADE,
-                     was_active INTEGER NOT NULL DEFAULT 0
-                 );
-                 CREATE TABLE IF NOT EXISTS app_settings (
-                     id INTEGER PRIMARY KEY CHECK(id = 1),
-                     default_show_line_numbers INTEGER NOT NULL DEFAULT 1,
-                     default_show_row_separators INTEGER NOT NULL DEFAULT 0,
-                     highlight_log_levels INTEGER NOT NULL DEFAULT 0,
-                     log_font_size INTEGER NOT NULL DEFAULT 13,
-                     log_line_spacing INTEGER NOT NULL DEFAULT 6,
-                     log_font_family TEXT NOT NULL DEFAULT 'consolas',
-                     shortcut_open_file TEXT NOT NULL DEFAULT 'Ctrl+O',
-                     shortcut_focus_search TEXT NOT NULL DEFAULT 'Ctrl+F',
-                     shortcut_quick_find TEXT NOT NULL DEFAULT 'Ctrl+Shift+F',
-                     shortcut_close_tab TEXT NOT NULL DEFAULT 'Ctrl+W',
-                     shortcut_open_settings TEXT NOT NULL DEFAULT 'Ctrl+,',
-                     shortcut_toggle_case_sensitive TEXT NOT NULL DEFAULT 'Alt+C',
-                     shortcut_jump_to_bottom TEXT NOT NULL DEFAULT 'Ctrl+End',
-                     shortcut_cycle_color_label TEXT NOT NULL DEFAULT 'Ctrl+D'
-                     ,shortcut_toggle_word_wrap TEXT NOT NULL DEFAULT 'W',
-                     mouse_wheel_scroll_percent INTEGER NOT NULL DEFAULT 100,
-                     scroll_by_line INTEGER NOT NULL DEFAULT 0,
-                     mouse_wheel_scroll_lines INTEGER NOT NULL DEFAULT 1,
-                     scroll_by_line_when_word_wrap INTEGER NOT NULL DEFAULT 0,
-                     reduce_motion INTEGER NOT NULL DEFAULT 0,
-                     confirm_close_tab INTEGER NOT NULL DEFAULT 0,
-                     show_full_path INTEGER NOT NULL DEFAULT 1,
-                     max_search_results INTEGER NOT NULL DEFAULT 0,
-                     highlight_matches INTEGER NOT NULL DEFAULT 1,
-                     word_boundary_characters TEXT NOT NULL DEFAULT '.,;:!?()[]{}<>/\\|\"''`~@#$%^&*+-=，。！？；：、（）【】《》“”‘’…—',
-                     default_case_sensitive INTEGER NOT NULL DEFAULT 0,
-                     default_use_regex INTEGER NOT NULL DEFAULT 0,
-                     show_line_number_row_separators INTEGER NOT NULL DEFAULT 0,
-                     line_number_width INTEGER NOT NULL DEFAULT 60,
-                     line_number_text_color TEXT,
-                     line_number_background_color TEXT,
-                     theme_preference TEXT NOT NULL DEFAULT 'light',
-                     open_directory_command TEXT NOT NULL DEFAULT '',
-                     viewer_overscan INTEGER NOT NULL DEFAULT 12,
-                     language TEXT NOT NULL DEFAULT 'zh-CN',
-                     app_log_level TEXT NOT NULL DEFAULT 'error'
-                 );
-                 CREATE TABLE IF NOT EXISTS ui_state (
-                     key TEXT PRIMARY KEY,
-                     value TEXT NOT NULL
-                 );
-                 CREATE TABLE IF NOT EXISTS global_search_preferences (
-                     path TEXT PRIMARY KEY,
-                     selected INTEGER NOT NULL DEFAULT 1
-                 );
-                 CREATE TABLE IF NOT EXISTS search_history (
-                     position INTEGER PRIMARY KEY,
-                     query_text TEXT NOT NULL UNIQUE
-                 );
-                 CREATE TABLE IF NOT EXISTS color_labels (
-                     position INTEGER PRIMARY KEY,
-                     label_id TEXT NOT NULL UNIQUE,
-                     name TEXT NOT NULL,
-                     color INTEGER NOT NULL,
-                     alpha INTEGER NOT NULL DEFAULT 255
-                 );
-                 CREATE TABLE IF NOT EXISTS color_label_settings (
-                     id INTEGER PRIMARY KEY CHECK(id = 1),
-                     initialized INTEGER NOT NULL DEFAULT 0
-                 );
-                 CREATE TABLE IF NOT EXISTS predefined_filters (
-                     position INTEGER PRIMARY KEY,
-                     filter_id TEXT NOT NULL UNIQUE,
-                     item_json TEXT NOT NULL
-                 );
-                 CREATE TABLE IF NOT EXISTS cloud_settings (
-                     id INTEGER PRIMARY KEY CHECK(id = 1),
-                     server_url TEXT NOT NULL DEFAULT '',
-                     display_name TEXT NOT NULL DEFAULT ''
-                 );",
-            )
-            .context("无法初始化状态库结构")?;
-            ensure_session_columns(&connection)?;
-            ensure_app_settings_columns(&connection)?;
-            ensure_color_label_columns(&connection)?;
-            connection
-                .execute(
-                    "CREATE INDEX IF NOT EXISTS idx_file_sessions_pinned_recent
-                     ON file_sessions(pinned DESC, last_opened_at DESC)",
-                    [],
-                )
-                .context("无法创建收藏文件索引")?;
-            connection
-                .pragma_update(None, "user_version", STATE_SCHEMA_VERSION)
-                .context("无法更新状态库版本")?;
-        }
-
-        let repository = StateRepository::open(database_path.clone())?;
-        Ok(Self {
-            connection: Mutex::new(connection),
-            repository,
-        })
+        let defaults = StateMigrationDefaults {
+            app_log_level: AppLogLevel::default().database_value().into(),
+            color_labels: default_color_labels()
+                .into_iter()
+                .map(|label| ColorLabelRecord {
+                    id: label.id,
+                    name: label.name,
+                    color: label.color,
+                    alpha: label.alpha,
+                })
+                .collect(),
+        };
+        StateRepository::open(database_path, &defaults).map(|repository| Self { repository })
     }
 
     pub fn record_opened(&self, paths: &[PathBuf]) -> Result<()> {
@@ -461,192 +330,14 @@ impl StateStore {
     }
 
     pub fn load_app_settings(&self) -> Result<AppSettings> {
-        let connection = self.lock()?;
-        connection
-            .query_row(
-                "SELECT default_show_line_numbers, default_show_row_separators,
-                        highlight_log_levels, log_font_size, log_line_spacing, log_font_family,
-                        shortcut_open_file, shortcut_focus_search, shortcut_quick_find,
-                        shortcut_close_tab, shortcut_open_settings,
-                        shortcut_toggle_case_sensitive, shortcut_jump_to_bottom,
-                        shortcut_cycle_color_label, shortcut_toggle_word_wrap,
-                        mouse_wheel_scroll_percent, scroll_by_line,
-                        mouse_wheel_scroll_lines, scroll_by_line_when_word_wrap,
-                        reduce_motion, confirm_close_tab, show_full_path,
-                        max_search_results, highlight_matches, word_boundary_characters,
-                        default_case_sensitive, default_use_regex,
-                        show_line_number_row_separators, line_number_width,
-                        line_number_text_color, line_number_background_color,
-                        theme_preference, open_directory_command, viewer_overscan, language,
-                        app_log_level
-                 FROM app_settings
-                 WHERE id = 1",
-                [],
-                |row| {
-                    Ok(AppSettings {
-                        app_log_level: AppLogLevel::from_database(&row.get::<_, String>(35)?),
-                        language: Language::from_database(&row.get::<_, String>(34)?),
-                        theme_preference: ThemePreference::from_database(
-                            &row.get::<_, String>(31)?,
-                        ),
-                        open_directory_command: row
-                            .get::<_, String>(32)?
-                            .chars()
-                            .take(2048)
-                            .collect(),
-                        viewer_overscan: row.get::<_, u16>(33)?.clamp(4, 40),
-                        default_show_line_numbers: row.get::<_, i64>(0)? != 0,
-                        default_show_row_separators: row.get::<_, i64>(1)? != 0,
-                        highlight_log_levels: row.get::<_, i64>(2)? != 0,
-                        log_font_size: row.get::<_, u16>(3)?.clamp(8, 32),
-                        log_line_spacing: row.get::<_, u16>(4)?.clamp(1, 40),
-                        log_font_family: LogFontFamily::from_database(&row.get::<_, String>(5)?),
-                        mouse_wheel_scroll_percent: row.get::<_, u16>(15)?.clamp(1, 400),
-                        scroll_by_line: row.get::<_, i64>(16)? != 0,
-                        mouse_wheel_scroll_lines: row.get::<_, u16>(17)?.clamp(1, 100),
-                        scroll_by_line_when_word_wrap: row.get::<_, i64>(18)? != 0,
-                        reduce_motion: row.get::<_, i64>(19)? != 0,
-                        confirm_close_tab: row.get::<_, i64>(20)? != 0,
-                        show_full_path: row.get::<_, i64>(21)? != 0,
-                        max_search_results: u32::try_from(
-                            row.get::<_, i64>(22)?.clamp(0, i64::from(u32::MAX)),
-                        )
-                        .unwrap_or(u32::MAX),
-                        highlight_matches: row.get::<_, i64>(23)? != 0,
-                        word_boundary_characters: row
-                            .get::<_, String>(24)?
-                            .chars()
-                            .take(MAX_WORD_BOUNDARY_CHARACTERS)
-                            .collect(),
-                        default_case_sensitive: row.get::<_, i64>(25)? != 0,
-                        default_use_regex: row.get::<_, i64>(26)? != 0,
-                        show_line_number_row_separators: row.get::<_, i64>(27)? != 0,
-                        line_number_width: row.get::<_, u16>(28)?.clamp(40, 160),
-                        line_number_text_color: normalize_optional_hex_color(row.get(29)?),
-                        line_number_background_color: normalize_optional_hex_color(row.get(30)?),
-                        shortcuts: ShortcutSettings {
-                            open_file: row.get(6)?,
-                            focus_search: row.get(7)?,
-                            quick_find: row.get(8)?,
-                            close_tab: row.get(9)?,
-                            open_settings: row.get(10)?,
-                            toggle_case_sensitive: row.get(11)?,
-                            jump_to_bottom: row.get(12)?,
-                            cycle_color_label: row.get(13)?,
-                            toggle_word_wrap: row.get(14)?,
-                        },
-                    })
-                },
-            )
-            .optional()
-            .context("无法读取应用设置")
-            .map(|settings| settings.unwrap_or_default())
+        self.repository
+            .load_app_settings()
+            .map(|settings| settings.map(app_settings_from_record).unwrap_or_default())
     }
 
     pub fn save_app_settings(&self, settings: AppSettings) -> Result<()> {
-        let connection = self.lock()?;
-        connection
-            .execute(
-                "INSERT INTO app_settings(
-                     id, default_show_line_numbers, default_show_row_separators,
-                     highlight_log_levels,
-                     log_font_size, log_line_spacing, log_font_family,
-                     shortcut_open_file, shortcut_focus_search, shortcut_quick_find,
-                     shortcut_close_tab, shortcut_open_settings,
-                     shortcut_toggle_case_sensitive, shortcut_jump_to_bottom,
-                     shortcut_cycle_color_label, shortcut_toggle_word_wrap,
-                     mouse_wheel_scroll_percent, scroll_by_line,
-                     mouse_wheel_scroll_lines, scroll_by_line_when_word_wrap,
-                     reduce_motion, confirm_close_tab, show_full_path,
-                     max_search_results, highlight_matches, word_boundary_characters,
-                     default_case_sensitive, default_use_regex,
-                     show_line_number_row_separators, line_number_width,
-                     line_number_text_color, line_number_background_color,
-                     theme_preference, open_directory_command, viewer_overscan, language,
-                     app_log_level
-                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36)
-                 ON CONFLICT(id) DO UPDATE SET
-                     default_show_line_numbers = excluded.default_show_line_numbers,
-                     default_show_row_separators = excluded.default_show_row_separators,
-                     highlight_log_levels = excluded.highlight_log_levels,
-                     log_font_size = excluded.log_font_size,
-                     log_line_spacing = excluded.log_line_spacing,
-                     log_font_family = excluded.log_font_family,
-                     shortcut_open_file = excluded.shortcut_open_file,
-                     shortcut_focus_search = excluded.shortcut_focus_search,
-                     shortcut_quick_find = excluded.shortcut_quick_find,
-                     shortcut_close_tab = excluded.shortcut_close_tab,
-                     shortcut_open_settings = excluded.shortcut_open_settings,
-                     shortcut_toggle_case_sensitive = excluded.shortcut_toggle_case_sensitive,
-                     shortcut_jump_to_bottom = excluded.shortcut_jump_to_bottom,
-                     shortcut_cycle_color_label = excluded.shortcut_cycle_color_label,
-                     shortcut_toggle_word_wrap = excluded.shortcut_toggle_word_wrap,
-                     mouse_wheel_scroll_percent = excluded.mouse_wheel_scroll_percent,
-                     scroll_by_line = excluded.scroll_by_line,
-                     mouse_wheel_scroll_lines = excluded.mouse_wheel_scroll_lines,
-                     scroll_by_line_when_word_wrap = excluded.scroll_by_line_when_word_wrap,
-                     reduce_motion = excluded.reduce_motion,
-                     confirm_close_tab = excluded.confirm_close_tab,
-                     show_full_path = excluded.show_full_path,
-                     max_search_results = excluded.max_search_results,
-                     highlight_matches = excluded.highlight_matches,
-                     word_boundary_characters = excluded.word_boundary_characters,
-                     default_case_sensitive = excluded.default_case_sensitive,
-                     default_use_regex = excluded.default_use_regex,
-                     show_line_number_row_separators = excluded.show_line_number_row_separators,
-                     line_number_width = excluded.line_number_width,
-                     line_number_text_color = excluded.line_number_text_color,
-                     line_number_background_color = excluded.line_number_background_color,
-                     theme_preference = excluded.theme_preference,
-                     open_directory_command = excluded.open_directory_command,
-                     viewer_overscan = excluded.viewer_overscan,
-                     language = excluded.language,
-                     app_log_level = excluded.app_log_level",
-                params![
-                    settings.default_show_line_numbers,
-                    settings.default_show_row_separators,
-                    settings.highlight_log_levels,
-                    settings.log_font_size,
-                    settings.log_line_spacing,
-                    settings.log_font_family.database_value(),
-                    settings.shortcuts.open_file,
-                    settings.shortcuts.focus_search,
-                    settings.shortcuts.quick_find,
-                    settings.shortcuts.close_tab,
-                    settings.shortcuts.open_settings,
-                    settings.shortcuts.toggle_case_sensitive,
-                    settings.shortcuts.jump_to_bottom,
-                    settings.shortcuts.cycle_color_label,
-                    settings.shortcuts.toggle_word_wrap,
-                    settings.mouse_wheel_scroll_percent,
-                    settings.scroll_by_line,
-                    settings.mouse_wheel_scroll_lines,
-                    settings.scroll_by_line_when_word_wrap,
-                    settings.reduce_motion,
-                    settings.confirm_close_tab,
-                    settings.show_full_path,
-                    settings.max_search_results,
-                    settings.highlight_matches,
-                    settings.word_boundary_characters,
-                    settings.default_case_sensitive,
-                    settings.default_use_regex,
-                    settings.show_line_number_row_separators,
-                    settings.line_number_width.clamp(40, 160),
-                    normalize_optional_hex_color(settings.line_number_text_color),
-                    normalize_optional_hex_color(settings.line_number_background_color),
-                    settings.theme_preference.database_value(),
-                    settings
-                        .open_directory_command
-                        .chars()
-                        .take(2048)
-                        .collect::<String>(),
-                    settings.viewer_overscan.clamp(4, 40),
-                    settings.language.database_value(),
-                    settings.app_log_level.database_value(),
-                ],
-            )
-            .context("无法保存应用设置")?;
-        Ok(())
+        self.repository
+            .save_app_settings(&app_settings_to_record(settings))
     }
 
     pub fn load_last_settings_category(&self) -> Result<Option<String>> {
@@ -875,12 +566,103 @@ impl StateStore {
         self.repository
             .save_workspace(&session_records(sessions)?, open_paths, active_path)
     }
+}
 
-    fn lock(&self) -> Result<MutexGuard<'_, Connection>> {
-        self.connection
-            .lock()
-            .map_err(|_| anyhow::anyhow!("状态库锁已损坏"))
+fn app_settings_from_record(record: AppSettingsRecord) -> AppSettings {
+    AppSettings {
+        app_log_level: AppLogLevel::from_database(&record.app_log_level),
+        language: Language::from_database(&record.language),
+        theme_preference: ThemePreference::from_database(&record.theme_preference),
+        default_show_line_numbers: record.default_show_line_numbers,
+        default_show_row_separators: record.default_show_row_separators,
+        show_line_number_row_separators: record.show_line_number_row_separators,
+        line_number_width: bounded_u16(record.line_number_width, 40, 160),
+        line_number_text_color: normalize_optional_hex_color(record.line_number_text_color),
+        line_number_background_color: normalize_optional_hex_color(
+            record.line_number_background_color,
+        ),
+        highlight_log_levels: record.highlight_log_levels,
+        log_font_size: bounded_u16(record.log_font_size, 8, 32),
+        log_line_spacing: bounded_u16(record.log_line_spacing, 1, 40),
+        log_font_family: LogFontFamily::from_database(&record.log_font_family),
+        mouse_wheel_scroll_percent: bounded_u16(record.mouse_wheel_scroll_percent, 1, 400),
+        scroll_by_line: record.scroll_by_line,
+        mouse_wheel_scroll_lines: bounded_u16(record.mouse_wheel_scroll_lines, 1, 100),
+        scroll_by_line_when_word_wrap: record.scroll_by_line_when_word_wrap,
+        viewer_overscan: bounded_u16(record.viewer_overscan, 4, 40),
+        reduce_motion: record.reduce_motion,
+        confirm_close_tab: record.confirm_close_tab,
+        show_full_path: record.show_full_path,
+        open_directory_command: record.open_directory_command.chars().take(2048).collect(),
+        max_search_results: u32::try_from(record.max_search_results.clamp(0, i64::from(u32::MAX)))
+            .unwrap_or(u32::MAX),
+        highlight_matches: record.highlight_matches,
+        word_boundary_characters: record
+            .word_boundary_characters
+            .chars()
+            .take(MAX_WORD_BOUNDARY_CHARACTERS)
+            .collect(),
+        default_case_sensitive: record.default_case_sensitive,
+        default_use_regex: record.default_use_regex,
+        shortcuts: ShortcutSettings {
+            open_file: record.shortcut_open_file,
+            focus_search: record.shortcut_focus_search,
+            quick_find: record.shortcut_quick_find,
+            close_tab: record.shortcut_close_tab,
+            open_settings: record.shortcut_open_settings,
+            toggle_case_sensitive: record.shortcut_toggle_case_sensitive,
+            jump_to_bottom: record.shortcut_jump_to_bottom,
+            cycle_color_label: record.shortcut_cycle_color_label,
+            toggle_word_wrap: record.shortcut_toggle_word_wrap,
+        },
     }
+}
+
+fn app_settings_to_record(settings: AppSettings) -> AppSettingsRecord {
+    AppSettingsRecord {
+        default_show_line_numbers: settings.default_show_line_numbers,
+        default_show_row_separators: settings.default_show_row_separators,
+        highlight_log_levels: settings.highlight_log_levels,
+        log_font_size: i64::from(settings.log_font_size),
+        log_line_spacing: i64::from(settings.log_line_spacing),
+        log_font_family: settings.log_font_family.database_value().into(),
+        shortcut_open_file: settings.shortcuts.open_file,
+        shortcut_focus_search: settings.shortcuts.focus_search,
+        shortcut_quick_find: settings.shortcuts.quick_find,
+        shortcut_close_tab: settings.shortcuts.close_tab,
+        shortcut_open_settings: settings.shortcuts.open_settings,
+        shortcut_toggle_case_sensitive: settings.shortcuts.toggle_case_sensitive,
+        shortcut_jump_to_bottom: settings.shortcuts.jump_to_bottom,
+        shortcut_cycle_color_label: settings.shortcuts.cycle_color_label,
+        shortcut_toggle_word_wrap: settings.shortcuts.toggle_word_wrap,
+        mouse_wheel_scroll_percent: i64::from(settings.mouse_wheel_scroll_percent),
+        scroll_by_line: settings.scroll_by_line,
+        mouse_wheel_scroll_lines: i64::from(settings.mouse_wheel_scroll_lines),
+        scroll_by_line_when_word_wrap: settings.scroll_by_line_when_word_wrap,
+        reduce_motion: settings.reduce_motion,
+        confirm_close_tab: settings.confirm_close_tab,
+        show_full_path: settings.show_full_path,
+        max_search_results: i64::from(settings.max_search_results),
+        highlight_matches: settings.highlight_matches,
+        word_boundary_characters: settings.word_boundary_characters,
+        default_case_sensitive: settings.default_case_sensitive,
+        default_use_regex: settings.default_use_regex,
+        show_line_number_row_separators: settings.show_line_number_row_separators,
+        line_number_width: i64::from(settings.line_number_width.clamp(40, 160)),
+        line_number_text_color: normalize_optional_hex_color(settings.line_number_text_color),
+        line_number_background_color: normalize_optional_hex_color(
+            settings.line_number_background_color,
+        ),
+        theme_preference: settings.theme_preference.database_value().into(),
+        open_directory_command: settings.open_directory_command.chars().take(2048).collect(),
+        viewer_overscan: i64::from(settings.viewer_overscan.clamp(4, 40)),
+        language: settings.language.database_value().into(),
+        app_log_level: settings.app_log_level.database_value().into(),
+    }
+}
+
+fn bounded_u16(value: i64, minimum: u16, maximum: u16) -> u16 {
+    u16::try_from(value.clamp(i64::from(minimum), i64::from(maximum))).unwrap_or(maximum)
 }
 
 fn file_session_from_record(record: FileSessionRecord) -> FileSessionState {
@@ -935,157 +717,6 @@ fn session_records(
         .iter()
         .map(|(path, state)| Ok((path.clone(), file_session_to_record(state)?)))
         .collect()
-}
-
-fn ensure_session_columns(connection: &Connection) -> Result<()> {
-    const COLUMNS: [(&str, &str); 13] = [
-        ("custom_title", "TEXT"),
-        ("selected_row", "INTEGER"),
-        ("query_text", "TEXT NOT NULL DEFAULT ''"),
-        ("case_sensitive", "INTEGER NOT NULL DEFAULT 0"),
-        ("regex", "INTEGER NOT NULL DEFAULT 0"),
-        ("result_mode", "INTEGER NOT NULL DEFAULT 0"),
-        ("marked_rows", "TEXT NOT NULL DEFAULT ''"),
-        ("show_line_numbers", "INTEGER NOT NULL DEFAULT 1"),
-        ("show_row_separators", "INTEGER NOT NULL DEFAULT 0"),
-        ("keyword_color_rules", "TEXT NOT NULL DEFAULT '[]'"),
-        ("word_wrap", "INTEGER NOT NULL DEFAULT 0"),
-        ("resume_state", "TEXT NOT NULL DEFAULT ''"),
-        ("pinned", "INTEGER NOT NULL DEFAULT 0"),
-    ];
-    let existing = table_columns(connection, "file_sessions")?;
-    for (name, declaration) in COLUMNS {
-        if !existing.contains(name) {
-            connection
-                .execute(
-                    &format!("ALTER TABLE file_sessions ADD COLUMN {name} {declaration}"),
-                    [],
-                )
-                .with_context(|| format!("无法迁移状态库字段：{name}"))?;
-        }
-    }
-    Ok(())
-}
-
-fn ensure_color_label_columns(connection: &Connection) -> Result<()> {
-    if table_columns(connection, "color_labels")?.contains("alpha") {
-        return Ok(());
-    }
-
-    connection
-        .execute(
-            "ALTER TABLE color_labels ADD COLUMN alpha INTEGER NOT NULL DEFAULT 255",
-            [],
-        )
-        .context("无法迁移颜色标签透明度字段")?;
-    for label in default_color_labels() {
-        connection
-            .execute(
-                "UPDATE color_labels
-                 SET alpha = ?1
-                 WHERE label_id = ?2 AND color = ?3",
-                params![label.alpha, label.id, label.color],
-            )
-            .with_context(|| format!("无法迁移颜色标签透明度：{}", label.name))?;
-    }
-    Ok(())
-}
-
-fn ensure_app_settings_columns(connection: &Connection) -> Result<()> {
-    const COLUMNS: [(&str, &str); 33] = [
-        ("highlight_log_levels", "INTEGER NOT NULL DEFAULT 0"),
-        ("log_font_size", "INTEGER NOT NULL DEFAULT 13"),
-        ("log_line_spacing", "INTEGER NOT NULL DEFAULT 6"),
-        ("log_font_family", "TEXT NOT NULL DEFAULT 'consolas'"),
-        ("shortcut_open_file", "TEXT NOT NULL DEFAULT 'Ctrl+O'"),
-        ("shortcut_focus_search", "TEXT NOT NULL DEFAULT 'Ctrl+F'"),
-        (
-            "shortcut_quick_find",
-            "TEXT NOT NULL DEFAULT 'Ctrl+Shift+F'",
-        ),
-        ("shortcut_close_tab", "TEXT NOT NULL DEFAULT 'Ctrl+W'"),
-        ("shortcut_open_settings", "TEXT NOT NULL DEFAULT 'Ctrl+,'"),
-        (
-            "shortcut_toggle_case_sensitive",
-            "TEXT NOT NULL DEFAULT 'Alt+C'",
-        ),
-        (
-            "shortcut_jump_to_bottom",
-            "TEXT NOT NULL DEFAULT 'Ctrl+End'",
-        ),
-        (
-            "shortcut_cycle_color_label",
-            "TEXT NOT NULL DEFAULT 'Ctrl+D'",
-        ),
-        ("shortcut_toggle_word_wrap", "TEXT NOT NULL DEFAULT 'W'"),
-        ("mouse_wheel_scroll_percent", "INTEGER NOT NULL DEFAULT 100"),
-        ("scroll_by_line", "INTEGER NOT NULL DEFAULT 0"),
-        ("mouse_wheel_scroll_lines", "INTEGER NOT NULL DEFAULT 1"),
-        (
-            "scroll_by_line_when_word_wrap",
-            "INTEGER NOT NULL DEFAULT 0",
-        ),
-        ("reduce_motion", "INTEGER NOT NULL DEFAULT 0"),
-        ("confirm_close_tab", "INTEGER NOT NULL DEFAULT 0"),
-        ("show_full_path", "INTEGER NOT NULL DEFAULT 1"),
-        ("max_search_results", "INTEGER NOT NULL DEFAULT 0"),
-        ("highlight_matches", "INTEGER NOT NULL DEFAULT 1"),
-        (
-            "word_boundary_characters",
-            r#"TEXT NOT NULL DEFAULT '.,;:!?()[]{}<>/\|"''`~@#$%^&*+-=，。！？；：、（）【】《》“”‘’…—'"#,
-        ),
-        ("default_case_sensitive", "INTEGER NOT NULL DEFAULT 0"),
-        ("default_use_regex", "INTEGER NOT NULL DEFAULT 0"),
-        (
-            "show_line_number_row_separators",
-            "INTEGER NOT NULL DEFAULT 0",
-        ),
-        ("line_number_width", "INTEGER NOT NULL DEFAULT 60"),
-        ("line_number_text_color", "TEXT"),
-        ("line_number_background_color", "TEXT"),
-        ("theme_preference", "TEXT NOT NULL DEFAULT 'light'"),
-        ("open_directory_command", "TEXT NOT NULL DEFAULT ''"),
-        ("viewer_overscan", "INTEGER NOT NULL DEFAULT 12"),
-        ("language", "TEXT NOT NULL DEFAULT 'zh-CN'"),
-    ];
-    let existing = table_columns(connection, "app_settings")?;
-    for (name, declaration) in COLUMNS {
-        if !existing.contains(name) {
-            connection
-                .execute(
-                    &format!("ALTER TABLE app_settings ADD COLUMN {name} {declaration}"),
-                    [],
-                )
-                .with_context(|| format!("无法迁移应用设置字段：{name}"))?;
-        }
-    }
-    if !existing.contains("app_log_level") {
-        connection
-            .execute(
-                "ALTER TABLE app_settings ADD COLUMN app_log_level TEXT NOT NULL DEFAULT 'error'",
-                [],
-            )
-            .context("无法迁移应用日志等级字段")?;
-        connection
-            .execute(
-                "UPDATE app_settings SET app_log_level = ?1",
-                [AppLogLevel::default().database_value()],
-            )
-            .context("无法初始化应用日志等级")?;
-    }
-    Ok(())
-}
-
-fn table_columns(connection: &Connection, table: &str) -> Result<HashSet<String>> {
-    let mut statement = connection
-        .prepare("SELECT name FROM pragma_table_info(?1)")
-        .with_context(|| format!("无法准备状态库字段检查：{table}"))?;
-    let columns = statement
-        .query_map([table], |row| row.get::<_, String>(0))
-        .with_context(|| format!("无法查询状态库字段：{table}"))?;
-    columns
-        .collect::<rusqlite::Result<HashSet<_>>>()
-        .with_context(|| format!("无法解析状态库字段：{table}"))
 }
 
 fn normalize_optional_hex_color(value: Option<String>) -> Option<String> {
@@ -1150,8 +781,8 @@ mod session_load_tests {
     use std::{ffi::OsString, os::unix::ffi::OsStringExt as _};
 
     use super::{
-        COMPRESSED_MARKED_ROWS_PREFIX, FileSessionState, StateStore, count_marked_rows,
-        decode_marked_rows, encode_marked_rows,
+        AppSettings, COMPRESSED_MARKED_ROWS_PREFIX, FileSessionState, PredefinedFilterRecord,
+        StateStore, count_marked_rows, decode_marked_rows, encode_marked_rows,
     };
     use vclogg_core::CompressedRows;
     use vclogg_data::{decode_persisted_path, encode_persisted_path};
@@ -1241,14 +872,11 @@ mod session_load_tests {
             .save_sessions(&[(path.clone(), state)])
             .expect("应能保存压缩标记会话");
         let persisted = store
-            .lock()
-            .expect("应能锁定测试状态库")
-            .query_row(
-                "SELECT marked_rows FROM file_sessions WHERE path = ?1",
-                [encode_persisted_path(&path)],
-                |row| row.get::<_, String>(0),
-            )
-            .expect("应能读取原始标记字段");
+            .repository
+            .load_session(&path)
+            .expect("应能读取原始会话记录")
+            .expect("原始会话记录应存在")
+            .marked_rows;
         assert_eq!(persisted, encoded);
         assert_eq!(
             store
@@ -1313,12 +941,11 @@ mod session_load_tests {
         let store = StateStore::open(database.0.clone()).expect("应能初始化测试状态库");
 
         let version = store
-            .lock()
-            .expect("应能锁定测试状态库")
-            .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
+            .repository
+            .schema_version()
             .expect("应能读取测试状态库版本");
 
-        assert_eq!(version, super::STATE_SCHEMA_VERSION);
+        assert_eq!(version, vclogg_data::STATE_SCHEMA_VERSION);
     }
 
     #[test]
@@ -1346,6 +973,32 @@ mod session_load_tests {
     }
 
     #[test]
+    fn app_settings_round_trip_through_data_record() {
+        let database = TemporaryDatabase::new("app-settings-record");
+        let store = StateStore::open(database.0.clone()).expect("应能打开测试状态库");
+        let mut expected = AppSettings {
+            log_font_size: 18,
+            log_line_spacing: 9,
+            word_boundary_characters: "._-".into(),
+            open_directory_command: "tool --path {directory}".into(),
+            line_number_text_color: Some("#AABBCC".into()),
+            ..AppSettings::default()
+        };
+        store
+            .save_app_settings(expected.clone())
+            .expect("应能保存应用设置记录");
+        drop(store);
+
+        let actual = StateStore::open(database.0.clone())
+            .expect("应能重新打开测试状态库")
+            .load_app_settings()
+            .expect("应能读取应用设置记录");
+
+        expected.line_number_text_color = Some("#aabbcc".into());
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn predefined_filter_rows_migrate_atomically_to_uuid_v5_shape() {
         let database = TemporaryDatabase::new("predefined-filter-v5");
         let store = StateStore::open(database.0.clone()).expect("应能打开测试状态库");
@@ -1354,12 +1007,11 @@ mod session_load_tests {
             r#"{{"id":"filter-1","uuid":"{uuid}","name":"Camera","value":"CAMERA","useRegex":false,"note":"","collaborative":true,"published":{{"serverUrl":"https://example.test","filterId":"{uuid}","revision":3,"ownerId":"owner","ownerName":"Owner","note":"","snapshot":{{"name":"Camera","value":"CAMERA","useRegex":false,"note":"","collaborative":true}}}}}}"#
         );
         store
-            .lock()
-            .unwrap()
-            .execute(
-                "INSERT INTO predefined_filters(position,filter_id,item_json) VALUES(0,'filter-1',?1)",
-                [legacy],
-            )
+            .repository
+            .save_predefined_filters(&[PredefinedFilterRecord {
+                id: "filter-1".into(),
+                json: legacy,
+            }])
             .unwrap();
 
         let loaded = store.load_predefined_filters().unwrap();
@@ -1367,19 +1019,11 @@ mod session_load_tests {
         assert_eq!(loaded[0].id.to_string(), uuid);
         assert_eq!(loaded[0].remote_references.len(), 1);
 
-        let (stored_id, stored_json): (String, String) = store
-            .lock()
-            .unwrap()
-            .query_row(
-                "SELECT filter_id,item_json FROM predefined_filters WHERE position=0",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(stored_id, uuid);
-        assert!(stored_json.contains("\"remoteReferences\""));
-        assert!(!stored_json.contains("\"id\""));
-        assert!(!stored_json.contains("\"published\""));
+        let stored = store.repository.load_predefined_filters().unwrap();
+        assert_eq!(stored[0].id, uuid);
+        assert!(stored[0].json.contains("\"remoteReferences\""));
+        assert!(!stored[0].json.contains("\"id\""));
+        assert!(!stored[0].json.contains("\"published\""));
     }
 
     #[test]

@@ -48,6 +48,8 @@ for dependency in gpui gpui-base gpui-component vclogg-app; do
   forbid_manifest_dependency crates/vclogg-data/Cargo.toml "$dependency"
 done
 
+forbid_manifest_dependency crates/vclogg-app/Cargo.toml rusqlite
+
 if rg --quiet '(^|::)gpui(_base|_component)?\b' crates/vclogg-core/src crates/vclogg-data/src; then
   fail "core and data source must not import GPUI"
 fi
@@ -58,6 +60,10 @@ fi
 
 if rg --quiet 'vclogg_app' crates/vclogg-data/src crates/vclogg-data/Cargo.toml; then
   fail "data must not depend on app"
+fi
+
+if rg --quiet '(^|::)rusqlite\b' crates/vclogg-app/src; then
+  fail "app must access SQLite through vclogg-data"
 fi
 
 echo "architecture boundaries are valid"

@@ -12,8 +12,8 @@ Data owns durable state and cache lifecycle without depending on GPUI or the app
 - `index_cache.rs`: enumerate, age, bound and clear managed on-disk index entries. The index file format and index construction remain core behavior.
 - `path_codec.rs`: lossless platform-aware path keys for persistence, including non-Unicode paths.
 - `state.rs`: stable DTOs returned by persistence repositories, including opaque file-session records that keep presentation payloads out of data.
-- `state_repository.rs`: SQLite access for recent files, pinning, history protection/deletion, workspace recovery, revision-aware session conflict merging, UI values, search preferences/history, filter/color records and database statistics.
-- `crates/vclogg-app/src/state_store.rs`: transitional adapter for presentation-specific payload encoding and the remaining settings/session SQL; do not add new persistence responsibilities there.
+- `state_repository.rs`: SQLite connection/schema ownership plus recent files, pinning, history protection/deletion, workspace recovery, revision-aware session conflict merging, settings, UI values, search preferences/history, filter/color records and database statistics.
+- `crates/vclogg-app/src/state_store.rs`: presentation adapter between app models and stable data records; it must not import rusqlite or contain SQL.
 
 SQLite schema, transactions, conflict-safe writes, cached data, persisted settings and recovery payload storage belong here. UI models may encode/decode DTO payloads in app, but data must not import GPUI types or app modules.
 

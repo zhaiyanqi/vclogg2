@@ -16,6 +16,7 @@ App owns GPUI entities, rendering, commands and user presentation state. Read [d
 - `workspace_state.rs`: retained controllers, task registries and presentation/search coordination state.
 - `log_table.rs`, `global_search_table.rs`, `virtual_log_lines.rs`, `sparse_virtual_list.rs`: source/projection/presentation virtualization and visible decoded-row lifetime.
 - `selectable_log_text.rs`, `color_labels.rs`, `ui_theme.rs`: selection, highlighting and visual composition.
+- `state_store.rs`: app-model adapter for settings, marks, color rules, search contexts and tab-resume records; all SQLite operations live in data.
 - `*_dialog.rs`, `actions.rs`: feature dialogs, commands, focus and keyboard entry points.
 
 User highlighting, selection, selected text, font size, line height, wrapping, marks, viewport and interaction state stay in app. File reads, index construction, search execution and result-set algorithms call core. SQLite, cached data and recovery storage call data.
