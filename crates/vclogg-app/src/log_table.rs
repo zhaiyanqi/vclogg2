@@ -536,15 +536,6 @@ impl RowSelection {
         self.pointer_text_selection_allowed = false;
     }
 
-    pub(crate) fn select_all(&mut self, row_count: usize) {
-        if row_count == 0 {
-            self.clear();
-        } else {
-            self.replace_with(0, row_count - 1);
-            self.anchor = Some(0);
-        }
-    }
-
     pub(crate) fn selected_indices(&self, row_count: usize) -> impl Iterator<Item = usize> + '_ {
         self.ranges
             .iter()
@@ -559,26 +550,16 @@ impl RowSelection {
         self.anchor
     }
 
-    pub(crate) fn replace_indices(&mut self, indices: impl IntoIterator<Item = usize>) {
-        self.clear();
-        for row_ix in indices {
-            match self.ranges.last_mut() {
-                Some((_, end)) if end.saturating_add(1) == row_ix => *end = row_ix,
-                _ => self.ranges.push((row_ix, row_ix)),
-            }
-        }
-        self.anchor = self.ranges.first().map(|(start, _)| *start);
-    }
-
-    pub(crate) fn replace_indices_with_anchor(
+    pub(crate) fn replace_ranges_with_anchor(
         &mut self,
-        indices: impl IntoIterator<Item = usize>,
+        ranges: impl IntoIterator<Item = (usize, usize)>,
         anchor: Option<usize>,
     ) {
-        self.replace_indices(indices);
-        if anchor.is_some() {
-            self.anchor = anchor;
+        self.clear();
+        for (start, end) in ranges {
+            self.add_range(start, end);
         }
+        self.anchor = anchor.or_else(|| self.ranges.first().map(|(start, _)| *start));
     }
 }
 
@@ -780,6 +761,51 @@ impl LogRowSource {
             LogRowProjection::All => self.document.line_count(),
             LogRowProjection::SourceRows(source_rows) => source_rows.len(),
         }
+    }
+
+    fn selected_source_rows(
+        &self,
+        ranges: impl IntoIterator<Item = (usize, usize)>,
+    ) -> CompressedRows {
+        match &self.row_projection {
+            LogRowProjection::All => {
+                let row_count = self.row_count();
+                CompressedRows::from_inclusive_ranges(ranges.into_iter().filter_map(
+                    |(first, last)| {
+                        let start = first.min(last);
+                        if start >= row_count {
+                            return None;
+                        }
+                        let end = first.max(last).min(row_count - 1);
+                        Some((self.source_row(start)?, self.source_row(end)?))
+                    },
+                ))
+            }
+            LogRowProjection::SourceRows(source_rows) => {
+                source_rows.rows_at_position_ranges(ranges)
+            }
+        }
+    }
+
+    fn position_ranges_for_selected_source_rows(
+        &self,
+        selected_rows: &CompressedRows,
+    ) -> Vec<(usize, usize)> {
+        let projection = match &self.row_projection {
+            LogRowProjection::All => {
+                let row_count = self.document.line_count();
+                if row_count == 0 {
+                    return Vec::new();
+                }
+                let first = self.document.segment_start_row();
+                CompressedRows::from_inclusive_ranges([(
+                    first,
+                    first.saturating_add(row_count - 1),
+                )])
+            }
+            LogRowProjection::SourceRows(source_rows) => source_rows.clone(),
+        };
+        projection.position_ranges_for_subset(selected_rows)
     }
 
     fn prepare_visible_rows(&self, visible_range: Range<usize>) {
@@ -1001,12 +1027,11 @@ impl LogTableDelegate {
         self.restore_stable_interaction_rows(selected_rows, active_row, selection_anchor);
     }
 
-    fn stable_interaction_rows(&self) -> (Vec<LogRowKey>, Option<LogRowKey>, Option<LogRowKey>) {
+    fn stable_interaction_rows(&self) -> (CompressedRows, Option<LogRowKey>, Option<LogRowKey>) {
         let selection = self.interaction.row_selection.borrow();
-        let selected_rows = selection
-            .selected_indices(self.source.row_count())
-            .filter_map(|row_ix| self.source.row_key(row_ix))
-            .collect();
+        let selected_rows = self
+            .source
+            .selected_source_rows(selection.selected_ranges());
         let selection_anchor = selection
             .anchor()
             .and_then(|row_ix| self.source.row_key(row_ix));
@@ -1020,18 +1045,18 @@ impl LogTableDelegate {
 
     fn restore_stable_interaction_rows(
         &self,
-        selected_rows: Vec<LogRowKey>,
+        selected_rows: CompressedRows,
         active_row: Option<LogRowKey>,
         selection_anchor: Option<LogRowKey>,
     ) {
-        let selected_indices = selected_rows
-            .into_iter()
-            .filter_map(|key| self.source.row_ix(key));
+        let selected_ranges = self
+            .source
+            .position_ranges_for_selected_source_rows(&selected_rows);
         let anchor = selection_anchor.and_then(|key| self.source.row_ix(key));
         self.interaction
             .row_selection
             .borrow_mut()
-            .replace_indices_with_anchor(selected_indices, anchor);
+            .replace_ranges_with_anchor(selected_ranges, anchor);
         self.interaction
             .active_row
             .set(active_row.and_then(|key| self.source.row_ix(key)));
@@ -1654,6 +1679,27 @@ mod tests {
 
         assert!(delegate.selected_source_rows().is_empty());
         assert_eq!(delegate.active_log_row(), None);
+    }
+
+    #[test]
+    fn projection_updates_do_not_select_new_rows_between_selected_rows() {
+        let document = Arc::new(LogDocument::placeholder("exact-stable-projection.log"));
+        let mut delegate = LogTableDelegate::projected(7, document, [2, 9].into_iter().collect());
+        assert_eq!(delegate.settle_table_selection(0), Some(2));
+        delegate.extend_keyboard_selection(1);
+
+        delegate.set_row_projection([2, 5, 9].into_iter().collect());
+
+        assert_eq!(delegate.selected_source_rows(), [2, 9]);
+        assert_eq!(
+            delegate
+                .interaction
+                .row_selection
+                .borrow()
+                .selected_ranges()
+                .collect::<Vec<_>>(),
+            [(0, 0), (2, 2)]
+        );
     }
 
     #[test]

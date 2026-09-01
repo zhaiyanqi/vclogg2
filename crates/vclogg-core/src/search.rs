@@ -82,6 +82,91 @@ impl CompressedRows {
             .and_then(|rank| usize::try_from(rank).ok())
     }
 
+    /// Keep rows selected by inclusive ranges in this set's positional space.
+    ///
+    /// The mask is built from source-row intervals and intersected with the
+    /// compressed set, so sparse projections remain sparse without expanding
+    /// every selected row into an intermediate collection.
+    pub fn rows_at_position_ranges(
+        &self,
+        ranges: impl IntoIterator<Item = (usize, usize)>,
+    ) -> Self {
+        let len = self.len();
+        if len == 0 {
+            return Self::default();
+        }
+        let mut mask = RoaringTreemap::new();
+        for (first, last) in ranges {
+            let start = first.min(last);
+            if start >= len {
+                continue;
+            }
+            let end = first.max(last).min(len - 1);
+            if start == 0 && end == len - 1 {
+                return self.clone();
+            }
+            let (Some(source_start), Some(source_end)) = (self.get(start), self.get(end)) else {
+                continue;
+            };
+            let (Ok(source_start), Ok(source_end)) =
+                (u64::try_from(source_start), u64::try_from(source_end))
+            else {
+                continue;
+            };
+            mask.insert_range(source_start..=source_end);
+        }
+        mask &= self.rows.as_ref();
+        Self {
+            rows: Arc::new(mask),
+        }
+    }
+
+    /// Map an exact subset of these rows back to compact inclusive positional ranges.
+    ///
+    /// The smaller side of the selection is enumerated: dense selections walk the
+    /// excluded rows and build their complement, while sparse selections walk only
+    /// selected rows.
+    pub fn position_ranges_for_subset(&self, selected: &Self) -> Vec<(usize, usize)> {
+        let row_count = self.len();
+        if row_count == 0 {
+            return Vec::new();
+        }
+        let selected_count = usize::try_from(self.rows.intersection_len(&selected.rows))
+            .unwrap_or(usize::MAX)
+            .min(row_count);
+        if selected_count == 0 {
+            return Vec::new();
+        }
+        if selected_count == row_count {
+            return vec![(0, row_count - 1)];
+        }
+
+        if selected_count <= row_count - selected_count {
+            let selected_rows = self.rows.as_ref() & selected.rows.as_ref();
+            let positions = selected_rows
+                .iter()
+                .filter_map(|row| usize::try_from(row).ok().and_then(|row| self.position(row)));
+            return consecutive_ranges(positions);
+        }
+
+        let excluded_rows = self.rows.as_ref() - selected.rows.as_ref();
+        let mut ranges = Vec::new();
+        let mut next_selected = 0;
+        for excluded_position in excluded_rows
+            .iter()
+            .filter_map(|row| usize::try_from(row).ok().and_then(|row| self.position(row)))
+        {
+            if next_selected < excluded_position {
+                ranges.push((next_selected, excluded_position - 1));
+            }
+            next_selected = excluded_position.saturating_add(1);
+        }
+        if next_selected < row_count {
+            ranges.push((next_selected, row_count - 1));
+        }
+        ranges
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
         self.rows.iter().filter_map(|row| usize::try_from(row).ok())
     }
@@ -115,6 +200,17 @@ impl FromIterator<usize> for CompressedRows {
             rows: Arc::new(rows),
         }
     }
+}
+
+fn consecutive_ranges(indices: impl IntoIterator<Item = usize>) -> Vec<(usize, usize)> {
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    for index in indices {
+        match ranges.last_mut() {
+            Some((_, end)) if end.saturating_add(1) == index => *end = index,
+            _ => ranges.push((index, index)),
+        }
+    }
+    ranges
 }
 
 /// Source row coordinates returned by a completed search.
@@ -643,6 +739,44 @@ mod performance_tests {
 
         assert!(!Arc::ptr_eq(&rows.rows, &union.rows));
         assert_eq!(union.iter().collect::<Vec<_>>(), [2, 5, 7, 9, 11]);
+    }
+
+    #[test]
+    fn positional_ranges_preserve_sparse_rows_without_expansion() {
+        let rows = [2, 5, 9, 20, 21, 30]
+            .into_iter()
+            .collect::<CompressedRows>();
+
+        let selected = rows.rows_at_position_ranges([(1, 3), (5, 5)]);
+
+        assert_eq!(selected.iter().collect::<Vec<_>>(), [5, 9, 20, 30]);
+    }
+
+    #[test]
+    fn full_positional_range_reuses_compressed_storage() {
+        let rows = (0..1_000_000_usize).step_by(3).collect::<CompressedRows>();
+
+        let selected = rows.rows_at_position_ranges([(0, rows.len() - 1)]);
+
+        assert!(Arc::ptr_eq(&rows.rows, &selected.rows));
+    }
+
+    #[test]
+    fn subset_positions_enumerate_the_smaller_side() {
+        let projection = [2, 5, 9, 20, 21, 30]
+            .into_iter()
+            .collect::<CompressedRows>();
+        let sparse = [5, 20].into_iter().collect::<CompressedRows>();
+        let dense = [2, 5, 20, 21, 30].into_iter().collect::<CompressedRows>();
+
+        assert_eq!(
+            projection.position_ranges_for_subset(&sparse),
+            [(1, 1), (3, 3)]
+        );
+        assert_eq!(
+            projection.position_ranges_for_subset(&dense),
+            [(0, 1), (3, 5)]
+        );
     }
 
     #[test]

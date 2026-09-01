@@ -750,12 +750,99 @@ impl GlobalSearchTableDelegate {
         self.interaction.row_bounds.clone()
     }
 
-    fn stable_interaction_rows(&self) -> (Vec<LogRowKey>, Option<LogRowKey>, Option<LogRowKey>) {
+    fn selected_position_ranges_by_document(&self) -> BTreeMap<u64, Vec<(usize, usize)>> {
         let selection = self.interaction.row_selection.borrow();
-        let selected_rows = selection
-            .selected_indices(self.projection.rows_len)
-            .filter_map(|row_ix| self.row_key(row_ix))
+        let mut ranges_by_document = BTreeMap::<u64, Vec<(usize, usize)>>::new();
+        for (group_ix, group) in self.projection.groups.iter().enumerate() {
+            if self
+                .interaction
+                .collapsed_documents
+                .contains(&group.source.document_id)
+                || group.projection.rows.is_empty()
+            {
+                continue;
+            }
+            let Some(match_start) = self
+                .projection
+                .group_starts
+                .get(group_ix)
+                .and_then(|start| start.checked_add(1))
+            else {
+                continue;
+            };
+            let match_end = match_start.saturating_add(group.projection.rows.len() - 1);
+            let selected_ranges = selection
+                .selected_ranges()
+                .filter_map(|(first, last)| {
+                    let start = first.min(last).max(match_start);
+                    let end = first.max(last).min(match_end);
+                    (start <= end).then(|| (start - match_start, end - match_start))
+                })
+                .collect::<Vec<_>>();
+            if !selected_ranges.is_empty() {
+                ranges_by_document.insert(group.source.document_id, selected_ranges);
+            }
+        }
+        ranges_by_document
+    }
+
+    fn position_ranges_for_selected_rows(
+        &self,
+        selected_rows: &BTreeMap<u64, CompressedRows>,
+    ) -> Vec<(usize, usize)> {
+        self.projection
+            .groups
+            .iter()
+            .enumerate()
+            .flat_map(|(group_ix, group)| {
+                let selected = selected_rows.get(&group.source.document_id);
+                let group_start = self.projection.group_starts.get(group_ix).copied();
+                selected
+                    .zip(group_start)
+                    .filter(|_| {
+                        !self
+                            .interaction
+                            .collapsed_documents
+                            .contains(&group.source.document_id)
+                    })
+                    .into_iter()
+                    .flat_map(move |(selected, group_start)| {
+                        group
+                            .projection
+                            .rows
+                            .position_ranges_for_subset(selected)
+                            .into_iter()
+                            .map(move |(start, end)| {
+                                (
+                                    group_start.saturating_add(start).saturating_add(1),
+                                    group_start.saturating_add(end).saturating_add(1),
+                                )
+                            })
+                    })
+            })
+            .collect()
+    }
+
+    fn stable_interaction_rows(
+        &self,
+    ) -> (
+        BTreeMap<u64, CompressedRows>,
+        Option<LogRowKey>,
+        Option<LogRowKey>,
+    ) {
+        let selected_rows = self
+            .selected_position_ranges_by_document()
+            .into_iter()
+            .filter_map(|(document_id, ranges)| {
+                let group_ix = *self.projection.group_by_document.get(&document_id)?;
+                let rows = self.projection.groups[group_ix]
+                    .projection
+                    .rows
+                    .rows_at_position_ranges(ranges);
+                (!rows.is_empty()).then_some((document_id, rows))
+            })
             .collect();
+        let selection = self.interaction.row_selection.borrow();
         let selection_anchor = selection.anchor().and_then(|row_ix| self.row_key(row_ix));
         let active_row = self
             .interaction
@@ -767,21 +854,16 @@ impl GlobalSearchTableDelegate {
 
     fn restore_stable_interaction_rows(
         &self,
-        selected_rows: Vec<LogRowKey>,
+        selected_rows: BTreeMap<u64, CompressedRows>,
         active_row: Option<LogRowKey>,
         selection_anchor: Option<LogRowKey>,
     ) {
-        let mut selected_indices = selected_rows
-            .into_iter()
-            .filter_map(|key| self.row_ix_for_key(key))
-            .collect::<Vec<_>>();
-        selected_indices.sort_unstable();
-        selected_indices.dedup();
+        let selected_ranges = self.position_ranges_for_selected_rows(&selected_rows);
         let anchor = selection_anchor.and_then(|key| self.row_ix_for_key(key));
         self.interaction
             .row_selection
             .borrow_mut()
-            .replace_indices_with_anchor(selected_indices, anchor);
+            .replace_ranges_with_anchor(selected_ranges, anchor);
         self.interaction
             .active_row
             .set(active_row.and_then(|key| self.row_ix_for_key(key)));
@@ -1086,10 +1168,32 @@ impl GlobalSearchTableDelegate {
     }
 
     pub(crate) fn select_all_rows(&self) {
+        let ranges = self
+            .projection
+            .groups
+            .iter()
+            .enumerate()
+            .filter_map(|(group_ix, group)| {
+                if self
+                    .interaction
+                    .collapsed_documents
+                    .contains(&group.source.document_id)
+                    || group.projection.rows.is_empty()
+                {
+                    return None;
+                }
+                let start = self
+                    .projection
+                    .group_starts
+                    .get(group_ix)?
+                    .saturating_add(1);
+                Some((start, start.saturating_add(group.projection.rows.len() - 1)))
+            })
+            .collect::<Vec<_>>();
         self.interaction
             .row_selection
             .borrow_mut()
-            .select_all(self.projection.rows_len);
+            .replace_ranges_with_anchor(ranges, None);
     }
 
     pub(crate) fn selected_rows_count(&self) -> usize {
@@ -1135,46 +1239,25 @@ impl GlobalSearchTableDelegate {
     }
 
     pub(crate) fn selection_snapshot(&self) -> BTreeMap<u64, CompressedRows> {
-        let mut rows_by_document = BTreeMap::<u64, Vec<usize>>::new();
-        let selection = self.interaction.row_selection.borrow();
-        for row_ix in selection.selected_indices(self.projection.rows_len) {
-            let Some(FlatRow::Match {
-                group_ix,
-                source_row,
-            }) = self.flat_row(row_ix)
-            else {
-                continue;
-            };
-            let document_id = self.projection.groups[group_ix].source.document_id;
-            rows_by_document
-                .entry(document_id)
-                .or_default()
-                .push(source_row);
-        }
-        rows_by_document
+        self.selected_position_ranges_by_document()
             .into_iter()
-            .map(|(document_id, rows)| (document_id, rows.into_iter().collect()))
+            .filter_map(|(document_id, ranges)| {
+                let group_ix = *self.projection.group_by_document.get(&document_id)?;
+                let rows = self.projection.groups[group_ix]
+                    .projection
+                    .rows
+                    .rows_at_position_ranges(ranges);
+                (!rows.is_empty()).then_some((document_id, rows))
+            })
             .collect()
     }
 
     pub(crate) fn restore_selection(&self, snapshot: &BTreeMap<u64, CompressedRows>) {
-        let mut selected_indices = snapshot
-            .iter()
-            .flat_map(|(document_id, rows)| {
-                rows.iter().filter_map(|source_row| {
-                    self.row_ix_for_key(LogRowKey::Row {
-                        document_id: *document_id,
-                        source_row,
-                    })
-                })
-            })
-            .collect::<Vec<_>>();
-        selected_indices.sort_unstable();
-        selected_indices.dedup();
+        let selected_ranges = self.position_ranges_for_selected_rows(snapshot);
         self.interaction
             .row_selection
             .borrow_mut()
-            .replace_indices(selected_indices);
+            .replace_ranges_with_anchor(selected_ranges, None);
     }
 
     fn rebuild_layout(&mut self) {
@@ -1771,6 +1854,31 @@ mod tests {
     }
 
     #[test]
+    fn group_projection_does_not_select_new_rows_between_selected_rows() {
+        let document = Arc::new(LogDocument::placeholder("exact-global-projection.log"));
+        let mut delegate = GlobalSearchTableDelegate::new();
+        let mut group = test_group(document);
+        group.projection.rows = [2, 9].into_iter().collect();
+        delegate.set_groups(vec![group.clone()]);
+        delegate.settle_table_selection(1);
+        delegate.extend_keyboard_selection(2);
+
+        group.projection.rows = [2, 5, 9].into_iter().collect();
+        delegate.set_groups(vec![group]);
+
+        assert_eq!(delegate.selected_matches(), [(1, 2), (1, 9)]);
+        assert_eq!(
+            delegate
+                .interaction
+                .row_selection
+                .borrow()
+                .selected_ranges()
+                .collect::<Vec<_>>(),
+            [(1, 1), (3, 3)]
+        );
+    }
+
+    #[test]
     fn document_index_tracks_reordered_groups() {
         let mut first = test_group(Arc::new(LogDocument::placeholder("first.log")));
         first.source.document_id = 11;
@@ -1818,7 +1926,7 @@ mod tests {
                 .borrow()
                 .selected_ranges()
                 .collect::<Vec<_>>(),
-            vec![(0, 3)]
+            vec![(1, 1), (3, 3)]
         );
     }
 
