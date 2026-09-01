@@ -20,8 +20,8 @@ const TAB_STOP_COLUMNS: usize = 8;
 type MeasureCallback = dyn Fn(Pixels, &mut Window, &mut App);
 
 #[derive(Clone)]
-struct DisplaySpan {
-    source: Range<usize>,
+struct TabExpansion {
+    source_offset: usize,
     display: Range<usize>,
 }
 
@@ -32,7 +32,7 @@ struct DisplaySpan {
 pub(crate) struct LogText {
     source: SharedString,
     display: SharedString,
-    display_spans: Rc<[DisplaySpan]>,
+    tab_expansions: Rc<[TabExpansion]>,
 }
 
 impl LogText {
@@ -41,34 +41,33 @@ impl LogText {
             return Self {
                 display: source.clone(),
                 source,
-                display_spans: Rc::default(),
+                tab_expansions: Rc::default(),
             };
         }
 
         let mut display = String::with_capacity(source.len());
-        let mut display_spans = Vec::new();
+        let mut tab_expansions = Vec::new();
         let mut column = 0usize;
         for (source_start, character) in source.char_indices() {
-            let source_end = source_start + character.len_utf8();
-            let display_start = display.len();
             if character == '\t' {
+                let display_start = display.len();
                 let spaces = TAB_STOP_COLUMNS - column % TAB_STOP_COLUMNS;
                 display.extend(std::iter::repeat_n(' ', spaces));
                 column = column.saturating_add(spaces);
+                tab_expansions.push(TabExpansion {
+                    source_offset: source_start,
+                    display: display_start..display.len(),
+                });
             } else {
                 display.push(character);
                 column = column.saturating_add(1);
             }
-            display_spans.push(DisplaySpan {
-                source: source_start..source_end,
-                display: display_start..display.len(),
-            });
         }
 
         Self {
             source,
             display: display.into(),
-            display_spans: display_spans.into(),
+            tab_expansions: tab_expansions.into(),
         }
     }
 
@@ -88,49 +87,113 @@ impl LogText {
     }
 
     pub(crate) fn retained_bytes(&self) -> usize {
-        let text_bytes = if self.display_spans.is_empty() && self.source == self.display {
+        let text_bytes = if self.tab_expansions.is_empty() && self.source == self.display {
             self.source.len()
         } else {
             self.source.len().saturating_add(self.display.len())
         };
         text_bytes.saturating_add(
-            self.display_spans
+            self.tab_expansions
                 .len()
-                .saturating_mul(std::mem::size_of::<DisplaySpan>()),
+                .saturating_mul(std::mem::size_of::<TabExpansion>()),
         )
     }
 
     pub(crate) fn display_range(&self, source_range: Range<usize>) -> Option<Range<usize>> {
-        if self.display_spans.is_empty() {
+        if self.tab_expansions.is_empty() {
             return (source_range.end <= self.source.len()).then_some(source_range);
         }
         Some(self.display_offset(source_range.start)?..self.display_offset(source_range.end)?)
     }
 
     fn display_offset(&self, source_offset: usize) -> Option<usize> {
-        if source_offset == self.source.len() {
-            return Some(self.display.len());
+        if source_offset > self.source.len() || !self.source.is_char_boundary(source_offset) {
+            return None;
         }
-        self.display_spans
-            .iter()
-            .find(|span| span.source.start == source_offset)
-            .map(|span| span.display.start)
+        let completed = self
+            .tab_expansions
+            .partition_point(|expansion| expansion.source_offset < source_offset);
+        let added = completed
+            .checked_sub(1)
+            .map(|index| {
+                let expansion = &self.tab_expansions[index];
+                expansion
+                    .display
+                    .end
+                    .saturating_sub(expansion.source_offset.saturating_add(1))
+            })
+            .unwrap_or_default();
+        source_offset.checked_add(added)
     }
 
     fn source_range(&self, display_range: Range<usize>) -> Option<Range<usize>> {
-        if self.display_spans.is_empty() {
+        if self.tab_expansions.is_empty() {
             return (display_range.end <= self.source.len()).then_some(display_range);
         }
-        let first = self
-            .display_spans
-            .iter()
-            .find(|span| span.display.end > display_range.start)?;
-        let last = self
-            .display_spans
-            .iter()
-            .rev()
-            .find(|span| span.display.start < display_range.end)?;
-        Some(first.source.start..last.source.end)
+        if display_range.start > display_range.end || display_range.end > self.display.len() {
+            return None;
+        }
+        Some(
+            self.source_offset_at_display_start(display_range.start)?
+                ..self.source_offset_at_display_end(display_range.end)?,
+        )
+    }
+
+    fn source_offset_at_display_start(&self, display_offset: usize) -> Option<usize> {
+        let completed = self
+            .tab_expansions
+            .partition_point(|expansion| expansion.display.end <= display_offset);
+        if let Some(expansion) = self.tab_expansions.get(completed)
+            && expansion.display.start <= display_offset
+        {
+            return Some(expansion.source_offset);
+        }
+        let source_offset =
+            display_offset.checked_sub(self.added_display_bytes_after(completed.checked_sub(1)))?;
+        self.source_char_boundary_before(source_offset)
+    }
+
+    fn source_offset_at_display_end(&self, display_offset: usize) -> Option<usize> {
+        let completed = self
+            .tab_expansions
+            .partition_point(|expansion| expansion.display.end < display_offset);
+        if let Some(expansion) = self.tab_expansions.get(completed)
+            && expansion.display.start < display_offset
+        {
+            return expansion.source_offset.checked_add(1);
+        }
+        let source_offset =
+            display_offset.checked_sub(self.added_display_bytes_after(completed.checked_sub(1)))?;
+        self.source_char_boundary_after(source_offset)
+    }
+
+    fn added_display_bytes_after(&self, expansion_ix: Option<usize>) -> usize {
+        expansion_ix
+            .and_then(|index| self.tab_expansions.get(index))
+            .map(|expansion| {
+                expansion
+                    .display
+                    .end
+                    .saturating_sub(expansion.source_offset.saturating_add(1))
+            })
+            .unwrap_or_default()
+    }
+
+    fn source_char_boundary_before(&self, mut offset: usize) -> Option<usize> {
+        if offset > self.source.len() {
+            return None;
+        }
+        while !self.source.is_char_boundary(offset) {
+            offset = offset.checked_sub(1)?;
+        }
+        Some(offset)
+    }
+
+    fn source_char_boundary_after(&self, mut offset: usize) -> Option<usize> {
+        while offset < self.source.len() && !self.source.is_char_boundary(offset) {
+            offset = offset.checked_add(1)?;
+        }
+        (offset <= self.source.len()).then_some(offset)
     }
 
     fn source_text(&self, display_range: Range<usize>) -> Option<String> {
@@ -703,6 +766,39 @@ mod tests {
         text: LogText,
         selections: TextSelectionCache<usize>,
         visible_keys: Vec<usize>,
+    }
+
+    #[test]
+    fn tab_coordinates_round_trip_with_sparse_expansions() {
+        let text = LogText::new("ab\t中x".into());
+
+        assert_eq!(text.display().as_ref(), "ab      中x");
+        assert_eq!(text.tab_expansions.len(), 1);
+        assert_eq!(text.display_range(0..2), Some(0..2));
+        assert_eq!(text.display_range(2..3), Some(2..8));
+        assert_eq!(text.display_range(3..6), Some(8..11));
+        assert_eq!(text.display_range(6..7), Some(11..12));
+        assert_eq!(text.source_range(4..5), Some(2..3));
+        assert_eq!(text.source_range(8..11), Some(3..6));
+        assert_eq!(text.source_range(9..10), Some(3..6));
+        assert_eq!(text.source_range(11..12), Some(6..7));
+        assert_eq!(text.display_range(4..5), None);
+    }
+
+    #[test]
+    fn tab_mapping_storage_scales_with_tabs_instead_of_characters() {
+        let mut source = "a".repeat(64 * 1024);
+        source.push('\t');
+        let text = LogText::new(source.clone().into());
+
+        assert_eq!(text.tab_expansions.len(), 1);
+        assert!(
+            text.retained_bytes()
+                <= source
+                    .len()
+                    .saturating_add(text.display().len())
+                    .saturating_add(std::mem::size_of::<TabExpansion>())
+        );
     }
 
     impl Render for SelectableLogTextTestView {
