@@ -7560,6 +7560,8 @@ name = "vclogg-data"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "roaring",
+ "rusqlite",
 ]
 
 [[package]]
