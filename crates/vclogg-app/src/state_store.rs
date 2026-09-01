@@ -1,10 +1,17 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
+    fmt::Write as _,
     fs,
     path::{Path, PathBuf},
     sync::{Mutex, MutexGuard},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(unix)]
+use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+
+#[cfg(windows)]
+use std::os::windows::ffi::{OsStrExt as _, OsStringExt as _};
 
 use anyhow::{Context as _, Result};
 use rusqlite::{Connection, OptionalExtension as _, params, params_from_iter};
@@ -32,6 +39,7 @@ pub const DEFAULT_WORD_BOUNDARY_CHARACTERS: &str =
     ".,;:!?()[]{}<>/\\|\"'`~@#$%^&*+-=，。！？；：、（）【】《》“”‘’…—";
 pub const MAX_WORD_BOUNDARY_CHARACTERS: usize = 256;
 const STATE_SCHEMA_VERSION: u32 = 4;
+const ENCODED_PATH_PREFIX: &str = "\0vclogg-path-v1:";
 
 #[derive(Clone, Debug)]
 pub struct RecentFile {
@@ -803,7 +811,7 @@ impl StateStore {
         let rows = statement
             .query_map([], |row| {
                 Ok((
-                    PathBuf::from(row.get::<_, String>(0)?),
+                    path_from_database(row.get::<_, String>(0)?),
                     row.get::<_, i64>(1)? != 0,
                 ))
             })
@@ -1049,7 +1057,7 @@ impl StateStore {
             .query_map([i64::try_from(limit).unwrap_or(i64::MAX)], |row| {
                 Ok(RecentFile {
                     id: row.get(0)?,
-                    path: PathBuf::from(row.get::<_, String>(1)?),
+                    path: path_from_database(row.get::<_, String>(1)?),
                     last_opened_at: row.get(2)?,
                 })
             })
@@ -1072,7 +1080,7 @@ impl StateStore {
             .query_map([], |row| {
                 Ok(RecentFile {
                     id: row.get(0)?,
-                    path: PathBuf::from(row.get::<_, String>(1)?),
+                    path: path_from_database(row.get::<_, String>(1)?),
                     last_opened_at: row.get(2)?,
                 })
             })
@@ -1099,7 +1107,7 @@ impl StateStore {
                 let marked_rows = row.get::<_, String>(6)?;
                 Ok(HistorySession {
                     id: row.get(0)?,
-                    path: PathBuf::from(row.get::<_, String>(1)?),
+                    path: path_from_database(row.get::<_, String>(1)?),
                     last_opened_at: row.get(2)?,
                     revision: row.get(3)?,
                     selected_row,
@@ -1255,7 +1263,7 @@ impl StateStore {
             let rows = statement
                 .query_map(params_from_iter(batch), |row| {
                     Ok((
-                        PathBuf::from(row.get::<_, String>(0)?),
+                        path_from_database(row.get::<_, String>(0)?),
                         file_session_from_row(row, 1)?,
                     ))
                 })
@@ -1285,7 +1293,7 @@ impl StateStore {
             .query_map([], |row| {
                 Ok(LastWorkspaceFile {
                     id: row.get(0)?,
-                    path: PathBuf::from(row.get::<_, String>(1)?),
+                    path: path_from_database(row.get::<_, String>(1)?),
                     last_opened_at: row.get(2)?,
                     was_active: row.get::<_, i64>(3)? != 0,
                 })
@@ -1723,7 +1731,75 @@ fn normalize_optional_hex_color(value: Option<String>) -> Option<String> {
 }
 
 fn path_to_database(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
+    if let Some(path) = path.to_str()
+        && !path.starts_with(ENCODED_PATH_PREFIX)
+    {
+        return path.to_owned();
+    }
+
+    #[cfg(unix)]
+    let (platform, bytes) = ("u:", path.as_os_str().as_bytes().to_vec());
+    #[cfg(windows)]
+    let (platform, bytes) = (
+        "w:",
+        path.as_os_str()
+            .encode_wide()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>(),
+    );
+    #[cfg(not(any(unix, windows)))]
+    let (platform, bytes) = ("o:", path.to_string_lossy().as_bytes().to_vec());
+
+    let mut encoded = String::with_capacity(ENCODED_PATH_PREFIX.len() + 2 + bytes.len() * 2);
+    encoded.push_str(ENCODED_PATH_PREFIX);
+    encoded.push_str(platform);
+    for byte in bytes {
+        write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    encoded
+}
+
+fn path_from_database(stored: String) -> PathBuf {
+    #[cfg(unix)]
+    if let Some(encoded) = stored
+        .strip_prefix(ENCODED_PATH_PREFIX)
+        .and_then(|encoded| encoded.strip_prefix("u:"))
+        && let Some(bytes) = decode_hex(encoded)
+    {
+        return PathBuf::from(std::ffi::OsString::from_vec(bytes));
+    }
+    #[cfg(windows)]
+    if let Some(encoded) = stored
+        .strip_prefix(ENCODED_PATH_PREFIX)
+        .and_then(|encoded| encoded.strip_prefix("w:"))
+        && let Some(bytes) = decode_hex(encoded)
+    {
+        let (units, remainder) = bytes.as_slice().as_chunks::<2>();
+        if remainder.is_empty() {
+            let wide = units
+                .iter()
+                .map(|bytes| u16::from_le_bytes(*bytes))
+                .collect::<Vec<_>>();
+            return PathBuf::from(std::ffi::OsString::from_wide(&wide));
+        }
+    }
+    PathBuf::from(stored)
+}
+
+fn decode_hex(encoded: &str) -> Option<Vec<u8>> {
+    if !encoded.len().is_multiple_of(2) {
+        return None;
+    }
+    let (pairs, remainder) = encoded.as_bytes().as_chunks::<2>();
+    debug_assert!(remainder.is_empty());
+    pairs
+        .iter()
+        .map(|digits| {
+            let high = (digits[0] as char).to_digit(16)?;
+            let low = (digits[1] as char).to_digit(16)?;
+            Some(((high << 4) | low) as u8)
+        })
+        .collect()
 }
 
 fn count_marked_rows(marked_rows: &str) -> usize {
@@ -1745,7 +1821,10 @@ fn unix_timestamp() -> i64 {
 mod session_load_tests {
     use std::{fs, hint::black_box, path::PathBuf, time::Instant};
 
-    use super::{FileSessionState, StateStore};
+    #[cfg(unix)]
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt as _};
+
+    use super::{FileSessionState, StateStore, path_from_database, path_to_database};
 
     struct TemporaryDatabase(PathBuf);
 
@@ -1806,6 +1885,46 @@ mod session_load_tests {
         assert_eq!(loaded[&first].query_text, "first");
         assert_eq!(loaded[&second].query_text, "second");
         assert!(!loaded.contains_key(&missing));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_paths_keep_distinct_persisted_sessions_and_preferences() {
+        let database = TemporaryDatabase::new("non-utf8-path-correctness");
+        let directory = database.0.parent().expect("测试数据库应有父目录");
+        let first = directory.join(OsString::from_vec(b"source-\x80.log".to_vec()));
+        let second = directory.join(OsString::from_vec(b"source-\x81.log".to_vec()));
+        assert_eq!(first.to_string_lossy(), second.to_string_lossy());
+        assert_ne!(path_to_database(&first), path_to_database(&second));
+        assert_eq!(
+            path_from_database(path_to_database(&first)),
+            first,
+            "原生路径编码应能无损往返"
+        );
+
+        let store = StateStore::open(database.0.clone()).expect("应能打开测试状态库");
+        store
+            .save_sessions(&[
+                (first.clone(), session("first")),
+                (second.clone(), session("second")),
+            ])
+            .expect("应能保存非 UTF-8 路径会话");
+        store
+            .save_global_search_preferences(&[(first.clone(), true), (second.clone(), false)])
+            .expect("应能保存非 UTF-8 路径搜索偏好");
+        drop(store);
+
+        let reopened = StateStore::open(database.0.clone()).expect("应能重新打开测试状态库");
+        let sessions = reopened
+            .load_sessions(&[first.clone(), second.clone()])
+            .expect("应能读回非 UTF-8 路径会话");
+        assert_eq!(sessions[&first].query_text, "first");
+        assert_eq!(sessions[&second].query_text, "second");
+        let preferences = reopened
+            .global_search_preferences()
+            .expect("应能读回非 UTF-8 路径搜索偏好");
+        assert_eq!(preferences.get(&first), Some(&true));
+        assert_eq!(preferences.get(&second), Some(&false));
     }
 
     #[test]
