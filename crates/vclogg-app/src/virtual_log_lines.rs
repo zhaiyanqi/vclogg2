@@ -24,6 +24,8 @@ pub(crate) enum LogRowProjection {
 
 const DEFAULT_MAX_LINE_SOURCE_BYTES: usize = 64 * 1024;
 const DEFAULT_MAX_CACHE_RETAINED_BYTES: usize = 32 * 1024 * 1024;
+/// A source byte can expand to at most one full eight-column tab stop in [`LogText`].
+pub(crate) const MAX_VISIBLE_LINE_COLUMNS: usize = DEFAULT_MAX_LINE_SOURCE_BYTES * 8;
 
 struct CachedLogLine {
     text: LogText,

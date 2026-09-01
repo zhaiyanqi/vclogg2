@@ -28,7 +28,9 @@ use crate::color_labels::ResolvedColorRule;
 use crate::selectable_log_text::{LogText, SelectableLogText, TextSelectionCache};
 use crate::state_store::{AppSettings, DEFAULT_WORD_BOUNDARY_CHARACTERS, LogFontFamily};
 use crate::ui_theme;
-use crate::virtual_log_lines::{LogRowKey, LogRowProjection, VisibleLineStore};
+use crate::virtual_log_lines::{
+    LogRowKey, LogRowProjection, MAX_VISIBLE_LINE_COLUMNS, VisibleLineStore,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LogSeverity {
@@ -191,6 +193,7 @@ pub(crate) fn message_column_width(
     font_size: u16,
     cx: &App,
 ) -> gpui::Pixels {
+    let max_columns = bounded_message_columns(max_columns);
     let em = px(font_size as f32);
     let font_id = cx.text_system().resolve_font(&gpui::font(font_family));
     let column_advance = cx
@@ -198,6 +201,10 @@ pub(crate) fn message_column_width(
         .ch_advance(font_id, em)
         .unwrap_or(em * 0.62);
     (column_advance * max_columns as f32 + em * 4.).max(em * 24.)
+}
+
+fn bounded_message_columns(max_columns: usize) -> usize {
+    max_columns.min(MAX_VISIBLE_LINE_COLUMNS)
 }
 
 pub(crate) fn line_marker_column_width() -> Pixels {
@@ -1532,6 +1539,15 @@ impl TableDelegate for LogTableDelegate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn message_width_cannot_exceed_the_visible_line_preview() {
+        assert_eq!(bounded_message_columns(120), 120);
+        assert_eq!(
+            bounded_message_columns(usize::MAX),
+            MAX_VISIBLE_LINE_COLUMNS
+        );
+    }
 
     #[test]
     fn presentation_changes_do_not_invalidate_decoded_lines() {
