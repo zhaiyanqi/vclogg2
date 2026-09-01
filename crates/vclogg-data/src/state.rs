@@ -1,6 +1,6 @@
 //! Stable records returned by state persistence repositories.
 
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 #[derive(Clone, Debug)]
 pub struct RecentFile {
@@ -40,3 +40,29 @@ pub struct CloudSettings {
     pub server_url: String,
     pub display_name: String,
 }
+
+/// Storage representation of one file session. Presentation payloads remain opaque to data.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FileSessionRecord {
+    pub revision: i64,
+    pub custom_title: Option<String>,
+    pub selected_row: Option<usize>,
+    pub query_text: String,
+    pub case_sensitive: bool,
+    pub regex: bool,
+    pub result_mode: i64,
+    pub marked_rows: String,
+    pub show_line_numbers: bool,
+    pub show_row_separators: bool,
+    pub word_wrap: bool,
+    pub keyword_color_rules: String,
+    pub resume_state: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionRecordSaveResult {
+    pub record: FileSessionRecord,
+    pub conflict_resolved: bool,
+}
+
+pub type FileSessionRecords = BTreeMap<PathBuf, FileSessionRecord>;

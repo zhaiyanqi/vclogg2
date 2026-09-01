@@ -13,5 +13,8 @@ pub use index_cache::{
     clear_index_cache, index_cache_info,
 };
 pub use path_codec::{decode_persisted_path, encode_persisted_path};
-pub use state::{CloudSettings, DatabaseInfo, HistorySession, LastWorkspaceFile, RecentFile};
+pub use state::{
+    CloudSettings, DatabaseInfo, FileSessionRecord, FileSessionRecords, HistorySession,
+    LastWorkspaceFile, RecentFile, SessionRecordSaveResult,
+};
 pub use state_repository::StateRepository;

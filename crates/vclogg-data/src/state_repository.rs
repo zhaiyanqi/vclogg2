@@ -1,7 +1,7 @@
 //! SQLite repository for file history and workspace recovery records.
 
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fs,
     io::Cursor,
     path::{Path, PathBuf},
@@ -11,11 +11,11 @@ use std::{
 
 use anyhow::{Context as _, Result};
 use roaring::RoaringTreemap;
-use rusqlite::{Connection, OptionalExtension as _, params};
+use rusqlite::{Connection, OptionalExtension as _, TransactionBehavior, params, params_from_iter};
 
 use crate::{
-    DatabaseInfo, HistorySession, LastWorkspaceFile, RecentFile, decode_persisted_path,
-    encode_persisted_path,
+    DatabaseInfo, FileSessionRecord, FileSessionRecords, HistorySession, LastWorkspaceFile,
+    RecentFile, SessionRecordSaveResult, decode_persisted_path, encode_persisted_path,
 };
 
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
@@ -261,6 +261,130 @@ impl StateRepository {
             .context("无法解析上一次工作区")
     }
 
+    pub fn load_session(&self, path: &Path) -> Result<Option<FileSessionRecord>> {
+        let connection = self.lock()?;
+        load_session_row(&connection, path)
+    }
+
+    pub fn load_sessions(&self, paths: &[PathBuf]) -> Result<FileSessionRecords> {
+        const BATCH_SIZE: usize = 500;
+
+        if paths.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let database_paths = paths
+            .iter()
+            .map(|path| encode_persisted_path(path))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let connection = self.lock()?;
+        let mut sessions = BTreeMap::new();
+        for batch in database_paths.chunks(BATCH_SIZE) {
+            let placeholders = std::iter::repeat_n("?", batch.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT path, revision, custom_title, selected_row, query_text,
+                        case_sensitive, regex, result_mode, marked_rows,
+                        show_line_numbers, show_row_separators, keyword_color_rules, word_wrap,
+                        resume_state
+                 FROM file_sessions
+                 WHERE path IN ({placeholders})"
+            );
+            let mut statement = connection
+                .prepare(&sql)
+                .context("无法准备批量文件会话查询")?;
+            let rows = statement
+                .query_map(params_from_iter(batch), |row| {
+                    Ok((
+                        decode_persisted_path(&row.get::<_, String>(0)?),
+                        file_session_from_row(row, 1)?,
+                    ))
+                })
+                .context("无法批量查询文件会话")?;
+            for row in rows {
+                let (path, session) = row.context("无法解析批量文件会话")?;
+                sessions.insert(path, session);
+            }
+        }
+        Ok(sessions)
+    }
+
+    pub fn save_session(
+        &self,
+        path: &Path,
+        base: &FileSessionRecord,
+        desired: &FileSessionRecord,
+    ) -> Result<SessionRecordSaveResult> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("无法开始文件会话保存事务")?;
+        let current = load_session_row(&transaction, path)?;
+        let current_revision = current.as_ref().map_or(0, |current| current.revision);
+        let conflict_resolved = current
+            .as_ref()
+            .is_some_and(|current| current.revision != base.revision);
+        let mut candidate = match current {
+            Some(current) if conflict_resolved => merge_session_changes(base, desired, current),
+            Some(_) | None => desired.clone(),
+        };
+        candidate.revision = current_revision.saturating_add(1);
+        save_session_row(&transaction, path, &candidate)?;
+        transaction.commit().context("无法提交文件会话保存事务")?;
+        Ok(SessionRecordSaveResult {
+            record: candidate,
+            conflict_resolved,
+        })
+    }
+
+    pub fn save_sessions(&self, sessions: &[(PathBuf, FileSessionRecord)]) -> Result<()> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction().context("无法开始窗口会话事务")?;
+        for (path, state) in sessions {
+            save_session_row(&transaction, path, state)?;
+        }
+        transaction.commit().context("无法提交窗口会话事务")
+    }
+
+    pub fn save_workspace(
+        &self,
+        sessions: &[(PathBuf, FileSessionRecord)],
+        open_paths: &[PathBuf],
+        active_path: Option<&Path>,
+    ) -> Result<()> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction().context("无法开始退出状态事务")?;
+        for (path, state) in sessions {
+            save_session_row(&transaction, path, state)?;
+        }
+        transaction
+            .execute("DELETE FROM last_workspace_files", [])
+            .context("无法重置上一次工作区")?;
+        for (position, path) in open_paths.iter().enumerate() {
+            let session_id = transaction
+                .query_row(
+                    "SELECT id FROM file_sessions WHERE path = ?1",
+                    [encode_persisted_path(path)],
+                    |row| row.get::<_, i64>(0),
+                )
+                .with_context(|| format!("无法定位工作区文件会话：{}", path.display()))?;
+            transaction
+                .execute(
+                    "INSERT INTO last_workspace_files(position, file_session_id, was_active)
+                     VALUES (?1, ?2, ?3)",
+                    params![
+                        i64::try_from(position).unwrap_or(i64::MAX),
+                        session_id,
+                        active_path.is_some_and(|active| active == path)
+                    ],
+                )
+                .with_context(|| format!("无法保存工作区文件：{}", path.display()))?;
+        }
+        transaction.commit().context("无法提交退出状态事务")
+    }
+
     pub fn database_info(&self) -> Result<DatabaseInfo> {
         let connection = self.lock()?;
         _ = connection.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
@@ -301,6 +425,135 @@ impl StateRepository {
             .lock()
             .map_err(|_| anyhow::anyhow!("状态库锁已损坏"))
     }
+}
+
+fn load_session_row(connection: &Connection, path: &Path) -> Result<Option<FileSessionRecord>> {
+    connection
+        .query_row(
+            "SELECT revision, custom_title, selected_row, query_text, case_sensitive, regex,
+                    result_mode, marked_rows, show_line_numbers, show_row_separators,
+                    keyword_color_rules, word_wrap, resume_state
+             FROM file_sessions
+             WHERE path = ?1",
+            [encode_persisted_path(path)],
+            |row| file_session_from_row(row, 0),
+        )
+        .optional()
+        .with_context(|| format!("无法读取文件会话：{}", path.display()))
+}
+
+fn file_session_from_row(
+    row: &rusqlite::Row<'_>,
+    offset: usize,
+) -> rusqlite::Result<FileSessionRecord> {
+    Ok(FileSessionRecord {
+        revision: row.get(offset)?,
+        custom_title: row.get(offset + 1)?,
+        selected_row: row
+            .get::<_, Option<i64>>(offset + 2)?
+            .and_then(|row| usize::try_from(row).ok()),
+        query_text: row.get(offset + 3)?,
+        case_sensitive: row.get::<_, i64>(offset + 4)? != 0,
+        regex: row.get::<_, i64>(offset + 5)? != 0,
+        result_mode: row.get(offset + 6)?,
+        marked_rows: row.get(offset + 7)?,
+        show_line_numbers: row.get::<_, i64>(offset + 8)? != 0,
+        show_row_separators: row.get::<_, i64>(offset + 9)? != 0,
+        keyword_color_rules: row.get(offset + 10)?,
+        word_wrap: row.get::<_, i64>(offset + 11)? != 0,
+        resume_state: row.get(offset + 12)?,
+    })
+}
+
+fn merge_session_changes(
+    base: &FileSessionRecord,
+    desired: &FileSessionRecord,
+    mut latest: FileSessionRecord,
+) -> FileSessionRecord {
+    if base.custom_title != desired.custom_title {
+        latest.custom_title.clone_from(&desired.custom_title);
+    }
+    if base.selected_row != desired.selected_row {
+        latest.selected_row = desired.selected_row;
+    }
+    if base.query_text != desired.query_text {
+        latest.query_text.clone_from(&desired.query_text);
+    }
+    if base.case_sensitive != desired.case_sensitive {
+        latest.case_sensitive = desired.case_sensitive;
+    }
+    if base.regex != desired.regex {
+        latest.regex = desired.regex;
+    }
+    if base.result_mode != desired.result_mode {
+        latest.result_mode = desired.result_mode;
+    }
+    if base.marked_rows != desired.marked_rows {
+        latest.marked_rows.clone_from(&desired.marked_rows);
+    }
+    if base.show_line_numbers != desired.show_line_numbers {
+        latest.show_line_numbers = desired.show_line_numbers;
+    }
+    if base.show_row_separators != desired.show_row_separators {
+        latest.show_row_separators = desired.show_row_separators;
+    }
+    if base.word_wrap != desired.word_wrap {
+        latest.word_wrap = desired.word_wrap;
+    }
+    if base.keyword_color_rules != desired.keyword_color_rules {
+        latest
+            .keyword_color_rules
+            .clone_from(&desired.keyword_color_rules);
+    }
+    if base.resume_state != desired.resume_state {
+        latest.resume_state.clone_from(&desired.resume_state);
+    }
+    latest
+}
+
+fn save_session_row(connection: &Connection, path: &Path, state: &FileSessionRecord) -> Result<()> {
+    let selected_row = state.selected_row.and_then(|row| i64::try_from(row).ok());
+    connection
+        .execute(
+            "INSERT INTO file_sessions(
+                 path, custom_title, last_opened_at, selected_row, query_text,
+                 case_sensitive, regex, result_mode, marked_rows,
+                 show_line_numbers, show_row_separators, keyword_color_rules, word_wrap,
+                 resume_state
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+             ON CONFLICT(path) DO UPDATE SET
+                 custom_title = excluded.custom_title,
+                 selected_row = excluded.selected_row,
+                 query_text = excluded.query_text,
+                 case_sensitive = excluded.case_sensitive,
+                 regex = excluded.regex,
+                 result_mode = excluded.result_mode,
+                 marked_rows = excluded.marked_rows,
+                 show_line_numbers = excluded.show_line_numbers,
+                 show_row_separators = excluded.show_row_separators,
+                 keyword_color_rules = excluded.keyword_color_rules,
+                 word_wrap = excluded.word_wrap,
+                 resume_state = excluded.resume_state,
+                 revision = file_sessions.revision + 1",
+            params![
+                encode_persisted_path(path),
+                state.custom_title,
+                unix_timestamp(),
+                selected_row,
+                state.query_text,
+                state.case_sensitive,
+                state.regex,
+                state.result_mode,
+                state.marked_rows,
+                state.show_line_numbers,
+                state.show_row_separators,
+                state.keyword_color_rules,
+                state.word_wrap,
+                state.resume_state,
+            ],
+        )
+        .with_context(|| format!("无法保存文件会话：{}", path.display()))?;
+    Ok(())
 }
 
 fn encoded_path_set(paths: &[PathBuf]) -> HashSet<String> {
@@ -354,10 +607,37 @@ fn unix_timestamp() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::count_marked_rows;
+    use super::{FileSessionRecord, count_marked_rows, merge_session_changes};
 
     #[test]
     fn legacy_marked_rows_count_only_valid_rows() {
         assert_eq!(count_marked_rows("1,2,nope,2,9"), 3);
+    }
+
+    #[test]
+    fn session_conflicts_merge_only_locally_changed_fields() {
+        let base = FileSessionRecord {
+            revision: 1,
+            query_text: "old".into(),
+            word_wrap: false,
+            ..FileSessionRecord::default()
+        };
+        let desired = FileSessionRecord {
+            revision: 1,
+            query_text: "local".into(),
+            word_wrap: false,
+            ..FileSessionRecord::default()
+        };
+        let latest = FileSessionRecord {
+            revision: 2,
+            query_text: "old".into(),
+            word_wrap: true,
+            ..FileSessionRecord::default()
+        };
+
+        let merged = merge_session_changes(&base, &desired, latest);
+
+        assert_eq!(merged.query_text, "local");
+        assert!(merged.word_wrap);
     }
 }

@@ -1,17 +1,16 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, HashSet},
     fmt::Write as _,
     fs,
     path::{Path, PathBuf},
     sync::{Mutex, MutexGuard},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context as _, Result};
-use rusqlite::{Connection, OptionalExtension as _, params, params_from_iter};
+use rusqlite::{Connection, OptionalExtension as _, params};
 use vclogg_core::CompressedRows;
-use vclogg_data::StateRepository;
 pub use vclogg_data::{CloudSettings, DatabaseInfo, HistorySession, LastWorkspaceFile, RecentFile};
+use vclogg_data::{FileSessionRecord, StateRepository};
 
 use crate::app_log::AppLogLevel;
 use crate::color_labels::{
@@ -1014,52 +1013,18 @@ impl StateStore {
     }
 
     pub fn load_session(&self, path: &Path) -> Result<Option<FileSessionState>> {
-        let connection = self.lock()?;
-        load_session_row(&connection, path)
+        self.repository
+            .load_session(path)
+            .map(|record| record.map(file_session_from_record))
     }
 
     pub fn load_sessions(&self, paths: &[PathBuf]) -> Result<BTreeMap<PathBuf, FileSessionState>> {
-        const BATCH_SIZE: usize = 500;
-
-        if paths.is_empty() {
-            return Ok(BTreeMap::new());
-        }
-        let database_paths = paths
-            .iter()
-            .map(|path| path_to_database(path))
-            .collect::<BTreeSet<_>>();
-        let database_paths = database_paths.into_iter().collect::<Vec<_>>();
-        let connection = self.lock()?;
-        let mut sessions = BTreeMap::new();
-        for batch in database_paths.chunks(BATCH_SIZE) {
-            let placeholders = std::iter::repeat_n("?", batch.len())
-                .collect::<Vec<_>>()
-                .join(",");
-            let sql = format!(
-                "SELECT path, revision, custom_title, selected_row, query_text,
-                        case_sensitive, regex, result_mode, marked_rows,
-                        show_line_numbers, show_row_separators, keyword_color_rules, word_wrap,
-                        resume_state
-                 FROM file_sessions
-                 WHERE path IN ({placeholders})"
-            );
-            let mut statement = connection
-                .prepare(&sql)
-                .context("无法准备批量文件会话查询")?;
-            let rows = statement
-                .query_map(params_from_iter(batch), |row| {
-                    Ok((
-                        path_from_database(row.get::<_, String>(0)?),
-                        file_session_from_row(row, 1)?,
-                    ))
-                })
-                .context("无法批量查询文件会话")?;
-            for row in rows {
-                let (path, session) = row.context("无法解析批量文件会话")?;
-                sessions.insert(path, session);
-            }
-        }
-        Ok(sessions)
+        self.repository.load_sessions(paths).map(|sessions| {
+            sessions
+                .into_iter()
+                .map(|(path, record)| (path, file_session_from_record(record)))
+                .collect()
+        })
     }
 
     pub fn last_workspace(&self) -> Result<Vec<LastWorkspaceFile>> {
@@ -1072,25 +1037,14 @@ impl StateStore {
         base: &FileSessionState,
         state: &FileSessionState,
     ) -> Result<SessionSaveResult> {
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .context("无法开始文件会话保存事务")?;
-        let current = load_session_row(&transaction, path)?;
-        let current_revision = current.as_ref().map_or(0, |current| current.revision);
-        let conflict_resolved = current
-            .as_ref()
-            .is_some_and(|current| current.revision != base.revision);
-        let mut candidate = match current {
-            Some(current) if conflict_resolved => merge_session_changes(base, state, current),
-            Some(_) | None => state.clone(),
-        };
-        candidate.revision = current_revision.saturating_add(1);
-        save_session_row(&transaction, path, &candidate)?;
-        transaction.commit().context("无法提交文件会话保存事务")?;
+        let result = self.repository.save_session(
+            path,
+            &file_session_to_record(base)?,
+            &file_session_to_record(state)?,
+        )?;
         Ok(SessionSaveResult {
-            state: candidate,
-            conflict_resolved,
+            state: file_session_from_record(result.record),
+            conflict_resolved: result.conflict_resolved,
         })
     }
 
@@ -1103,12 +1057,7 @@ impl StateStore {
     }
 
     pub fn save_sessions(&self, sessions: &[(PathBuf, FileSessionState)]) -> Result<()> {
-        let mut connection = self.lock()?;
-        let transaction = connection.transaction().context("无法开始窗口会话事务")?;
-        for (path, state) in sessions {
-            save_session_row(&transaction, path, state)?;
-        }
-        transaction.commit().context("无法提交窗口会话事务")
+        self.repository.save_sessions(&session_records(sessions)?)
     }
 
     pub fn save_workspace(
@@ -1117,35 +1066,8 @@ impl StateStore {
         open_paths: &[PathBuf],
         active_path: Option<&Path>,
     ) -> Result<()> {
-        let mut connection = self.lock()?;
-        let transaction = connection.transaction().context("无法开始退出状态事务")?;
-        for (path, state) in sessions {
-            save_session_row(&transaction, path, state)?;
-        }
-        transaction
-            .execute("DELETE FROM last_workspace_files", [])
-            .context("无法重置上一次工作区")?;
-        for (position, path) in open_paths.iter().enumerate() {
-            let session_id = transaction
-                .query_row(
-                    "SELECT id FROM file_sessions WHERE path = ?1",
-                    [path_to_database(path)],
-                    |row| row.get::<_, i64>(0),
-                )
-                .with_context(|| format!("无法定位工作区文件会话：{}", path.display()))?;
-            transaction
-                .execute(
-                    "INSERT INTO last_workspace_files(position, file_session_id, was_active)
-                     VALUES (?1, ?2, ?3)",
-                    params![
-                        i64::try_from(position).unwrap_or(i64::MAX),
-                        session_id,
-                        active_path.is_some_and(|active| active == path)
-                    ],
-                )
-                .with_context(|| format!("无法保存工作区文件：{}", path.display()))?;
-        }
-        transaction.commit().context("无法提交退出状态事务")
+        self.repository
+            .save_workspace(&session_records(sessions)?, open_paths, active_path)
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, Connection>> {
@@ -1155,147 +1077,58 @@ impl StateStore {
     }
 }
 
-fn load_session_row(connection: &Connection, path: &Path) -> Result<Option<FileSessionState>> {
-    connection
-        .query_row(
-            "SELECT revision, custom_title, selected_row, query_text, case_sensitive, regex,
-                    result_mode, marked_rows, show_line_numbers, show_row_separators,
-                    keyword_color_rules, word_wrap, resume_state
-             FROM file_sessions
-             WHERE path = ?1",
-            [path_to_database(path)],
-            |row| file_session_from_row(row, 0),
-        )
-        .optional()
-        .with_context(|| format!("无法读取文件会话：{}", path.display()))
-}
-
-fn file_session_from_row(
-    row: &rusqlite::Row<'_>,
-    offset: usize,
-) -> rusqlite::Result<FileSessionState> {
-    let selected_row = row
-        .get::<_, Option<i64>>(offset + 2)?
-        .and_then(|row| usize::try_from(row).ok());
-    let marked_rows = decode_marked_rows(&row.get::<_, String>(offset + 7)?);
-    let query_text = row.get::<_, String>(offset + 3)?;
-    let result_mode = row.get::<_, i64>(offset + 6)?;
-    let resume_state = row.get::<_, String>(offset + 12)?;
+fn file_session_from_record(record: FileSessionRecord) -> FileSessionState {
+    let marked_rows = decode_marked_rows(&record.marked_rows);
     let legacy_results_visible =
-        !query_text.is_empty() || (result_mode != 1 && !marked_rows.is_empty());
-    let resume = serde_json::from_str(&resume_state)
+        !record.query_text.is_empty() || (record.result_mode != 1 && !marked_rows.is_empty());
+    let resume = serde_json::from_str(&record.resume_state)
         .ok()
         .filter(TabResumeState::is_compatible)
-        .unwrap_or_else(|| TabResumeState::from_legacy(selected_row, legacy_results_visible));
-    Ok(FileSessionState {
-        revision: row.get(offset)?,
-        custom_title: row.get(offset + 1)?,
-        selected_row,
-        query_text,
-        case_sensitive: row.get::<_, i64>(offset + 4)? != 0,
-        regex: row.get::<_, i64>(offset + 5)? != 0,
-        result_mode,
+        .unwrap_or_else(|| {
+            TabResumeState::from_legacy(record.selected_row, legacy_results_visible)
+        });
+    FileSessionState {
+        revision: record.revision,
+        custom_title: record.custom_title,
+        selected_row: record.selected_row,
+        query_text: record.query_text,
+        case_sensitive: record.case_sensitive,
+        regex: record.regex,
+        result_mode: record.result_mode,
         marked_rows,
-        show_line_numbers: row.get::<_, i64>(offset + 8)? != 0,
-        show_row_separators: row.get::<_, i64>(offset + 9)? != 0,
-        keyword_color_rules: decode_rules(&row.get::<_, String>(offset + 10)?),
-        word_wrap: row.get::<_, i64>(offset + 11)? != 0,
+        show_line_numbers: record.show_line_numbers,
+        show_row_separators: record.show_row_separators,
+        keyword_color_rules: decode_rules(&record.keyword_color_rules),
+        word_wrap: record.word_wrap,
         resume,
+    }
+}
+
+fn file_session_to_record(state: &FileSessionState) -> Result<FileSessionRecord> {
+    Ok(FileSessionRecord {
+        revision: state.revision,
+        custom_title: state.custom_title.clone(),
+        selected_row: state.selected_row,
+        query_text: state.query_text.clone(),
+        case_sensitive: state.case_sensitive,
+        regex: state.regex,
+        result_mode: state.result_mode,
+        marked_rows: encode_marked_rows(&state.marked_rows),
+        show_line_numbers: state.show_line_numbers,
+        show_row_separators: state.show_row_separators,
+        word_wrap: state.word_wrap,
+        keyword_color_rules: encode_rules(&state.keyword_color_rules),
+        resume_state: serde_json::to_string(&state.resume).context("无法序列化标签恢复状态")?,
     })
 }
 
-fn merge_session_changes(
-    base: &FileSessionState,
-    desired: &FileSessionState,
-    mut latest: FileSessionState,
-) -> FileSessionState {
-    if base.custom_title != desired.custom_title {
-        latest.custom_title.clone_from(&desired.custom_title);
-    }
-    if base.selected_row != desired.selected_row {
-        latest.selected_row = desired.selected_row;
-    }
-    if base.query_text != desired.query_text {
-        latest.query_text.clone_from(&desired.query_text);
-    }
-    if base.case_sensitive != desired.case_sensitive {
-        latest.case_sensitive = desired.case_sensitive;
-    }
-    if base.regex != desired.regex {
-        latest.regex = desired.regex;
-    }
-    if base.result_mode != desired.result_mode {
-        latest.result_mode = desired.result_mode;
-    }
-    if base.marked_rows != desired.marked_rows {
-        latest.marked_rows.clone_from(&desired.marked_rows);
-    }
-    if base.show_line_numbers != desired.show_line_numbers {
-        latest.show_line_numbers = desired.show_line_numbers;
-    }
-    if base.show_row_separators != desired.show_row_separators {
-        latest.show_row_separators = desired.show_row_separators;
-    }
-    if base.word_wrap != desired.word_wrap {
-        latest.word_wrap = desired.word_wrap;
-    }
-    if base.keyword_color_rules != desired.keyword_color_rules {
-        latest
-            .keyword_color_rules
-            .clone_from(&desired.keyword_color_rules);
-    }
-    if base.resume != desired.resume {
-        latest.resume.clone_from(&desired.resume);
-    }
-    latest
-}
-
-fn save_session_row(connection: &Connection, path: &Path, state: &FileSessionState) -> Result<()> {
-    let selected_row = state.selected_row.and_then(|row| i64::try_from(row).ok());
-    let marked_rows = encode_marked_rows(&state.marked_rows);
-    let keyword_color_rules = encode_rules(&state.keyword_color_rules);
-    let resume_state = serde_json::to_string(&state.resume).context("无法序列化标签恢复状态")?;
-    connection
-        .execute(
-            "INSERT INTO file_sessions(
-                     path, custom_title, last_opened_at, selected_row, query_text,
-                     case_sensitive, regex, result_mode, marked_rows,
-                     show_line_numbers, show_row_separators, keyword_color_rules, word_wrap,
-                     resume_state
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
-                 ON CONFLICT(path) DO UPDATE SET
-                     custom_title = excluded.custom_title,
-                     selected_row = excluded.selected_row,
-                     query_text = excluded.query_text,
-                     case_sensitive = excluded.case_sensitive,
-                     regex = excluded.regex,
-                     result_mode = excluded.result_mode,
-                     marked_rows = excluded.marked_rows,
-                     show_line_numbers = excluded.show_line_numbers,
-                     show_row_separators = excluded.show_row_separators,
-                     keyword_color_rules = excluded.keyword_color_rules,
-                     word_wrap = excluded.word_wrap,
-                     resume_state = excluded.resume_state,
-                     revision = file_sessions.revision + 1",
-            params![
-                path_to_database(path),
-                state.custom_title,
-                unix_timestamp(),
-                selected_row,
-                state.query_text,
-                state.case_sensitive,
-                state.regex,
-                state.result_mode,
-                marked_rows,
-                state.show_line_numbers,
-                state.show_row_separators,
-                keyword_color_rules,
-                state.word_wrap,
-                resume_state,
-            ],
-        )
-        .with_context(|| format!("无法保存文件会话：{}", path.display()))?;
-    Ok(())
+fn session_records(
+    sessions: &[(PathBuf, FileSessionState)],
+) -> Result<Vec<(PathBuf, FileSessionRecord)>> {
+    sessions
+        .iter()
+        .map(|(path, state)| Ok((path.clone(), file_session_to_record(state)?)))
+        .collect()
 }
 
 fn ensure_session_columns(connection: &Connection) -> Result<()> {
@@ -1509,13 +1342,6 @@ fn decode_marked_rows(stored: &str) -> CompressedRows {
         .split(',')
         .filter_map(|value| value.parse::<usize>().ok())
         .collect()
-}
-
-fn unix_timestamp() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| i64::try_from(duration.as_secs()).unwrap_or(i64::MAX))
-        .unwrap_or_default()
 }
 
 #[cfg(test)]
