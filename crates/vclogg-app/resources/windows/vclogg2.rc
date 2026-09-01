@@ -1,3 +1,6 @@
-#define IDI_VCLOGG2 101
+// GPUI's Windows backend loads the application icon from resource ID 1 and
+// assigns it to the native window class. Keep this ID in sync so taskbar
+// thumbnail previews can resolve the icon through WM_GETICON.
+#define IDI_VCLOGG2 1
 
 IDI_VCLOGG2 ICON "resources/windows/vclogg2.ico"
