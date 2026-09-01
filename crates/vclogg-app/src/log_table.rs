@@ -247,12 +247,15 @@ pub(crate) enum TextHighlight {
 #[derive(Default)]
 pub(crate) struct RowSelection {
     ranges: Vec<(usize, usize)>,
+    selected_count: usize,
     anchor: Option<usize>,
     pending_pointer_row: Option<usize>,
     pointer_drag_anchor: Option<usize>,
     pointer_drag_additive: bool,
     pointer_drag_base_ranges: Vec<(usize, usize)>,
+    pointer_drag_base_count: usize,
     pointer_restore_ranges: Vec<(usize, usize)>,
+    pointer_restore_count: usize,
     pointer_restore_anchor: Option<usize>,
     pointer_text_selection_allowed: bool,
 }
@@ -338,14 +341,14 @@ impl RowSelection {
     }
 
     pub(crate) fn count(&self) -> usize {
-        self.ranges.iter().fold(0_usize, |count, (start, end)| {
-            count.saturating_add(end.saturating_sub(*start).saturating_add(1))
-        })
+        self.selected_count
     }
 
     fn replace_with(&mut self, start: usize, end: usize) {
+        let range = ordered_range(start, end);
         self.ranges.clear();
-        self.ranges.push(ordered_range(start, end));
+        self.ranges.push(range);
+        self.selected_count = inclusive_range_len(range);
     }
 
     fn add_range(&mut self, start: usize, end: usize) {
@@ -362,7 +365,17 @@ impl RowSelection {
             end = end.max(range_end);
             after += 1;
         }
+        let removed_count = self.ranges[first..after]
+            .iter()
+            .copied()
+            .fold(0_usize, |count, range| {
+                count.saturating_add(inclusive_range_len(range))
+            });
         self.ranges.splice(first..after, [(start, end)]);
+        self.selected_count = self
+            .selected_count
+            .saturating_sub(removed_count)
+            .saturating_add(inclusive_range_len((start, end)));
     }
 
     fn toggle(&mut self, row_ix: usize) {
@@ -376,6 +389,7 @@ impl RowSelection {
             return;
         };
         let (start, end) = self.ranges.remove(range_ix);
+        self.selected_count = self.selected_count.saturating_sub(1);
         if start < row_ix {
             self.ranges.insert(range_ix, (start, row_ix - 1));
         }
@@ -419,7 +433,9 @@ impl RowSelection {
         self.pointer_drag_anchor = allow_drag.then_some(drag_anchor);
         self.pointer_drag_additive = allow_drag && control;
         self.pointer_drag_base_ranges = self.ranges.clone();
+        self.pointer_drag_base_count = self.selected_count;
         self.pointer_restore_ranges = self.ranges.clone();
+        self.pointer_restore_count = self.selected_count;
         self.pointer_restore_anchor = self.anchor;
         self.pointer_text_selection_allowed = allow_drag && !control && !shift;
     }
@@ -431,6 +447,7 @@ impl RowSelection {
         self.pending_pointer_row = Some(row_ix);
         if self.pointer_drag_additive {
             self.ranges.clone_from(&self.pointer_drag_base_ranges);
+            self.selected_count = self.pointer_drag_base_count;
             self.add_range(anchor, row_ix);
         } else {
             self.replace_with(anchor, row_ix);
@@ -442,6 +459,7 @@ impl RowSelection {
             return;
         }
         self.ranges.clone_from(&self.pointer_restore_ranges);
+        self.selected_count = self.pointer_restore_count;
         self.anchor = self.pointer_restore_anchor;
         self.pending_pointer_row = self.pointer_drag_anchor;
     }
@@ -451,7 +469,9 @@ impl RowSelection {
         self.pointer_drag_anchor = None;
         self.pointer_drag_additive = false;
         self.pointer_drag_base_ranges.clear();
+        self.pointer_drag_base_count = 0;
         self.pointer_restore_ranges.clear();
+        self.pointer_restore_count = 0;
         self.pointer_restore_anchor = None;
         self.pointer_text_selection_allowed = false;
     }
@@ -491,12 +511,15 @@ impl RowSelection {
 
     pub(crate) fn clear(&mut self) {
         self.ranges.clear();
+        self.selected_count = 0;
         self.anchor = None;
         self.pending_pointer_row = None;
         self.pointer_drag_anchor = None;
         self.pointer_drag_additive = false;
         self.pointer_drag_base_ranges.clear();
+        self.pointer_drag_base_count = 0;
         self.pointer_restore_ranges.clear();
+        self.pointer_restore_count = 0;
         self.pointer_restore_anchor = None;
         self.pointer_text_selection_allowed = false;
     }
@@ -524,6 +547,10 @@ impl RowSelection {
 
 fn ordered_range(first: usize, second: usize) -> (usize, usize) {
     (first.min(second), first.max(second))
+}
+
+fn inclusive_range_len((start, end): (usize, usize)) -> usize {
+    end.saturating_sub(start).saturating_add(1)
 }
 
 pub(crate) fn combined_match_ranges(
@@ -1544,6 +1571,7 @@ mod tests {
     fn row_selection_finds_sparse_ranges_at_binary_boundaries() {
         let selection = RowSelection {
             ranges: (0..100_000).map(|index| (index * 3, index * 3)).collect(),
+            selected_count: 100_000,
             ..Default::default()
         };
 
@@ -1553,6 +1581,36 @@ mod tests {
         assert!(!selection.contains(1));
         assert!(!selection.contains(299_998));
         assert!(!selection.contains(usize::MAX));
+        assert_eq!(selection.count(), 100_000);
+    }
+
+    #[test]
+    fn row_selection_keeps_cached_count_in_sync() {
+        let mut selection = RowSelection::default();
+        selection.replace_ranges_with_anchor([(1, 3), (10, 12)], None);
+        assert_eq!(selection.count(), 6);
+
+        selection.add_range(3, 10);
+        assert_eq!(
+            selection.selected_ranges().collect::<Vec<_>>(),
+            vec![(1, 12)]
+        );
+        assert_eq!(selection.count(), 12);
+
+        selection.toggle(5);
+        assert_eq!(selection.count(), 11);
+        selection.toggle(5);
+        assert_eq!(selection.count(), 12);
+
+        selection.begin_pointer_selection(20, true, false, 1);
+        assert_eq!(selection.count(), 13);
+        selection.extend_pointer_selection(22);
+        assert_eq!(selection.count(), 15);
+        selection.restore_pointer_selection();
+        assert_eq!(selection.count(), 13);
+
+        selection.clear();
+        assert_eq!(selection.count(), 0);
     }
 
     #[test]
