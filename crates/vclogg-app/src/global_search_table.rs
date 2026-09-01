@@ -95,6 +95,7 @@ struct GlobalSearchProjectionState {
     content_revision: u64,
     layout_revision: u64,
     group_starts: Vec<usize>,
+    expanded_result_groups: Vec<usize>,
     rows_len: usize,
     max_line_columns: usize,
 }
@@ -132,6 +133,7 @@ impl Default for GlobalSearchProjectionState {
             content_revision: 1,
             layout_revision: 1,
             group_starts: Vec::new(),
+            expanded_result_groups: Vec::new(),
             rows_len: 0,
             max_line_columns: 0,
         }
@@ -1143,14 +1145,33 @@ impl GlobalSearchTableDelegate {
     }
 
     pub(crate) fn nearest_match_row(&self, row_ix: usize, prefer_after: bool) -> Option<usize> {
-        if matches!(self.flat_row(row_ix), Some(FlatRow::Match { .. })) {
+        let row_ix = row_ix.min(self.projection.rows_len.checked_sub(1)?);
+        let row = self.flat_row(row_ix)?;
+        if matches!(row, FlatRow::Match { .. }) {
             return Some(row_ix);
         }
-        let before = (0..row_ix)
-            .rev()
-            .find(|candidate| matches!(self.flat_row(*candidate), Some(FlatRow::Match { .. })));
-        let after = (row_ix.saturating_add(1)..self.projection.rows_len)
-            .find(|candidate| matches!(self.flat_row(*candidate), Some(FlatRow::Match { .. })));
+        let FlatRow::Group { group_ix } = row else {
+            unreachable!("match rows return before nearest-group lookup");
+        };
+        let split = self
+            .projection
+            .expanded_result_groups
+            .partition_point(|candidate| *candidate < group_ix);
+        let before = split.checked_sub(1).and_then(|position| {
+            let group_ix = *self.projection.expanded_result_groups.get(position)?;
+            let group = self.projection.groups.get(group_ix)?;
+            self.projection
+                .group_starts
+                .get(group_ix)
+                .copied()?
+                .checked_add(group.projection.rows.len())
+        });
+        let after = self
+            .projection
+            .expanded_result_groups
+            .get(split)
+            .and_then(|group_ix| self.projection.group_starts.get(*group_ix))
+            .and_then(|start| start.checked_add(1));
         if prefer_after {
             after.or(before)
         } else {
@@ -1269,8 +1290,9 @@ impl GlobalSearchTableDelegate {
         self.visible_lines.invalidate_window();
         self.projection.layout_revision = self.projection.layout_revision.saturating_add(1);
         self.projection.group_starts.clear();
+        self.projection.expanded_result_groups.clear();
         self.projection.rows_len = 0;
-        for group in &self.projection.groups {
+        for (group_ix, group) in self.projection.groups.iter().enumerate() {
             self.projection.group_starts.push(self.projection.rows_len);
             self.projection.rows_len = self.projection.rows_len.saturating_add(1);
             if !self
@@ -1278,6 +1300,9 @@ impl GlobalSearchTableDelegate {
                 .collapsed_documents
                 .contains(&group.source.document_id)
             {
+                if !group.projection.rows.is_empty() {
+                    self.projection.expanded_result_groups.push(group_ix);
+                }
                 self.projection.rows_len = self
                     .projection
                     .rows_len
@@ -1699,9 +1724,9 @@ mod tests {
 
     use super::{
         GlobalSearchGroup, GlobalSearchGroupIcon, GlobalSearchGroupPresentation,
-        GlobalSearchGroupProjection, GlobalSearchGroupSource, GlobalSearchTableDelegate, LogRowKey,
-        format_group_result_count, global_search_group_header_presentation,
-        global_search_group_title,
+        GlobalSearchGroupProjection, GlobalSearchGroupSource, GlobalSearchRow,
+        GlobalSearchTableDelegate, LogRowKey, format_group_result_count,
+        global_search_group_header_presentation, global_search_group_title,
     };
 
     fn test_group(document: Arc<LogDocument>) -> GlobalSearchGroup {
@@ -1822,6 +1847,30 @@ mod tests {
 
         delegate.set_groups(Vec::new());
         assert!(delegate.collapsed_document_ids().is_empty());
+    }
+
+    #[test]
+    fn nearest_match_skips_collapsed_groups() {
+        let mut first = test_group(Arc::new(LogDocument::placeholder("first.log")));
+        first.source.document_id = 11;
+        first.projection.rows = [2, 5].into_iter().collect();
+        let mut middle = test_group(Arc::new(LogDocument::placeholder("middle.log")));
+        middle.source.document_id = 22;
+        middle.projection.rows = [7].into_iter().collect();
+        let mut last = test_group(Arc::new(LogDocument::placeholder("last.log")));
+        last.source.document_id = 33;
+        last.projection.rows = [9, 12].into_iter().collect();
+        let mut delegate = GlobalSearchTableDelegate::new();
+        delegate.set_groups(vec![first, middle, last]);
+        delegate.toggle_group(22);
+
+        assert_eq!(
+            delegate.row_ix(GlobalSearchRow::Group { document_id: 22 }),
+            Some(3)
+        );
+        assert_eq!(delegate.nearest_match_row(3, false), Some(2));
+        assert_eq!(delegate.nearest_match_row(3, true), Some(5));
+        assert_eq!(delegate.nearest_match_row(usize::MAX, true), Some(6));
     }
 
     #[test]
