@@ -28,7 +28,7 @@ use memchr::{memchr_iter, memchr2};
 use memmap2::{Mmap, MmapOptions};
 use sha2::{Digest as _, Sha256};
 
-use crate::CancellationToken;
+use crate::{CancellationToken, search::CompressedRows};
 
 #[cfg(windows)]
 use windows_sys::Win32::{
@@ -499,6 +499,7 @@ fn read_file_exact_at(file: &File, mut bytes: &mut [u8], mut offset: u64) -> std
     Ok(())
 }
 
+#[derive(Clone)]
 struct AppendFingerprint {
     head: Arc<[u8]>,
     tail: Arc<[u8]>,
@@ -746,6 +747,8 @@ impl PendingIndexCacheWrite {
 pub struct LogDocument {
     bytes: Arc<DocumentBytes>,
     line_starts: LineStarts,
+    line_ends: Option<LineStarts>,
+    source_rows: Option<CompressedRows>,
     segment_start_row: usize,
     metadata: DocumentMetadata,
     longest_completed_line_bytes: usize,
@@ -1214,17 +1217,27 @@ impl LogDocument {
 
     /// Zero-based source row represented by the first visible preview row.
     pub fn segment_start_row(&self) -> usize {
-        self.segment_start_row
+        self.source_rows
+            .as_ref()
+            .and_then(CompressedRows::first)
+            .unwrap_or(self.segment_start_row)
     }
 
     pub fn source_row(&self, local_row: usize) -> Option<usize> {
-        (local_row < self.line_count()).then(|| self.segment_start_row.saturating_add(local_row))
+        match &self.source_rows {
+            Some(source_rows) => source_rows.get(local_row),
+            None => (local_row < self.line_count())
+                .then(|| self.segment_start_row.saturating_add(local_row)),
+        }
     }
 
     pub fn local_row(&self, source_row: usize) -> Option<usize> {
-        source_row
-            .checked_sub(self.segment_start_row)
-            .filter(|local_row| *local_row < self.line_count())
+        match &self.source_rows {
+            Some(source_rows) => source_rows.position(source_row),
+            None => source_row
+                .checked_sub(self.segment_start_row)
+                .filter(|local_row| *local_row < self.line_count()),
+        }
     }
 
     pub fn contains_source_row(&self, source_row: usize) -> bool {
@@ -1257,6 +1270,47 @@ impl LogDocument {
     /// remain available from the bounded snapshot cache.
     pub fn release_source_handle(&self) {
         self.bytes.release_source_handle();
+    }
+
+    /// Create a byte-snapshot view that retains offsets only for requested source rows.
+    ///
+    /// Directory-search results use this so files with millions of lines and a handful of
+    /// matches do not retain complete line-offset tables. The source bytes and content identity
+    /// remain shared, and retained lines keep their original source row coordinates.
+    pub fn project_source_rows(&self, rows: &CompressedRows) -> Self {
+        let capacity = rows.len().min(self.line_count());
+        let max_offset = u64::try_from(self.bytes.len()).unwrap_or(u64::MAX);
+        let mut selected_rows = Vec::with_capacity(capacity);
+        let mut starts = MutableLineStarts::with_capacity(max_offset, capacity);
+        let mut ends = MutableLineStarts::with_capacity(max_offset, capacity);
+        for source_row in rows.iter() {
+            let Some(local_row) = self.local_row(source_row) else {
+                continue;
+            };
+            let Some(mut range) = self.line_byte_range_at_local_row(local_row) else {
+                continue;
+            };
+            if source_row == 0 {
+                range.start = range.start.saturating_sub(self.encoding.bom_len());
+            }
+            selected_rows.push(source_row);
+            starts.push(range.start);
+            ends.push(range.end);
+        }
+
+        Self {
+            bytes: self.bytes.clone(),
+            line_starts: starts.into_immutable(),
+            line_ends: Some(ends.into_immutable()),
+            source_rows: Some(selected_rows.into_iter().collect()),
+            segment_start_row: 0,
+            metadata: self.metadata.clone(),
+            longest_completed_line_bytes: self.longest_completed_line_bytes,
+            longest_completed_line_columns: self.longest_completed_line_columns,
+            append_fingerprint: self.append_fingerprint.clone(),
+            content_digest: self.content_digest,
+            encoding: self.encoding,
+        }
     }
 
     fn contains_complete_source(&self) -> bool {
@@ -1301,8 +1355,13 @@ impl LogDocument {
 
     fn line_byte_range_at_local_row(&self, row_ix: usize) -> Option<std::ops::Range<usize>> {
         let mut start = self.line_starts.get(row_ix)?;
-        let end = self.line_starts.get(row_ix + 1).unwrap_or(self.bytes.len());
-        if self.segment_start_row == 0 && row_ix == 0 {
+        let end = self
+            .line_ends
+            .as_ref()
+            .and_then(|ends| ends.get(row_ix))
+            .or_else(|| self.line_starts.get(row_ix + 1))
+            .unwrap_or(self.bytes.len());
+        if self.source_row(row_ix) == Some(0) {
             start = start.saturating_add(self.encoding.bom_len()).min(end);
         }
         Some(start..end)
@@ -1316,6 +1375,9 @@ impl LogDocument {
     }
 
     fn try_refresh_appended(&self) -> Result<Option<Self>> {
+        if self.source_rows.is_some() {
+            return Ok(None);
+        }
         if !matches!(self.encoding, FileEncoding::Utf8 | FileEncoding::Utf8Bom) {
             return Ok(None);
         }
@@ -1467,6 +1529,8 @@ impl LogDocument {
         Self {
             bytes: Arc::new(bytes),
             line_starts: indexed_lines.starts.into_immutable(),
+            line_ends: None,
+            source_rows: None,
             segment_start_row: source_rows.start,
             metadata,
             longest_completed_line_bytes: indexed_lines.longest_completed_line_bytes,
@@ -2532,6 +2596,29 @@ mod source_snapshot_tests {
         fs::write(&replaced_path, b"first\nsecond\n").expect("应能写入同内容替换日志");
 
         assert_eq!(replaced.line(0), None);
+        _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn sparse_source_row_views_keep_only_requested_line_offsets() {
+        let directory = test_directory("sparse-source-rows");
+        let path = directory.join("source.log");
+        fs::write(&path, b"\xef\xbb\xbfalpha\nbeta\ngamma\n").expect("应能写入稀疏源行测试日志");
+        let document = LogDocument::open(&path).expect("应能打开稀疏源行测试日志");
+        let rows = [0, 2, usize::MAX].into_iter().collect();
+
+        let projected = document.project_source_rows(&rows);
+
+        assert_eq!(projected.line_count(), 2);
+        assert_eq!(projected.source_line_count(), document.source_line_count());
+        assert_eq!(projected.source_row(0), Some(0));
+        assert_eq!(projected.source_row(1), Some(2));
+        assert_eq!(projected.local_row(2), Some(1));
+        assert_eq!(projected.line(0).as_deref(), Some("alpha"));
+        assert_eq!(projected.line(1), None);
+        assert_eq!(projected.line(2).as_deref(), Some("gamma"));
+        assert!(projected.same_source_snapshot(&document));
+        assert_eq!(projected.line_ends.as_ref().map(|ends| ends.len()), Some(2));
         _ = fs::remove_dir_all(directory);
     }
 

@@ -10281,7 +10281,9 @@ impl Workspace {
                                 document_id: *document_id,
                                 title: result.title.clone(),
                                 path: result.path.clone(),
-                                document: result.document.clone(),
+                                document: open_tab
+                                    .map(|tab| tab.document.clone())
+                                    .unwrap_or_else(|| result.document.clone()),
                             },
                             projection: crate::global_search_table::GlobalSearchGroupProjection {
                                 rows,
@@ -11913,6 +11915,9 @@ impl Workspace {
                                 if !search_result.line_indices.is_empty()
                                     || path_match_set_contains(&open_document_paths, path) =>
                             {
+                                let document = Arc::new(
+                                    document.project_source_rows(&search_result.line_indices),
+                                );
                                 document.release_source_handle();
                                 if !cancellation_for_search.is_cancelled()
                                     && let Some(cache_write) = pending_index_cache
