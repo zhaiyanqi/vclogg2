@@ -361,8 +361,9 @@ where
 impl RowSelection {
     pub(crate) fn contains(&self, row_ix: usize) -> bool {
         self.ranges
-            .iter()
-            .any(|(start, end)| *start <= row_ix && row_ix <= *end)
+            .partition_point(|(start, _)| *start <= row_ix)
+            .checked_sub(1)
+            .is_some_and(|range_ix| row_ix <= self.ranges[range_ix].1)
     }
 
     pub(crate) fn count(&self) -> usize {
@@ -378,34 +379,27 @@ impl RowSelection {
 
     fn add_range(&mut self, start: usize, end: usize) {
         let (mut start, mut end) = ordered_range(start, end);
-        let mut merged = Vec::with_capacity(self.ranges.len().saturating_add(1));
-        let mut inserted = false;
-
-        for (range_start, range_end) in self.ranges.drain(..) {
-            if range_end.saturating_add(1) < start {
-                merged.push((range_start, range_end));
-            } else if end.saturating_add(1) < range_start {
-                if !inserted {
-                    merged.push((start, end));
-                    inserted = true;
-                }
-                merged.push((range_start, range_end));
-            } else {
-                start = start.min(range_start);
-                end = end.max(range_end);
+        let first = self
+            .ranges
+            .partition_point(|(_, range_end)| range_end.saturating_add(1) < start);
+        let mut after = first;
+        while let Some((range_start, range_end)) = self.ranges.get(after).copied() {
+            if end.saturating_add(1) < range_start {
+                break;
             }
+            start = start.min(range_start);
+            end = end.max(range_end);
+            after += 1;
         }
-        if !inserted {
-            merged.push((start, end));
-        }
-        self.ranges = merged;
+        self.ranges.splice(first..after, [(start, end)]);
     }
 
     fn toggle(&mut self, row_ix: usize) {
         let Some(range_ix) = self
             .ranges
-            .iter()
-            .position(|(start, end)| *start <= row_ix && row_ix <= *end)
+            .partition_point(|(start, _)| *start <= row_ix)
+            .checked_sub(1)
+            .filter(|range_ix| row_ix <= self.ranges[*range_ix].1)
         else {
             self.add_range(row_ix, row_ix);
             return;
@@ -1559,6 +1553,21 @@ impl TableDelegate for LogTableDelegate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn row_selection_finds_sparse_ranges_at_binary_boundaries() {
+        let selection = RowSelection {
+            ranges: (0..100_000).map(|index| (index * 3, index * 3)).collect(),
+            ..Default::default()
+        };
+
+        assert!(selection.contains(0));
+        assert!(selection.contains(150_000));
+        assert!(selection.contains(299_997));
+        assert!(!selection.contains(1));
+        assert!(!selection.contains(299_998));
+        assert!(!selection.contains(usize::MAX));
+    }
 
     #[test]
     fn message_width_cannot_exceed_the_visible_line_preview() {
