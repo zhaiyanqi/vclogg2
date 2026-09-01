@@ -11913,6 +11913,7 @@ impl Workspace {
                                 if !search_result.line_indices.is_empty()
                                     || path_match_set_contains(&open_document_paths, path) =>
                             {
+                                document.release_source_handle();
                                 if !cancellation_for_search.is_cancelled()
                                     && let Some(cache_write) = pending_index_cache
                                 {

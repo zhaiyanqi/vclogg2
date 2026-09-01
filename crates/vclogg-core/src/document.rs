@@ -5,7 +5,10 @@ use std::{
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     ops::{ControlFlow, Deref},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -206,13 +209,16 @@ pub enum DocumentRefreshKind {
 enum DocumentBytes {
     Empty,
     Owned(Box<[u8]>),
-    Verified(VerifiedFileBytes),
+    Verified(Box<VerifiedFileBytes>),
 }
 
 struct VerifiedFileBytes {
     len: usize,
     integrity_blocks: Arc<[[u8; 32]]>,
-    file: File,
+    path: PathBuf,
+    identity: Option<FileIdentity>,
+    transient_source_handles: AtomicBool,
+    file: RwLock<Option<Arc<File>>>,
     state: Mutex<VerifiedFileState>,
 }
 
@@ -254,21 +260,25 @@ impl DocumentLineBytes<'_> {
 }
 
 impl DocumentBytes {
-    fn verified(file: File, len: usize, integrity_blocks: Arc<[[u8; 32]]>) -> Self {
+    fn verified(file: File, path: PathBuf, len: usize, integrity_blocks: Arc<[[u8; 32]]>) -> Self {
         if len == 0 {
             Self::Empty
         } else {
-            Self::Verified(VerifiedFileBytes {
+            let identity = read_file_identity(&file);
+            Self::Verified(Box::new(VerifiedFileBytes {
                 len,
                 integrity_blocks,
-                file,
+                path,
+                identity,
+                transient_source_handles: AtomicBool::new(false),
+                file: RwLock::new(Some(Arc::new(file))),
                 state: Mutex::new(VerifiedFileState {
                     blocks: BTreeMap::new(),
                     invalid_blocks: BTreeSet::new(),
                     block_order: VecDeque::new(),
                     cached_bytes: 0,
                 }),
-            })
+            }))
         }
     }
 
@@ -314,9 +324,50 @@ impl DocumentBytes {
             Self::Verified(_) => None,
         }
     }
+
+    fn release_source_handle(&self) {
+        if let Self::Verified(bytes) = self {
+            bytes.release_source_handle();
+        }
+    }
 }
 
 impl VerifiedFileBytes {
+    fn release_source_handle(&self) {
+        self.transient_source_handles.store(true, Ordering::Release);
+        if let Ok(mut file) = self.file.write() {
+            *file = None;
+        }
+    }
+
+    fn source_file(&self) -> Option<Arc<File>> {
+        if !self.transient_source_handles.load(Ordering::Acquire)
+            && let Some(file) = self.file.read().ok()?.clone()
+        {
+            return Some(file);
+        }
+
+        let file = Arc::new(File::open(&self.path).ok()?);
+        let metadata = file.metadata().ok()?;
+        if metadata.len() != u64::try_from(self.len).ok()? {
+            return None;
+        }
+        if let Some(expected) = &self.identity
+            && read_file_identity(&file).as_ref() != Some(expected)
+        {
+            return None;
+        }
+        if self.transient_source_handles.load(Ordering::Acquire) {
+            return Some(file);
+        }
+
+        let mut retained = self.file.write().ok()?;
+        if self.transient_source_handles.load(Ordering::Acquire) {
+            return Some(file);
+        }
+        Some(retained.get_or_insert(file).clone())
+    }
+
     fn read_range(&self, range: std::ops::Range<usize>) -> Option<DocumentLineBytes<'_>> {
         if range.start > range.end || range.end > self.len {
             return None;
@@ -361,7 +412,8 @@ impl VerifiedFileBytes {
         if bytes.is_empty() {
             return Some(bytes);
         }
-        read_file_exact_at(&self.file, &mut bytes, range.start as u64).ok()?;
+        let file = self.source_file()?;
+        read_file_exact_at(&file, &mut bytes, range.start as u64).ok()?;
         Some(bytes)
     }
 
@@ -390,7 +442,8 @@ impl VerifiedFileBytes {
                 .checked_add(APPEND_INTEGRITY_BLOCK_BYTES)?
                 .min(self.len);
             let mut block = vec![0_u8; block_end.checked_sub(block_start)?];
-            read_file_exact_at(&self.file, &mut block, block_start as u64).ok()?;
+            let file = self.source_file()?;
+            read_file_exact_at(&file, &mut block, block_start as u64).ok()?;
             let expected = self.integrity_blocks.get(block_ix)?;
             (<[u8; 32]>::from(Sha256::digest(&block)) == *expected).then_some(block)
         })();
@@ -827,6 +880,7 @@ impl LogDocument {
         drop(mapped);
         let bytes = DocumentBytes::verified(
             file,
+            path.clone(),
             usize::try_from(file_metadata.len())
                 .with_context(|| format!("日志文件过大，无法读取：{}", path.display()))?,
             integrity_blocks.clone(),
@@ -921,6 +975,7 @@ impl LogDocument {
             .expect("complete documents always carry integrity blocks from cache or indexing");
         let bytes = DocumentBytes::verified(
             file,
+            path.clone(),
             usize::try_from(file_size)
                 .with_context(|| format!("日志文件过大，无法读取：{}", path.display()))?,
             integrity_blocks.clone(),
@@ -1194,6 +1249,15 @@ impl LogDocument {
             && self.content_digest == other.content_digest
     }
 
+    /// Release the retained source handle and reopen it by strong identity for future cache misses.
+    ///
+    /// Directory-search result snapshots use this after scanning so a large result set does not
+    /// retain one operating-system file descriptor per matching file. Already verified blocks
+    /// remain available from the bounded snapshot cache.
+    pub fn release_source_handle(&self) {
+        self.bytes.release_source_handle();
+    }
+
     fn contains_complete_source(&self) -> bool {
         self.segment_start_row == 0 && self.bytes.len() as u64 == self.metadata.file_size
     }
@@ -1298,6 +1362,7 @@ impl LogDocument {
         drop(mapped);
         let bytes = DocumentBytes::verified(
             file,
+            path.to_path_buf(),
             usize::try_from(new_size)
                 .with_context(|| format!("日志文件过大，无法读取：{}", path.display()))?,
             integrity_blocks.clone(),
@@ -2432,6 +2497,28 @@ mod source_snapshot_tests {
 
         assert_eq!(document.line(0).as_deref(), Some("alpha"));
         assert_eq!(document.line(1).as_deref(), Some("beta"));
+        _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn released_source_handles_reopen_only_the_original_file_identity() {
+        let directory = test_directory("released-source-handle");
+        let path = directory.join("source.log");
+        fs::write(&path, b"alpha\nbeta\n").expect("应能写入原始测试日志");
+        let document = LogDocument::open(&path).expect("应能打开原始测试日志");
+
+        document.release_source_handle();
+        assert_eq!(document.line(0).as_deref(), Some("alpha"));
+
+        let replaced_path = directory.join("replacement.log");
+        fs::write(&replaced_path, b"first\nsecond\n").expect("应能写入待替换测试日志");
+        let replaced = LogDocument::open(&replaced_path).expect("应能打开待替换测试日志");
+        replaced.release_source_handle();
+        fs::rename(&replaced_path, directory.join("original.log"))
+            .expect("释放句柄后应能移走原始日志");
+        fs::write(&replaced_path, b"first\nsecond\n").expect("应能写入同内容替换日志");
+
+        assert_eq!(replaced.line(0), None);
         _ = fs::remove_dir_all(directory);
     }
 
