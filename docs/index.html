@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VCLogg2 — 大文件日志，清晰掌控</title>
+    <meta
+      name="description"
+      content="VCLogg2 是使用 Rust 与 GPUI Component 构建的跨平台桌面日志查看器，专注于大文件浏览、实时跟随、多范围检索、筛选与结果导出。"
+    />
+    <meta name="theme-color" content="#0b1020" />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="zh_CN" />
+    <meta property="og:site_name" content="VCLogg2" />
+    <meta property="og:title" content="VCLogg2 — 大文件日志，清晰掌控" />
+    <meta
+      property="og:description"
+      content="快速打开、检索和分析大型日志文件的原生桌面工具。"
+    />
+    <meta property="og:url" content="https://zhaiyanqi.github.io/vclogg2/" />
+    <meta property="og:image" content="https://zhaiyanqi.github.io/vclogg2/assets/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="VCLogg2，大文件日志，清晰掌控" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="VCLogg2 — 大文件日志，清晰掌控" />
+    <meta
+      name="twitter:description"
+      content="快速打开、检索和分析大型日志文件的原生桌面工具。"
+    />
+    <meta name="twitter:image" content="https://zhaiyanqi.github.io/vclogg2/assets/og.png" />
+    <link rel="canonical" href="https://zhaiyanqi.github.io/vclogg2/" />
+    <link rel="icon" href="assets/vclogg2.png" type="image/png" />
+    <link rel="stylesheet" href="assets/styles.css" />
+    <script>
+      try {
+        const savedTheme = localStorage.getItem("vclogg2-site-theme");
+        const preferredTheme = window.matchMedia("(prefers-color-scheme: light)").matches
+          ? "light"
+          : "dark";
+        document.documentElement.dataset.theme = savedTheme || preferredTheme;
+      } catch (_) {}
+    </script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主要内容</a>
+
+    <header class="site-header" aria-label="主导航">
+      <div class="container header-inner">
+        <a class="brand" href="#top" aria-label="VCLogg2 首页">
+          <img src="assets/vclogg2.png" alt="" width="38" height="38" />
+          <span>VCLogg2</span>
+        </a>
+
+        <nav class="nav-links" aria-label="页面章节">
+          <a href="#features">能力</a>
+          <a href="#experience">体验</a>
+          <a href="#platforms">平台</a>
+          <a href="#start">开始使用</a>
+        </nav>
+
+        <div class="header-actions">
+          <button class="theme-toggle" type="button" aria-label="切换明暗主题">
+            <span aria-hidden="true">明 / 暗</span>
+          </button>
+          <a
+            class="github-link"
+            href="https://github.com/zhaiyanqi/vclogg2"
+            target="_blank"
+            rel="noreferrer"
+          >
+            GitHub <span aria-hidden="true">↗</span>
+          </a>
+        </div>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top">
+        <div class="hero-grid container">
+          <div class="hero-copy">
+            <p class="eyebrow"><span></span> Rust × GPUI 原生桌面体验</p>
+            <h1>大文件日志，<br /><em>清晰掌控。</em></h1>
+            <p class="hero-lede">
+              VCLogg2 为持续增长的日志和复杂排障场景而生。快速打开、灵活检索、稳定浏览，
+              让你把注意力留给真正重要的线索。
+            </p>
+            <div class="hero-actions">
+              <a
+                class="button button-primary"
+                href="https://github.com/zhaiyanqi/vclogg2/releases"
+                target="_blank"
+                rel="noreferrer"
+              >
+                获取最新版本 <span aria-hidden="true">↗</span>
+              </a>
+              <a
+                class="button button-secondary"
+                href="https://github.com/zhaiyanqi/vclogg2"
+                target="_blank"
+                rel="noreferrer"
+              >
+                查看源代码
+              </a>
+            </div>
+            <ul class="hero-notes" aria-label="支持信息">
+              <li>Windows 10 / 11</li>
+              <li>macOS 15 ARM64</li>
+              <li>Ubuntu 22.04</li>
+            </ul>
+          </div>
+
+          <div class="product-stage" aria-label="VCLogg2 界面示意">
+            <div class="stage-glow"></div>
+            <div class="app-window">
+              <div class="window-titlebar">
+                <div class="window-controls" aria-hidden="true">
+                  <span></span><span></span><span></span>
+                </div>
+                <div class="window-title">VCLogg2</div>
+                <div class="window-status"><i></i> 已就绪</div>
+              </div>
+              <div class="window-toolbar">
+                <span class="tool">文件</span>
+                <span class="tool">搜索</span>
+                <span class="path">/var/log/gateway/service.log</span>
+              </div>
+              <div class="window-tabs">
+                <span class="tab active">service.log <b>×</b></span>
+                <span class="tab">worker.log <b>×</b></span>
+                <span class="tab-add">＋</span>
+              </div>
+              <div class="searchbar">
+                <span class="search-mode">当前标签</span>
+                <span class="search-input">timeout|retry</span>
+                <span class="search-option active">Aa</span>
+                <span class="search-option">.*</span>
+                <span class="search-button">搜索</span>
+              </div>
+              <div class="log-view" role="img" aria-label="带有错误级别与搜索高亮的日志行示意">
+                <div class="log-row info"><span class="line-no">18401</span><code>10:42:16.103 INFO&nbsp; gateway request accepted</code></div>
+                <div class="log-row"><span class="line-no">18402</span><code>10:42:16.118 DEBUG route=/api/events status=200</code></div>
+                <div class="log-row warn selected"><span class="line-no">18403</span><code>10:42:17.651 WARN&nbsp; upstream <mark>timeout</mark> after 30s</code></div>
+                <div class="log-row"><span class="line-no">18404</span><code>10:42:17.653 DEBUG policy=<mark>retry</mark> attempt=2</code></div>
+                <div class="log-row error"><span class="line-no">18405</span><code>10:42:18.010 ERROR connection reset by peer</code></div>
+                <div class="log-row"><span class="line-no">18406</span><code>10:42:18.023 DEBUG backoff=240ms region=cn-east</code></div>
+                <div class="log-row info"><span class="line-no">18407</span><code>10:42:18.266 INFO&nbsp; request recovered status=200</code></div>
+                <div class="log-row"><span class="line-no">18408</span><code>10:42:18.311 DEBUG trace flushed duration=3ms</code></div>
+              </div>
+              <div class="window-footer">
+                <span><i></i> 1,248,320 行</span>
+                <span>4 个匹配 · UTF-8 · 跟随末尾</span>
+              </div>
+            </div>
+            <div class="floating-card result-card">
+              <span>搜索完成</span>
+              <strong>4 个匹配</strong>
+            </div>
+            <div class="floating-card file-card">
+              <span>按需解码</span>
+              <strong>低内存浏览</strong>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="trust-strip" aria-label="核心特性摘要">
+        <div class="container trust-grid">
+          <div><strong>三平台</strong><span>原生桌面支持</span></div>
+          <div><strong>多范围</strong><span>标签与目录检索</span></div>
+          <div><strong>可恢复</strong><span>工作区与会话</span></div>
+          <div><strong>开源</strong><span>代码托管于 GitHub</span></div>
+        </div>
+      </section>
+
+      <section class="section" id="features">
+        <div class="container">
+          <div class="section-heading">
+            <p class="eyebrow"><span></span> 为真实排障流程设计</p>
+            <h2>从数百万行里，<br />更快抵达答案。</h2>
+            <p>
+              打开、定位、对比、标记与导出在一个原生工作区里自然衔接，不需要先把日志搬进另一套系统。
+            </p>
+          </div>
+
+          <div class="feature-grid">
+            <article class="feature-card feature-wide">
+              <div class="feature-index">01</div>
+              <div>
+                <h3>大文件也能从容浏览</h3>
+                <p>后台建立行索引，按需解码可见内容，并通过虚拟化表格控制内存占用。</p>
+              </div>
+              <div class="index-visual" aria-hidden="true">
+                <span style="--w: 38%"></span><span style="--w: 74%"></span><span style="--w: 51%"></span>
+                <span class="hot" style="--w: 86%"></span><span style="--w: 62%"></span><span style="--w: 43%"></span>
+              </div>
+            </article>
+
+            <article class="feature-card">
+              <div class="feature-index">02</div>
+              <h3>搜索，不止一个范围</h3>
+              <p>多关键词、大小写、字节正则，以及当前标签、多标签和目录三种范围自由组合。</p>
+              <div class="query-pills" aria-hidden="true"><span>error</span><span>timeout</span><span>retry</span></div>
+            </article>
+
+            <article class="feature-card">
+              <div class="feature-index">03</div>
+              <h3>持续追踪变化</h3>
+              <p>支持末尾跟随。纯追加文件只索引新增内容，截断或替换时安全回退到完整重建。</p>
+              <div class="tail-visual" aria-hidden="true"><span></span><span></span><span></span><i></i></div>
+            </article>
+
+            <article class="feature-card">
+              <div class="feature-index">04</div>
+              <h3>把线索留在现场</h3>
+              <p>行标记、十色标签、日志级别着色与匹配高亮，让复盘时仍能看见分析脉络。</p>
+              <div class="color-dots" aria-hidden="true">
+                <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+              </div>
+            </article>
+
+            <article class="feature-card">
+              <div class="feature-index">05</div>
+              <h3>工作区可恢复</h3>
+              <p>标签顺序、查询、标记、视口与呈现偏好都会保存，下一次打开即可接着分析。</p>
+              <div class="resume-visual" aria-hidden="true"><span></span><span></span><span></span></div>
+            </article>
+
+            <article class="feature-card feature-wide export-card">
+              <div class="feature-index">06</div>
+              <div>
+                <h3>结果随时带走</h3>
+                <p>流式导出当前或全局结果，既可按文件分组，也可按日志时间戳稳定合并。</p>
+              </div>
+              <div class="export-visual" aria-hidden="true">
+                <span>service.log</span><span>worker.log</span><b>→</b><strong>results.log</strong>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section experience-section" id="experience">
+        <div class="container experience-grid">
+          <div class="experience-copy">
+            <p class="eyebrow"><span></span> 清楚，也耐看</p>
+            <h2>为长时间阅读<br />留出安静的界面。</h2>
+            <p>
+              晨雾浅色与深海夜色两套主题，以明确的层级、克制的强调色和稳定的交互反馈，
+              帮助你分辨悬停、选中、普通命中与当前定位结果。
+            </p>
+            <ul class="check-list">
+              <li>独立等宽字体、字号与行距设置</li>
+              <li>自动换行、行号栏与滚动策略</li>
+              <li>可配置常用快捷键</li>
+            </ul>
+            <a class="text-link" href="https://github.com/zhaiyanqi/vclogg2/blob/main/doc/ui-polish-acceptance.md" target="_blank" rel="noreferrer">
+              查看界面规范 <span aria-hidden="true">↗</span>
+            </a>
+          </div>
+          <figure class="design-board">
+            <img
+              src="assets/ui-polish-acceptance.svg"
+              alt="VCLogg2 晨雾浅色与深海夜色主题、搜索高亮和颜色标签规范预览"
+              loading="lazy"
+            />
+            <figcaption>界面规格预览 · 浅色 / 深色主题与交互状态</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="section" id="platforms">
+        <div class="container">
+          <div class="section-heading compact">
+            <p class="eyebrow"><span></span> 在你的桌面上</p>
+            <h2>同一套能力，三个平台。</h2>
+            <p>原生窗口、文件拖放、系统废纸篓与文件打开集成，在不同平台上保持一致。</p>
+          </div>
+          <div class="platform-grid">
+            <article>
+              <span class="platform-symbol" aria-hidden="true">▦</span>
+              <h3>Windows</h3>
+              <p>Windows 10 / 11 · x64</p>
+              <small>便携 ZIP，解压即可使用</small>
+            </article>
+            <article>
+              <span class="platform-symbol" aria-hidden="true">⌘</span>
+              <h3>macOS</h3>
+              <p>macOS 15 · Apple Silicon</p>
+              <small>原生 App 包与安装脚本</small>
+            </article>
+            <article>
+              <span class="platform-symbol" aria-hidden="true">›_</span>
+              <h3>Linux</h3>
+              <p>Ubuntu 22.04 · x86_64</p>
+              <small>桌面与 MIME 类型集成</small>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section start-section" id="start">
+        <div class="container start-card">
+          <div class="start-heading">
+            <p class="eyebrow"><span></span> 三步开始</p>
+            <h2>把日志交给 VCLogg2。</h2>
+          </div>
+          <ol class="steps">
+            <li><span>01</span><div><strong>下载</strong><p>从 GitHub Releases 获取对应平台的发布包。</p></div></li>
+            <li><span>02</span><div><strong>打开</strong><p>通过快捷键、拖放或命令行打开一个或多个日志。</p></div></li>
+            <li><span>03</span><div><strong>定位</strong><p>组合关键词、范围与筛选条件，快速找到关键行。</p></div></li>
+          </ol>
+          <div class="start-actions">
+            <a class="button button-primary" href="https://github.com/zhaiyanqi/vclogg2/releases" target="_blank" rel="noreferrer">
+              前往 GitHub Releases <span aria-hidden="true">↗</span>
+            </a>
+            <a class="text-link" href="https://github.com/zhaiyanqi/vclogg2#快速开始" target="_blank" rel="noreferrer">
+              阅读快速开始
+            </a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-grid">
+        <div class="footer-brand">
+          <img src="assets/vclogg2.png" alt="" width="42" height="42" />
+          <div><strong>VCLogg2</strong><span>大文件日志，清晰掌控。</span></div>
+        </div>
+        <div class="footer-links">
+          <a href="https://github.com/zhaiyanqi/vclogg2" target="_blank" rel="noreferrer">GitHub</a>
+          <a href="https://github.com/zhaiyanqi/vclogg2/releases" target="_blank" rel="noreferrer">Releases</a>
+          <a href="https://github.com/zhaiyanqi/vclogg2/issues" target="_blank" rel="noreferrer">Issues</a>
+          <a href="https://github.com/zhaiyanqi/vclogg2/blob/main/LICENSE" target="_blank" rel="noreferrer">License</a>
+        </div>
+      </div>
+      <div class="container footer-meta">
+        <span>© 2026 VCLogg2 contributors</span>
+        <span>Built with Rust and GPUI Component</span>
+      </div>
+    </footer>
+
+    <script src="assets/main.js"></script>
+  </body>
+</html>

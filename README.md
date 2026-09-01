@@ -2,6 +2,8 @@
 
 使用 Rust 与 GPUI Component 构建的桌面日志查看器，专注于大文件浏览、实时跟随、多范围检索、筛选与结果导出。
 
+[项目主页](https://zhaiyanqi.github.io/vclogg2/) · [下载最新版本](https://github.com/zhaiyanqi/vclogg2/releases) · [问题反馈](https://github.com/zhaiyanqi/vclogg2/issues)
+
 > Windows 10/11 x64、macOS 15 ARM64 与 Ubuntu 22.04 x86_64 是同等支持的桌面平台。三者共享日志浏览、单实例多窗口、系统废纸篓和文件打开集成；“帮助 → 更新”统一在系统浏览器中打开 GitHub Releases。平台差异仅限原生安装格式、快捷键修饰键与系统运行库。功能实现状态以 [`doc/migration-status.md`](doc/migration-status.md) 为准。
 
 [功能亮点](#功能亮点) · [快速开始](#快速开始) · [搜索与筛选](#搜索与筛选) · [快捷键](#常用快捷键) · [从源码构建](#从源码构建) · [项目文档](#项目文档) · [参与贡献](#参与贡献) · [鸣谢](#鸣谢)
