@@ -1208,32 +1208,35 @@ impl GlobalSearchTableDelegate {
     }
 
     pub(crate) fn select_all_rows(&self) {
-        let ranges = self
+        let range = self
             .projection
-            .groups
-            .iter()
-            .enumerate()
-            .filter_map(|(group_ix, group)| {
-                if self
-                    .interaction
-                    .collapsed_documents
-                    .contains(&group.source.document_id)
-                    || group.projection.rows.is_empty()
-                {
-                    return None;
-                }
+            .expanded_result_groups
+            .first()
+            .zip(self.projection.expanded_result_groups.last())
+            .and_then(|(first_group_ix, last_group_ix)| {
                 let start = self
                     .projection
                     .group_starts
-                    .get(group_ix)?
-                    .saturating_add(1);
-                Some((start, start.saturating_add(group.projection.rows.len() - 1)))
-            })
-            .collect::<Vec<_>>();
+                    .get(*first_group_ix)?
+                    .checked_add(1)?;
+                let end = self
+                    .projection
+                    .group_starts
+                    .get(*last_group_ix)?
+                    .checked_add(
+                        self.projection
+                            .groups
+                            .get(*last_group_ix)?
+                            .projection
+                            .rows
+                            .len(),
+                    )?;
+                Some((start, end))
+            });
         self.interaction
             .row_selection
             .borrow_mut()
-            .replace_ranges_with_anchor(ranges, None);
+            .replace_ranges_with_anchor(range, None);
     }
 
     pub(crate) fn selected_rows_count(&self) -> usize {
@@ -2044,6 +2047,39 @@ mod tests {
         let selected = delegate.selection_snapshot();
 
         assert_eq!(selected.get(&1).map(CompressedRows::len), Some(1_000_000));
+    }
+
+    #[test]
+    fn select_all_uses_one_virtual_range_across_group_headers() {
+        let mut first = test_group(Arc::new(LogDocument::placeholder("first.log")));
+        first.source.document_id = 11;
+        first.projection.rows = [2, 5].into_iter().collect();
+        let mut collapsed = test_group(Arc::new(LogDocument::placeholder("collapsed.log")));
+        collapsed.source.document_id = 22;
+        collapsed.projection.rows = [7, 9].into_iter().collect();
+        let mut last = test_group(Arc::new(LogDocument::placeholder("last.log")));
+        last.source.document_id = 33;
+        last.projection.rows = [12, 15].into_iter().collect();
+        let mut delegate = GlobalSearchTableDelegate::new();
+        delegate.set_groups(vec![first, collapsed, last]);
+        delegate.toggle_group(22);
+
+        delegate.select_all_rows();
+
+        assert_eq!(
+            delegate
+                .interaction
+                .row_selection
+                .borrow()
+                .selected_ranges()
+                .collect::<Vec<_>>(),
+            vec![(1, 6)]
+        );
+        assert_eq!(delegate.selected_rows_count(), 4);
+        assert_eq!(
+            delegate.selected_matches(),
+            vec![(11, 2), (11, 5), (33, 12), (33, 15)]
+        );
     }
 
     #[test]
