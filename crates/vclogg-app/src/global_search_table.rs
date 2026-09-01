@@ -763,16 +763,12 @@ impl GlobalSearchTableDelegate {
 
     fn selected_position_ranges_by_document(&self) -> BTreeMap<u64, Vec<(usize, usize)>> {
         let selection = self.interaction.row_selection.borrow();
+        let mut selected_ranges = selection.selected_ranges().peekable();
         let mut ranges_by_document = BTreeMap::<u64, Vec<(usize, usize)>>::new();
-        for (group_ix, group) in self.projection.groups.iter().enumerate() {
-            if self
-                .interaction
-                .collapsed_documents
-                .contains(&group.source.document_id)
-                || group.projection.rows.is_empty()
-            {
+        for &group_ix in &self.projection.expanded_result_groups {
+            let Some(group) = self.projection.groups.get(group_ix) else {
                 continue;
-            }
+            };
             let Some(match_start) = self
                 .projection
                 .group_starts
@@ -782,16 +778,30 @@ impl GlobalSearchTableDelegate {
                 continue;
             };
             let match_end = match_start.saturating_add(group.projection.rows.len() - 1);
-            let selected_ranges = selection
-                .selected_ranges()
-                .filter_map(|(first, last)| {
-                    let start = first.min(last).max(match_start);
-                    let end = first.max(last).min(match_end);
-                    (start <= end).then(|| (start - match_start, end - match_start))
-                })
-                .collect::<Vec<_>>();
-            if !selected_ranges.is_empty() {
-                ranges_by_document.insert(group.source.document_id, selected_ranges);
+            while selected_ranges
+                .peek()
+                .is_some_and(|(_, selected_end)| *selected_end < match_start)
+            {
+                selected_ranges.next();
+            }
+            let mut group_ranges = Vec::new();
+            while let Some(&(selected_start, selected_end)) = selected_ranges.peek() {
+                if selected_start > match_end {
+                    break;
+                }
+                let start = selected_start.max(match_start);
+                let end = selected_end.min(match_end);
+                if start <= end {
+                    group_ranges.push((start - match_start, end - match_start));
+                }
+                if selected_end <= match_end {
+                    selected_ranges.next();
+                } else {
+                    break;
+                }
+            }
+            if !group_ranges.is_empty() {
+                ranges_by_document.insert(group.source.document_id, group_ranges);
             }
         }
         ranges_by_document
@@ -1871,6 +1881,29 @@ mod tests {
         assert_eq!(delegate.nearest_match_row(3, false), Some(2));
         assert_eq!(delegate.nearest_match_row(3, true), Some(5));
         assert_eq!(delegate.nearest_match_row(usize::MAX, true), Some(6));
+    }
+
+    #[test]
+    fn selection_snapshot_sweeps_across_group_headers() {
+        let mut first = test_group(Arc::new(LogDocument::placeholder("first.log")));
+        first.source.document_id = 11;
+        first.projection.rows = [2, 5].into_iter().collect();
+        let mut second = test_group(Arc::new(LogDocument::placeholder("second.log")));
+        second.source.document_id = 22;
+        second.projection.rows = [7, 9].into_iter().collect();
+        let mut delegate = GlobalSearchTableDelegate::new();
+        delegate.set_groups(vec![first, second]);
+
+        delegate.settle_table_selection(1);
+        delegate.extend_keyboard_selection(5);
+
+        assert_eq!(
+            delegate.selection_snapshot(),
+            BTreeMap::from([
+                (11, [2, 5].into_iter().collect()),
+                (22, [7, 9].into_iter().collect()),
+            ])
+        );
     }
 
     #[test]
