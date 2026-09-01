@@ -80,6 +80,48 @@ pub(crate) struct VisibleLineLoadResult<K> {
     lines: Vec<(K, Option<LinePreview>, usize)>,
 }
 
+/// A visible window loaded without replacing the window that is currently painted.
+///
+/// Result-row navigation uses this staging path so the old log window remains intact while the
+/// destination is read on a background thread. Installing the staged window and moving the
+/// viewport can then happen in one foreground update.
+pub(crate) struct StagedVisibleLineLoadRequest<K> {
+    window: (usize, usize, usize, usize),
+    priority_keys: Vec<K>,
+    keys: Vec<K>,
+    source_limits: Vec<usize>,
+    retained_limits: Vec<usize>,
+}
+
+impl<K> StagedVisibleLineLoadRequest<K> {
+    pub(crate) fn load(
+        self,
+        mut load: impl FnMut(&K, usize) -> Option<LinePreview>,
+    ) -> StagedVisibleLineLoadResult<K> {
+        let lines = self
+            .keys
+            .into_iter()
+            .zip(self.source_limits)
+            .zip(self.retained_limits)
+            .map(|((key, source_limit), retained_limit)| {
+                let preview = load(&key, source_limit);
+                (key, preview, retained_limit)
+            })
+            .collect();
+        StagedVisibleLineLoadResult {
+            window: self.window,
+            priority_keys: self.priority_keys,
+            lines,
+        }
+    }
+}
+
+pub(crate) struct StagedVisibleLineLoadResult<K> {
+    window: (usize, usize, usize, usize),
+    priority_keys: Vec<K>,
+    lines: Vec<(K, Option<LinePreview>, usize)>,
+}
+
 impl CachedLogLine {
     fn from_preview(preview: Option<LinePreview>, retained_limit: usize) -> Option<Self> {
         let (text, truncated, source_unavailable) = match preview {
@@ -151,6 +193,35 @@ impl<K> Drop for VisibleLineStore<K> {
 }
 
 impl<K: Clone + Ord> VisibleLineStore<K> {
+    fn visible_window(
+        &self,
+        visible_range: Range<usize>,
+        row_count: usize,
+        mut key_for_row: impl FnMut(usize) -> Option<K>,
+    ) -> ((usize, usize, usize, usize), Vec<K>) {
+        let visible_start = visible_range.start.min(row_count);
+        let visible_end = visible_range.end.min(row_count).max(visible_start);
+        let start = visible_start.saturating_sub(self.overscan.get());
+        let end = visible_end
+            .saturating_add(self.overscan.get())
+            .min(row_count);
+        let window = (visible_start, visible_end, start, end);
+
+        let mut seen = BTreeSet::new();
+        let mut priority_keys = Vec::new();
+        for row_ix in (visible_start..visible_end)
+            .chain((start..visible_start).rev())
+            .chain(visible_end..end)
+        {
+            if let Some(key) = key_for_row(row_ix)
+                && seen.insert(key.clone())
+            {
+                priority_keys.push(key);
+            }
+        }
+        (window, priority_keys)
+    }
+
     pub(crate) fn set_overscan(&self, overscan: usize) {
         if self.overscan.replace(overscan) != overscan {
             self.invalidate_window();
@@ -202,28 +273,9 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
         &self,
         visible_range: Range<usize>,
         row_count: usize,
-        mut key_for_row: impl FnMut(usize) -> Option<K>,
+        key_for_row: impl FnMut(usize) -> Option<K>,
     ) -> Option<VisibleLineLoadRequest<K>> {
-        let visible_start = visible_range.start.min(row_count);
-        let visible_end = visible_range.end.min(row_count).max(visible_start);
-        let start = visible_start.saturating_sub(self.overscan.get());
-        let end = visible_end
-            .saturating_add(self.overscan.get())
-            .min(row_count);
-        let window = (visible_start, visible_end, start, end);
-
-        let mut seen = BTreeSet::new();
-        let mut priority_keys = Vec::new();
-        for row_ix in (visible_start..visible_end)
-            .chain((start..visible_start).rev())
-            .chain(visible_end..end)
-        {
-            if let Some(key) = key_for_row(row_ix)
-                && seen.insert(key.clone())
-            {
-                priority_keys.push(key);
-            }
-        }
+        let (window, priority_keys) = self.visible_window(visible_range, row_count, key_for_row);
         if self.window.get() == Some(window) && *self.prepared_priority.borrow() == priority_keys {
             return None;
         }
@@ -284,6 +336,93 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
             retained_limits,
             cancellation,
         })
+    }
+
+    pub(crate) fn stage_visible_rows(
+        &self,
+        visible_range: Range<usize>,
+        row_count: usize,
+        key_for_row: impl FnMut(usize) -> Option<K>,
+    ) -> Option<StagedVisibleLineLoadRequest<K>> {
+        let (window, priority_keys) = self.visible_window(visible_range, row_count, key_for_row);
+        let current_window_is_ready = self.window.get() == Some(window)
+            && *self.prepared_priority.borrow() == priority_keys
+            && priority_keys
+                .iter()
+                .all(|key| self.lines.borrow().contains_key(key));
+        if current_window_is_ready {
+            return None;
+        }
+
+        let byte_budget = self.max_cache_retained_bytes.get();
+        let mut reserved_bytes = 0usize;
+        let mut keys = Vec::new();
+        let mut source_limits = Vec::new();
+        let mut retained_limits = Vec::new();
+        for (key_ix, key) in priority_keys.iter().enumerate() {
+            if reserved_bytes >= byte_budget {
+                break;
+            }
+            let remaining = byte_budget - reserved_bytes;
+            let remaining_keys = priority_keys.len().saturating_sub(key_ix).max(1);
+            let fair_retained_limit = remaining / remaining_keys;
+            let retained_limit = if fair_retained_limit >= MIN_TRUNCATED_PREVIEW_RETAINED_BYTES {
+                fair_retained_limit
+            } else {
+                remaining
+            };
+            if retained_limit < MIN_TRUNCATED_PREVIEW_RETAINED_BYTES {
+                break;
+            }
+            keys.push(key.clone());
+            source_limits.push(self.max_line_source_bytes.get().min(retained_limit));
+            retained_limits.push(retained_limit);
+            reserved_bytes = reserved_bytes.saturating_add(retained_limit);
+        }
+        (!keys.is_empty()).then_some(StagedVisibleLineLoadRequest {
+            window,
+            priority_keys,
+            keys,
+            source_limits,
+            retained_limits,
+        })
+    }
+
+    pub(crate) fn install_staged(&self, staged: StagedVisibleLineLoadResult<K>) {
+        if let Some(cancellation) = self.load_cancellation.borrow_mut().take() {
+            cancellation.store(true, Ordering::Release);
+        }
+        self.revision.set(self.revision.get().saturating_add(1));
+        self.window.set(Some(staged.window));
+        *self.prepared_keys.borrow_mut() = staged.priority_keys.iter().cloned().collect();
+        *self.prepared_priority.borrow_mut() = staged.priority_keys;
+
+        let mut loaded = staged
+            .lines
+            .into_iter()
+            .filter_map(|(key, preview, retained_limit)| {
+                Some((key, CachedLogLine::from_preview(preview, retained_limit)?))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut previous = std::mem::take(&mut *self.lines.borrow_mut());
+        let mut next = BTreeMap::new();
+        let byte_budget = self.max_cache_retained_bytes.get();
+        let mut retained_bytes = 0usize;
+        for key in self.prepared_priority.borrow().iter() {
+            if retained_bytes >= byte_budget {
+                break;
+            }
+            let remaining = byte_budget - retained_bytes;
+            let line = loaded.remove(key).or_else(|| previous.remove(key));
+            let Some(line) = line else {
+                continue;
+            };
+            if line.retained_bytes <= remaining {
+                retained_bytes = retained_bytes.saturating_add(line.retained_bytes);
+                next.insert(key.clone(), line);
+            }
+        }
+        *self.lines.borrow_mut() = next;
     }
 
     pub(crate) fn install_loaded(&self, loaded: VisibleLineLoadResult<K>) -> bool {
@@ -573,6 +712,30 @@ mod tests {
             cache.line(1).expect("新窗口正文应被安装").source().as_ref(),
             "line 1"
         );
+    }
+
+    #[test]
+    fn staged_window_keeps_current_lines_until_atomic_installation() {
+        let cache = VisibleLineStore::<usize>::default();
+        cache.set_overscan(0);
+        cache.prepare_visible_rows(0..2, 20, Some, |source_row, _| {
+            Some(LinePreview::new(format!("line {source_row}"), false))
+        });
+
+        let staged = cache
+            .stage_visible_rows(10..12, 20, Some)
+            .expect("远处窗口应在不清空当前窗口的情况下预加载")
+            .load(|source_row, _| Some(LinePreview::new(format!("line {source_row}"), false)));
+
+        assert_eq!(cache.line(0).unwrap().source().as_ref(), "line 0");
+        assert_eq!(cache.line(1).unwrap().source().as_ref(), "line 1");
+        assert!(cache.line(10).is_none());
+
+        cache.install_staged(staged);
+
+        assert!(cache.line(0).is_none());
+        assert_eq!(cache.line(10).unwrap().source().as_ref(), "line 10");
+        assert_eq!(cache.line(11).unwrap().source().as_ref(), "line 11");
     }
 
     #[test]

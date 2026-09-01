@@ -30,8 +30,8 @@ use crate::selectable_log_text::{LogSeverity, LogText, SelectableLogText, TextSe
 use crate::state_store::{AppSettings, DEFAULT_WORD_BOUNDARY_CHARACTERS, LogFontFamily};
 use crate::ui_theme;
 use crate::virtual_log_lines::{
-    LogRowKey, LogRowProjection, MAX_VISIBLE_LINE_COLUMNS, VisibleLineLoadRequest,
-    VisibleLineLoadResult, VisibleLineStore,
+    LogRowKey, LogRowProjection, MAX_VISIBLE_LINE_COLUMNS, StagedVisibleLineLoadRequest,
+    StagedVisibleLineLoadResult, VisibleLineLoadRequest, VisibleLineLoadResult, VisibleLineStore,
 };
 
 pub(crate) fn log_cell_horizontal_padding(cx: &App) -> Pixels {
@@ -844,6 +844,16 @@ impl LogRowSource {
             })
     }
 
+    fn stage_visible_rows(
+        &self,
+        visible_range: Range<usize>,
+    ) -> Option<StagedVisibleLineLoadRequest<usize>> {
+        self.visible_lines
+            .stage_visible_rows(visible_range, self.row_count(), |row_ix| {
+                self.source_row(row_ix)
+            })
+    }
+
     fn line_text(&self, source_row: usize) -> Option<LogText> {
         (!self.visible_lines.source_unavailable(source_row))
             .then(|| self.visible_lines.line(source_row))
@@ -1141,12 +1151,23 @@ impl LogTableDelegate {
         self.source.request_visible_rows(visible_range)
     }
 
+    pub(crate) fn stage_visible_rows(
+        &self,
+        visible_range: Range<usize>,
+    ) -> Option<StagedVisibleLineLoadRequest<usize>> {
+        self.source.stage_visible_rows(visible_range)
+    }
+
     pub(crate) fn visible_document(&self) -> Arc<LogDocument> {
         self.source.document.clone()
     }
 
     pub(crate) fn install_visible_lines(&self, loaded: VisibleLineLoadResult<usize>) -> bool {
         self.source.visible_lines.install_loaded(loaded)
+    }
+
+    pub(crate) fn install_staged_visible_lines(&self, loaded: StagedVisibleLineLoadResult<usize>) {
+        self.source.visible_lines.install_staged(loaded);
     }
 
     pub(crate) fn reset_visible_line_owner(&mut self) {

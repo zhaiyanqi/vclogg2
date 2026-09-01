@@ -621,6 +621,8 @@ struct DocumentTab {
     result_mode: ResultMode,
     result_mode_select: Entity<SelectState<Vec<ResultMode>>>,
     search_revision: u64,
+    log_jump_revision: u64,
+    log_jump_task: Option<Task<()>>,
     results_visible: bool,
     restoring_result_selection: bool,
     marked_rows: CompressedRows,
@@ -1221,6 +1223,24 @@ fn centered_scroll_top(
     (row_top + row_height / 2. - viewport_height / 2.).clamp(px(0.), max_top.max(px(0.)))
 }
 
+fn centered_log_jump_preload_range(
+    target_row: usize,
+    row_count: usize,
+    visible_row_count: usize,
+) -> Range<usize> {
+    if row_count == 0 {
+        return 0..0;
+    }
+    // Loading three viewports absorbs small fixed/wrapped measurement differences when the
+    // destination is first laid out, without approaching the cache's normal byte budget.
+    let preload_count = visible_row_count.max(1).saturating_mul(3).min(row_count);
+    let target_row = target_row.min(row_count - 1);
+    let start = target_row
+        .saturating_sub(preload_count / 2)
+        .min(row_count - preload_count);
+    start..start + preload_count
+}
+
 fn viewport_anchor_row(
     count: usize,
     first_visible: usize,
@@ -1347,6 +1367,14 @@ mod scroll_position_tests {
             centered_scroll_top(px(920.), px(20.), px(200.), px(820.)),
             px(820.)
         );
+    }
+
+    #[test]
+    fn log_jump_preload_range_covers_the_target_and_viewport_edges() {
+        assert_eq!(centered_log_jump_preload_range(50, 100, 10), 35..65);
+        assert_eq!(centered_log_jump_preload_range(2, 100, 10), 0..30);
+        assert_eq!(centered_log_jump_preload_range(98, 100, 10), 70..100);
+        assert_eq!(centered_log_jump_preload_range(0, 0, 10), 0..0);
     }
 
     #[test]
@@ -2227,7 +2255,11 @@ impl DocumentTab {
             return false;
         };
         self.log_table.update(cx, |table, cx| {
-            table.set_active_log_row(row_ix, cx);
+            // This selection mirrors a result-row command. Do not emit a second table selection
+            // event that would make the log body steal focus/region ownership from the results.
+            table.delegate().set_active_log_row(Some(row_ix));
+            table.delegate().settle_table_selection(row_ix);
+            cx.notify();
         });
         self.log_viewport.center_row(row_ix);
         true
@@ -6908,6 +6940,8 @@ impl Workspace {
                     this.selected_source_row = source_row;
                     this.active_log_region = LogRegion::Body;
                     if let Some(tab) = this.documents.iter_mut().find(|tab| tab.id == document_id) {
+                        tab.log_jump_revision = tab.log_jump_revision.saturating_add(1);
+                        tab.log_jump_task.take();
                         if !keep_quick_find_focus {
                             tab.log_focus_handle.focus(window, cx);
                         }
@@ -6935,17 +6969,23 @@ impl Workspace {
                             }
                             table.read(cx).delegate().clear_row_selection();
                             table.read(cx).delegate().set_active_log_row(None);
+                            if let Some(tab) =
+                                this.documents.iter_mut().find(|tab| tab.id == document_id)
+                            {
+                                tab.log_jump_revision = tab.log_jump_revision.saturating_add(1);
+                                tab.log_jump_task.take();
+                            }
                             this.schedule_checkpoint(document_id, window, cx);
                             return;
                         }
                         _ => return,
                     };
-                    let Some(tab) = this.documents.iter_mut().find(|tab| tab.id == document_id)
+                    let Some(tab_ix) = this.documents.iter().position(|tab| tab.id == document_id)
                     else {
                         return;
                     };
-                    if tab.restoring_result_selection {
-                        tab.restoring_result_selection = false;
+                    if this.documents[tab_ix].restoring_result_selection {
+                        this.documents[tab_ix].restoring_result_selection = false;
                         return;
                     }
                     let Some(source_row) =
@@ -6953,14 +6993,19 @@ impl Workspace {
                     else {
                         return;
                     };
-                    tab.auto_follow = false;
-                    if !tab.select_and_center_log_source_row(source_row, cx) {
+                    this.documents[tab_ix].auto_follow = false;
+                    if !this.select_and_center_log_source_row_atomically(
+                        document_id,
+                        source_row,
+                        window,
+                        cx,
+                    ) {
                         return;
                     }
                     if !keep_quick_find_focus {
-                        tab.result_focus_handle.focus(window, cx);
+                        this.documents[tab_ix].result_focus_handle.focus(window, cx);
                     }
-                    tab.selection_table = SelectionTable::Results;
+                    this.documents[tab_ix].selection_table = SelectionTable::Results;
                     this.active_log_region = LogRegion::CurrentResults;
                     this.selected_source_row = Some(source_row);
                     this.schedule_checkpoint(document_id, window, cx);
@@ -7087,6 +7132,8 @@ impl Workspace {
                 result_mode,
                 result_mode_select,
                 search_revision: 0,
+                log_jump_revision: 0,
+                log_jump_task: None,
                 results_visible,
                 restoring_result_selection: false,
                 marked_rows,
@@ -11386,14 +11433,20 @@ impl Workspace {
             }
         }
         self.activate_tab(document_ix, window, cx);
-        let selected = {
+        let workspace_document_id = {
             let Some(tab) = self.documents.get_mut(document_ix) else {
                 return;
             };
             tab.auto_follow = false;
             tab.selection_table = SelectionTable::Log;
-            tab.select_and_center_log_source_row(source_row, cx)
+            tab.id
         };
+        let selected = self.select_and_center_log_source_row_atomically(
+            workspace_document_id,
+            source_row,
+            window,
+            cx,
+        );
         if selected {
             self.selected_source_row = Some(source_row);
         } else {
@@ -12513,6 +12566,81 @@ impl Workspace {
             });
         });
         self.visible_line_tasks.insert((document_id, region), task);
+    }
+
+    fn select_and_center_log_source_row_atomically(
+        &mut self,
+        document_id: u64,
+        source_row: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(tab_ix) = self.documents.iter().position(|tab| tab.id == document_id) else {
+            return false;
+        };
+        let Some(row_ix) = self.documents[tab_ix].document.local_row(source_row) else {
+            return false;
+        };
+        let table = self.documents[tab_ix].log_table.clone();
+        let document = self.documents[tab_ix].document.clone();
+        let row_count = table.read(cx).delegate().row_count();
+        let table_visible_rows = table.read(cx).visible_range().rows().len();
+        let measured_visible_rows = self
+            .row_drag_bounds
+            .get(&(document_id, WrappedRegion::Log))
+            .map(|bounds| (bounds.size.height / self.log_row_height()).ceil().max(1.) as usize)
+            .unwrap_or_default();
+        let preload_range = centered_log_jump_preload_range(
+            row_ix,
+            row_count,
+            table_visible_rows.max(measured_visible_rows),
+        );
+        let staged_request = table.read(cx).delegate().stage_visible_rows(preload_range);
+
+        let revision = {
+            let tab = &mut self.documents[tab_ix];
+            tab.log_jump_revision = tab.log_jump_revision.saturating_add(1);
+            tab.log_jump_task.take();
+            tab.log_jump_revision
+        };
+        let Some(staged_request) = staged_request else {
+            return self.documents[tab_ix].select_and_center_log_source_row(source_row, cx);
+        };
+
+        let expected_document = document.clone();
+        let task = cx.spawn_in(window, async move |this, cx| {
+            let staged = cx
+                .background_spawn(async move {
+                    let mut reader = LinePreviewReader::default();
+                    staged_request.load(|source_row, max_bytes| {
+                        reader.line_preview(&document, *source_row, max_bytes)
+                    })
+                })
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                let Some(tab_ix) = this.documents.iter().position(|tab| tab.id == document_id)
+                else {
+                    return;
+                };
+                let tab = &mut this.documents[tab_ix];
+                if tab.log_jump_revision != revision
+                    || !Arc::ptr_eq(&tab.document, &expected_document)
+                {
+                    return;
+                }
+                table.update(cx, |table, cx| {
+                    table.delegate().install_staged_visible_lines(staged);
+                    table.delegate().set_active_log_row(Some(row_ix));
+                    table.delegate().settle_table_selection(row_ix);
+                    cx.notify();
+                });
+                tab.log_viewport.center_row(row_ix);
+                this.schedule_checkpoint(document_id, window, cx);
+                cx.notify();
+            });
+        });
+        self.documents[tab_ix].log_jump_task = Some(task);
+        true
     }
 
     fn reset_visible_line_owner(
