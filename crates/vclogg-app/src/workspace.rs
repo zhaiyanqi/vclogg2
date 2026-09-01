@@ -2435,6 +2435,31 @@ enum LineCopyScope {
     Global,
 }
 
+enum ColorKeywordSelection {
+    Text(String),
+    Rows(CompressedRows),
+}
+
+struct ColorKeywordTarget {
+    document_id: u64,
+    document: Arc<LogDocument>,
+    selection: ColorKeywordSelection,
+}
+
+struct PreparedColorKeywords {
+    document_id: u64,
+    document: Arc<LogDocument>,
+    keywords: BTreeSet<String>,
+}
+
+enum ColorRuleAction {
+    Cycle,
+    Apply {
+        label_id: Option<String>,
+        clear_all: bool,
+    },
+}
+
 struct CopiedLogLines {
     text: String,
     count: usize,
@@ -2589,6 +2614,9 @@ pub struct Workspace {
     line_copy_task: Option<Task<()>>,
     line_copy_cancellation: Option<SearchCancellation>,
     line_copy_revision: u64,
+    color_rule_task: Option<Task<()>>,
+    color_rule_cancellation: Option<SearchCancellation>,
+    color_rule_revision: u64,
     file_drop_visible: bool,
     file_drop_tab_transfer: Option<TabTransferMode>,
     cross_window_drop_ix: Option<usize>,
@@ -3695,6 +3723,9 @@ impl Workspace {
             line_copy_task: None,
             line_copy_cancellation: None,
             line_copy_revision: 0,
+            color_rule_task: None,
+            color_rule_cancellation: None,
+            color_rule_revision: 0,
             file_drop_visible: false,
             file_drop_tab_transfer: None,
             cross_window_drop_ix: None,
@@ -9040,14 +9071,23 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let selected_text = TextSelection::selected_text(window, cx);
-        let (active_ix, keywords) =
-            match self.context_color_target(Some(selected_text.as_str()), cx) {
-                Ok(target) => target,
-                Err(message) => {
-                    window.push_notification(message, cx);
-                    return;
-                }
-            };
+        let (_, target) = match self.context_color_target(Some(selected_text.as_str()), cx) {
+            Ok(target) => target,
+            Err(message) => {
+                window.push_notification(message, cx);
+                return;
+            }
+        };
+        self.start_color_rule_action(target, ColorRuleAction::Cycle, window, cx);
+    }
+
+    fn finish_cycle_color_label(
+        &mut self,
+        active_ix: usize,
+        keywords: BTreeSet<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if keywords.is_empty() {
             window.push_notification(
                 crate::tr!(
@@ -16429,7 +16469,7 @@ impl Workspace {
         &self,
         selected_text: Option<&str>,
         cx: &App,
-    ) -> std::result::Result<(usize, BTreeSet<String>), String> {
+    ) -> std::result::Result<(usize, ColorKeywordTarget), String> {
         if self.active_log_region == LogRegion::GlobalResults {
             let selected_groups = self
                 .global_table
@@ -16463,35 +16503,111 @@ impl Workspace {
                         .to_string()
                     }
                 })?;
-            let keywords =
-                if let Some(text) = selected_text.map(str::trim).filter(|text| !text.is_empty()) {
-                    std::iter::once(text.to_string()).collect()
-                } else {
-                    rows.iter()
-                        .filter_map(|row| self.documents[active_ix].document.line(row))
-                        .map(|line| line.trim().to_string())
-                        .filter(|line| !line.is_empty())
-                        .collect()
-                };
-            return Ok((active_ix, keywords));
-        }
-        if let Some(text) = selected_text.map(str::trim).filter(|text| !text.is_empty()) {
-            let active_ix = self.active_ix.ok_or_else(|| {
-                crate::tr!("当前没有活动日志文件", "There is no active log file").to_string()
-            })?;
-            return Ok((active_ix, std::iter::once(text.to_string()).collect()));
+            let tab = &self.documents[active_ix];
+            let selection = selected_text
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map_or_else(
+                    || ColorKeywordSelection::Rows(rows.clone()),
+                    |text| ColorKeywordSelection::Text(text.to_string()),
+                );
+            return Ok((
+                active_ix,
+                ColorKeywordTarget {
+                    document_id: tab.id,
+                    document: tab.document.clone(),
+                    selection,
+                },
+            ));
         }
         let active_ix = self.active_ix.ok_or_else(|| {
             crate::tr!("当前没有活动日志文件", "There is no active log file").to_string()
         })?;
-        let keywords = self.documents[active_ix]
-            .selected_source_rows_compressed(cx)
-            .iter()
-            .filter_map(|row| self.documents[active_ix].document.line(row))
-            .map(|line| line.trim().to_string())
-            .filter(|line| !line.is_empty())
-            .collect();
-        Ok((active_ix, keywords))
+        let tab = &self.documents[active_ix];
+        let selection = selected_text
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map_or_else(
+                || ColorKeywordSelection::Rows(tab.selected_source_rows_compressed(cx)),
+                |text| ColorKeywordSelection::Text(text.to_string()),
+            );
+        Ok((
+            active_ix,
+            ColorKeywordTarget {
+                document_id: tab.id,
+                document: tab.document.clone(),
+                selection,
+            },
+        ))
+    }
+
+    fn start_color_rule_action(
+        &mut self,
+        target: ColorKeywordTarget,
+        action: ColorRuleAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.color_rule_revision = self.color_rule_revision.saturating_add(1);
+        if let Some(cancellation) = self.color_rule_cancellation.take() {
+            cancellation.cancel();
+        }
+        self.color_rule_task = None;
+        let revision = self.color_rule_revision;
+        let collect_keywords = !matches!(
+            &action,
+            ColorRuleAction::Apply {
+                clear_all: true,
+                ..
+            }
+        );
+        let cancellation = SearchCancellation::default();
+        self.color_rule_cancellation = Some(cancellation.clone());
+        self.color_rule_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let prepared = cx
+                .background_spawn(async move {
+                    prepare_color_keywords(target, collect_keywords, &cancellation)
+                })
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                if this.color_rule_revision != revision {
+                    return;
+                }
+                this.color_rule_task = None;
+                this.color_rule_cancellation = None;
+                let Some(prepared) = prepared else {
+                    return;
+                };
+                let Some(active_ix) = this.documents.iter().position(|tab| {
+                    tab.id == prepared.document_id && Arc::ptr_eq(&tab.document, &prepared.document)
+                }) else {
+                    window.push_notification(
+                        crate::tr!(
+                            "目标日志已刷新或关闭，请重新选择",
+                            "The target log was refreshed or closed. Select it again."
+                        ),
+                        cx,
+                    );
+                    return;
+                };
+                match action {
+                    ColorRuleAction::Cycle => {
+                        this.finish_cycle_color_label(active_ix, prepared.keywords, window, cx)
+                    }
+                    ColorRuleAction::Apply {
+                        label_id,
+                        clear_all,
+                    } => this.finish_apply_context_color_label(
+                        active_ix,
+                        label_id,
+                        prepared.keywords,
+                        clear_all,
+                        window,
+                        cx,
+                    ),
+                }
+            });
+        }));
     }
 
     fn open_document_ix_for_global_result(&self, document_id: u64) -> Option<usize> {
@@ -16547,13 +16663,33 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (active_ix, keywords) = match self.context_color_target(selected_text.as_deref(), cx) {
+        let (_, target) = match self.context_color_target(selected_text.as_deref(), cx) {
             Ok(target) => target,
             Err(message) => {
                 window.push_notification(message, cx);
                 return;
             }
         };
+        self.start_color_rule_action(
+            target,
+            ColorRuleAction::Apply {
+                label_id,
+                clear_all,
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn finish_apply_context_color_label(
+        &mut self,
+        active_ix: usize,
+        label_id: Option<String>,
+        keywords: BTreeSet<String>,
+        clear_all: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let applying_label = label_id.is_some();
         if clear_all {
             self.documents[active_ix].keyword_color_rules.clear();
@@ -16663,24 +16799,14 @@ impl Workspace {
         let selected_text = selected_text
             .map(str::trim)
             .filter(|text| !text.is_empty())?;
-        let (tab_ix, keywords) = self.context_color_target(Some(selected_text), cx).ok()?;
-        if keywords.is_empty() {
-            return None;
-        }
-        let mut current: Option<Option<String>> = None;
-        for keyword in keywords {
-            let label_id = self.documents[tab_ix]
-                .keyword_color_rules
-                .iter()
-                .find(|rule| rule.enabled && rule.case_sensitive && rule.keyword == keyword)
-                .and_then(|rule| rule.label_id.clone());
-            match &current {
-                None => current = Some(label_id),
-                Some(existing) if *existing == label_id => {}
-                Some(_) => return None,
-            }
-        }
-        current.flatten()
+        let (tab_ix, _) = self.context_color_target(Some(selected_text), cx).ok()?;
+        self.documents[tab_ix]
+            .keyword_color_rules
+            .iter()
+            .find(|rule| {
+                rule.enabled && rule.case_sensitive && rule.keyword.as_str() == selected_text
+            })
+            .and_then(|rule| rule.label_id.clone())
     }
 
     fn build_log_context_menu(
@@ -18605,6 +18731,44 @@ fn collect_log_lines_for_clipboard(
     })
 }
 
+fn prepare_color_keywords(
+    target: ColorKeywordTarget,
+    collect_keywords: bool,
+    cancellation: &SearchCancellation,
+) -> Option<PreparedColorKeywords> {
+    if cancellation.is_cancelled() {
+        return None;
+    }
+    let keywords = if !collect_keywords {
+        BTreeSet::new()
+    } else {
+        match target.selection {
+            ColorKeywordSelection::Text(text) => std::iter::once(text).collect(),
+            ColorKeywordSelection::Rows(rows) => {
+                let mut keywords = BTreeSet::new();
+                for source_row in rows.iter() {
+                    if cancellation.is_cancelled() {
+                        return None;
+                    }
+                    let Some(line) = target.document.line(source_row) else {
+                        continue;
+                    };
+                    let line = line.trim();
+                    if !line.is_empty() {
+                        keywords.insert(line.to_string());
+                    }
+                }
+                keywords
+            }
+        }
+    };
+    Some(PreparedColorKeywords {
+        document_id: target.document_id,
+        document: target.document,
+        keywords,
+    })
+}
+
 fn prepare_paths_bounded<T, F>(paths: Vec<PathBuf>, operation: F) -> Vec<(PathBuf, T)>
 where
     T: Send,
@@ -18950,6 +19114,66 @@ mod result_snapshot_tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn color_keyword_preparation_decodes_selected_rows_off_state() {
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("测试时间应晚于 Unix epoch")
+            .as_nanos();
+        let temporary = TemporaryFile(std::env::temp_dir().join(format!(
+            "vclogg2-color-keywords-{}-{nonce}.log",
+            std::process::id()
+        )));
+        fs::write(&temporary.0, b" alpha \n\nbeta\nalpha").expect("应能创建颜色关键词测试日志");
+        let document =
+            Arc::new(LogDocument::open(&temporary.0).expect("应能打开颜色关键词测试日志"));
+
+        let prepared = prepare_color_keywords(
+            ColorKeywordTarget {
+                document_id: 7,
+                document: document.clone(),
+                selection: ColorKeywordSelection::Rows([0, 1, 2, 3].into_iter().collect()),
+            },
+            true,
+            &SearchCancellation::default(),
+        )
+        .expect("未取消的颜色关键词解析应完成");
+
+        assert_eq!(prepared.document_id, 7);
+        assert!(Arc::ptr_eq(&prepared.document, &document));
+        assert_eq!(
+            prepared.keywords,
+            BTreeSet::from(["alpha".to_string(), "beta".to_string()])
+        );
+    }
+
+    #[test]
+    fn cancelled_color_keyword_preparation_does_not_read_documents() {
+        let cancellation = SearchCancellation::default();
+        cancellation.cancel();
+        let target = ColorKeywordTarget {
+            document_id: 1,
+            document: Arc::new(LogDocument::placeholder("cancelled-color.log")),
+            selection: ColorKeywordSelection::Rows([0].into_iter().collect()),
+        };
+
+        assert!(prepare_color_keywords(target, true, &cancellation).is_none());
+    }
+
+    #[test]
+    fn clearing_color_rules_skips_selected_row_decoding() {
+        let target = ColorKeywordTarget {
+            document_id: 1,
+            document: Arc::new(LogDocument::placeholder("clear-color.log")),
+            selection: ColorKeywordSelection::Rows([usize::MAX].into_iter().collect()),
+        };
+
+        let prepared = prepare_color_keywords(target, false, &SearchCancellation::default())
+            .expect("清除颜色规则无需读取所选行");
+
+        assert!(prepared.keywords.is_empty());
     }
 
     #[test]
