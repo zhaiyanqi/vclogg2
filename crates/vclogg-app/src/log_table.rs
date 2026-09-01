@@ -1,6 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     ops::Range,
     rc::Rc,
     sync::Arc,
@@ -675,7 +675,7 @@ struct LogRowSource {
 }
 
 struct LogRowPresenter {
-    marked_rows: Arc<BTreeSet<usize>>,
+    marked_rows: CompressedRows,
     empty_message: SharedString,
     show_line_numbers: bool,
     show_row_separators: bool,
@@ -827,7 +827,7 @@ impl LogRowSource {
 impl LogRowPresenter {
     fn new(empty_message: SharedString) -> Self {
         Self {
-            marked_rows: Arc::default(),
+            marked_rows: CompressedRows::default(),
             empty_message,
             show_line_numbers: true,
             show_row_separators: false,
@@ -942,7 +942,7 @@ impl LogTableDelegate {
         self.restore_stable_interaction_rows(selected_rows, active_row, selection_anchor);
     }
 
-    pub fn set_marked_rows(&mut self, marked_rows: Arc<BTreeSet<usize>>) {
+    pub fn set_marked_rows(&mut self, marked_rows: CompressedRows) {
         self.presenter.marked_rows = marked_rows;
     }
 
@@ -1091,7 +1091,7 @@ impl LogTableDelegate {
         Some(WrappedLogRow {
             source_row,
             selected: self.interaction.row_selection.borrow().contains(row_ix),
-            marked: self.presenter.marked_rows.contains(&source_row),
+            marked: self.presenter.marked_rows.contains(source_row),
             matched: self.presenter.matched_rows.contains(source_row),
             highlight_severity: self.presenter.highlight_log_levels,
             highlights: presentation.highlights,
@@ -1431,7 +1431,7 @@ impl TableDelegate for LogTableDelegate {
             self.presenter.log_line_spacing,
         );
         if col_ix == 0 {
-            let marked = self.presenter.marked_rows.contains(&source_row);
+            let marked = self.presenter.marked_rows.contains(source_row);
             let matched = self.presenter.matched_rows.contains(source_row);
             let severity_accent = self
                 .presenter
@@ -1604,7 +1604,7 @@ mod tests {
         );
         delegate.set_quick_find_matcher(None);
         delegate.set_color_rules(Arc::default());
-        delegate.set_marked_rows(Arc::new(BTreeSet::from([7])));
+        delegate.set_marked_rows([7].into_iter().collect());
         delegate.set_appearance(&AppSettings::default());
 
         let reused = delegate

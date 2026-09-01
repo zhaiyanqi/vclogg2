@@ -171,6 +171,53 @@ impl CompressedRows {
         self.rows.iter().filter_map(|row| usize::try_from(row).ok())
     }
 
+    /// Insert one source row while preserving cheap clone semantics.
+    pub fn insert(&mut self, row: usize) -> bool {
+        let Ok(row) = u64::try_from(row) else {
+            return false;
+        };
+        if self.rows.contains(row) {
+            return false;
+        }
+        Arc::make_mut(&mut self.rows).insert(row)
+    }
+
+    /// Remove one source row while preserving cheap clone semantics.
+    pub fn remove(&mut self, row: usize) -> bool {
+        let Ok(row) = u64::try_from(row) else {
+            return false;
+        };
+        if !self.rows.contains(row) {
+            return false;
+        }
+        Arc::make_mut(&mut self.rows).remove(row)
+    }
+
+    /// Add source rows with one copy-on-write detach at most.
+    pub fn extend(&mut self, rows: impl IntoIterator<Item = usize>) {
+        let mut rows = rows.into_iter().filter_map(|row| u64::try_from(row).ok());
+        while let Some(row) = rows.next() {
+            if self.rows.contains(row) {
+                continue;
+            }
+            let writable = Arc::make_mut(&mut self.rows);
+            writable.insert(row);
+            writable.extend(rows);
+            return;
+        }
+    }
+
+    /// Drop source rows outside a document snapshot.
+    pub fn retain_below(&mut self, upper_bound: usize) {
+        let Ok(upper_bound) = u64::try_from(upper_bound) else {
+            return;
+        };
+        if self.rows.max().is_none_or(|row| row < upper_bound) {
+            return;
+        }
+        Arc::make_mut(&mut self.rows).remove_range(upper_bound..);
+    }
+
     pub fn union(&self, rows: impl IntoIterator<Item = usize>) -> Self {
         let mut rows = rows.into_iter().filter_map(|row| u64::try_from(row).ok());
         while let Some(row) = rows.next() {
@@ -739,6 +786,34 @@ mod performance_tests {
 
         assert!(!Arc::ptr_eq(&rows.rows, &union.rows));
         assert_eq!(union.iter().collect::<Vec<_>>(), [2, 5, 7, 9, 11]);
+    }
+
+    #[test]
+    fn mutable_rows_detach_clones_and_can_be_bounded() {
+        let original = [2, 5, 9].into_iter().collect::<CompressedRows>();
+        let mut changed = original.clone();
+
+        changed.insert(7);
+        changed.remove(2);
+        changed.extend([11, 20]);
+        changed.retain_below(12);
+
+        assert_eq!(original.iter().collect::<Vec<_>>(), [2, 5, 9]);
+        assert_eq!(changed.iter().collect::<Vec<_>>(), [5, 7, 9, 11]);
+        assert!(!Arc::ptr_eq(&original.rows, &changed.rows));
+    }
+
+    #[test]
+    fn no_op_mutations_reuse_compressed_storage() {
+        let original = [2, 5, 9].into_iter().collect::<CompressedRows>();
+        let mut unchanged = original.clone();
+
+        assert!(!unchanged.insert(5));
+        assert!(!unchanged.remove(7));
+        unchanged.extend([2, 9]);
+        unchanged.retain_below(10);
+
+        assert!(Arc::ptr_eq(&original.rows, &unchanged.rows));
     }
 
     #[test]

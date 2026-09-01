@@ -620,8 +620,8 @@ struct DocumentTab {
     search_revision: u64,
     results_visible: bool,
     restoring_result_selection: bool,
-    marked_rows: Arc<BTreeSet<usize>>,
-    pending_restore_marked_rows: BTreeSet<usize>,
+    marked_rows: CompressedRows,
+    pending_restore_marked_rows: CompressedRows,
     keyword_color_rules: Vec<KeywordColorRule>,
     resolved_color_rules: Arc<[ResolvedColorRule]>,
     log_text_selection_scope: TextSelectionScopeId,
@@ -1665,14 +1665,16 @@ mod scroll_position_tests {
 
     #[test]
     fn matches_only_keeps_an_empty_match_set_empty() {
-        let rows = compute_result_rows(ResultMode::MatchesOnly, None, &BTreeSet::from([2, 7]));
+        let marks = [2, 7].into_iter().collect();
+        let rows = compute_result_rows(ResultMode::MatchesOnly, None, &marks);
 
         assert!(rows.is_empty());
     }
 
     #[test]
     fn matches_and_marks_shows_marks_when_the_match_set_is_empty() {
-        let rows = compute_result_rows(ResultMode::MatchesAndMarks, None, &BTreeSet::from([2, 7]));
+        let marks = [2, 7].into_iter().collect();
+        let rows = compute_result_rows(ResultMode::MatchesAndMarks, None, &marks);
 
         assert_eq!(rows.iter().collect::<Vec<_>>(), vec![2, 7]);
     }
@@ -6336,7 +6338,6 @@ impl Workspace {
             .marked_rows
             .iter()
             .chain(tab.pending_restore_marked_rows.iter())
-            .copied()
             .collect::<BTreeSet<_>>();
         let selected_row = tab
             .log_table
@@ -6632,15 +6633,17 @@ impl Workspace {
                 max_results: self.app_settings.search_result_limit(),
             };
             let result_mode = ResultMode::from_database(session.result_mode);
-            let restored_marked_rows = session.marked_rows.iter().copied().collect::<BTreeSet<_>>();
-            let marked_rows = restored_marked_rows
+            let restored_marked_rows = session
+                .marked_rows
                 .iter()
                 .copied()
+                .collect::<CompressedRows>();
+            let marked_rows = restored_marked_rows
+                .iter()
                 .filter(|row| document.contains_source_row(*row))
-                .collect::<BTreeSet<_>>();
+                .collect::<CompressedRows>();
             let result_rows =
                 compute_result_rows(result_mode, Some(&prepared.search_result), &marked_rows);
-            let marked_rows = Arc::new(marked_rows);
             let marked_rows_snapshot = marked_rows.clone();
             let keyword_color_rules = session.keyword_color_rules.clone();
             let resolved_color_rules =
@@ -6916,7 +6919,7 @@ impl Workspace {
                 pending_restore_marked_rows: if prepared.load_state != DocumentLoadState::Ready {
                     restored_marked_rows
                 } else {
-                    BTreeSet::new()
+                    CompressedRows::default()
                 },
                 keyword_color_rules,
                 resolved_color_rules,
@@ -7271,17 +7274,16 @@ impl Workspace {
         tab.search_result = prepared.search_result;
         tab.search_matcher = prepared.search_matcher;
         if prepared.load_state == DocumentLoadState::Ready {
-            let marked_rows = Arc::make_mut(&mut tab.marked_rows);
-            marked_rows.extend(std::mem::take(&mut tab.pending_restore_marked_rows));
-            marked_rows.retain(|row| *row < tab.document.source_line_count());
+            let pending_marks = std::mem::take(&mut tab.pending_restore_marked_rows);
+            tab.marked_rows.extend(pending_marks.iter());
+            tab.marked_rows
+                .retain_below(tab.document.source_line_count());
         } else {
-            tab.marked_rows = Arc::new(
-                tab.pending_restore_marked_rows
-                    .iter()
-                    .copied()
-                    .filter(|row| tab.document.contains_source_row(*row))
-                    .collect(),
-            );
+            tab.marked_rows = tab
+                .pending_restore_marked_rows
+                .iter()
+                .filter(|row| tab.document.contains_source_row(*row))
+                .collect();
         }
         let result_rows = tab.compute_result_rows();
         tab.log_viewport.invalidate_wrapped();
@@ -7436,9 +7438,9 @@ impl Workspace {
                         tab.search_query.max_results = search_result_limit;
                         tab.search_result = search_result;
                         tab.search_matcher = search_matcher;
-                        let marked_rows = Arc::make_mut(&mut tab.marked_rows);
-                        marked_rows.extend(std::mem::take(&mut tab.pending_restore_marked_rows));
-                        marked_rows.retain(|row| *row < tab.document.line_count());
+                        let pending_marks = std::mem::take(&mut tab.pending_restore_marked_rows);
+                        tab.marked_rows.extend(pending_marks.iter());
+                        tab.marked_rows.retain_below(tab.document.line_count());
                         let result_rows = tab.compute_result_rows();
                         tab.log_viewport.invalidate_wrapped();
                         tab.result_viewport.invalidate_wrapped();
@@ -9172,7 +9174,7 @@ impl Workspace {
                 self.documents
                     .iter()
                     .find(|tab| tab.id == *document_id)
-                    .is_some_and(|tab| rows.iter().any(|row| !tab.marked_rows.contains(row)))
+                    .is_some_and(|tab| rows.iter().any(|row| !tab.marked_rows.contains(*row)))
             });
             let mut changed_documents = Vec::new();
             let mut changed_rows = 0_usize;
@@ -9191,13 +9193,12 @@ impl Workspace {
                     continue;
                 }
                 if is_marking {
-                    Arc::make_mut(&mut tab.marked_rows).extend(rows.iter().copied());
+                    tab.marked_rows.extend(rows.iter().copied());
                     tab.pending_restore_marked_rows.extend(rows.iter().copied());
                 } else {
-                    let marked_rows = Arc::make_mut(&mut tab.marked_rows);
                     for source_row in &rows {
-                        marked_rows.remove(source_row);
-                        tab.pending_restore_marked_rows.remove(source_row);
+                        tab.marked_rows.remove(*source_row);
+                        tab.pending_restore_marked_rows.remove(*source_row);
                     }
                 }
                 changed_rows = changed_rows.saturating_add(rows.len());
@@ -9262,16 +9263,15 @@ impl Workspace {
 
             let is_marking = !selected_rows
                 .iter()
-                .all(|source_row| tab.marked_rows.contains(source_row));
+                .all(|source_row| tab.marked_rows.contains(*source_row));
             if is_marking {
-                Arc::make_mut(&mut tab.marked_rows).extend(selected_rows.iter().copied());
+                tab.marked_rows.extend(selected_rows.iter().copied());
                 tab.pending_restore_marked_rows
                     .extend(selected_rows.iter().copied());
             } else {
-                let marked_rows = Arc::make_mut(&mut tab.marked_rows);
                 for source_row in &selected_rows {
-                    marked_rows.remove(source_row);
-                    tab.pending_restore_marked_rows.remove(source_row);
+                    tab.marked_rows.remove(*source_row);
+                    tab.pending_restore_marked_rows.remove(*source_row);
                 }
             }
             let marked_rows = tab.marked_rows.clone();
@@ -16641,7 +16641,7 @@ impl Workspace {
                         .find(|tab| tab.id == *document_id)
                         .is_some_and(|tab| {
                             rows.iter()
-                                .all(|source_row| tab.marked_rows.contains(source_row))
+                                .all(|source_row| tab.marked_rows.contains(*source_row))
                         })
                 })
             {
@@ -16651,7 +16651,7 @@ impl Workspace {
             }
         } else if self.active_document().is_some_and(|tab| {
             let rows = tab.selected_source_rows(cx);
-            !rows.is_empty() && rows.iter().all(|row| tab.marked_rows.contains(row))
+            !rows.is_empty() && rows.iter().all(|row| tab.marked_rows.contains(*row))
         }) {
             crate::tr!("取消标记", "Unmark")
         } else {
@@ -18797,15 +18797,15 @@ fn prepare_document_preview(
 fn compute_result_rows(
     mode: ResultMode,
     search_result: Option<&SearchResult>,
-    marked_rows: &BTreeSet<usize>,
+    marked_rows: &CompressedRows,
 ) -> CompressedRows {
     let matched_rows = search_result
         .map(|result| result.line_indices.clone())
         .unwrap_or_default();
     match mode {
         ResultMode::MatchesOnly => matched_rows,
-        ResultMode::MarksOnly => marked_rows.iter().copied().collect(),
-        ResultMode::MatchesAndMarks => matched_rows.union(marked_rows.iter().copied()),
+        ResultMode::MarksOnly => marked_rows.clone(),
+        ResultMode::MatchesAndMarks => matched_rows.union(marked_rows.iter()),
     }
 }
 

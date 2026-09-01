@@ -57,7 +57,7 @@ pub struct GlobalSearchGroupProjection {
 #[derive(Clone)]
 pub struct GlobalSearchGroupPresentation {
     pub matched_rows: CompressedRows,
-    pub marked_rows: Arc<BTreeSet<usize>>,
+    pub marked_rows: CompressedRows,
     pub truncated: bool,
     pub failure: Option<SharedString>,
     pub color_rules: Arc<[ResolvedColorRule]>,
@@ -1004,7 +1004,7 @@ impl GlobalSearchTableDelegate {
                     document_id: group.source.document_id,
                     source_row,
                     selected: self.interaction.row_selection.borrow().contains(row_ix),
-                    marked: group.presentation.marked_rows.contains(&source_row),
+                    marked: group.presentation.marked_rows.contains(source_row),
                     matched: group.presentation.matched_rows.contains(source_row),
                     highlights: presentation.highlights,
                     text: presentation.text,
@@ -1539,7 +1539,7 @@ impl TableDelegate for GlobalSearchTableDelegate {
                 let group = &self.projection.groups[group_ix];
                 let selected = self.interaction.row_selection.borrow().contains(row_ix);
                 if col_ix == 0 {
-                    let marked = group.presentation.marked_rows.contains(&source_row);
+                    let marked = group.presentation.marked_rows.contains(source_row);
                     let matched = group.presentation.matched_rows.contains(source_row);
                     let severity_accent = self
                         .presenter
@@ -1693,7 +1693,7 @@ mod tests {
     };
 
     use gpui::Bounds;
-    use vclogg_core::LogDocument;
+    use vclogg_core::{CompressedRows, LogDocument};
 
     use crate::log_table::LogTableCursor;
 
@@ -1717,7 +1717,7 @@ mod tests {
             },
             presentation: GlobalSearchGroupPresentation {
                 matched_rows: [0].into_iter().collect(),
-                marked_rows: Arc::new(BTreeSet::new()),
+                marked_rows: CompressedRows::default(),
                 truncated: false,
                 failure: None,
                 color_rules: Arc::default(),
@@ -1742,7 +1742,7 @@ mod tests {
 
         let mut changed_presentation = group.clone();
         changed_presentation.projection.rows = [0].into_iter().collect();
-        changed_presentation.presentation.marked_rows = Arc::new(BTreeSet::from([0]));
+        changed_presentation.presentation.marked_rows = [0].into_iter().collect();
         assert!(delegate.has_same_virtual_content(std::slice::from_ref(&changed_presentation)));
         delegate
             .interaction
@@ -1807,7 +1807,7 @@ mod tests {
         delegate.set_groups(vec![group.clone()]);
         delegate.toggle_group(1);
 
-        group.presentation.marked_rows = Arc::new(BTreeSet::from([5]));
+        group.presentation.marked_rows = [5].into_iter().collect();
         delegate.set_groups(vec![group]);
 
         assert_eq!(delegate.collapsed_document_ids(), BTreeSet::from([1]));
