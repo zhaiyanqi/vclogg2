@@ -125,6 +125,7 @@ struct GlobalInteractionState {
     suppress_table_clear: Cell<bool>,
     row_bounds: Rc<RefCell<BTreeMap<usize, Bounds<Pixels>>>>,
     collapsed_documents: BTreeSet<u64>,
+    selected_rows_count_cache: Cell<Option<(u64, u64, usize)>>,
 }
 
 impl Default for GlobalSearchProjectionState {
@@ -193,6 +194,7 @@ impl Default for GlobalInteractionState {
             suppress_table_clear: Cell::default(),
             row_bounds: Rc::default(),
             collapsed_documents: BTreeSet::new(),
+            selected_rows_count_cache: Cell::default(),
         }
     }
 }
@@ -918,8 +920,14 @@ impl GlobalSearchTableDelegate {
         if self.interaction.collapsed_documents == collapsed_documents {
             return;
         }
+        let stable_interaction = self.stable_interaction_rows();
         self.interaction.collapsed_documents = collapsed_documents;
         self.rebuild_layout();
+        self.restore_stable_interaction_rows(
+            stable_interaction.0,
+            stable_interaction.1,
+            stable_interaction.2,
+        );
     }
 
     pub fn toggle_group(&mut self, document_id: u64) {
@@ -929,10 +937,16 @@ impl GlobalSearchTableDelegate {
         if self.projection.groups[group_ix].projection.rows.is_empty() {
             return;
         }
+        let stable_interaction = self.stable_interaction_rows();
         if !self.interaction.collapsed_documents.remove(&document_id) {
             self.interaction.collapsed_documents.insert(document_id);
         }
         self.rebuild_layout();
+        self.restore_stable_interaction_rows(
+            stable_interaction.0,
+            stable_interaction.1,
+            stable_interaction.2,
+        );
     }
 
     pub fn group_has_results(&self, document_id: u64) -> bool {
@@ -1247,7 +1261,14 @@ impl GlobalSearchTableDelegate {
 
     pub(crate) fn selected_rows_count(&self) -> usize {
         let selection = self.interaction.row_selection.borrow();
-        selection
+        let cache_key = (selection.revision(), self.projection.layout_revision);
+        if let Some((selection_revision, layout_revision, count)) =
+            self.interaction.selected_rows_count_cache.get()
+            && (selection_revision, layout_revision) == cache_key
+        {
+            return count;
+        }
+        let count = selection
             .selected_ranges()
             .map(|(start, end)| {
                 let end = end.min(self.projection.rows_len.saturating_sub(1));
@@ -1262,7 +1283,11 @@ impl GlobalSearchTableDelegate {
                         .partition_point(|row| *row < start);
                 row_count.saturating_sub(group_count)
             })
-            .sum()
+            .sum();
+        self.interaction
+            .selected_rows_count_cache
+            .set(Some((cache_key.0, cache_key.1, count)));
+        count
     }
 
     pub(crate) fn is_row_selected(&self, row_ix: usize) -> bool {
@@ -1886,6 +1911,32 @@ mod tests {
 
         delegate.set_groups(Vec::new());
         assert!(delegate.collapsed_document_ids().is_empty());
+    }
+
+    #[test]
+    fn collapsing_groups_preserves_selection_by_stable_result_key() {
+        let mut first = test_group(Arc::new(LogDocument::placeholder("first.log")));
+        first.source.document_id = 11;
+        first.projection.rows = [2, 5].into_iter().collect();
+        let mut second = test_group(Arc::new(LogDocument::placeholder("second.log")));
+        second.source.document_id = 22;
+        second.projection.rows = [7, 9].into_iter().collect();
+        let mut delegate = GlobalSearchTableDelegate::new();
+        delegate.set_groups(vec![first, second]);
+        delegate.settle_table_selection(4);
+        delegate.set_active_log_row(Some(4));
+
+        assert_eq!(delegate.selected_rows_count(), 1);
+        delegate.toggle_group(11);
+
+        assert_eq!(delegate.selected_matches(), vec![(22, 7)]);
+        assert_eq!(delegate.active_log_row(), Some(2));
+        assert_eq!(delegate.selected_rows_count(), 1);
+
+        delegate.toggle_group(22);
+        assert!(delegate.selected_matches().is_empty());
+        assert_eq!(delegate.active_log_row(), None);
+        assert_eq!(delegate.selected_rows_count(), 0);
     }
 
     #[test]

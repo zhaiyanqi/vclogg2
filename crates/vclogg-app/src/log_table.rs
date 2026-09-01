@@ -248,6 +248,7 @@ pub(crate) enum TextHighlight {
 pub(crate) struct RowSelection {
     ranges: Vec<(usize, usize)>,
     selected_count: usize,
+    revision: u64,
     anchor: Option<usize>,
     pending_pointer_row: Option<usize>,
     pointer_drag_anchor: Option<usize>,
@@ -344,11 +345,20 @@ impl RowSelection {
         self.selected_count
     }
 
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    fn advance_revision(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     fn replace_with(&mut self, start: usize, end: usize) {
         let range = ordered_range(start, end);
         self.ranges.clear();
         self.ranges.push(range);
         self.selected_count = inclusive_range_len(range);
+        self.advance_revision();
     }
 
     fn add_range(&mut self, start: usize, end: usize) {
@@ -376,6 +386,7 @@ impl RowSelection {
             .selected_count
             .saturating_sub(removed_count)
             .saturating_add(inclusive_range_len((start, end)));
+        self.advance_revision();
     }
 
     fn toggle(&mut self, row_ix: usize) {
@@ -390,6 +401,7 @@ impl RowSelection {
         };
         let (start, end) = self.ranges.remove(range_ix);
         self.selected_count = self.selected_count.saturating_sub(1);
+        self.advance_revision();
         if start < row_ix {
             self.ranges.insert(range_ix, (start, row_ix - 1));
         }
@@ -460,6 +472,7 @@ impl RowSelection {
         }
         self.ranges.clone_from(&self.pointer_restore_ranges);
         self.selected_count = self.pointer_restore_count;
+        self.advance_revision();
         self.anchor = self.pointer_restore_anchor;
         self.pending_pointer_row = self.pointer_drag_anchor;
     }
@@ -512,6 +525,7 @@ impl RowSelection {
     pub(crate) fn clear(&mut self) {
         self.ranges.clear();
         self.selected_count = 0;
+        self.advance_revision();
         self.anchor = None;
         self.pending_pointer_row = None;
         self.pointer_drag_anchor = None;
