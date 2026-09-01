@@ -226,6 +226,12 @@ struct VerifiedFileState {
     cached_bytes: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum VerifiedSourceUnavailable {
+    Transient,
+    InvalidSnapshot,
+}
+
 enum DocumentByteStorage<'a> {
     Borrowed(&'a [u8]),
     Shared(Arc<[u8]>),
@@ -328,32 +334,46 @@ impl VerifiedFileBytes {
         }
     }
 
-    fn source_file(&self) -> Option<Arc<File>> {
+    fn source_file(&self) -> Result<Arc<File>, VerifiedSourceUnavailable> {
         if !self.transient_source_handles.load(Ordering::Acquire)
-            && let Some(file) = self.file.read().ok()?.clone()
+            && let Some(file) = self
+                .file
+                .read()
+                .map_err(|_| VerifiedSourceUnavailable::Transient)?
+                .clone()
         {
-            return Some(file);
+            return Ok(file);
         }
 
-        let file = Arc::new(File::open(&self.path).ok()?);
-        let metadata = file.metadata().ok()?;
-        if metadata.len() != u64::try_from(self.len).ok()? {
-            return None;
+        let file =
+            Arc::new(File::open(&self.path).map_err(|_| VerifiedSourceUnavailable::Transient)?);
+        let metadata = file
+            .metadata()
+            .map_err(|_| VerifiedSourceUnavailable::Transient)?;
+        let expected_len =
+            u64::try_from(self.len).map_err(|_| VerifiedSourceUnavailable::InvalidSnapshot)?;
+        if metadata.len() != expected_len {
+            return Err(VerifiedSourceUnavailable::InvalidSnapshot);
         }
-        if let Some(expected) = &self.identity
-            && read_file_identity(&file).as_ref() != Some(expected)
-        {
-            return None;
+        if let Some(expected) = &self.identity {
+            match try_read_file_identity(&file) {
+                Ok(current) if &current == expected => {}
+                Ok(_) => return Err(VerifiedSourceUnavailable::InvalidSnapshot),
+                Err(_) => return Err(VerifiedSourceUnavailable::Transient),
+            }
         }
         if self.transient_source_handles.load(Ordering::Acquire) {
-            return Some(file);
+            return Ok(file);
         }
 
-        let mut retained = self.file.write().ok()?;
+        let mut retained = self
+            .file
+            .write()
+            .map_err(|_| VerifiedSourceUnavailable::Transient)?;
         if self.transient_source_handles.load(Ordering::Acquire) {
-            return Some(file);
+            return Ok(file);
         }
-        Some(retained.get_or_insert(file).clone())
+        Ok(retained.get_or_insert(file).clone())
     }
 
     fn read_range(&self, range: std::ops::Range<usize>) -> Option<DocumentLineBytes<'_>> {
@@ -413,23 +433,47 @@ impl VerifiedFileBytes {
         }
 
         let block = (|| {
-            let block_start = block_ix.checked_mul(APPEND_INTEGRITY_BLOCK_BYTES)?;
+            let block_start = block_ix
+                .checked_mul(APPEND_INTEGRITY_BLOCK_BYTES)
+                .ok_or(VerifiedSourceUnavailable::InvalidSnapshot)?;
             let block_end = block_start
-                .checked_add(APPEND_INTEGRITY_BLOCK_BYTES)?
+                .checked_add(APPEND_INTEGRITY_BLOCK_BYTES)
+                .ok_or(VerifiedSourceUnavailable::InvalidSnapshot)?
                 .min(self.len);
-            let mut block = vec![0_u8; block_end.checked_sub(block_start)?];
+            let mut block = vec![
+                0_u8;
+                block_end
+                    .checked_sub(block_start)
+                    .ok_or(VerifiedSourceUnavailable::InvalidSnapshot)?
+            ];
             let file = self.source_file()?;
-            read_file_exact_at(&file, &mut block, block_start as u64).ok()?;
-            let expected = self.integrity_blocks.get(block_ix)?;
-            (<[u8; 32]>::from(Sha256::digest(&block)) == *expected).then_some(block)
-        })();
-        let Some(block) = block else {
-            let mut state = self.state.lock().ok()?;
-            if let Some(block) = state.blocks.get(&block_ix).cloned() {
-                return Some(block);
+            read_file_exact_at(&file, &mut block, block_start as u64).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::UnexpectedEof {
+                    VerifiedSourceUnavailable::InvalidSnapshot
+                } else {
+                    VerifiedSourceUnavailable::Transient
+                }
+            })?;
+            let expected = self
+                .integrity_blocks
+                .get(block_ix)
+                .ok_or(VerifiedSourceUnavailable::InvalidSnapshot)?;
+            if <[u8; 32]>::from(Sha256::digest(&block)) != *expected {
+                return Err(VerifiedSourceUnavailable::InvalidSnapshot);
             }
-            state.invalid_blocks.insert(block_ix);
-            return None;
+            Ok(block)
+        })();
+        let block = match block {
+            Ok(block) => block,
+            Err(VerifiedSourceUnavailable::Transient) => return None,
+            Err(VerifiedSourceUnavailable::InvalidSnapshot) => {
+                let mut state = self.state.lock().ok()?;
+                if let Some(block) = state.blocks.get(&block_ix).cloned() {
+                    return Some(block);
+                }
+                state.invalid_blocks.insert(block_ix);
+                return None;
+            }
         };
 
         let block: Arc<[u8]> = block.into();
@@ -2527,6 +2571,11 @@ fn replace_file_atomically(source: &Path, destination: &Path) -> std::io::Result
 
 #[cfg(windows)]
 fn read_file_identity(file: &File) -> Option<FileIdentity> {
+    try_read_file_identity(file).ok()
+}
+
+#[cfg(windows)]
+fn try_read_file_identity(file: &File) -> std::io::Result<FileIdentity> {
     #[repr(C)]
     struct ReadFileUsnData {
         min_major_version: u16,
@@ -2544,7 +2593,7 @@ fn read_file_identity(file: &File) -> Option<FileIdentity> {
         )
     } != 0;
     if !file_id_ok {
-        return None;
+        return Err(std::io::Error::last_os_error());
     }
 
     let versions = ReadFileUsnData {
@@ -2565,20 +2614,39 @@ fn read_file_identity(file: &File) -> Option<FileIdentity> {
             std::ptr::null_mut(),
         )
     } != 0;
-    if !usn_ok || returned < 32 {
-        return None;
+    if !usn_ok {
+        return Err(std::io::Error::last_os_error());
+    }
+    if returned < 32 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "file USN response is truncated",
+        ));
     }
     let major = u16::from_le_bytes([output[4], output[5]]);
     let usn_offset = match major {
         2 => 24,
         3 => 40,
-        _ => return None,
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "file USN response has an unsupported version",
+            ));
+        }
     };
     if (returned as usize) < usn_offset + 8 {
-        return None;
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "file USN response does not contain a complete sequence number",
+        ));
     }
-    let usn = i64::from_le_bytes(output[usn_offset..usn_offset + 8].try_into().ok()?);
-    Some(FileIdentity {
+    let usn = i64::from_le_bytes(output[usn_offset..usn_offset + 8].try_into().map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "file USN response contains an invalid sequence number",
+        )
+    })?);
+    Ok(FileIdentity {
         volume_serial: file_id.VolumeSerialNumber,
         file_id: file_id.FileId.Identifier,
         usn,
@@ -2587,11 +2655,16 @@ fn read_file_identity(file: &File) -> Option<FileIdentity> {
 
 #[cfg(unix)]
 fn read_file_identity(file: &File) -> Option<FileIdentity> {
-    let metadata = file.metadata().ok()?;
+    try_read_file_identity(file).ok()
+}
+
+#[cfg(unix)]
+fn try_read_file_identity(file: &File) -> std::io::Result<FileIdentity> {
+    let metadata = file.metadata()?;
     let mut file_id = [0_u8; 16];
     file_id[..8].copy_from_slice(&metadata.ino().to_le_bytes());
     file_id[8..].copy_from_slice(&metadata.ctime_nsec().to_le_bytes());
-    Some(FileIdentity {
+    Ok(FileIdentity {
         volume_serial: metadata.dev(),
         file_id,
         usn: metadata.ctime(),
@@ -3220,6 +3293,25 @@ mod source_snapshot_tests {
         fs::write(&replaced_path, b"first\nsecond\n").expect("应能写入同内容替换日志");
 
         assert_eq!(replaced.line(0), None);
+        _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn released_source_handles_retry_after_transient_path_unavailability() {
+        let directory = test_directory("released-source-retry");
+        let source_directory = directory.join("source");
+        let parked_directory = directory.join("source-parked");
+        fs::create_dir(&source_directory).expect("应能创建源目录");
+        let path = source_directory.join("source.log");
+        fs::write(&path, b"alpha\nbeta\n").expect("应能写入原始测试日志");
+        let document = LogDocument::open(&path).expect("应能打开原始测试日志");
+        document.release_source_handle();
+
+        fs::rename(&source_directory, &parked_directory).expect("应能暂时移走源目录");
+        assert_eq!(document.line(0), None);
+        fs::rename(&parked_directory, &source_directory).expect("应能恢复同一个源目录");
+
+        assert_eq!(document.line(0).as_deref(), Some("alpha"));
         _ = fs::remove_dir_all(directory);
     }
 
