@@ -13,7 +13,8 @@ vclogg-app                    # GPUI 应用外壳、展示状态与交互编排
         ▼               ▼
 vclogg-core          vclogg-data
 # 文件与搜索逻辑       # 持久化与缓存生命周期
-├─ document           ├─ index_cache
+├─ document           ├─ index_cache lifecycle
+│  └─ index_cache     │
 ├─ search             ├─ path_codec
 ├─ result_set         ├─ state_repository
 └─ cancellation      └─ state DTO / path_codec

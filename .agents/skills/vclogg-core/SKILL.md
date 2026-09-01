@@ -9,7 +9,8 @@ Keep core deterministic, GPUI-free, persistence-free, and usable from background
 
 ## Route the change
 
-- `document.rs`: verified source snapshots, bounded previews, decoding, line readers, line-index construction, cached index format, append refresh.
+- `document.rs`: verified source snapshots, bounded previews, decoding, line readers, line-index construction and append refresh.
+- `document/index_cache.rs`: persistent line-index cache format, validation, path identity, varint offsets and atomic cache writes. Cache retention/cleanup still belongs to data.
 - `search.rs`: query compilation, parallel/cancellable scans, progress and completed search results.
 - `result_set.rs`: `CompressedRows`, union/subtraction, stable source-row lookup, positional ranges, portable compressed encoding.
 - `cancellation.rs`: cooperative cancellation shared by long-running core operations.
