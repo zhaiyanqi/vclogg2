@@ -2,8 +2,8 @@
     [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\dist'),
     [string]$SigningCertificatePath = $env:VCLOGG2_WINDOWS_SIGNING_CERTIFICATE_PATH,
     [string]$TimestampUrl = $env:VCLOGG2_WINDOWS_TIMESTAMP_URL,
-    [ValidateSet('None', 'Pfx', 'PreSigned')]
-    [string]$SigningMode = 'None',
+    [ValidateSet('Pfx', 'PreSigned')]
+    [string]$SigningMode = 'Pfx',
     [switch]$SkipBuild
 )
 
@@ -88,23 +88,20 @@ if ($SigningMode -eq 'Pfx') {
         -TimestampUrl $TimestampUrl
 }
 
-if ($SigningMode -ne 'None') {
-    $releaseSignature = Get-AuthenticodeSignature -LiteralPath $releaseExecutable
-    if ($releaseSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
-        $null -eq $releaseSignature.SignerCertificate -or
-        $null -eq $releaseSignature.TimeStamperCertificate) {
-        throw '已启用签名时，Windows Release 可执行文件必须包含有效且受信任的 Authenticode 签名和 RFC 3161 时间戳。'
-    }
+$releaseSignature = Get-AuthenticodeSignature -LiteralPath $releaseExecutable
+if ($releaseSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+    $null -eq $releaseSignature.SignerCertificate -or
+    $null -eq $releaseSignature.TimeStamperCertificate) {
+    throw 'Windows Release 可执行文件必须包含有效且受信任的 Authenticode 签名和 RFC 3161 时间戳。'
 }
 
 $packagedExecutable = Join-Path $stageDirectory 'vclogg2.exe'
 Copy-Item -LiteralPath $releaseExecutable -Destination $packagedExecutable
-if ($SigningMode -ne 'None') {
-    $packagedSignature = Get-AuthenticodeSignature -LiteralPath $packagedExecutable
-    if ($packagedSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
-        $null -eq $packagedSignature.TimeStamperCertificate) {
-        throw 'Windows 发布目录中的 vclogg2.exe 未保留有效的 Authenticode 签名和时间戳。'
-    }
+$packagedSignature = Get-AuthenticodeSignature -LiteralPath $packagedExecutable
+if ($packagedSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+    $null -eq $packagedSignature.SignerCertificate -or
+    $null -eq $packagedSignature.TimeStamperCertificate) {
+    throw 'Windows 发布目录中的 vclogg2.exe 未保留有效的 Authenticode 签名和时间戳。'
 }
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'README.md') -Destination $stageDirectory
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination $stageDirectory

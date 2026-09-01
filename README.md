@@ -27,7 +27,7 @@
 .\vclogg2.exe
 ```
 
-Windows 分发包是纯便携包，只包含可执行程序、README 和许可证，不附带 PowerShell 安装或更新脚本，也不会创建开始菜单快捷方式或注册文件关联。发布流水线默认允许生成未签名包，也可按需启用 Authenticode 签名和 RFC 3161 时间戳。应用不会联网检查、下载或自行安装新版本，也不会复制自身到临时目录；需要更新时使用“帮助 → 更新”打开 [GitHub Releases](https://github.com/zhaiyanqi/vclogg2/releases)，下载新包后手动解压替换。
+Windows 分发包是纯便携包，只包含可执行程序、README 和许可证，不附带 PowerShell 安装或更新脚本，也不会创建开始菜单快捷方式或注册文件关联。发布流水线强制要求有效且受信任的 Authenticode 签名和 RFC 3161 时间戳，签名配置缺失或验证失败时不会生成 Windows Release。应用不会联网检查、下载或自行安装新版本，也不会复制自身到临时目录；需要更新时使用“帮助 → 更新”打开 [GitHub Releases](https://github.com/zhaiyanqi/vclogg2/releases)，下载新包后手动解压替换。
 
 ### macOS
 
@@ -235,13 +235,13 @@ powershell -ExecutionPolicy Bypass -File scripts/run-performance-debug.ps1 `
 
 ## 打包与发布
 
-`package-release.ps1` 默认使用 `None` 模式构建未签名 Windows 发行包，不要求证书或时间戳配置：
+`package-release.ps1` 只接受 `Pfx` 或 `PreSigned` 签名模式，默认使用 `Pfx`。缺少证书、签名无效或没有可信时间戳时立即失败，不会生成发行 ZIP：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 ```
 
-需要签名时可显式选择 `Pfx` 或 `PreSigned`。`Pfx` 模式负责构建、签名和打包；`PreSigned` 模式只接受已经由硬件令牌、HSM 或云签名服务处理的 `target\release\vclogg2.exe`，并且必须与 `-SkipBuild` 同时使用，避免重新编译覆盖签名。
+`Pfx` 模式负责构建、签名和打包；`PreSigned` 模式只接受已经由硬件令牌、HSM 或云签名服务处理的 `target\release\vclogg2.exe`，并且必须与 `-SkipBuild` 同时使用，避免重新编译覆盖签名。
 
 适用于可合法导出证书的本地 PFX 模式：
 
@@ -262,7 +262,7 @@ powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1 `
   -SigningMode PreSigned -SkipBuild
 ```
 
-仅在 `Pfx` 或 `PreSigned` 模式下，`package-release.ps1` 才会在压缩前后调用 `Get-AuthenticodeSignature`；证书不受信任、签名无效或没有时间戳时不会生成发布 ZIP。PFX 模式还会调用 Windows SDK `SignTool`，使用 SHA-256 Authenticode 签名并通过 `/tr`、`/td SHA256` 获取 RFC 3161 时间戳，再执行 SignTool 验证。`None` 模式不执行签名校验并允许分发未签名包。
+`package-release.ps1` 会在压缩前后调用 `Get-AuthenticodeSignature`；证书不受信任、签名无效或没有时间戳时不会生成发布 ZIP。PFX 模式还会调用 Windows SDK `SignTool`，使用 SHA-256 Authenticode 签名并通过 `/tr`、`/td SHA256` 获取 RFC 3161 时间戳，再执行 SignTool 验证。
 
 公开 GitHub Release 推荐使用 Microsoft Artifact Signing：私钥保留在合规 HSM 中，GitHub Actions 通过 OIDC 获取短期身份，不保存代码签名私钥。配置以下仓库变量：
 
@@ -273,7 +273,7 @@ powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1 `
 
 同时配置 `AZURE_CLIENT_ID`、`AZURE_TENANT_ID`、`AZURE_SUBSCRIPTION_ID` Secrets，为对应身份建立 GitHub OIDC 联合凭据，并授予 Artifact Signing Certificate Profile Signer 角色。工作流使用 `azure/login@v3` 和 `azure/artifact-signing-action@v2`，对 EXE 执行 SHA-256 签名，并使用 Microsoft RFC 3161 时间戳服务。
 
-未配置 `WINDOWS_SIGNING_PROVIDER` 时，GitHub Actions 默认使用 `unsigned`，无需任何签名 Secrets 即可生成 Windows 包和 GitHub Release。旧有可导出 PFX 或企业内部证书可以使用 PFX 后端：将 `WINDOWS_SIGNING_PROVIDER` 显式设为 `pfx`，并配置两个加密 Secrets 和一个可选仓库变量：
+GitHub Actions 必须将 `WINDOWS_SIGNING_PROVIDER` 配置为 `artifact-signing` 或 `pfx`；未配置或填写其他值时 Windows job 立即失败，最终 GitHub Release 不会创建。旧有可导出 PFX 或企业内部证书可以使用 PFX 后端，并配置两个加密 Secrets 和一个可选仓库变量：
 
 - `WINDOWS_SIGNING_CERTIFICATE_BASE64`：代码签名 PFX 的 Base64 内容；
 - `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`：PFX 密码；
@@ -300,7 +300,7 @@ gh variable set WINDOWS_TIMESTAMP_URL --body 'https://<证书颁发机构提供�
 ./scripts/package-release-linux.sh
 ```
 
-三种平台的产物分别写入 `dist/windows-x86_64/`、`dist/macos-aarch64/` 与 `dist/linux-x86_64/`。打包脚本根据当前提交上的 `v<SemVer>` tag 和实际 runner 架构命名产物，并把同一版本写入可执行文件和 macOS 应用信息；Windows 默认生成未签名包，配置签名后才强制校验 Authenticode 与 RFC 3161 时间戳，macOS 当前生成临时签名的 `.app`。未打 tag 的手动构建使用 `0.0.0-dev+g<commit>`，也可通过 `VCLOGG2_BUILD_VERSION` 显式覆盖。
+三种平台的产物分别写入 `dist/windows-x86_64/`、`dist/macos-aarch64/` 与 `dist/linux-x86_64/`。打包脚本根据当前提交上的 `v<SemVer>` tag 和实际 runner 架构命名产物，并把同一版本写入可执行文件和 macOS 应用信息；Windows ZIP 在上传前会再次解压并强制校验 Authenticode 签名与 RFC 3161 时间戳，macOS 当前生成临时签名的 `.app`。未打 tag 的手动构建使用 `0.0.0-dev+g<commit>`，也可通过 `VCLOGG2_BUILD_VERSION` 显式覆盖。
 
 仓库中的 [`.github/workflows/release-build.yml`](.github/workflows/release-build.yml) 会在推送 `v*` tag 时并行构建 Windows x64、macOS ARM64 和 Linux x86_64，也支持在 GitHub Actions 页面手动执行仅构建产物。构建结果作为 Actions Artifacts 保存 14 天；推送 `v*` tag 且三个构建全部成功后，工作流会核对标签对应的三平台包名，再自动创建带生成式发行说明的 GitHub Release。
 
@@ -318,7 +318,7 @@ git tag -a "v${VERSION}" -m "VCLogg2 v${VERSION}"
 
 脚本不会创建或修改标签。它要求标签是合法的 `v<SemVer>`、已存在并指向当前 `main`，同时要求本地 `main` 与 `origin/main` 完全一致；运行格式、静态检查和 Clippy 后只推送该标签，标签会触发上述 GitHub Action。无人值守调用可追加 `--yes`，非默认远端可使用 `--remote <名称>`。
 
-GitHub 仓库权限属于发布信任边界。Windows 未签名模式不提供发布者身份校验；启用签名后流水线会强制验证 Authenticode 签名与 RFC 3161 时间戳。macOS Developer ID 签名和公证仍由正式发布环境负责。完整交付边界见 [`doc/delivery.md`](doc/delivery.md)。
+GitHub 仓库权限属于发布信任边界。Windows 流水线强制验证 Authenticode 签名与 RFC 3161 时间戳，任何未签名产物都会阻止 Release。macOS Developer ID 签名和公证仍由正式发布环境负责。完整交付边界见 [`doc/delivery.md`](doc/delivery.md)。
 
 ## 工程结构
 

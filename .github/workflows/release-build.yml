@@ -23,7 +23,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 90
     env:
-      WINDOWS_SIGNING_PROVIDER: ${{ vars.WINDOWS_SIGNING_PROVIDER || 'unsigned' }}
+      WINDOWS_SIGNING_PROVIDER: ${{ vars.WINDOWS_SIGNING_PROVIDER }}
     permissions:
       contents: read
       id-token: write
@@ -46,16 +46,9 @@ jobs:
       - name: Validate Windows signing provider
         shell: powershell
         run: |
-          if ($env:WINDOWS_SIGNING_PROVIDER -notin @('unsigned', 'pfx', 'artifact-signing')) {
-            throw 'WINDOWS_SIGNING_PROVIDER must be unsigned, pfx, or artifact-signing.'
+          if ($env:WINDOWS_SIGNING_PROVIDER -notin @('pfx', 'artifact-signing')) {
+            throw 'Signed Windows releases require WINDOWS_SIGNING_PROVIDER=pfx or artifact-signing.'
           }
-
-      - name: Build unsigned Windows release package
-        if: env.WINDOWS_SIGNING_PROVIDER == 'unsigned'
-        shell: powershell
-        run: >-
-          powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
-          -SigningMode None
 
       - name: Build Windows release executable
         if: env.WINDOWS_SIGNING_PROVIDER == 'artifact-signing'
@@ -133,6 +126,31 @@ jobs:
           if (Test-Path -LiteralPath $certificatePath -PathType Leaf) {
             Remove-Item -LiteralPath $certificatePath -Force
           }
+
+      - name: Verify signature in packaged Windows release
+        shell: powershell
+        run: |
+          $archives = @(Get-ChildItem -LiteralPath 'dist\windows-x86_64' -Filter 'vclogg2-*-windows-x86_64.zip')
+          if ($archives.Count -ne 1) {
+            throw "Expected exactly one Windows release archive, found $($archives.Count)."
+          }
+          $verificationDirectory = Join-Path $env:RUNNER_TEMP 'vclogg2-signature-verification'
+          if (Test-Path -LiteralPath $verificationDirectory) {
+            Remove-Item -LiteralPath $verificationDirectory -Recurse -Force
+          }
+          Expand-Archive -LiteralPath $archives[0].FullName -DestinationPath $verificationDirectory
+          $executables = @(Get-ChildItem -LiteralPath $verificationDirectory -Filter 'vclogg2.exe' -Recurse)
+          if ($executables.Count -ne 1) {
+            throw "Expected exactly one packaged vclogg2.exe, found $($executables.Count)."
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $executables[0].FullName
+          if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+              $null -eq $signature.SignerCertificate -or
+              $null -eq $signature.TimeStamperCertificate) {
+            throw "Packaged vclogg2.exe must have a valid trusted Authenticode signature and RFC 3161 timestamp; status: $($signature.Status)."
+          }
+          Write-Output "Verified signer: $($signature.SignerCertificate.Subject)"
+          Write-Output "Verified timestamp authority: $($signature.TimeStamperCertificate.Subject)"
 
       - name: Upload Windows release package
         uses: actions/upload-artifact@v7

@@ -19,7 +19,7 @@
 | 会话、最近/收藏/上一次文件、历史清理与设置持久化 | 已实现 | `crates/vclogg-app/src/state_store.rs`、`history_dialog.rs`；SQLite/WAL、revision 合并、退出事务化 flush |
 | 搜索结果导出、时间戳合并与临时结果回收站 | 已实现 | `crates/vclogg-app/src/result_export.rs`、`trash.rs`；流式输出、同目录原子替换、临时文件隔离 |
 | 预定义过滤器与云端过滤器 | 已实现 | `crates/vclogg-app/src/predefined_filters*.rs`、`cloud_filters.rs`、`settings_dialog.rs`；设置页网络配置与 Cookie 连接测试、本地导入导出、无客户端密钥注册、冲突选择和离线只读目录 |
-| 三平台文件集成与发行交付 | 已实现 | Windows 便携包支持默认未签名以及可选 Artifact Signing/PFX 签名，macOS 文档类型、Linux desktop/MIME、系统废纸篓和三平台 GitHub Release 包均已落地；应用不检测、下载或自行安装更新，“帮助 → 更新”只打开 GitHub Releases |
+| 三平台文件集成与发行交付 | 已实现 | Windows 便携包强制使用 Artifact Signing 或 PFX 签名并验证时间戳，macOS 文档类型、Linux desktop/MIME、系统废纸篓和三平台 GitHub Release 包均已落地；应用不检测、下载或自行安装更新，“帮助 → 更新”只打开 GitHub Releases |
 
 ## 本轮交付
 
