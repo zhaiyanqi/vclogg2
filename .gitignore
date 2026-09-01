@@ -12,7 +12,12 @@ dist/
 
 # Local AI agent skills and installer metadata
 .agent/
-.agents/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/vclogg-app/
+!.agents/skills/vclogg-core/
+!.agents/skills/vclogg-data/
 skills-lock.json
 
 # Private keys and local application data

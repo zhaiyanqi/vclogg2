@@ -27,6 +27,18 @@ require_file crates/vclogg-data/Cargo.toml
 require_file crates/vclogg-data/src/lib.rs
 require_file crates/vclogg-app/Cargo.toml
 require_file crates/vclogg-app/src/main.rs
+require_file .agents/skills/vclogg-core/SKILL.md
+require_file .agents/skills/vclogg-data/SKILL.md
+require_file .agents/skills/vclogg-app/SKILL.md
+
+for layer in core data app; do
+  skill=".agents/skills/vclogg-${layer}/SKILL.md"
+  rg --quiet "^name: vclogg-${layer}$" "$skill" \
+    || fail "$skill has an invalid or missing skill name"
+  if rg --quiet '\[TODO:' "$skill"; then
+    fail "$skill contains an unfinished TODO"
+  fi
+done
 
 for dependency in gpui gpui-base gpui-component rusqlite vclogg-data vclogg-app; do
   forbid_manifest_dependency crates/vclogg-core/Cargo.toml "$dependency"
