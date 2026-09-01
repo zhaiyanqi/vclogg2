@@ -2,6 +2,7 @@
 
 mod cancellation;
 mod document;
+mod result_set;
 mod search;
 
 pub use cancellation::CancellationToken;
@@ -9,9 +10,10 @@ pub use document::{
     DocumentMetadata, DocumentRefreshKind, LinePreview, LinePreviewReader, LineReader, LogDocument,
     PendingIndexCacheWrite,
 };
+pub use result_set::CompressedRows;
 pub use search::{
-    CompressedRows, SearchCancellation, SearchMatcher, SearchProgress, SearchProgressSnapshot,
-    SearchQuery, SearchResult, SearchRun, search, search_cancellable, search_with_compiled_matcher,
+    SearchCancellation, SearchMatcher, SearchProgress, SearchProgressSnapshot, SearchQuery,
+    SearchResult, SearchRun, search, search_cancellable, search_with_compiled_matcher,
     search_with_progress,
 };
 

@@ -27,7 +27,7 @@ use encoding_rs::{CoderResult, Decoder, Encoding, UTF_8, UTF_16BE, UTF_16LE};
 use memchr::memchr2;
 use sha2::{Digest as _, Sha256};
 
-use crate::{CancellationToken, search::CompressedRows};
+use crate::{CancellationToken, CompressedRows};
 
 #[cfg(windows)]
 use windows_sys::Win32::{

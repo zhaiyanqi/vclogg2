@@ -14,11 +14,12 @@ vclogg-app                    # GPUI 应用外壳、展示状态与交互编排
 vclogg-core          vclogg-data
 # 文件与搜索逻辑       # 持久化与缓存生命周期
 ├─ document           ├─ index_cache
-├─ search             └─ state_store（迁移目标）
+├─ search             ├─ path_codec
+├─ result_set         └─ state_store（迁移目标）
 └─ cancellation
 ```
 
-- `vclogg-core` 负责文件读取、行索引建立、搜索执行与结果集合运算；它不依赖 GPUI，也不包含持久化或界面状态。
+- `vclogg-core` 负责文件读取、行索引建立、搜索执行与结果集合运算；`result_set` 独立维护压缩行集合、集合拼接、位置区间和稳定源行映射。core 不依赖 GPUI，也不包含持久化或界面状态。
 - `vclogg-data` 负责 SQLite 持久化、缓存生命周期和可恢复状态的存取；它不依赖 GPUI，也不决定界面如何呈现这些状态。
 - `vclogg-app` 是应用外壳和界面呈现所有者，对外构建 `vclogg2`；用户高亮、选择、选词、字号、行高、换行、标记与交互状态都在这一层组合，渲染路径不直接执行文件 I/O。
 - app 可以组合 core 与 data；core 不依赖 data 或 app，data 不依赖 app。跨层传递稳定 DTO、领域 ID、命令结果或小型协议，不共享 GPUI 实体。
