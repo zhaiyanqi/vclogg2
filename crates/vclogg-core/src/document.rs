@@ -679,12 +679,19 @@ pub struct PendingIndexCacheWrite {
 }
 
 /// A bounded decoded prefix for interactive display.
-///
-/// Search, export, and explicit copy operations continue to use [`LogDocument::line`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LinePreview {
     text: String,
     truncated: bool,
+}
+
+/// Task-local reader for a sequence of complete logical lines.
+///
+/// It retains at most the current verified source block, so search, export, and explicit copy
+/// operations can share adjacent positional reads without growing document-owned caches.
+#[derive(Default)]
+pub struct LineReader {
+    verified_blocks: TaskVerifiedBlockReader,
 }
 
 /// Task-local reader for a sequence of visible line previews.
@@ -693,8 +700,29 @@ pub struct LinePreview {
 /// directory-search snapshots share one positional read without growing document-owned caches.
 #[derive(Default)]
 pub struct LinePreviewReader {
+    verified_blocks: TaskVerifiedBlockReader,
+}
+
+#[derive(Default)]
+struct TaskVerifiedBlockReader {
     content_digest: Option<[u8; 32]>,
     verified_block: Option<(usize, Option<Arc<[u8]>>)>,
+}
+
+enum TaskVerifiedBytes {
+    Shared(Arc<[u8]>, std::ops::Range<usize>),
+    Owned(Box<[u8]>),
+}
+
+impl Deref for TaskVerifiedBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Shared(bytes, range) => &bytes[range.clone()],
+            Self::Owned(bytes) => bytes,
+        }
+    }
 }
 
 impl LinePreview {
@@ -718,6 +746,24 @@ impl LinePreview {
     }
 }
 
+impl LineReader {
+    /// Decode one complete logical line in this reader's task-local I/O context.
+    pub fn line(&mut self, document: &LogDocument, source_row: usize) -> Option<String> {
+        self.verified_blocks.reset_for(document.content_digest);
+        let row_ix = document.local_row(source_row)?;
+        let range = document.line_byte_range_at_local_row(row_ix)?;
+        let bytes = match document.bytes.as_ref() {
+            DocumentBytes::Empty => range.is_empty().then_some(&[][..])?,
+            DocumentBytes::Owned(bytes) => bytes.get(range)?,
+            DocumentBytes::Verified(bytes) => {
+                let bytes = self.verified_blocks.read_range(bytes, range)?;
+                return Some(decode_complete_line(document, &bytes));
+            }
+        };
+        Some(decode_complete_line(document, bytes))
+    }
+}
+
 impl LinePreviewReader {
     pub fn line_preview(
         &mut self,
@@ -725,10 +771,7 @@ impl LinePreviewReader {
         source_row: usize,
         max_bytes: usize,
     ) -> Option<LinePreview> {
-        if self.content_digest != Some(document.content_digest) {
-            self.content_digest = Some(document.content_digest);
-            self.verified_block = None;
-        }
+        self.verified_blocks.reset_for(document.content_digest);
         let row_ix = document.local_row(source_row)?;
         let range = document.line_byte_range_at_local_row(row_ix)?;
         let read_end = range
@@ -746,38 +789,58 @@ impl LinePreviewReader {
                 complete_line,
             )),
             DocumentBytes::Verified(bytes) => {
-                if range.start == read_end {
-                    return Some(decode_line_preview(document, &[], max_bytes, complete_line));
-                }
-                let first_block = range.start / APPEND_INTEGRITY_BLOCK_BYTES;
-                let last_block = (read_end - 1) / APPEND_INTEGRITY_BLOCK_BYTES;
-                if first_block == last_block {
-                    let block = self.load_verified_block(bytes, first_block)?;
-                    let block_start = first_block.saturating_mul(APPEND_INTEGRITY_BLOCK_BYTES);
-                    return Some(decode_line_preview(
-                        document,
-                        block.get(range.start - block_start..read_end - block_start)?,
-                        max_bytes,
-                        complete_line,
-                    ));
-                }
-
-                let mut joined = Vec::with_capacity(read_end - range.start);
-                for block_ix in first_block..=last_block {
-                    let block = self.load_verified_block(bytes, block_ix)?;
-                    let block_start = block_ix.saturating_mul(APPEND_INTEGRITY_BLOCK_BYTES);
-                    let start = range.start.saturating_sub(block_start).min(block.len());
-                    let end = read_end.saturating_sub(block_start).min(block.len());
-                    joined.extend_from_slice(block.get(start..end)?);
-                }
+                let bytes = self
+                    .verified_blocks
+                    .read_range(bytes, range.start..read_end)?;
                 Some(decode_line_preview(
                     document,
-                    &joined,
+                    &bytes,
                     max_bytes,
                     complete_line,
                 ))
             }
         }
+    }
+}
+
+impl TaskVerifiedBlockReader {
+    fn reset_for(&mut self, content_digest: [u8; 32]) {
+        if self.content_digest != Some(content_digest) {
+            self.content_digest = Some(content_digest);
+            self.verified_block = None;
+        }
+    }
+
+    fn read_range(
+        &mut self,
+        bytes: &VerifiedFileBytes,
+        range: std::ops::Range<usize>,
+    ) -> Option<TaskVerifiedBytes> {
+        if range.start > range.end || range.end > bytes.len {
+            return None;
+        }
+        if range.is_empty() {
+            return Some(TaskVerifiedBytes::Owned(Box::new([])));
+        }
+        let first_block = range.start / APPEND_INTEGRITY_BLOCK_BYTES;
+        let last_block = (range.end - 1) / APPEND_INTEGRITY_BLOCK_BYTES;
+        if first_block == last_block {
+            let block = self.load_verified_block(bytes, first_block)?;
+            let block_start = first_block.saturating_mul(APPEND_INTEGRITY_BLOCK_BYTES);
+            let local_range = range.start - block_start..range.end - block_start;
+            block.get(local_range.clone())?;
+            return Some(TaskVerifiedBytes::Shared(block, local_range));
+        }
+
+        let mut joined = Vec::with_capacity(range.len());
+        for block_ix in first_block..=last_block {
+            let block = self.load_verified_block(bytes, block_ix)?;
+            let block_start = block_ix.saturating_mul(APPEND_INTEGRITY_BLOCK_BYTES);
+            let start = range.start.saturating_sub(block_start).min(block.len());
+            let end = range.end.saturating_sub(block_start).min(block.len());
+            joined.extend_from_slice(block.get(start..end)?);
+        }
+        Some(TaskVerifiedBytes::Owned(joined.into_boxed_slice()))
     }
 
     fn load_verified_block(
@@ -794,6 +857,12 @@ impl LinePreviewReader {
         }
         self.verified_block.as_ref()?.1.clone()
     }
+}
+
+fn decode_complete_line(document: &LogDocument, bytes: &[u8]) -> String {
+    document
+        .encoding
+        .decode(document.encoding.trim_line_bytes(bytes))
 }
 
 fn decode_line_preview(
@@ -2873,8 +2942,8 @@ mod source_snapshot_tests {
 
     use super::{
         APPEND_INTEGRITY_BLOCK_BYTES, DocumentBytes, DocumentRefreshKind, FileEncoding,
-        LinePreviewReader, LogDocument, build_file_index_with_integrity_while, build_line_index,
-        build_line_index_while, calculate_integrity_blocks, read_file_identity,
+        LinePreviewReader, LineReader, LogDocument, build_file_index_with_integrity_while,
+        build_line_index, build_line_index_while, calculate_integrity_blocks, read_file_identity,
     };
 
     fn test_directory(label: &str) -> PathBuf {
@@ -3174,6 +3243,22 @@ mod source_snapshot_tests {
         assert_eq!(projected.line(2).as_deref(), Some("gamma"));
         assert!(projected.same_source_snapshot(&document));
         assert_eq!(projected.line_ends.as_ref().map(|ends| ends.len()), Some(2));
+        _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn task_local_line_reader_reuses_a_transient_verified_block() {
+        let directory = test_directory("task-local-line-block");
+        let path = directory.join("source.log");
+        fs::write(&path, b"alpha\nbeta\n").expect("应能写入完整行读取器测试日志");
+        let document = LogDocument::open(&path).expect("应能打开完整行读取器测试日志");
+        document.release_source_handle();
+        let mut reader = LineReader::default();
+
+        assert_eq!(reader.line(&document, 0).as_deref(), Some("alpha"));
+        fs::remove_file(&path).expect("首行读取后应已关闭瞬时源句柄");
+        assert_eq!(reader.line(&document, 1).as_deref(), Some("beta"));
+        assert!(document.line(1).is_none());
         _ = fs::remove_dir_all(directory);
     }
 

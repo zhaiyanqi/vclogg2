@@ -13,7 +13,7 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use vclogg_core::{CompressedRows, LogDocument};
+use vclogg_core::{CompressedRows, LineReader, LogDocument};
 
 static UNIQUE_PATH_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -136,6 +136,7 @@ struct TimestampMergeCursor {
     group: ExportGroup,
     next_result_ix: usize,
     resolution: TimestampResolutionState,
+    reader: LineReader,
 }
 
 #[derive(Default)]
@@ -268,6 +269,7 @@ fn write_timestamp_merged_export(export: &ResultExport, file: File) -> Result<us
             group,
             next_result_ix: 0,
             resolution: TimestampResolutionState::default(),
+            reader: LineReader::default(),
         })
         .collect::<Vec<_>>();
     let mut heads = BinaryHeap::<Reverse<(u64, usize, usize)>>::new();
@@ -283,14 +285,17 @@ fn write_timestamp_merged_export(export: &ResultExport, file: File) -> Result<us
     let mut row_count = 0usize;
     while let Some(Reverse((_, source_ix, row))) = heads.pop() {
         let cursor = &mut cursors[source_ix];
-        let line = cursor.group.document.line(row).ok_or_else(|| {
-            anyhow!(crate::tr_args!(
-                "{} 的第 {} 行已不在合并快照中",
-                "Line {} at row {} is no longer in the merge snapshot",
-                cursor.group.document.path().display(),
-                row + 1
-            ))
-        })?;
+        let line = cursor
+            .reader
+            .line(&cursor.group.document, row)
+            .ok_or_else(|| {
+                anyhow!(crate::tr_args!(
+                    "{} 的第 {} 行已不在合并快照中",
+                    "Line {} at row {} is no longer in the merge snapshot",
+                    cursor.group.document.path().display(),
+                    row + 1
+                ))
+            })?;
         writer.write_all(line.as_bytes())?;
         writer.write_all(b"\n")?;
         row_count = row_count.saturating_add(1);
@@ -317,23 +322,24 @@ fn write_timestamp_merged_export(export: &ResultExport, file: File) -> Result<us
 }
 
 fn resolve_row_timestamp(cursor: &mut TimestampMergeCursor, row: usize) -> Result<Option<u64>> {
-    let document = &cursor.group.document;
-    resolve_row_timestamp_with(
-        &mut cursor.resolution,
-        row,
-        document.source_line_count(),
-        |candidate| {
-            let line = document.line(candidate).ok_or_else(|| {
-                anyhow!(crate::tr_args!(
-                    "{} 的第 {} 行已不在时间戳合并快照中",
-                    "Line {} at row {} is no longer in the timestamp-merge snapshot",
-                    document.path().display(),
-                    candidate + 1
-                ))
-            })?;
-            Ok(match_log_timestamp(&line))
-        },
-    )
+    let TimestampMergeCursor {
+        group,
+        resolution,
+        reader,
+        ..
+    } = cursor;
+    let document = &group.document;
+    resolve_row_timestamp_with(resolution, row, document.source_line_count(), |candidate| {
+        let line = reader.line(document, candidate).ok_or_else(|| {
+            anyhow!(crate::tr_args!(
+                "{} 的第 {} 行已不在时间戳合并快照中",
+                "Line {} at row {} is no longer in the timestamp-merge snapshot",
+                document.path().display(),
+                candidate + 1
+            ))
+        })?;
+        Ok(match_log_timestamp(&line))
+    })
 }
 
 fn resolve_row_timestamp_with(
@@ -490,8 +496,9 @@ fn write_rows(
     document: &LogDocument,
     rows: &CompressedRows,
 ) -> Result<usize> {
+    let mut reader = LineReader::default();
     for row in rows.iter() {
-        let line = document.line(row).ok_or_else(|| {
+        let line = reader.line(document, row).ok_or_else(|| {
             anyhow!(crate::tr_args!(
                 "{} 的第 {} 行已不在导出快照中",
                 "Line {} at row {} is no longer in the export snapshot",

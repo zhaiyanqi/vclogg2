@@ -55,8 +55,9 @@ use gpui_component::{
 };
 use rayon::prelude::{IntoParallelIterator as _, ParallelIterator as _};
 use vclogg_core::{
-    CompressedRows, LinePreviewReader, LogDocument, PendingIndexCacheWrite, SearchCancellation,
-    SearchMatcher, SearchQuery, SearchResult, SearchRun, search_with_compiled_matcher,
+    CompressedRows, LinePreviewReader, LineReader, LogDocument, PendingIndexCacheWrite,
+    SearchCancellation, SearchMatcher, SearchQuery, SearchResult, SearchRun,
+    search_with_compiled_matcher,
 };
 
 use crate::{
@@ -9867,11 +9868,14 @@ impl Workspace {
         start: usize,
         cancellation: SearchCancellation,
     ) -> DocumentLineTask<Option<QuickFindMatch>> {
-        let inspect = |view_row: usize, source_row: usize, document: &Arc<LogDocument>| {
+        let inspect = |view_row: usize,
+                       source_row: usize,
+                       document: &Arc<LogDocument>,
+                       reader: &mut LineReader| {
             if cancellation.is_cancelled() {
                 return DocumentLineTask::Cancelled;
             }
-            let Some(line) = document.line(source_row) else {
+            let Some(line) = reader.line(document, source_row) else {
                 return DocumentLineTask::SourceUnavailable;
             };
             DocumentLineTask::Completed((!matcher.matching_ranges(&line).is_empty()).then_some(
@@ -9888,59 +9892,63 @@ impl Workspace {
                 document,
                 rows,
                 row_count,
-            } => match direction {
-                QuickFindDirection::Forward => {
-                    for view_row in start..row_count {
-                        if cancellation.is_cancelled() {
-                            return DocumentLineTask::Cancelled;
-                        }
-                        let source_row = rows
-                            .as_ref()
-                            .and_then(|rows| rows.get(view_row))
-                            .unwrap_or(view_row);
-                        match inspect(view_row, source_row, &document) {
-                            DocumentLineTask::Completed(Some(matched)) => {
-                                return DocumentLineTask::Completed(Some(matched));
+            } => {
+                let mut reader = LineReader::default();
+                match direction {
+                    QuickFindDirection::Forward => {
+                        for view_row in start..row_count {
+                            if cancellation.is_cancelled() {
+                                return DocumentLineTask::Cancelled;
                             }
-                            DocumentLineTask::Completed(None) => {}
-                            outcome => return outcome,
-                        }
-                    }
-                    DocumentLineTask::Completed(None)
-                }
-                QuickFindDirection::Backward => {
-                    if row_count == 0 {
-                        return DocumentLineTask::Completed(None);
-                    }
-                    for view_row in (0..=start.min(row_count - 1)).rev() {
-                        if cancellation.is_cancelled() {
-                            return DocumentLineTask::Cancelled;
-                        }
-                        let source_row = rows
-                            .as_ref()
-                            .and_then(|rows| rows.get(view_row))
-                            .unwrap_or(view_row);
-                        match inspect(view_row, source_row, &document) {
-                            DocumentLineTask::Completed(Some(matched)) => {
-                                return DocumentLineTask::Completed(Some(matched));
+                            let source_row = rows
+                                .as_ref()
+                                .and_then(|rows| rows.get(view_row))
+                                .unwrap_or(view_row);
+                            match inspect(view_row, source_row, &document, &mut reader) {
+                                DocumentLineTask::Completed(Some(matched)) => {
+                                    return DocumentLineTask::Completed(Some(matched));
+                                }
+                                DocumentLineTask::Completed(None) => {}
+                                outcome => return outcome,
                             }
-                            DocumentLineTask::Completed(None) => {}
-                            outcome => return outcome,
                         }
+                        DocumentLineTask::Completed(None)
                     }
-                    DocumentLineTask::Completed(None)
+                    QuickFindDirection::Backward => {
+                        if row_count == 0 {
+                            return DocumentLineTask::Completed(None);
+                        }
+                        for view_row in (0..=start.min(row_count - 1)).rev() {
+                            if cancellation.is_cancelled() {
+                                return DocumentLineTask::Cancelled;
+                            }
+                            let source_row = rows
+                                .as_ref()
+                                .and_then(|rows| rows.get(view_row))
+                                .unwrap_or(view_row);
+                            match inspect(view_row, source_row, &document, &mut reader) {
+                                DocumentLineTask::Completed(Some(matched)) => {
+                                    return DocumentLineTask::Completed(Some(matched));
+                                }
+                                DocumentLineTask::Completed(None) => {}
+                                outcome => return outcome,
+                            }
+                        }
+                        DocumentLineTask::Completed(None)
+                    }
                 }
-            },
+            }
             QuickFindSource::Global(groups) => match direction {
                 QuickFindDirection::Forward => {
                     for group in &groups {
+                        let mut reader = LineReader::default();
                         let first = start.saturating_sub(group.view_start).min(group.rows.len());
                         for result_ix in first..group.rows.len() {
                             let Some(source_row) = group.rows.get(result_ix) else {
                                 continue;
                             };
                             let view_row = group.view_start.saturating_add(result_ix);
-                            match inspect(view_row, source_row, &group.document) {
+                            match inspect(view_row, source_row, &group.document, &mut reader) {
                                 DocumentLineTask::Completed(Some(matched)) => {
                                     return DocumentLineTask::Completed(Some(matched));
                                 }
@@ -9953,6 +9961,7 @@ impl Workspace {
                 }
                 QuickFindDirection::Backward => {
                     for group in groups.iter().rev() {
+                        let mut reader = LineReader::default();
                         if group.rows.is_empty() || start < group.view_start {
                             continue;
                         }
@@ -9964,7 +9973,7 @@ impl Workspace {
                                 continue;
                             };
                             let view_row = group.view_start.saturating_add(result_ix);
-                            match inspect(view_row, source_row, &group.document) {
+                            match inspect(view_row, source_row, &group.document, &mut reader) {
                                 DocumentLineTask::Completed(Some(matched)) => {
                                     return DocumentLineTask::Completed(Some(matched));
                                 }
@@ -18919,11 +18928,12 @@ fn collect_log_lines_for_clipboard(
     let mut count = 0_usize;
     let mut first_source_row = None;
     for (document, rows) in documents {
+        let mut reader = LineReader::default();
         for source_row in rows.iter() {
             if cancellation.is_cancelled() {
                 return DocumentLineTask::Cancelled;
             }
-            let Some(line) = document.line(source_row) else {
+            let Some(line) = reader.line(&document, source_row) else {
                 return DocumentLineTask::SourceUnavailable;
             };
             if count > 0 {
@@ -18960,11 +18970,12 @@ fn prepare_color_keywords(
             ColorKeywordSelection::Text(text) => std::iter::once(text).collect(),
             ColorKeywordSelection::Rows(rows) => {
                 let mut keywords = BTreeSet::new();
+                let mut reader = LineReader::default();
                 for source_row in rows.iter() {
                     if cancellation.is_cancelled() {
                         return DocumentLineTask::Cancelled;
                     }
-                    let Some(line) = target.document.line(source_row) else {
+                    let Some(line) = reader.line(&target.document, source_row) else {
                         return DocumentLineTask::SourceUnavailable;
                     };
                     let line = line.trim();
