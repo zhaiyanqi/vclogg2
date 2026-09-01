@@ -5609,7 +5609,7 @@ impl Workspace {
         self.updates.task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
-                    client.check_latest(env!("CARGO_PKG_VERSION"), static_server_url.as_deref())
+                    client.check_latest(crate::build_info::VERSION, static_server_url.as_deref())
                 })
                 .await;
             _ = this.update_in(cx, |this, window, cx| {
@@ -5626,7 +5626,7 @@ impl Workspace {
                                 crate::tr_args!(
                                     "VCLogg2 {} 已是最新版本",
                                     "VCLogg2 {} is up to date",
-                                    env!("CARGO_PKG_VERSION")
+                                    crate::build_info::VERSION
                                 ),
                                 cx,
                             );
@@ -18463,7 +18463,7 @@ impl Workspace {
                     )
                 }
             })
-            .unwrap_or_else(|| format!("core {}", vclogg_core::CORE_VERSION));
+            .unwrap_or_else(|| format!("core {}", crate::build_info::VERSION));
 
         StatusBar::new()
             .h(px(30.))

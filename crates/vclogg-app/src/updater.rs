@@ -149,13 +149,13 @@ impl UpdateClient {
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30 * 60))
             .redirect(Policy::none())
-            .user_agent(concat!("VCLogg2/", env!("CARGO_PKG_VERSION")))
+            .user_agent(crate::build_info::USER_AGENT)
             .build()?;
         let github_asset_client = Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30 * 60))
             .redirect(github_redirect_policy())
-            .user_agent(concat!("VCLogg2/", env!("CARGO_PKG_VERSION")))
+            .user_agent(crate::build_info::USER_AGENT)
             .build()?;
         Ok(Self {
             client,

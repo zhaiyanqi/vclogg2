@@ -61,7 +61,7 @@ fn write_panic_report(directory: &Path, info: &PanicHookInfo<'_>) -> io::Result<
     let message = panic_message(info);
 
     writeln!(file, "VCLogg2 panic report")?;
-    writeln!(file, "version: {}", env!("CARGO_PKG_VERSION"))?;
+    writeln!(file, "version: {}", crate::build_info::VERSION)?;
     writeln!(file, "os: {}", std::env::consts::OS)?;
     writeln!(file, "architecture: {}", std::env::consts::ARCH)?;
     writeln!(file, "timestamp_unix_ms: {timestamp_millis}")?;

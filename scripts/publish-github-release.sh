@@ -11,7 +11,7 @@ tag_name=""
 print_usage() {
   echo "Usage: ./scripts/publish-github-release.sh <TAG> [--remote NAME] [--yes]"
   echo
-  echo "Validate and push an existing v<Cargo version> tag; GitHub Actions publishes the Release."
+  echo "Validate and push an existing v<semver> tag; GitHub Actions publishes the Release."
 }
 
 while (($# > 0)); do
@@ -55,7 +55,7 @@ if [[ -z "$tag_name" ]]; then
   exit 2
 fi
 
-for command_name in cargo git python3; do
+for command_name in cargo git; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "Required command not found: $command_name" >&2
     exit 1
@@ -95,20 +95,11 @@ if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
   exit 1
 fi
 
-version="$({ cargo metadata --no-deps --format-version 1 --locked; } | python3 -c '
-import json
-import sys
-
-metadata = json.load(sys.stdin)
-package = next(item for item in metadata["packages"] if item["name"] == "vclogg2")
-print(package["version"])
-')"
-expected_tag="v$version"
-if [[ "$tag_name" != "$expected_tag" ]]; then
-  echo "Release tag must match the Cargo version: $expected_tag" >&2
-  echo "Received: $tag_name" >&2
+if [[ "$tag_name" != v* ]]; then
+  echo "Release tag must use the v<semver> format: $tag_name" >&2
   exit 1
 fi
+version="$("$script_directory/resolve-build-version.sh" --tag "$tag_name")"
 
 if ! git check-ref-format "refs/tags/$tag_name" >/dev/null 2>&1; then
   echo "Invalid release tag: $tag_name" >&2

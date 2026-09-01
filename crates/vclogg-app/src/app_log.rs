@@ -142,7 +142,7 @@ impl LogBuffer {
         output.push_str("VCLogg2 application log\n");
         output.push_str(&format!(
             "version={} profile={} target={} commit={}\n",
-            env!("CARGO_PKG_VERSION"),
+            crate::build_info::VERSION,
             env!("VCLOGG2_BUILD_PROFILE"),
             env!("VCLOGG2_BUILD_TARGET"),
             env!("VCLOGG2_BUILD_COMMIT"),

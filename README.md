@@ -253,21 +253,21 @@ powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 ./scripts/package-release-linux.sh
 ```
 
-三种平台的产物分别写入 `dist/windows-x86_64/`、`dist/macos-aarch64/` 与 `dist/linux-x86_64/`。打包脚本根据实际 runner 架构命名产物；macOS 还会生成临时签名的 `.app`。
+三种平台的产物分别写入 `dist/windows-x86_64/`、`dist/macos-aarch64/` 与 `dist/linux-x86_64/`。打包脚本根据当前提交上的 `v<SemVer>` tag 和实际 runner 架构命名产物，并把同一版本写入可执行文件、更新清单和 macOS 应用信息；macOS 还会生成临时签名的 `.app`。未打 tag 的手动构建使用 `0.0.0-dev+g<commit>`，也可通过 `VCLOGG2_BUILD_VERSION` 显式覆盖。
 
 仓库中的 [`.github/workflows/release-build.yml`](.github/workflows/release-build.yml) 会在推送 `v*` tag 时并行构建 Windows x64、macOS ARM64 和 Linux x86_64，也支持在 GitHub Actions 页面手动执行仅构建产物。构建结果作为 Actions Artifacts 保存 14 天；推送 `v*` tag 且三个构建全部成功后，工作流会复核标签、三平台清单、文件大小和 SHA-256，再自动创建带生成式发行说明的 GitHub Release。Release 同时包含安装包、blockmap 和客户端可识别的 `latest-<platform>-<architecture>.json`。
 
 正式发行版默认通过 GitHub Releases REST API 检查 `zhaiyanqi/vclogg2` 的最新正式版本，即使“设置 → 网络”没有业务服务器地址也能更新；若已配置服务器，原有静态更新目录会作为第二来源参与检查，两边都有更新时选择版本较新的包。GitHub 返回的仓库、标签、资产名称、大小和可用摘要会先与平台清单交叉验证；资产下载只允许重定向到 GitHub 管理的 HTTPS 域名，落盘前仍逐块及整包验证 SHA-256。标记为 prerelease 的版本不会进入普通客户端的自动更新通道。
 
-发布新版本时，先修改 `Cargo.toml` 的 workspace 版本、同步 `Cargo.lock`，提交并推送干净的 `main`。标签由发布者创建，再交给脚本校验并推送：
+发布新版本时不需要修改 `Cargo.toml` 或 `Cargo.lock` 中的版本号。提交并推送干净的 `main` 后，创建一个 `v<SemVer>` 标签，再交给脚本校验并推送：
 
 ```bash
-VERSION=2.0.6
+VERSION=2.0.7
 git tag -a "v${VERSION}" -m "VCLogg2 v${VERSION}"
 ./scripts/publish-github-release.sh "v${VERSION}"
 ```
 
-脚本不会创建或修改标签。它要求标签已存在、与 workspace 版本一致、指向当前 `main`，并要求本地 `main` 与 `origin/main` 完全一致；运行格式、静态检查和 Clippy 后只推送该标签，标签会触发上述 GitHub Action。无人值守调用可追加 `--yes`，非默认远端可使用 `--remote <名称>`。
+脚本不会创建或修改标签。它要求标签是合法的 `v<SemVer>`、已存在并指向当前 `main`，同时要求本地 `main` 与 `origin/main` 完全一致；运行格式、静态检查和 Clippy 后只推送该标签，标签会触发上述 GitHub Action。无人值守调用可追加 `--yes`，非默认远端可使用 `--remote <名称>`。
 
 任一平台的产物都可通过跨平台发布脚本写入对应静态更新目录；脚本先验证清单、大小和 SHA-256，最后原子替换 `latest.json`：
 

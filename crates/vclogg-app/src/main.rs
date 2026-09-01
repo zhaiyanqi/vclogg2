@@ -6,6 +6,7 @@
 mod actions;
 mod app_log;
 mod app_paths;
+mod build_info;
 mod cloud_filters;
 mod color_labels;
 mod color_labels_dialog;
@@ -142,7 +143,7 @@ fn main() {
     app_log::init();
     app_paths::log_development_override();
     crash_report::install_panic_hook();
-    log::info!("VCLogg2 {} starting", env!("CARGO_PKG_VERSION"));
+    log::info!("VCLogg2 {} starting", build_info::VERSION);
 
     let initial_paths = single_instance::command_line_paths();
     let primary_instance = match single_instance::acquire_or_forward(&initial_paths) {

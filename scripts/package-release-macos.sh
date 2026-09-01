@@ -25,14 +25,8 @@ case "$(uname -m)" in
 esac
 
 cd "$repository_root"
-version="$({ cargo metadata --no-deps --format-version 1 --locked; } | python3 -c '
-import json
-import sys
-
-metadata = json.load(sys.stdin)
-package = next(item for item in metadata["packages"] if item["name"] == "vclogg2")
-print(package["version"])
-')"
+version="$("$script_directory/resolve-build-version.sh")"
+export VCLOGG2_BUILD_VERSION="$version"
 
 "$script_directory/build-release.sh"
 

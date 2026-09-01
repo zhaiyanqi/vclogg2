@@ -8,11 +8,30 @@ $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $resolvedOutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
 
 Push-Location -LiteralPath $repositoryRoot
-$metadata = cargo metadata --no-deps --format-version 1 --locked | ConvertFrom-Json
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-$package = $metadata.packages | Where-Object { $_.name -eq 'vclogg2' } | Select-Object -First 1
-if ($null -eq $package) { throw '无法从 Cargo 元数据读取 vclogg2 版本。' }
-$version = $package.version
+$version = $env:VCLOGG2_BUILD_VERSION
+if ([string]::IsNullOrWhiteSpace($version)) {
+    $tag = & git describe --tags --exact-match --match 'v[0-9]*' HEAD 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        $version = $tag
+    } else {
+        $commit = & git rev-parse --short=12 HEAD 2>$null
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($commit)) {
+            $version = "0.0.0-dev+g$commit"
+        } else {
+            $version = '0.0.0'
+        }
+    }
+}
+$version = $version.Trim()
+if ($version.StartsWith('v')) { $version = $version.Substring(1) }
+$number = '(0|[1-9][0-9]*)'
+$prereleaseIdentifier = '(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+$buildIdentifier = '[0-9A-Za-z-]+'
+$semverPattern = "^$number\.$number\.$number(-$prereleaseIdentifier(\.$prereleaseIdentifier)*)?(\+$buildIdentifier(\.$buildIdentifier)*)?$"
+if ($version -notmatch $semverPattern) {
+    throw "构建版本必须是语义版本或带 v 前缀的语义版本：$version"
+}
+$env:VCLOGG2_BUILD_VERSION = $version
 
 & (Join-Path $PSScriptRoot 'build-release.ps1')
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

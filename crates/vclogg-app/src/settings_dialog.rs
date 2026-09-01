@@ -1621,7 +1621,7 @@ impl SettingsDialog {
                 DescriptionList::new()
                     .small()
                     .columns(1)
-                    .item(crate::tr!("应用版本", "Application version"), concat!("v", env!("CARGO_PKG_VERSION")), 1)
+                    .item(crate::tr!("应用版本", "Application version"), crate::build_info::DISPLAY_VERSION, 1)
                     .item(crate::tr!("编译 Commit", "Build commit"), env!("VCLOGG2_BUILD_COMMIT"), 1)
                     .item(crate::tr!("编译时间", "Build time"), build_time, 1)
                     .item(crate::tr!("构建目标", "Build target"), env!("VCLOGG2_BUILD_TARGET"), 1)

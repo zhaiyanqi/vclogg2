@@ -25,6 +25,7 @@ fn emit_build_metadata() {
     }
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
     println!("cargo:rerun-if-env-changed=VCLOGG2_BUILD_COMMIT");
+    println!("cargo:rerun-if-env-changed=VCLOGG2_BUILD_VERSION");
 
     let timestamp = std::env::var("SOURCE_DATE_EPOCH")
         .ok()
@@ -37,6 +38,7 @@ fn emit_build_metadata() {
         })
         .unwrap_or_default();
     let target = std::env::var("TARGET").unwrap_or_else(|_| "unknown".to_string());
+    let version = build_version();
     let commit = std::env::var("VCLOGG2_BUILD_COMMIT")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -49,25 +51,56 @@ fn emit_build_metadata() {
         Err(_) => "Unknown".to_string(),
     };
 
+    println!("cargo:rustc-env=VCLOGG2_VERSION={version}");
     println!("cargo:rustc-env=VCLOGG2_BUILD_UNIX_TIMESTAMP={timestamp}");
     println!("cargo:rustc-env=VCLOGG2_BUILD_COMMIT={commit}");
     println!("cargo:rustc-env=VCLOGG2_BUILD_TARGET={target}");
     println!("cargo:rustc-env=VCLOGG2_BUILD_PROFILE={profile}");
 }
 
-fn git_commit() -> Option<String> {
-    let output = Command::new("git")
-        .args(["rev-parse", "--short=12", "HEAD"])
-        .output()
-        .ok()?;
+fn build_version() -> String {
+    if let Some(version) = std::env::var("VCLOGG2_BUILD_VERSION")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    {
+        return normalize_version(&version).unwrap_or_else(|error| {
+            panic!("VCLOGG2_BUILD_VERSION must be a semantic version: {error}")
+        });
+    }
+
+    if let Some(tag) = git_output(&[
+        "describe",
+        "--tags",
+        "--exact-match",
+        "--match",
+        "v[0-9]*",
+        "HEAD",
+    ]) {
+        return normalize_version(&tag)
+            .unwrap_or_else(|error| panic!("release tag must be v<semver>: {error}"));
+    }
+
+    git_output(&["rev-parse", "--short=12", "HEAD"])
+        .map(|commit| format!("0.0.0-dev+g{commit}"))
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
+}
+
+fn normalize_version(value: &str) -> Result<String, semver::Error> {
+    let value = value.trim().strip_prefix('v').unwrap_or(value.trim());
+    semver::Version::parse(value).map(|version| version.to_string())
+}
+
+fn git_output(args: &[&str]) -> Option<String> {
+    let output = Command::new("git").args(args).output().ok()?;
     if !output.status.success() {
         return None;
     }
+    let value = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
 
-    let mut commit = String::from_utf8(output.stdout).ok()?.trim().to_string();
-    if commit.is_empty() {
-        return None;
-    }
+fn git_commit() -> Option<String> {
+    let mut commit = git_output(&["rev-parse", "--short=12", "HEAD"])?;
 
     let dirty = Command::new("git")
         .args(["status", "--porcelain", "--untracked-files=normal"])
