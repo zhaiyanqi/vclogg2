@@ -8975,13 +8975,11 @@ impl Workspace {
                         }
 
                         let source_row = line_number - 1;
-                        let document_id = tab.id;
                         let table = tab.log_table.clone();
                         table.update(cx, |table, cx| {
                             table.set_active_log_row(source_row, cx);
                         });
                         workspace.selected_source_row = Some(source_row);
-                        workspace.schedule_checkpoint(document_id, window, cx);
                         cx.notify();
                         Ok(())
                     });
@@ -9616,7 +9614,7 @@ impl Workspace {
         matcher: SearchMatcher,
         direction: QuickFindDirection,
         incremental: bool,
-        window: &mut Window,
+        _: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some((source, row_count, source_version)) = self.quick_find_source(target, cx) else {
@@ -9686,13 +9684,13 @@ impl Workspace {
         self.quick_find.direction = Some(direction);
         self.quick_find.boundary = None;
         cx.notify();
-        self.quick_find.task = Some(cx.spawn_in(window, async move |this, cx| {
+        self.quick_find.task = Some(cx.spawn(async move |this, cx| {
             let matched = cx
                 .background_spawn(async move {
                     Self::find_quick_match(source, target, matcher, direction, start, cancellation)
                 })
                 .await;
-            _ = this.update_in(cx, |this, window, cx| {
+            _ = this.update(cx, |this, cx| {
                 if !this.quick_find.open
                     || this.quick_find.revision != revision
                     || this.quick_find.target != Some(target)
@@ -9723,7 +9721,7 @@ impl Workspace {
                         this.quick_find.matched_source_version = Some(source_version);
                         this.quick_find.no_match = false;
                         this.quick_find.boundary = None;
-                        this.apply_quick_find_match(matched, window, cx);
+                        this.apply_quick_find_match(matched, cx);
                     }
                     None => {
                         this.quick_find.no_match |= incremental;
@@ -9836,12 +9834,7 @@ impl Workspace {
         }
     }
 
-    fn apply_quick_find_match(
-        &mut self,
-        matched: QuickFindMatch,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn apply_quick_find_match(&mut self, matched: QuickFindMatch, cx: &mut Context<Self>) {
         match matched.target {
             QuickFindTarget::Log(document_id) => {
                 let Some(tab) = self.documents.iter_mut().find(|tab| tab.id == document_id) else {
@@ -9855,7 +9848,6 @@ impl Workspace {
                 tab.log_viewport.center_row(matched.view_row);
                 self.active_log_region = LogRegion::Body;
                 self.selected_source_row = Some(matched.source_row);
-                self.schedule_checkpoint(document_id, window, cx);
             }
             QuickFindTarget::Results(document_id) => {
                 let Some(tab) = self.documents.iter_mut().find(|tab| tab.id == document_id) else {
@@ -9869,7 +9861,6 @@ impl Workspace {
                 tab.result_viewport.center_row(matched.view_row);
                 self.active_log_region = LogRegion::CurrentResults;
                 self.selected_source_row = Some(matched.source_row);
-                self.schedule_checkpoint(document_id, window, cx);
             }
             QuickFindTarget::GlobalResults => {
                 self.global_table.update(cx, |table, cx| {
@@ -9877,7 +9868,6 @@ impl Workspace {
                 });
                 self.global_viewport.center_row(matched.view_row);
                 self.active_log_region = LogRegion::GlobalResults;
-                self.schedule_workspace_search_state_save(window, cx);
             }
         }
     }
@@ -12114,11 +12104,9 @@ impl Workspace {
             );
             return;
         }
-        let document_id = tab.id;
         tab.log_table
             .update(cx, |table, cx| table.set_active_log_row(0, cx));
         self.selected_source_row = Some(0);
-        self.schedule_checkpoint(document_id, window, cx);
         cx.notify();
     }
 
@@ -12166,11 +12154,9 @@ impl Workspace {
             return;
         }
         let last_row = line_count - 1;
-        let document_id = tab.id;
         tab.log_table
             .update(cx, |table, cx| table.set_active_log_row(last_row, cx));
         self.selected_source_row = Some(last_row);
-        self.schedule_checkpoint(document_id, window, cx);
         cx.notify();
     }
 
@@ -16390,7 +16376,6 @@ impl Workspace {
             table.set_active_log_row(row_ix, cx);
         });
         self.selected_source_row = table.read(cx).delegate().source_row(row_ix);
-        self.schedule_log_region_state_save(document_id, region, window, cx);
         cx.notify();
     }
 
@@ -17095,7 +17080,6 @@ impl Workspace {
         direction: i32,
         page: bool,
         edge: Option<bool>,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.active_log_region == LogRegion::GlobalResults {
@@ -17128,7 +17112,6 @@ impl Workspace {
                 table.set_active_log_row(target, cx);
                 table.scroll_to_row(target, cx);
             });
-            self.schedule_workspace_search_state_save(window, cx);
             cx.stop_propagation();
             cx.notify();
             return;
@@ -17136,13 +17119,10 @@ impl Workspace {
         let Some(tab) = self.active_document() else {
             return;
         };
-        let (region, table) = match self.active_log_region {
-            LogRegion::CurrentResults if tab.results_visible => {
-                (WrappedRegion::Results, tab.result_table.clone())
-            }
-            _ => (WrappedRegion::Log, tab.log_table.clone()),
+        let table = match self.active_log_region {
+            LogRegion::CurrentResults if tab.results_visible => tab.result_table.clone(),
+            _ => tab.log_table.clone(),
         };
-        let document_id = tab.id;
         let state = table.read(cx);
         let count = state.delegate().row_count();
         if count == 0 {
@@ -17165,7 +17145,6 @@ impl Workspace {
             table.set_active_log_row(target, cx);
             table.scroll_to_row(target, cx);
         });
-        self.schedule_log_region_state_save(document_id, region, window, cx);
         cx.stop_propagation();
         cx.notify();
     }
@@ -17173,55 +17152,55 @@ impl Workspace {
     fn extend_selection_up(
         &mut self,
         _: &ExtendSelectionUp,
-        window: &mut Window,
+        _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.extend_log_selection(-1, false, None, window, cx);
+        self.extend_log_selection(-1, false, None, cx);
     }
 
     fn extend_selection_down(
         &mut self,
         _: &ExtendSelectionDown,
-        window: &mut Window,
+        _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.extend_log_selection(1, false, None, window, cx);
+        self.extend_log_selection(1, false, None, cx);
     }
 
     fn extend_selection_page_up(
         &mut self,
         _: &ExtendSelectionPageUp,
-        window: &mut Window,
+        _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.extend_log_selection(-1, true, None, window, cx);
+        self.extend_log_selection(-1, true, None, cx);
     }
 
     fn extend_selection_page_down(
         &mut self,
         _: &ExtendSelectionPageDown,
-        window: &mut Window,
+        _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.extend_log_selection(1, true, None, window, cx);
+        self.extend_log_selection(1, true, None, cx);
     }
 
     fn extend_selection_first(
         &mut self,
         _: &ExtendSelectionFirst,
-        window: &mut Window,
+        _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.extend_log_selection(-1, false, Some(false), window, cx);
+        self.extend_log_selection(-1, false, Some(false), cx);
     }
 
     fn extend_selection_last(
         &mut self,
         _: &ExtendSelectionLast,
-        window: &mut Window,
+        _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.extend_log_selection(1, false, Some(true), window, cx);
+        self.extend_log_selection(1, false, Some(true), cx);
     }
 
     fn prepare_wrapped_global_context(
@@ -17241,7 +17220,6 @@ impl Workspace {
             }
             table.set_active_log_row(row_ix, cx);
         });
-        self.schedule_log_region_state_save(0, WrappedRegion::GlobalResults, window, cx);
         cx.notify();
     }
 
@@ -17256,7 +17234,6 @@ impl Workspace {
             table.delegate().clear_row_selection();
             table.clear_selection(cx);
         });
-        self.schedule_log_region_state_save(0, WrappedRegion::GlobalResults, window, cx);
         cx.notify();
     }
 
