@@ -2460,6 +2460,28 @@ enum ColorRuleAction {
     },
 }
 
+enum ColorRuleOutcome {
+    EmptyKeywords,
+    MissingLabels,
+    MissingLabel,
+    CycleRemoved { count: usize },
+    CycleApplied { label: ColorLabel, count: usize },
+    Applied,
+    Removed,
+    Cleared,
+}
+
+struct PreparedColorRuleUpdate {
+    document_id: u64,
+    document: Arc<LogDocument>,
+    expected_rules: Vec<KeywordColorRule>,
+    expected_labels: Vec<ColorLabel>,
+    rules: Vec<KeywordColorRule>,
+    resolved: Option<Arc<ResolvedColorRules>>,
+    last_color_label_id: Option<String>,
+    outcome: ColorRuleOutcome,
+}
+
 struct CopiedLogLines {
     text: String,
     count: usize,
@@ -5092,6 +5114,7 @@ impl Workspace {
     }
 
     fn apply_color_labels(&mut self, labels: Vec<ColorLabel>, cx: &mut Context<Self>) {
+        self.cancel_color_rule_action();
         self.color_labels = labels;
         if self
             .last_color_label_id
@@ -9079,115 +9102,6 @@ impl Workspace {
             }
         };
         self.start_color_rule_action(target, ColorRuleAction::Cycle, window, cx);
-    }
-
-    fn finish_cycle_color_label(
-        &mut self,
-        active_ix: usize,
-        keywords: BTreeSet<String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if keywords.is_empty() {
-            window.push_notification(
-                crate::tr!(
-                    "请先选择包含文字的日志行",
-                    "Select log lines containing text first"
-                ),
-                cx,
-            );
-            return;
-        }
-
-        let remove = keywords.iter().all(|keyword| {
-            self.documents[active_ix]
-                .keyword_color_rules
-                .iter()
-                .any(|rule| {
-                    rule.enabled && rule.case_sensitive && rule.keyword.as_str() == keyword.as_str()
-                })
-        });
-        let feedback = if remove {
-            self.documents[active_ix]
-                .keyword_color_rules
-                .retain(|rule| {
-                    !(rule.enabled
-                        && rule.case_sensitive
-                        && keywords.contains(rule.keyword.as_str()))
-                });
-            crate::tr_args!(
-                "已移除 {} 行文字的颜色标签",
-                "Removed color labels from {} lines of text",
-                keywords.len()
-            )
-        } else {
-            if self.color_labels.is_empty() {
-                window.push_notification(
-                    crate::tr!(
-                        "请先在“颜色标签…”中添加标签",
-                        "Add a label in Color labels… first"
-                    ),
-                    cx,
-                );
-                return;
-            }
-            let next_ix = self
-                .last_color_label_id
-                .as_deref()
-                .and_then(|id| self.color_labels.iter().position(|label| label.id == id))
-                .map_or(0, |ix| (ix + 1) % self.color_labels.len());
-            let label = self.color_labels[next_ix].clone();
-            self.last_color_label_id = Some(label.id.clone());
-            for keyword in &keywords {
-                if let Some(rule) = self.documents[active_ix]
-                    .keyword_color_rules
-                    .iter_mut()
-                    .find(|rule| rule.case_sensitive && rule.keyword == *keyword)
-                {
-                    rule.label_id = Some(label.id.clone());
-                    rule.color = label.color;
-                    rule.alpha = label.alpha;
-                    rule.enabled = true;
-                } else {
-                    self.documents[active_ix]
-                        .keyword_color_rules
-                        .push(KeywordColorRule {
-                            label_id: Some(label.id.clone()),
-                            keyword: keyword.clone(),
-                            color: label.color,
-                            alpha: label.alpha,
-                            case_sensitive: true,
-                            enabled: true,
-                        });
-                }
-            }
-            crate::tr_args!(
-                "已用“{}”高亮 {} 行文字",
-                "Highlighted “{}” in {} lines of text",
-                label.localized_name(),
-                keywords.len()
-            )
-        };
-
-        let resolved = resolve_color_rules(
-            &self.documents[active_ix].keyword_color_rules,
-            &self.color_labels,
-        );
-        self.documents[active_ix].resolved_color_rules = resolved.clone();
-        for table in [
-            self.documents[active_ix].log_table.clone(),
-            self.documents[active_ix].result_table.clone(),
-        ] {
-            table.update(cx, |table, cx| {
-                table.delegate_mut().set_color_rules(resolved.clone());
-                table.refresh(cx);
-            });
-        }
-        let document_id = self.documents[active_ix].id;
-        self.refresh_global_result_rows(cx);
-        self.schedule_checkpoint(document_id, window, cx);
-        window.push_notification(feedback, cx);
-        cx.notify();
     }
 
     fn toggle_marked_row(
@@ -16548,11 +16462,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.color_rule_revision = self.color_rule_revision.saturating_add(1);
-        if let Some(cancellation) = self.color_rule_cancellation.take() {
-            cancellation.cancel();
-        }
-        self.color_rule_task = None;
+        self.cancel_color_rule_action();
         let revision = self.color_rule_revision;
         let collect_keywords = !matches!(
             &action,
@@ -16561,12 +16471,35 @@ impl Workspace {
                 ..
             }
         );
+        let Some(tab) = self.documents.iter().find(|tab| {
+            tab.id == target.document_id && Arc::ptr_eq(&tab.document, &target.document)
+        }) else {
+            window.push_notification(
+                crate::tr!(
+                    "目标日志已刷新或关闭，请重新选择",
+                    "The target log was refreshed or closed. Select it again."
+                ),
+                cx,
+            );
+            return;
+        };
+        let rules = tab.keyword_color_rules.clone();
+        let labels = self.color_labels.clone();
+        let last_color_label_id = self.last_color_label_id.clone();
         let cancellation = SearchCancellation::default();
         self.color_rule_cancellation = Some(cancellation.clone());
         self.color_rule_task = Some(cx.spawn_in(window, async move |this, cx| {
             let prepared = cx
                 .background_spawn(async move {
-                    prepare_color_keywords(target, collect_keywords, &cancellation)
+                    prepare_color_rule_update(
+                        target,
+                        collect_keywords,
+                        action,
+                        rules,
+                        labels,
+                        last_color_label_id,
+                        &cancellation,
+                    )
                 })
                 .await;
             _ = this.update_in(cx, |this, window, cx| {
@@ -16578,36 +16511,124 @@ impl Workspace {
                 let Some(prepared) = prepared else {
                     return;
                 };
-                let Some(active_ix) = this.documents.iter().position(|tab| {
-                    tab.id == prepared.document_id && Arc::ptr_eq(&tab.document, &prepared.document)
-                }) else {
-                    window.push_notification(
-                        crate::tr!(
-                            "目标日志已刷新或关闭，请重新选择",
-                            "The target log was refreshed or closed. Select it again."
-                        ),
-                        cx,
-                    );
-                    return;
-                };
-                match action {
-                    ColorRuleAction::Cycle => {
-                        this.finish_cycle_color_label(active_ix, prepared.keywords, window, cx)
-                    }
-                    ColorRuleAction::Apply {
-                        label_id,
-                        clear_all,
-                    } => this.finish_apply_context_color_label(
-                        active_ix,
-                        label_id,
-                        prepared.keywords,
-                        clear_all,
-                        window,
-                        cx,
-                    ),
-                }
+                this.finish_color_rule_update(prepared, window, cx);
             });
         }));
+    }
+
+    fn cancel_color_rule_action(&mut self) {
+        self.color_rule_revision = self.color_rule_revision.saturating_add(1);
+        if let Some(cancellation) = self.color_rule_cancellation.take() {
+            cancellation.cancel();
+        }
+        self.color_rule_task = None;
+    }
+
+    fn finish_color_rule_update(
+        &mut self,
+        prepared: PreparedColorRuleUpdate,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(active_ix) = self.documents.iter().position(|tab| {
+            tab.id == prepared.document_id && Arc::ptr_eq(&tab.document, &prepared.document)
+        }) else {
+            window.push_notification(
+                crate::tr!(
+                    "目标日志已刷新或关闭，请重新选择",
+                    "The target log was refreshed or closed. Select it again."
+                ),
+                cx,
+            );
+            return;
+        };
+        if self.documents[active_ix].keyword_color_rules != prepared.expected_rules
+            || self.color_labels != prepared.expected_labels
+        {
+            window.push_notification(
+                crate::tr!(
+                    "颜色设置已发生变化，请重新应用",
+                    "Color settings changed. Apply the selection again."
+                ),
+                cx,
+            );
+            return;
+        }
+        let notification = match &prepared.outcome {
+            ColorRuleOutcome::EmptyKeywords => {
+                window.push_notification(
+                    crate::tr!(
+                        "请先选择包含文字的日志行",
+                        "Select log lines containing text first"
+                    ),
+                    cx,
+                );
+                return;
+            }
+            ColorRuleOutcome::MissingLabels => {
+                window.push_notification(
+                    crate::tr!(
+                        "请先在“颜色标签…”中添加标签",
+                        "Add a label in Color labels… first"
+                    ),
+                    cx,
+                );
+                return;
+            }
+            ColorRuleOutcome::MissingLabel => {
+                window.push_notification(
+                    crate::tr!("颜色标签已不存在", "The color label no longer exists"),
+                    cx,
+                );
+                return;
+            }
+            ColorRuleOutcome::CycleRemoved { count } => crate::tr_args!(
+                "已移除 {} 行文字的颜色标签",
+                "Removed color labels from {} lines of text",
+                count
+            ),
+            ColorRuleOutcome::CycleApplied { label, count } => crate::tr_args!(
+                "已用“{}”高亮 {} 行文字",
+                "Highlighted “{}” in {} lines of text",
+                label.localized_name(),
+                count
+            ),
+            ColorRuleOutcome::Applied => {
+                crate::tr!("已应用颜色标签", "Color label applied").to_string()
+            }
+            ColorRuleOutcome::Removed => {
+                crate::tr!("已移除颜色标签", "Color label removed").to_string()
+            }
+            ColorRuleOutcome::Cleared => crate::tr!(
+                "已清除当前文件的所有颜色",
+                "Cleared all colors from the current file"
+            )
+            .to_string(),
+        };
+        let Some(resolved) = prepared.resolved else {
+            debug_assert!(
+                false,
+                "successful color updates must resolve their matchers"
+            );
+            return;
+        };
+        self.documents[active_ix].keyword_color_rules = prepared.rules;
+        self.documents[active_ix].resolved_color_rules = resolved.clone();
+        self.last_color_label_id = prepared.last_color_label_id;
+        for table in [
+            self.documents[active_ix].log_table.clone(),
+            self.documents[active_ix].result_table.clone(),
+        ] {
+            table.update(cx, |table, cx| {
+                table.delegate_mut().set_color_rules(resolved.clone());
+                table.refresh(cx);
+            });
+        }
+        let document_id = self.documents[active_ix].id;
+        self.refresh_global_result_rows(cx);
+        self.schedule_checkpoint(document_id, window, cx);
+        window.push_notification(notification, cx);
+        cx.notify();
     }
 
     fn open_document_ix_for_global_result(&self, document_id: u64) -> Option<usize> {
@@ -16679,93 +16700,6 @@ impl Workspace {
             window,
             cx,
         );
-    }
-
-    fn finish_apply_context_color_label(
-        &mut self,
-        active_ix: usize,
-        label_id: Option<String>,
-        keywords: BTreeSet<String>,
-        clear_all: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let applying_label = label_id.is_some();
-        if clear_all {
-            self.documents[active_ix].keyword_color_rules.clear();
-        } else if let Some(label_id) = label_id {
-            let Some(label) = self
-                .color_labels
-                .iter()
-                .find(|label| label.id == label_id)
-                .cloned()
-            else {
-                window.push_notification(
-                    crate::tr!("颜色标签已不存在", "The color label no longer exists"),
-                    cx,
-                );
-                return;
-            };
-            for keyword in &keywords {
-                if let Some(rule) = self.documents[active_ix]
-                    .keyword_color_rules
-                    .iter_mut()
-                    .find(|rule| rule.case_sensitive && rule.keyword == *keyword)
-                {
-                    rule.label_id = Some(label.id.clone());
-                    rule.color = label.color;
-                    rule.alpha = label.alpha;
-                    rule.enabled = true;
-                } else {
-                    self.documents[active_ix]
-                        .keyword_color_rules
-                        .push(KeywordColorRule {
-                            label_id: Some(label.id.clone()),
-                            keyword: keyword.clone(),
-                            color: label.color,
-                            alpha: label.alpha,
-                            case_sensitive: true,
-                            enabled: true,
-                        });
-                }
-            }
-            self.last_color_label_id = Some(label.id);
-        } else {
-            self.documents[active_ix]
-                .keyword_color_rules
-                .retain(|rule| !(rule.case_sensitive && keywords.contains(rule.keyword.as_str())));
-        }
-        let resolved = resolve_color_rules(
-            &self.documents[active_ix].keyword_color_rules,
-            &self.color_labels,
-        );
-        self.documents[active_ix].resolved_color_rules = resolved.clone();
-        for table in [
-            self.documents[active_ix].log_table.clone(),
-            self.documents[active_ix].result_table.clone(),
-        ] {
-            table.update(cx, |table, cx| {
-                table.delegate_mut().set_color_rules(resolved.clone());
-                table.refresh(cx);
-            });
-        }
-        let document_id = self.documents[active_ix].id;
-        self.refresh_global_result_rows(cx);
-        self.schedule_checkpoint(document_id, window, cx);
-        window.push_notification(
-            if clear_all {
-                crate::tr!(
-                    "已清除当前文件的所有颜色",
-                    "Cleared all colors from the current file"
-                )
-            } else if applying_label {
-                crate::tr!("已应用颜色标签", "Color label applied")
-            } else {
-                crate::tr!("已移除颜色标签", "Color label removed")
-            },
-            cx,
-        );
-        cx.notify();
     }
 
     fn context_mark_label(&self, cx: &App) -> &'static str {
@@ -18769,6 +18703,148 @@ fn prepare_color_keywords(
     })
 }
 
+fn prepare_color_rule_update(
+    target: ColorKeywordTarget,
+    collect_keywords: bool,
+    action: ColorRuleAction,
+    mut rules: Vec<KeywordColorRule>,
+    labels: Vec<ColorLabel>,
+    mut last_color_label_id: Option<String>,
+    cancellation: &SearchCancellation,
+) -> Option<PreparedColorRuleUpdate> {
+    let prepared = prepare_color_keywords(target, collect_keywords, cancellation)?;
+    if cancellation.is_cancelled() {
+        return None;
+    }
+    let expected_rules = rules.clone();
+    let expected_labels = labels.clone();
+    let keywords = prepared.keywords;
+    let outcome = match action {
+        ColorRuleAction::Cycle if keywords.is_empty() => ColorRuleOutcome::EmptyKeywords,
+        ColorRuleAction::Cycle => {
+            let remove = keywords.iter().all(|keyword| {
+                rules.iter().any(|rule| {
+                    rule.enabled && rule.case_sensitive && rule.keyword.as_str() == keyword.as_str()
+                })
+            });
+            if remove {
+                rules.retain(|rule| {
+                    !(rule.enabled
+                        && rule.case_sensitive
+                        && keywords.contains(rule.keyword.as_str()))
+                });
+                ColorRuleOutcome::CycleRemoved {
+                    count: keywords.len(),
+                }
+            } else if labels.is_empty() {
+                ColorRuleOutcome::MissingLabels
+            } else {
+                let next_ix = last_color_label_id
+                    .as_deref()
+                    .and_then(|id| labels.iter().position(|label| label.id == id))
+                    .map_or(0, |ix| (ix + 1) % labels.len());
+                let label = labels[next_ix].clone();
+                apply_color_label_to_keywords(&mut rules, &keywords, &label);
+                last_color_label_id = Some(label.id.clone());
+                ColorRuleOutcome::CycleApplied {
+                    label,
+                    count: keywords.len(),
+                }
+            }
+        }
+        ColorRuleAction::Apply {
+            clear_all: true, ..
+        } => {
+            rules.clear();
+            ColorRuleOutcome::Cleared
+        }
+        ColorRuleAction::Apply {
+            clear_all: false, ..
+        } if keywords.is_empty() => ColorRuleOutcome::EmptyKeywords,
+        ColorRuleAction::Apply {
+            label_id: Some(label_id),
+            clear_all: false,
+        } => {
+            let Some(label) = labels.iter().find(|label| label.id == label_id) else {
+                return Some(PreparedColorRuleUpdate {
+                    document_id: prepared.document_id,
+                    document: prepared.document,
+                    expected_rules,
+                    expected_labels,
+                    rules,
+                    resolved: None,
+                    last_color_label_id,
+                    outcome: ColorRuleOutcome::MissingLabel,
+                });
+            };
+            apply_color_label_to_keywords(&mut rules, &keywords, label);
+            last_color_label_id = Some(label.id.clone());
+            ColorRuleOutcome::Applied
+        }
+        ColorRuleAction::Apply {
+            label_id: None,
+            clear_all: false,
+        } => {
+            rules.retain(|rule| !(rule.case_sensitive && keywords.contains(rule.keyword.as_str())));
+            ColorRuleOutcome::Removed
+        }
+    };
+    let resolved = if matches!(
+        &outcome,
+        ColorRuleOutcome::EmptyKeywords
+            | ColorRuleOutcome::MissingLabels
+            | ColorRuleOutcome::MissingLabel
+    ) {
+        None
+    } else {
+        if cancellation.is_cancelled() {
+            return None;
+        }
+        let resolved = resolve_color_rules(&rules, &labels);
+        if cancellation.is_cancelled() {
+            return None;
+        }
+        Some(resolved)
+    };
+    Some(PreparedColorRuleUpdate {
+        document_id: prepared.document_id,
+        document: prepared.document,
+        expected_rules,
+        expected_labels,
+        rules,
+        resolved,
+        last_color_label_id,
+        outcome,
+    })
+}
+
+fn apply_color_label_to_keywords(
+    rules: &mut Vec<KeywordColorRule>,
+    keywords: &BTreeSet<String>,
+    label: &ColorLabel,
+) {
+    for keyword in keywords {
+        if let Some(rule) = rules
+            .iter_mut()
+            .find(|rule| rule.case_sensitive && rule.keyword == *keyword)
+        {
+            rule.label_id = Some(label.id.clone());
+            rule.color = label.color;
+            rule.alpha = label.alpha;
+            rule.enabled = true;
+        } else {
+            rules.push(KeywordColorRule {
+                label_id: Some(label.id.clone()),
+                keyword: keyword.clone(),
+                color: label.color,
+                alpha: label.alpha,
+                case_sensitive: true,
+                enabled: true,
+            });
+        }
+    }
+}
+
 fn prepare_paths_bounded<T, F>(paths: Vec<PathBuf>, operation: F) -> Vec<(PathBuf, T)>
 where
     T: Send,
@@ -19174,6 +19250,99 @@ mod result_snapshot_tests {
             .expect("清除颜色规则无需读取所选行");
 
         assert!(prepared.keywords.is_empty());
+    }
+
+    #[test]
+    fn color_rule_updates_build_matchers_without_mutating_input_state() {
+        let document = Arc::new(LogDocument::placeholder("color-rule-update.log"));
+        let label = default_color_labels()[0].clone();
+        let prepared = prepare_color_rule_update(
+            ColorKeywordTarget {
+                document_id: 9,
+                document,
+                selection: ColorKeywordSelection::Text("needle".to_string()),
+            },
+            true,
+            ColorRuleAction::Apply {
+                label_id: Some(label.id.clone()),
+                clear_all: false,
+            },
+            Vec::new(),
+            vec![label.clone()],
+            None,
+            &SearchCancellation::default(),
+        )
+        .expect("颜色规则更新应完成");
+
+        assert!(prepared.expected_rules.is_empty());
+        assert_eq!(prepared.rules.len(), 1);
+        assert_eq!(prepared.rules[0].keyword, "needle");
+        assert_eq!(
+            prepared.rules[0].label_id.as_deref(),
+            Some(label.id.as_str())
+        );
+        assert!(prepared.resolved.is_some());
+        assert!(matches!(prepared.outcome, ColorRuleOutcome::Applied));
+    }
+
+    #[test]
+    fn cycling_an_existing_color_rule_prepares_removal() {
+        let document = Arc::new(LogDocument::placeholder("cycle-color-rule.log"));
+        let label = default_color_labels()[0].clone();
+        let rule = KeywordColorRule {
+            label_id: Some(label.id.clone()),
+            keyword: "needle".to_string(),
+            color: label.color,
+            alpha: label.alpha,
+            case_sensitive: true,
+            enabled: true,
+        };
+        let prepared = prepare_color_rule_update(
+            ColorKeywordTarget {
+                document_id: 9,
+                document,
+                selection: ColorKeywordSelection::Text("needle".to_string()),
+            },
+            true,
+            ColorRuleAction::Cycle,
+            vec![rule.clone()],
+            vec![label],
+            None,
+            &SearchCancellation::default(),
+        )
+        .expect("颜色规则循环更新应完成");
+
+        assert_eq!(prepared.expected_rules, vec![rule]);
+        assert!(prepared.rules.is_empty());
+        assert!(matches!(
+            prepared.outcome,
+            ColorRuleOutcome::CycleRemoved { count: 1 }
+        ));
+        assert!(prepared.resolved.is_some());
+    }
+
+    #[test]
+    fn cancelled_color_rule_update_does_not_build_matchers() {
+        let cancellation = SearchCancellation::default();
+        cancellation.cancel();
+        let target = ColorKeywordTarget {
+            document_id: 9,
+            document: Arc::new(LogDocument::placeholder("cancelled-rule-update.log")),
+            selection: ColorKeywordSelection::Text("needle".to_string()),
+        };
+
+        assert!(
+            prepare_color_rule_update(
+                target,
+                true,
+                ColorRuleAction::Cycle,
+                Vec::new(),
+                default_color_labels(),
+                None,
+                &cancellation,
+            )
+            .is_none()
+        );
     }
 
     #[test]
