@@ -2,6 +2,7 @@ use std::{
     fs::{self, File},
     io::{BufWriter, Write as _},
     path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -13,6 +14,7 @@ use vclogg_core::{
 
 const LINE_COUNT: usize = 60_000;
 const MATCH_INTERVAL: usize = 137;
+static TEMPORARY_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 struct TemporaryDirectory(PathBuf);
 
@@ -22,8 +24,11 @@ impl TemporaryDirectory {
             .duration_since(UNIX_EPOCH)
             .expect("系统时间应晚于 Unix 纪元")
             .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("vclogg2-{label}-{}-{nonce}", std::process::id()));
+        let sequence = TEMPORARY_DIRECTORY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "vclogg2-{label}-{}-{nonce}-{sequence}",
+            std::process::id()
+        ));
         fs::create_dir_all(&path).expect("应能创建临时搜索测试目录");
         Self(path)
     }
