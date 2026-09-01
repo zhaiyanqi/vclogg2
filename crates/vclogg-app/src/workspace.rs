@@ -6662,6 +6662,7 @@ impl Workspace {
                             }
                             table.read(cx).delegate().clear_row_selection();
                             table.read(cx).delegate().set_active_log_row(None);
+                            this.schedule_checkpoint(document_id, window, cx);
                             return;
                         }
                         _ => return,
@@ -6689,6 +6690,7 @@ impl Workspace {
                     tab.selection_table = SelectionTable::Results;
                     this.active_log_region = LogRegion::CurrentResults;
                     this.selected_source_row = Some(source_row);
+                    this.schedule_checkpoint(document_id, window, cx);
                     cx.notify();
                 },
             ));
