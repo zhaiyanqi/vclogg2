@@ -11758,8 +11758,13 @@ impl Workspace {
                     let file_count = enumeration.paths.len();
                     let unreadable_directory_count = enumeration.unreadable_directory_count;
                     let max_results = query_for_search.max_results;
-                    let outcomes = prepare_paths_bounded(
+                    let scan_paths = directory_search_scan_paths(
                         enumeration.paths,
+                        matcher.is_some(),
+                        &open_document_paths,
+                    );
+                    let outcomes = prepare_paths_bounded(
+                        scan_paths,
                         |path| -> Result<Option<(Arc<LogDocument>, SearchResult)>> {
                         if cancellation_for_search.is_cancelled() {
                             return Ok(None);
@@ -11780,17 +11785,23 @@ impl Workspace {
                             max_results,
                             &cancellation_for_search,
                         );
-                        if let Some(cache_write) = pending_index_cache {
-                            _ = cache_write.persist();
-                        }
                         match run {
                             SearchRun::Completed(search_result)
                                 if !search_result.line_indices.is_empty()
                                     || path_match_set_contains(&open_document_paths, path) =>
                             {
+                                if let Some(cache_write) = pending_index_cache {
+                                    _ = cache_write.persist();
+                                }
                                 Ok(Some((document, search_result)))
                             }
-                            SearchRun::Completed(_) | SearchRun::Cancelled => Ok(None),
+                            SearchRun::Completed(_) => {
+                                if let Some(cache_write) = pending_index_cache {
+                                    _ = cache_write.persist();
+                                }
+                                Ok(None)
+                            }
+                            SearchRun::Cancelled => Ok(None),
                         }
                         },
                     );
@@ -18529,6 +18540,20 @@ impl Render for Workspace {
     }
 }
 
+fn directory_search_scan_paths(
+    paths: Vec<PathBuf>,
+    query_has_matcher: bool,
+    open_document_paths: &BTreeSet<PathMatchKey>,
+) -> Vec<PathBuf> {
+    if query_has_matcher {
+        return paths;
+    }
+    paths
+        .into_iter()
+        .filter(|path| path_match_set_contains(open_document_paths, path))
+        .collect()
+}
+
 fn prepare_paths_bounded<T, F>(paths: Vec<PathBuf>, operation: F) -> Vec<(PathBuf, T)>
 where
     T: Send,
@@ -18995,7 +19020,7 @@ mod document_prepare_performance_tests {
 
     use vclogg_core::LogDocument;
 
-    use super::prepare_paths_bounded;
+    use super::{directory_search_scan_paths, path_match_key, prepare_paths_bounded};
 
     struct TemporaryDirectory(PathBuf);
 
@@ -19033,6 +19058,27 @@ mod document_prepare_performance_tests {
                 .map(|path| (path.clone(), path))
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn empty_directory_query_only_prepares_open_paths_for_marks() {
+        let open_path = PathBuf::from("open.log");
+        let other_path = PathBuf::from("other.log");
+        let open_paths = [path_match_key(&open_path)].into_iter().collect();
+
+        let scan_paths =
+            directory_search_scan_paths(vec![other_path, open_path.clone()], false, &open_paths);
+
+        assert_eq!(scan_paths, [open_path]);
+    }
+
+    #[test]
+    fn nonempty_directory_query_prepares_every_enumerated_path() {
+        let paths = vec![PathBuf::from("first.log"), PathBuf::from("second.log")];
+
+        let scan_paths = directory_search_scan_paths(paths.clone(), true, &Default::default());
+
+        assert_eq!(scan_paths, paths);
     }
 
     #[test]
