@@ -740,7 +740,12 @@ impl LogRowSource {
             self.visible_lines.clear();
             self.content_revision = self.content_revision.saturating_add(1);
         } else {
-            self.visible_lines.invalidate_window();
+            match &row_projection {
+                LogRowProjection::All => self.visible_lines.invalidate_window(),
+                LogRowProjection::SourceRows(source_rows) => self
+                    .visible_lines
+                    .retain(|source_row| source_rows.contains(*source_row)),
+            }
         }
         self.document = document;
         self.row_projection = row_projection;
@@ -963,8 +968,10 @@ impl LogTableDelegate {
             return;
         }
         let (selected_rows, active_row, selection_anchor) = self.stable_interaction_rows();
+        self.source
+            .visible_lines
+            .retain(|source_row| source_rows.contains(*source_row));
         self.source.row_projection = LogRowProjection::SourceRows(source_rows);
-        self.source.visible_lines.invalidate_window();
         self.interaction.row_bounds.borrow_mut().clear();
         self.restore_stable_interaction_rows(selected_rows, active_row, selection_anchor);
     }
@@ -1145,6 +1152,11 @@ impl LogTableDelegate {
     pub(crate) fn reset_visible_line_owner(&mut self) {
         self.visible_line_task = None;
         self.source.visible_lines.invalidate_window();
+    }
+
+    pub(crate) fn clear_visible_lines(&mut self) {
+        self.visible_line_task = None;
+        self.source.visible_lines.clear();
     }
 
     fn schedule_visible_rows(
@@ -1953,6 +1965,24 @@ mod tests {
             .line(3)
             .expect("the prepared row should remain cached");
         assert_eq!(reused.source().as_ref(), "line 3");
+    }
+
+    #[test]
+    fn projection_updates_release_decoded_rows_that_are_no_longer_reachable() {
+        let document = Arc::new(LogDocument::placeholder("pruned-result-window.log"));
+        let mut delegate = LogTableDelegate::projected(7, document, [3, 9].into_iter().collect());
+        delegate.source.visible_lines.prepare_visible_rows(
+            0..2,
+            2,
+            |row_ix| [3, 9].get(row_ix).copied(),
+            |source_row, _| Some(LinePreview::new(format!("line {source_row}"), false)),
+        );
+
+        delegate.set_row_projection([9].into_iter().collect());
+        assert_eq!(delegate.source.visible_lines.cached_keys(), [9]);
+
+        delegate.set_row_projection(CompressedRows::default());
+        assert!(delegate.source.visible_lines.cached_keys().is_empty());
     }
 
     #[test]

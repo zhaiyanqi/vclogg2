@@ -7730,6 +7730,11 @@ impl Workspace {
             let state = self.file_session_state(active, cx);
             self.save_file_session(path, base, state, window, cx);
         }
+        if self.active_tab_id != tab_id
+            && let Some(document_id) = self.active_document().map(|tab| tab.id)
+        {
+            self.clear_document_visible_lines(document_id, cx);
+        }
         self.active_tab_id = tab_id;
         self.sync_active_document_ix();
         self.pending_document_tab_reveal.set(None);
@@ -12534,6 +12539,21 @@ impl Workspace {
         table.update(cx, |table, _| {
             table.delegate_mut().reset_visible_line_owner();
         });
+    }
+
+    fn clear_document_visible_lines(&mut self, document_id: u64, cx: &mut Context<Self>) {
+        self.visible_line_tasks
+            .remove(&(document_id, WrappedRegion::Log));
+        self.visible_line_tasks
+            .remove(&(document_id, WrappedRegion::Results));
+        let Some(tab) = self.documents.iter().find(|tab| tab.id == document_id) else {
+            return;
+        };
+        for table in [tab.log_table.clone(), tab.result_table.clone()] {
+            table.update(cx, |table, _| {
+                table.delegate_mut().clear_visible_lines();
+            });
+        }
     }
 
     fn schedule_global_visible_lines(

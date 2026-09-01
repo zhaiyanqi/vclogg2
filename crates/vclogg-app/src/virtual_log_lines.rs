@@ -193,6 +193,11 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
                 .is_some_and(|line| line.source_unavailable)
     }
 
+    #[cfg(test)]
+    pub(crate) fn cached_keys(&self) -> Vec<K> {
+        self.lines.borrow().keys().cloned().collect()
+    }
+
     pub(crate) fn request_visible_rows(
         &self,
         visible_range: Range<usize>,

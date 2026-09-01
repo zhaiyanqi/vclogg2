@@ -1418,7 +1418,23 @@ impl GlobalSearchTableDelegate {
     }
 
     fn rebuild_layout(&mut self) {
-        self.visible_lines.invalidate_window();
+        let visible_rows = self
+            .projection
+            .groups
+            .iter()
+            .filter(|group| {
+                !self
+                    .interaction
+                    .collapsed_documents
+                    .contains(&group.source.document_id)
+            })
+            .map(|group| (group.source.document_id, &group.projection.rows))
+            .collect::<BTreeMap<_, _>>();
+        self.visible_lines.retain(|(document_id, source_row)| {
+            visible_rows
+                .get(document_id)
+                .is_some_and(|rows| rows.contains(*source_row))
+        });
         self.projection.layout_revision = self.projection.layout_revision.saturating_add(1);
         self.projection.group_starts.clear();
         self.projection.expanded_result_groups.clear();
@@ -1986,7 +2002,19 @@ mod tests {
         let mut group = test_group(document);
         group.projection.rows = [2, 5].into_iter().collect();
         delegate.set_groups(vec![group.clone()]);
+        delegate.visible_lines.prepare_visible_rows(
+            0..2,
+            2,
+            |row_ix| [2, 5].get(row_ix).map(|source_row| (1, *source_row)),
+            |(_, source_row), _| {
+                Some(vclogg_core::LinePreview::new(
+                    format!("line {source_row}"),
+                    false,
+                ))
+            },
+        );
         delegate.toggle_group(1);
+        assert!(delegate.visible_lines.cached_keys().is_empty());
 
         group.presentation.marked_rows = [5].into_iter().collect();
         delegate.set_groups(vec![group]);
