@@ -3,7 +3,10 @@ use std::{cmp::Reverse, collections::BTreeSet};
 use serde::{Deserialize, Serialize};
 use vclogg_core::CompressedRows;
 
-use crate::path_identity::{decode_persisted_path, normalized_path_match_key};
+use crate::{
+    color_labels::KeywordColorRule,
+    path_identity::{decode_persisted_path, normalized_path_match_key},
+};
 
 pub(crate) const SEARCH_CONTEXT_VERSION: u32 = 2;
 const LEGACY_SEARCH_CONTEXT_VERSION: u32 = 1;
@@ -120,6 +123,7 @@ pub(crate) struct PersistedGlobalSearchContext {
     pub result_mode: i64,
     pub results_visible: bool,
     pub word_wrap: bool,
+    pub keyword_color_rules: Vec<KeywordColorRule>,
     pub collapsed_paths: Vec<String>,
     pub selection: Vec<PersistedPathSelection>,
     pub selected_row: Option<PersistedSearchRowKey>,
@@ -135,6 +139,7 @@ impl Default for PersistedGlobalSearchContext {
             result_mode: 0,
             results_visible: false,
             word_wrap: false,
+            keyword_color_rules: Vec::new(),
             collapsed_paths: Vec::new(),
             selection: Vec::new(),
             selected_row: None,
@@ -423,6 +428,14 @@ mod tests {
                 },
                 result_mode: 2,
                 word_wrap: true,
+                keyword_color_rules: vec![KeywordColorRule {
+                    label_id: Some("warning".into()),
+                    keyword: "needle".into(),
+                    color: 0xf28e2b,
+                    alpha: 179,
+                    case_sensitive: true,
+                    enabled: true,
+                }],
                 ..PersistedGlobalSearchContext::default()
             },
             active_directory: Some("logs/x".into()),
@@ -452,6 +465,9 @@ mod tests {
         let restored = restored
             .migrated()
             .expect("version two should be compatible");
+
+        assert_eq!(restored.all_open.keyword_color_rules.len(), 1);
+        assert_eq!(restored.all_open.keyword_color_rules[0].keyword, "needle");
 
         assert_eq!(restored.all_open.query.text, "all open");
         assert!(restored.all_open.query.case_sensitive);

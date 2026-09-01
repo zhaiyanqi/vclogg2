@@ -90,14 +90,19 @@ pub(super) fn prepare_color_keywords(
 }
 
 pub(super) fn prepare_color_rule_update(
-    target: ColorKeywordTarget,
-    collect_keywords: bool,
-    action: ColorRuleAction,
-    mut rules: Vec<KeywordColorRule>,
-    labels: Vec<ColorLabel>,
-    mut last_color_label_id: Option<String>,
+    input: ColorRuleUpdateInput,
     cancellation: &SearchCancellation,
 ) -> DocumentLineTask<PreparedColorRuleUpdate> {
+    let ColorRuleUpdateInput {
+        target,
+        collect_keywords,
+        action,
+        mut rules,
+        labels,
+        mut last_color_label_id,
+        propagation_targets,
+        session_target,
+    } = input;
     let prepared = match prepare_color_keywords(target, collect_keywords, cancellation) {
         DocumentLineTask::Completed(prepared) => prepared,
         DocumentLineTask::Cancelled => return DocumentLineTask::Cancelled,
@@ -163,6 +168,8 @@ pub(super) fn prepare_color_rule_update(
                     expected_labels,
                     rules,
                     resolved: None,
+                    propagated_files: Vec::new(),
+                    search_session: None,
                     last_color_label_id,
                     outcome: ColorRuleOutcome::MissingLabel,
                 });
@@ -196,6 +203,40 @@ pub(super) fn prepare_color_rule_update(
         }
         Some(resolved)
     };
+    let mut propagated_files = Vec::new();
+    let mut search_session = None;
+    if resolved.is_some() {
+        for target in propagation_targets {
+            if cancellation.is_cancelled() {
+                return DocumentLineTask::Cancelled;
+            }
+            let mut target_rules = target.expected_rules.clone();
+            synchronize_keyword_color_rules(&mut target_rules, &rules, &keywords);
+            let target_resolved = resolve_color_rules(&target_rules, &labels);
+            propagated_files.push(PreparedColorRulePropagation {
+                document_id: target.document_id,
+                document: target.document,
+                expected_rules: target.expected_rules,
+                rules: target_rules,
+                resolved: target_resolved,
+            });
+        }
+        if let Some(target) = session_target {
+            if cancellation.is_cancelled() {
+                return DocumentLineTask::Cancelled;
+            }
+            let mut target_rules = target.expected_rules.clone();
+            synchronize_keyword_color_rules(&mut target_rules, &rules, &keywords);
+            let target_resolved = resolve_color_rules(&target_rules, &labels);
+            search_session = Some(PreparedColorRuleSession {
+                scope: target.scope,
+                expected_revision: target.expected_revision,
+                expected_rules: target.expected_rules,
+                rules: target_rules,
+                resolved: target_resolved,
+            });
+        }
+    }
     DocumentLineTask::Completed(PreparedColorRuleUpdate {
         document_id: prepared.document_id,
         document: prepared.document,
@@ -203,9 +244,27 @@ pub(super) fn prepare_color_rule_update(
         expected_labels,
         rules,
         resolved,
+        propagated_files,
+        search_session,
         last_color_label_id,
         outcome,
     })
+}
+
+pub(super) fn synchronize_keyword_color_rules(
+    destination: &mut Vec<KeywordColorRule>,
+    source: &[KeywordColorRule],
+    keywords: &BTreeSet<String>,
+) {
+    for keyword in keywords {
+        destination.retain(|rule| !(rule.case_sensitive && rule.keyword == *keyword));
+        if let Some(rule) = source
+            .iter()
+            .find(|rule| rule.case_sensitive && rule.keyword == *keyword)
+        {
+            destination.push(rule.clone());
+        }
+    }
 }
 
 pub(super) fn apply_color_label_to_keywords(

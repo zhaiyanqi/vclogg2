@@ -2265,6 +2265,34 @@ struct PreparedColorKeywords {
     keywords: BTreeSet<String>,
 }
 
+struct ColorRulePropagationTarget {
+    document_id: u64,
+    document: Arc<LogDocument>,
+    expected_rules: Vec<KeywordColorRule>,
+}
+
+struct ColorRuleSessionTarget {
+    scope: SearchScope,
+    expected_revision: u64,
+    expected_rules: Vec<KeywordColorRule>,
+}
+
+struct PreparedColorRulePropagation {
+    document_id: u64,
+    document: Arc<LogDocument>,
+    expected_rules: Vec<KeywordColorRule>,
+    rules: Vec<KeywordColorRule>,
+    resolved: Arc<ResolvedColorRules>,
+}
+
+struct PreparedColorRuleSession {
+    scope: SearchScope,
+    expected_revision: u64,
+    expected_rules: Vec<KeywordColorRule>,
+    rules: Vec<KeywordColorRule>,
+    resolved: Arc<ResolvedColorRules>,
+}
+
 enum ColorRuleAction {
     Cycle,
     Apply {
@@ -2284,6 +2312,17 @@ enum ColorRuleOutcome {
     Cleared,
 }
 
+struct ColorRuleUpdateInput {
+    target: ColorKeywordTarget,
+    collect_keywords: bool,
+    action: ColorRuleAction,
+    rules: Vec<KeywordColorRule>,
+    labels: Vec<ColorLabel>,
+    last_color_label_id: Option<String>,
+    propagation_targets: Vec<ColorRulePropagationTarget>,
+    session_target: Option<ColorRuleSessionTarget>,
+}
+
 struct PreparedColorRuleUpdate {
     document_id: u64,
     document: Arc<LogDocument>,
@@ -2291,6 +2330,8 @@ struct PreparedColorRuleUpdate {
     expected_labels: Vec<ColorLabel>,
     rules: Vec<KeywordColorRule>,
     resolved: Option<Arc<ResolvedColorRules>>,
+    propagated_files: Vec<PreparedColorRulePropagation>,
+    search_session: Option<PreparedColorRuleSession>,
     last_color_label_id: Option<String>,
     outcome: ColorRuleOutcome,
 }

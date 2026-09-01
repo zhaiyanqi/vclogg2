@@ -68,6 +68,7 @@ pub struct KeywordColorRule {
 pub struct ResolvedColorRules {
     case_sensitive: Option<CaseSensitiveColorRules>,
     fallback: Arc<[ResolvedColorRule]>,
+    layers: Arc<[Arc<ResolvedColorRules>]>,
 }
 
 #[derive(Clone)]
@@ -90,7 +91,36 @@ struct ResolvedColorRule {
 }
 
 impl ResolvedColorRules {
+    pub fn layered(
+        base: Arc<ResolvedColorRules>,
+        overlay: Arc<ResolvedColorRules>,
+    ) -> Arc<ResolvedColorRules> {
+        Arc::new(Self {
+            case_sensitive: None,
+            fallback: Arc::default(),
+            layers: Arc::from([base, overlay]),
+        })
+    }
+
     pub fn matching_ranges(&self, text: &str) -> Vec<(Range<usize>, Hsla, usize)> {
+        if !self.layers.is_empty() {
+            let mut ranges = Vec::new();
+            let mut order_offset = 0_usize;
+            for layer in self.layers.iter() {
+                let mut layer_ranges = layer.matching_ranges(text);
+                let next_offset = layer_ranges
+                    .iter()
+                    .map(|(_, _, order)| order.saturating_add(1))
+                    .max()
+                    .unwrap_or_default();
+                for (_, _, order) in &mut layer_ranges {
+                    *order = order.saturating_add(order_offset);
+                }
+                ranges.extend(layer_ranges);
+                order_offset = order_offset.saturating_add(next_offset);
+            }
+            return ranges;
+        }
         let mut ranges = Vec::new();
         if let Some(case_sensitive) = &self.case_sensitive {
             let mut next_allowed_start = BTreeMap::<usize, usize>::new();
@@ -210,6 +240,7 @@ pub fn resolve_color_rules(
     Arc::new(ResolvedColorRules {
         case_sensitive: case_sensitive.flatten(),
         fallback: fallback.into(),
+        layers: Arc::default(),
     })
 }
 
@@ -274,5 +305,17 @@ mod tests {
                 .iter()
                 .any(|(range, _, order)| range == &(4..5) && *order == 1)
         );
+    }
+
+    #[test]
+    fn layered_rules_give_the_search_session_overlay_precedence() {
+        let base = resolve_color_rules(&[rule("error", true, 0xff0000)], &[]);
+        let overlay = resolve_color_rules(&[rule("error", true, 0x00ff00)], &[]);
+        let layered = ResolvedColorRules::layered(base, overlay);
+        let mut ranges = layered.matching_ranges("error");
+        ranges.sort_by_key(|(_, _, order)| *order);
+
+        assert_eq!(ranges.len(), 2);
+        assert!(ranges[1].2 > ranges[0].2);
     }
 }

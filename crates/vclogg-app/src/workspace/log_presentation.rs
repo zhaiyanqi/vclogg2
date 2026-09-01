@@ -1182,6 +1182,27 @@ impl Workspace {
             let Some((document_id, rows)) = selected_groups.first() else {
                 return Err(crate::tr!("请先选择日志行", "Select log lines first").to_string());
             };
+            if let Some(text) = selected_text.map(str::trim).filter(|text| !text.is_empty()) {
+                let target_ix = self
+                    .presentation_document_ix_for_global_result(*document_id)
+                    .or(self.active_ix)
+                    .ok_or_else(|| {
+                        crate::tr!(
+                            "当前没有可承载颜色规则的日志文件",
+                            "There is no open log file to own the color rule"
+                        )
+                        .to_string()
+                    })?;
+                let tab = &self.documents[target_ix];
+                return Ok((
+                    target_ix,
+                    ColorKeywordTarget {
+                        document_id: tab.id,
+                        document: tab.document.clone(),
+                        selection: ColorKeywordSelection::Text(text.to_string()),
+                    },
+                ));
+            }
             if selected_groups.len() > 1 {
                 return Err(crate::tr!(
                     "颜色标签一次只能应用到同一文件的全局结果",
@@ -1207,13 +1228,7 @@ impl Workspace {
                     }
                 })?;
             let tab = &self.documents[active_ix];
-            let selection = selected_text
-                .map(str::trim)
-                .filter(|text| !text.is_empty())
-                .map_or_else(
-                    || ColorKeywordSelection::Rows(rows.clone()),
-                    |text| ColorKeywordSelection::Text(text.to_string()),
-                );
+            let selection = ColorKeywordSelection::Rows(rows.clone());
             return Ok((
                 active_ix,
                 ColorKeywordTarget {
@@ -1273,6 +1288,56 @@ impl Workspace {
             return;
         };
         let rules = tab.file.keyword_color_rules.clone();
+        let propagation_scope = matches!(target.selection, ColorKeywordSelection::Text(ref text) if !text.trim().is_empty())
+            .then_some(self.global_search.scope)
+            .filter(|scope| {
+                matches!(scope, SearchScope::AllOpenFiles | SearchScope::Directory)
+                    && self.global_search.result_scope == Some(*scope)
+            });
+        let propagation_targets = propagation_scope.map_or_else(Vec::new, |scope| {
+            self.documents
+                .iter()
+                .filter(|candidate| candidate.id != target.document_id)
+                .filter(|candidate| match scope {
+                    SearchScope::AllOpenFiles => {
+                        self.global_search.results.get(&candidate.id).is_some()
+                    }
+                    SearchScope::Directory => self.global_search.results.values().any(|result| {
+                        result_snapshot_matches_document(
+                            &result.path,
+                            &result.document,
+                            &candidate.document,
+                        )
+                    }),
+                    SearchScope::CurrentFile => false,
+                })
+                .map(|candidate| ColorRulePropagationTarget {
+                    document_id: candidate.id,
+                    document: candidate.document.clone(),
+                    expected_rules: candidate.file.keyword_color_rules.clone(),
+                })
+                .collect()
+        });
+        let session_target = propagation_scope.map(|scope| {
+            let expected_rules = match scope {
+                SearchScope::AllOpenFiles => self
+                    .global_search
+                    .all_open_context
+                    .keyword_color_rules
+                    .clone(),
+                SearchScope::Directory => self
+                    .global_search
+                    .directory_context
+                    .keyword_color_rules
+                    .clone(),
+                SearchScope::CurrentFile => Vec::new(),
+            };
+            ColorRuleSessionTarget {
+                scope,
+                expected_revision: self.global_search.revision,
+                expected_rules,
+            }
+        });
         let labels = self.color_labels.clone();
         let last_color_label_id = self.last_color_label_id.clone();
         let cancellation = SearchCancellation::default();
@@ -1281,12 +1346,16 @@ impl Workspace {
             let prepared = cx
                 .background_spawn(async move {
                     prepare_color_rule_update(
-                        target,
-                        collect_keywords,
-                        action,
-                        rules,
-                        labels,
-                        last_color_label_id,
+                        ColorRuleUpdateInput {
+                            target,
+                            collect_keywords,
+                            action,
+                            rules,
+                            labels,
+                            last_color_label_id,
+                            propagation_targets,
+                            session_target,
+                        },
                         &cancellation,
                     )
                 })
@@ -1354,6 +1423,44 @@ impl Workspace {
             );
             return;
         }
+        let propagated_file_indices = prepared
+            .propagated_files
+            .iter()
+            .map(|propagated| {
+                self.documents.iter().position(|tab| {
+                    tab.id == propagated.document_id
+                        && Arc::ptr_eq(&tab.document, &propagated.document)
+                        && tab.file.keyword_color_rules == propagated.expected_rules
+                })
+            })
+            .collect::<Option<Vec<_>>>();
+        let session_is_current = prepared.search_session.as_ref().is_none_or(|session| {
+            if self.global_search.scope != session.scope
+                || self.global_search.result_scope != Some(session.scope)
+                || self.global_search.revision != session.expected_revision
+            {
+                return false;
+            }
+            let current_rules = match session.scope {
+                SearchScope::AllOpenFiles => {
+                    &self.global_search.all_open_context.keyword_color_rules
+                }
+                SearchScope::Directory => &self.global_search.directory_context.keyword_color_rules,
+                SearchScope::CurrentFile => return false,
+            };
+            current_rules == &session.expected_rules
+        });
+        let Some(propagated_file_indices) = propagated_file_indices.filter(|_| session_is_current)
+        else {
+            window.push_notification(
+                crate::tr!(
+                    "搜索结果或颜色设置已发生变化，请重新应用",
+                    "Search results or color settings changed. Apply the selection again."
+                ),
+                cx,
+            );
+            return;
+        };
         let notification = match &prepared.outcome {
             ColorRuleOutcome::EmptyKeywords => {
                 window.push_notification(
@@ -1424,9 +1531,46 @@ impl Workspace {
                 table.refresh(cx);
             });
         }
-        let document_id = self.documents[active_ix].id;
+        let mut document_ids = vec![self.documents[active_ix].id];
+        for (propagated, document_ix) in prepared
+            .propagated_files
+            .into_iter()
+            .zip(propagated_file_indices)
+        {
+            self.documents[document_ix].file.keyword_color_rules = propagated.rules;
+            self.documents[document_ix].file.resolved_color_rules = propagated.resolved.clone();
+            for table in [
+                self.documents[document_ix].log_table.clone(),
+                self.documents[document_ix].result_table.clone(),
+            ] {
+                let color_rules = propagated.resolved.clone();
+                table.update(cx, |table, cx| {
+                    table.delegate_mut().set_color_rules(color_rules);
+                    table.refresh(cx);
+                });
+            }
+            document_ids.push(propagated.document_id);
+        }
+        let search_session_changed = if let Some(session) = prepared.search_session {
+            let context = match session.scope {
+                SearchScope::AllOpenFiles => &mut self.global_search.all_open_context,
+                SearchScope::Directory => &mut self.global_search.directory_context,
+                SearchScope::CurrentFile => unreachable!(),
+            };
+            context.keyword_color_rules = session.rules;
+            context.resolved_color_rules = session.resolved;
+            true
+        } else {
+            false
+        };
         self.refresh_global_result_rows(window, cx);
-        self.schedule_checkpoint(document_id, window, cx);
+        self.refresh_active_log_search_presentation(cx);
+        for document_id in document_ids {
+            self.schedule_checkpoint(document_id, window, cx);
+        }
+        if search_session_changed {
+            self.schedule_workspace_search_state_save(window, cx);
+        }
         window.push_notification(notification, cx);
         cx.notify();
     }
@@ -1540,6 +1684,20 @@ impl Workspace {
         let selected_text = selected_text
             .map(str::trim)
             .filter(|text| !text.is_empty())?;
+        let session_rules: &[KeywordColorRule] = match self.global_search.scope {
+            SearchScope::AllOpenFiles => &self.global_search.all_open_context.keyword_color_rules,
+            SearchScope::Directory => &self.global_search.directory_context.keyword_color_rules,
+            SearchScope::CurrentFile => &[],
+        };
+        let session_rule = session_rules
+            .iter()
+            .find(|rule| {
+                rule.enabled && rule.case_sensitive && rule.keyword.as_str() == selected_text
+            })
+            .and_then(|rule| rule.label_id.clone());
+        if session_rule.is_some() {
+            return session_rule;
+        }
         let (tab_ix, _) = self.context_color_target(Some(selected_text), cx).ok()?;
         self.documents[tab_ix]
             .file

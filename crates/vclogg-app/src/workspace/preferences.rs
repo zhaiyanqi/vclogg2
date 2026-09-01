@@ -698,6 +698,27 @@ impl Workspace {
     }
 
     pub(super) fn refresh_global_color_rules(&mut self, cx: &mut Context<Self>) {
+        self.global_search.all_open_context.resolved_color_rules = resolve_color_rules(
+            &self.global_search.all_open_context.keyword_color_rules,
+            &self.color_labels,
+        );
+        self.global_search.directory_context.resolved_color_rules = resolve_color_rules(
+            &self.global_search.directory_context.keyword_color_rules,
+            &self.color_labels,
+        );
+        let session_color_rules = match self.global_search.scope {
+            SearchScope::AllOpenFiles => self
+                .global_search
+                .all_open_context
+                .resolved_color_rules
+                .clone(),
+            SearchScope::Directory => self
+                .global_search
+                .directory_context
+                .resolved_color_rules
+                .clone(),
+            SearchScope::CurrentFile => Arc::default(),
+        };
         let color_rules_by_path = self
             .documents
             .iter()
@@ -710,15 +731,17 @@ impl Workspace {
             .collect::<BTreeMap<_, _>>();
         self.global_table.update(cx, |table, cx| {
             table.delegate_mut().update_color_rules(|source| {
-                path_match_map_get(&color_rules_by_path, &source.path)
+                let color_rules = path_match_map_get(&color_rules_by_path, &source.path)
                     .filter(|(document, _)| {
                         result_snapshot_matches_document(&source.path, &source.document, document)
                     })
                     .map(|(_, color_rules)| color_rules.clone())
-                    .unwrap_or_default()
+                    .unwrap_or_default();
+                ResolvedColorRules::layered(color_rules, session_color_rules.clone())
             });
             table.refresh(cx);
         });
+        self.refresh_active_log_search_presentation(cx);
     }
 
     pub(super) fn open_color_labels_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1196,6 +1219,7 @@ impl Workspace {
             tab.refresh_log_level_highlighting(settings.highlight_log_levels, cx);
             tab.refresh_search_matcher(settings.highlight_matches, cx);
         }
+        self.refresh_active_log_search_presentation(cx);
         self.global_search.query.max_results = search_result_limit;
         self.global_search.directory_query.max_results = search_result_limit;
         let global_matcher = self.global_result_matcher();
@@ -1246,6 +1270,7 @@ impl Workspace {
                     tab.refresh_log_level_highlighting(shared_settings.highlight_log_levels, cx);
                     tab.refresh_search_matcher(shared_settings.highlight_matches, cx);
                 }
+                workspace.refresh_active_log_search_presentation(cx);
                 workspace.global_search.query.max_results = search_result_limit;
                 workspace.global_search.directory_query.max_results = search_result_limit;
                 let global_matcher = workspace.global_result_matcher();

@@ -8,6 +8,7 @@ impl Workspace {
         let Some(tab_ix) = self.active_ix else {
             return;
         };
+        self.refresh_active_log_search_presentation(cx);
         let log_table = self.documents[tab_ix].log_table.clone();
         self.log_viewer
             .surface

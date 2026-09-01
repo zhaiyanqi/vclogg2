@@ -169,19 +169,23 @@ fn color_rule_updates_build_matchers_without_mutating_input_state() {
     let document = Arc::new(LogDocument::placeholder("color-rule-update.log"));
     let label = default_color_labels()[0].clone();
     let prepared = prepare_color_rule_update(
-        ColorKeywordTarget {
-            document_id: 9,
-            document,
-            selection: ColorKeywordSelection::Text("needle".to_string()),
+        ColorRuleUpdateInput {
+            target: ColorKeywordTarget {
+                document_id: 9,
+                document,
+                selection: ColorKeywordSelection::Text("needle".to_string()),
+            },
+            collect_keywords: true,
+            action: ColorRuleAction::Apply {
+                label_id: Some(label.id.clone()),
+                clear_all: false,
+            },
+            rules: Vec::new(),
+            labels: vec![label.clone()],
+            last_color_label_id: None,
+            propagation_targets: Vec::new(),
+            session_target: None,
         },
-        true,
-        ColorRuleAction::Apply {
-            label_id: Some(label.id.clone()),
-            clear_all: false,
-        },
-        Vec::new(),
-        vec![label.clone()],
-        None,
         &SearchCancellation::default(),
     )
     .expect("颜色规则更新应完成");
@@ -198,6 +202,65 @@ fn color_rule_updates_build_matchers_without_mutating_input_state() {
 }
 
 #[test]
+fn global_keyword_color_update_is_synchronized_to_files_and_session() {
+    let primary_document = Arc::new(LogDocument::placeholder("primary-color.log"));
+    let secondary_document = Arc::new(LogDocument::placeholder("secondary-color.log"));
+    let label = default_color_labels()[0].clone();
+    let unrelated = KeywordColorRule {
+        label_id: None,
+        keyword: "keep-me".to_string(),
+        color: 0x123456,
+        alpha: u8::MAX,
+        case_sensitive: true,
+        enabled: true,
+    };
+    let prepared = prepare_color_rule_update(
+        ColorRuleUpdateInput {
+            target: ColorKeywordTarget {
+                document_id: 9,
+                document: primary_document,
+                selection: ColorKeywordSelection::Text("needle".to_string()),
+            },
+            collect_keywords: true,
+            action: ColorRuleAction::Apply {
+                label_id: Some(label.id.clone()),
+                clear_all: false,
+            },
+            rules: Vec::new(),
+            labels: vec![label.clone()],
+            last_color_label_id: None,
+            propagation_targets: vec![ColorRulePropagationTarget {
+                document_id: 10,
+                document: secondary_document,
+                expected_rules: vec![unrelated.clone()],
+            }],
+            session_target: Some(ColorRuleSessionTarget {
+                scope: SearchScope::Directory,
+                expected_revision: 4,
+                expected_rules: Vec::new(),
+            }),
+        },
+        &SearchCancellation::default(),
+    )
+    .expect("全局关键词颜色规则应在后台原子准备完成");
+
+    assert_eq!(prepared.propagated_files.len(), 1);
+    assert!(prepared.propagated_files[0].rules.contains(&unrelated));
+    let propagated_rule = prepared.propagated_files[0]
+        .rules
+        .iter()
+        .find(|rule| rule.keyword == "needle")
+        .expect("其他结果文件应获得相同关键词规则");
+    assert_eq!(propagated_rule.label_id.as_deref(), Some(label.id.as_str()));
+    let session = prepared
+        .search_session
+        .expect("目录会话应获得未打开结果可使用的覆盖规则");
+    assert_eq!(session.scope, SearchScope::Directory);
+    assert_eq!(session.expected_revision, 4);
+    assert_eq!(session.rules, vec![propagated_rule.clone()]);
+}
+
+#[test]
 fn cycling_an_existing_color_rule_prepares_removal() {
     let document = Arc::new(LogDocument::placeholder("cycle-color-rule.log"));
     let label = default_color_labels()[0].clone();
@@ -210,16 +273,20 @@ fn cycling_an_existing_color_rule_prepares_removal() {
         enabled: true,
     };
     let prepared = prepare_color_rule_update(
-        ColorKeywordTarget {
-            document_id: 9,
-            document,
-            selection: ColorKeywordSelection::Text("needle".to_string()),
+        ColorRuleUpdateInput {
+            target: ColorKeywordTarget {
+                document_id: 9,
+                document,
+                selection: ColorKeywordSelection::Text("needle".to_string()),
+            },
+            collect_keywords: true,
+            action: ColorRuleAction::Cycle,
+            rules: vec![rule.clone()],
+            labels: vec![label],
+            last_color_label_id: None,
+            propagation_targets: Vec::new(),
+            session_target: None,
         },
-        true,
-        ColorRuleAction::Cycle,
-        vec![rule.clone()],
-        vec![label],
-        None,
         &SearchCancellation::default(),
     )
     .expect("颜色规则循环更新应完成");
@@ -245,12 +312,16 @@ fn cancelled_color_rule_update_does_not_build_matchers() {
 
     assert!(
         prepare_color_rule_update(
-            target,
-            true,
-            ColorRuleAction::Cycle,
-            Vec::new(),
-            default_color_labels(),
-            None,
+            ColorRuleUpdateInput {
+                target,
+                collect_keywords: true,
+                action: ColorRuleAction::Cycle,
+                rules: Vec::new(),
+                labels: default_color_labels(),
+                last_color_label_id: None,
+                propagation_targets: Vec::new(),
+                session_target: None,
+            },
             &cancellation,
         )
         .is_cancelled()

@@ -15,6 +15,7 @@ use vclogg_core::{
 
 use crate::{
     cloud_filters::{CloudClient, CloudConnectionProfile},
+    color_labels::{KeywordColorRule, ResolvedColorRules},
     directory_search_dialog::DirectorySearchOptions,
     global_search_table::{GlobalQuickFindGroup, GlobalSearchRow},
     path_identity::{PathMatchKey, path_match_key},
@@ -190,6 +191,8 @@ impl FromIterator<(u64, GlobalSearchDocumentResult)> for GlobalSearchResults {
 #[derive(Clone)]
 pub(crate) struct SearchSessionState {
     pub(crate) query: SearchQuery,
+    pub(crate) keyword_color_rules: Vec<KeywordColorRule>,
+    pub(crate) resolved_color_rules: Arc<ResolvedColorRules>,
     pub(crate) initialized: bool,
     pub(crate) results: GlobalSearchResults,
     pub(crate) matcher: Option<SearchMatcher>,
@@ -208,6 +211,8 @@ impl Default for SearchSessionState {
     fn default() -> Self {
         Self {
             query: SearchQuery::default(),
+            keyword_color_rules: Vec::new(),
+            resolved_color_rules: Arc::default(),
             initialized: false,
             results: GlobalSearchResults::default(),
             matcher: None,
@@ -874,6 +879,8 @@ mod state_controller_tests {
                 regex: false,
                 max_results: None,
             },
+            keyword_color_rules: Vec::new(),
+            resolved_color_rules: Arc::default(),
             initialized: true,
             results: [
                 (9, global_result("nine.log")),
@@ -920,6 +927,14 @@ mod state_controller_tests {
 
     #[test]
     fn invalidating_retained_results_preserves_presentation_preferences() {
+        let keyword_color_rule = KeywordColorRule {
+            label_id: None,
+            keyword: "needle".into(),
+            color: 0xf28e2b,
+            alpha: 179,
+            case_sensitive: true,
+            enabled: true,
+        };
         let mut context = SearchSessionState {
             query: SearchQuery {
                 text: "needle".into(),
@@ -927,6 +942,11 @@ mod state_controller_tests {
                 regex: false,
                 max_results: None,
             },
+            keyword_color_rules: vec![keyword_color_rule.clone()],
+            resolved_color_rules: crate::color_labels::resolve_color_rules(
+                std::slice::from_ref(&keyword_color_rule),
+                &[],
+            ),
             initialized: true,
             results: [(3, global_result("a.log"))].into_iter().collect(),
             matcher: SearchMatcher::literal_phrase("needle").expect("matcher should compile"),
@@ -956,6 +976,11 @@ mod state_controller_tests {
 
         assert_eq!(context.query.text, "needle");
         assert!(context.query.case_sensitive);
+        assert_eq!(context.keyword_color_rules, vec![keyword_color_rule]);
+        assert_eq!(
+            context.resolved_color_rules.matching_ranges("needle").len(),
+            1
+        );
         assert!(!context.initialized);
         assert!(context.results.is_empty());
         assert!(context.matcher.is_none());

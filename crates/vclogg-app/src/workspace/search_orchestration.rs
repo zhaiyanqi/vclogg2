@@ -1,6 +1,75 @@
 use super::*;
 
 impl Workspace {
+    /// Installs the active search session's matcher and hit rows into the shared upper log
+    /// projection. Global and directory searches therefore highlight the opened file with the
+    /// same matcher as the lower result projection.
+    pub(super) fn refresh_active_log_search_presentation(&mut self, cx: &mut Context<Self>) {
+        let Some(active_ix) = self.active_ix else {
+            return;
+        };
+        let tab = &self.documents[active_ix];
+        let (matched_rows, matcher, session_color_rules) = match self.global_search.scope {
+            SearchScope::CurrentFile => (
+                tab.search_result.line_indices.clone(),
+                tab.search_matcher.clone(),
+                Arc::default(),
+            ),
+            scope @ (SearchScope::AllOpenFiles | SearchScope::Directory)
+                if self.global_search.result_scope == Some(scope) =>
+            {
+                let result = match scope {
+                    SearchScope::AllOpenFiles => self.global_search.results.get(&tab.id),
+                    SearchScope::Directory => self.global_search.results.values().find(|result| {
+                        result_snapshot_matches_document(
+                            &result.path,
+                            &result.document,
+                            &tab.document,
+                        )
+                    }),
+                    SearchScope::CurrentFile => unreachable!(),
+                };
+                (
+                    result
+                        .map(|result| result.search_result.line_indices.clone())
+                        .unwrap_or_default(),
+                    self.global_search.matcher.clone(),
+                    match scope {
+                        SearchScope::AllOpenFiles => self
+                            .global_search
+                            .all_open_context
+                            .resolved_color_rules
+                            .clone(),
+                        SearchScope::Directory => self
+                            .global_search
+                            .directory_context
+                            .resolved_color_rules
+                            .clone(),
+                        SearchScope::CurrentFile => unreachable!(),
+                    },
+                )
+            }
+            SearchScope::AllOpenFiles | SearchScope::Directory => {
+                (CompressedRows::default(), None, Arc::default())
+            }
+        };
+        let matcher = self
+            .app_settings
+            .highlight_matches
+            .then_some(matcher)
+            .flatten();
+        let color_rules =
+            ResolvedColorRules::layered(tab.file.resolved_color_rules.clone(), session_color_rules);
+        let table = self.documents[active_ix].log_table.clone();
+        table.update(cx, |table, cx| {
+            table.delegate_mut().set_matched_rows(matched_rows);
+            table.delegate_mut().set_search_matcher(matcher);
+            table.delegate_mut().set_color_rules(color_rules);
+            table.refresh(cx);
+            cx.notify();
+        });
+    }
+
     pub(super) fn open_global_search_files_dialog(
         &mut self,
         window: &mut Window,
@@ -177,8 +246,12 @@ impl Workspace {
         self.global_search.directory_query =
             Self::restored_search_query(&session.context.query, search_result_limit);
         self.global_search.directory_options = Self::restored_directory_options(session.options);
+        let keyword_color_rules = session.context.keyword_color_rules.clone();
+        let resolved_color_rules = resolve_color_rules(&keyword_color_rules, &self.color_labels);
         self.global_search.directory_context = SearchSessionState {
             query: self.global_search.directory_query.clone(),
+            keyword_color_rules,
+            resolved_color_rules,
             result_mode: ResultMode::from_database(session.context.result_mode),
             results_visible: session.context.results_visible,
             word_wrap: session.context.word_wrap,
@@ -274,6 +347,19 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let session_color_rules = match self.global_search.scope {
+            SearchScope::AllOpenFiles => self
+                .global_search
+                .all_open_context
+                .resolved_color_rules
+                .clone(),
+            SearchScope::Directory => self
+                .global_search
+                .directory_context
+                .resolved_color_rules
+                .clone(),
+            SearchScope::CurrentFile => Arc::default(),
+        };
         let groups = match self.global_search.scope {
             SearchScope::AllOpenFiles => self
                 .documents
@@ -312,7 +398,10 @@ impl Workspace {
                             truncated: search_result.is_some_and(|result| result.truncated)
                                 && self.global_search.result_mode.includes_matches(),
                             failure: result.and_then(|result| result.failure.clone()),
-                            color_rules: tab.file.resolved_color_rules.clone(),
+                            color_rules: ResolvedColorRules::layered(
+                                tab.file.resolved_color_rules.clone(),
+                                session_color_rules.clone(),
+                            ),
                         },
                     }
                 })
@@ -367,9 +456,12 @@ impl Workspace {
                                     truncated: result.search_result.truncated
                                         && self.global_search.result_mode.includes_matches(),
                                     failure: result.failure.clone(),
-                                    color_rules: open_tab
-                                        .map(|tab| tab.file.resolved_color_rules.clone())
-                                        .unwrap_or_else(Arc::default),
+                                    color_rules: ResolvedColorRules::layered(
+                                        open_tab
+                                            .map(|tab| tab.file.resolved_color_rules.clone())
+                                            .unwrap_or_else(Arc::default),
+                                        session_color_rules.clone(),
+                                    ),
                                 },
                         })
                     })
@@ -905,6 +997,7 @@ impl Workspace {
             persisted.result_mode = context.result_mode.database_value();
             persisted.results_visible = context.results_visible;
             persisted.word_wrap = context.word_wrap;
+            persisted.keyword_color_rules = context.keyword_color_rules.clone();
             persisted.active = context.active;
             return persisted;
         }
@@ -965,6 +1058,7 @@ impl Workspace {
             result_mode: context.result_mode.database_value(),
             results_visible: context.results_visible,
             word_wrap: context.word_wrap,
+            keyword_color_rules: context.keyword_color_rules.clone(),
             collapsed_paths,
             selection,
             selected_row,
@@ -1094,16 +1188,26 @@ impl Workspace {
         self.global_search.directory_query =
             Self::restored_search_query(&directory_context.query, search_result_limit);
         self.global_search.directory_options = Self::restored_directory_options(directory_options);
+        let all_open_keyword_color_rules = state.all_open.keyword_color_rules.clone();
+        let all_open_resolved_color_rules =
+            resolve_color_rules(&all_open_keyword_color_rules, &self.color_labels);
         self.global_search.all_open_context = SearchSessionState {
             query: self.global_search.query.clone(),
+            keyword_color_rules: all_open_keyword_color_rules,
+            resolved_color_rules: all_open_resolved_color_rules,
             result_mode: ResultMode::from_database(state.all_open.result_mode),
             results_visible: state.all_open.results_visible,
             word_wrap: state.all_open.word_wrap,
             active: state.all_open.active,
             ..SearchSessionState::default()
         };
+        let directory_keyword_color_rules = directory_context.keyword_color_rules.clone();
+        let directory_resolved_color_rules =
+            resolve_color_rules(&directory_keyword_color_rules, &self.color_labels);
         self.global_search.directory_context = SearchSessionState {
             query: self.global_search.directory_query.clone(),
+            keyword_color_rules: directory_keyword_color_rules,
+            resolved_color_rules: directory_resolved_color_rules,
             result_mode: ResultMode::from_database(directory_context.result_mode),
             results_visible: directory_context.results_visible,
             word_wrap: directory_context.word_wrap,
@@ -1264,6 +1368,11 @@ impl Workspace {
                 &persisted.query,
                 self.app_settings.search_result_limit(),
             ),
+            keyword_color_rules: persisted.keyword_color_rules.clone(),
+            resolved_color_rules: resolve_color_rules(
+                &persisted.keyword_color_rules,
+                &self.color_labels,
+            ),
             initialized: true,
             results: self.global_search.results.clone(),
             matcher: self.global_search.matcher.clone(),
@@ -1349,12 +1458,37 @@ impl Workspace {
                 selected_row,
             )
         };
+        let retained_color_rules = match scope {
+            SearchScope::AllOpenFiles => (
+                self.global_search
+                    .all_open_context
+                    .keyword_color_rules
+                    .clone(),
+                self.global_search
+                    .all_open_context
+                    .resolved_color_rules
+                    .clone(),
+            ),
+            SearchScope::Directory => (
+                self.global_search
+                    .directory_context
+                    .keyword_color_rules
+                    .clone(),
+                self.global_search
+                    .directory_context
+                    .resolved_color_rules
+                    .clone(),
+            ),
+            SearchScope::CurrentFile => return,
+        };
         let context = SearchSessionState {
             query: match scope {
                 SearchScope::AllOpenFiles => self.global_search.query.clone(),
                 SearchScope::Directory => self.global_search.directory_query.clone(),
                 SearchScope::CurrentFile => return,
             },
+            keyword_color_rules: retained_color_rules.0,
+            resolved_color_rules: retained_color_rules.1,
             initialized: self.global_search.result_scope == Some(scope),
             results: self.global_search.results.clone(),
             matcher: self.global_search.matcher.clone(),
@@ -1895,6 +2029,7 @@ impl Workspace {
         self.global_search.result_scope = Some(completed.scope);
 
         self.refresh_global_result_rows(window, cx);
+        self.refresh_active_log_search_presentation(cx);
         self.position_global_row_viewport_anchor(viewport_anchor, row_height, cx);
         if word_wrap {
             self.prime_global_wrapped_frame(row_height, false, window, cx);
