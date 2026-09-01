@@ -16117,8 +16117,9 @@ impl Workspace {
                     .with_highlights(Self::highlight_styles(&row.highlights, cx));
                 let severity = row
                     .highlight_severity
-                    .then(|| severity_style(row.text.source(), cx))
-                    .flatten();
+                    .then(|| row.text.severity())
+                    .flatten()
+                    .map(|severity| severity_style(severity, cx));
                 let measure_workspace = workspace.clone();
                 let row_bounds = rendered_row_bounds.clone();
                 let line = SelectableLogText::new(
@@ -17408,8 +17409,9 @@ impl Workspace {
                         let styled_text = StyledText::new(text.display().clone())
                             .with_highlights(Self::highlight_styles(&highlights, cx));
                         let severity = highlight_severity
-                            .then(|| severity_style(text.source(), cx))
-                            .flatten();
+                            .then(|| text.severity())
+                            .flatten()
+                            .map(|severity| severity_style(severity, cx));
                         let measure_workspace = workspace.clone();
                         let row_bounds = rendered_row_bounds.clone();
                         let selectable = SelectableLogText::new(

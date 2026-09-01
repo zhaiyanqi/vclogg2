@@ -26,20 +26,12 @@ use vclogg_core::{CompressedRows, LogDocument, SearchMatcher};
 use vclogg_core::LinePreview;
 
 use crate::color_labels::ResolvedColorRules;
-use crate::selectable_log_text::{LogText, SelectableLogText, TextSelectionCache};
+use crate::selectable_log_text::{LogSeverity, LogText, SelectableLogText, TextSelectionCache};
 use crate::state_store::{AppSettings, DEFAULT_WORD_BOUNDARY_CHARACTERS, LogFontFamily};
 use crate::ui_theme;
 use crate::virtual_log_lines::{
     LogRowKey, LogRowProjection, MAX_VISIBLE_LINE_COLUMNS, VisibleLineStore,
 };
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum LogSeverity {
-    Error,
-    Warning,
-    Info,
-    Debug,
-}
 
 pub(crate) fn log_cell_horizontal_padding(cx: &App) -> Pixels {
     cx.theme().spacing_tokens().sm
@@ -126,28 +118,6 @@ pub(crate) fn log_row_selection_overlay(
         .border_color(cx.theme().table_active_border)
 }
 
-pub(crate) fn detect_log_severity(text: &str) -> Option<LogSeverity> {
-    let contains_any = |candidates: &[&str]| {
-        text.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
-            .any(|word| {
-                candidates
-                    .iter()
-                    .any(|candidate| word.eq_ignore_ascii_case(candidate))
-            })
-    };
-    if contains_any(&["FATAL", "ERROR", "CRITICAL", "SEVERE"]) {
-        Some(LogSeverity::Error)
-    } else if contains_any(&["WARN", "WARNING"]) {
-        Some(LogSeverity::Warning)
-    } else if contains_any(&["INFO", "NOTICE"]) {
-        Some(LogSeverity::Info)
-    } else if contains_any(&["DEBUG", "TRACE", "VERBOSE"]) {
-        Some(LogSeverity::Debug)
-    } else {
-        None
-    }
-}
-
 /// 级别着色使用「整行实色底 + 最左侧 3px 色条」。
 #[derive(Clone, Copy)]
 pub(crate) struct SeverityStyle {
@@ -155,9 +125,9 @@ pub(crate) struct SeverityStyle {
     pub(crate) accent: Hsla,
 }
 
-pub(crate) fn severity_style(text: &str, cx: &App) -> Option<SeverityStyle> {
+pub(crate) fn severity_style(severity: LogSeverity, cx: &App) -> SeverityStyle {
     let colors = ui_theme::palette(cx);
-    detect_log_severity(text).map(|severity| match severity {
+    match severity {
         LogSeverity::Error => SeverityStyle {
             background: colors.severity_error_background,
             accent: colors.severity_error_accent,
@@ -174,7 +144,7 @@ pub(crate) fn severity_style(text: &str, cx: &App) -> Option<SeverityStyle> {
             background: colors.severity_debug_background,
             accent: colors.severity_debug_accent,
         },
-    })
+    }
 }
 
 /// 级别色条使用不占布局的绝对定位覆盖层，挂在标记列上即可贴住行的左缘。
@@ -1370,7 +1340,8 @@ impl TableDelegate for LogTableDelegate {
         let severity = source_row
             .filter(|_| self.presenter.highlight_log_levels)
             .and_then(|source_row| self.line_text(source_row))
-            .and_then(|line| severity_style(line.source(), cx));
+            .and_then(|line| line.severity())
+            .map(|severity| severity_style(severity, cx));
         let row_bounds = self.interaction.row_bounds.clone();
         div()
             .id(format!(
@@ -1441,7 +1412,8 @@ impl TableDelegate for LogTableDelegate {
                 .highlight_log_levels
                 .then(|| self.line_text(source_row))
                 .flatten()
-                .and_then(|line| severity_style(line.source(), cx))
+                .and_then(|line| line.severity())
+                .map(|severity| severity_style(severity, cx))
                 .map(|style| style.accent);
             h_flex()
                 .relative()

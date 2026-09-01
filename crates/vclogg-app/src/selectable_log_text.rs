@@ -1,5 +1,5 @@
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     collections::{BTreeMap, BTreeSet},
     ops::Range,
     rc::Rc,
@@ -19,6 +19,14 @@ const CACHE_LIMIT: usize = 2048;
 const TAB_STOP_COLUMNS: usize = 8;
 type MeasureCallback = dyn Fn(Pixels, &mut Window, &mut App);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LogSeverity {
+    Error,
+    Warning,
+    Info,
+    Debug,
+}
+
 #[derive(Clone)]
 struct TabExpansion {
     source_offset: usize,
@@ -33,6 +41,7 @@ pub(crate) struct LogText {
     source: SharedString,
     display: SharedString,
     tab_expansions: Rc<[TabExpansion]>,
+    severity: Rc<OnceCell<Option<LogSeverity>>>,
 }
 
 impl LogText {
@@ -42,6 +51,7 @@ impl LogText {
                 display: source.clone(),
                 source,
                 tab_expansions: Rc::default(),
+                severity: Rc::default(),
             };
         }
 
@@ -68,6 +78,7 @@ impl LogText {
             source,
             display: display.into(),
             tab_expansions: tab_expansions.into(),
+            severity: Rc::default(),
         }
     }
 
@@ -84,6 +95,12 @@ impl LogText {
 
     pub(crate) fn display(&self) -> &SharedString {
         &self.display
+    }
+
+    pub(crate) fn severity(&self) -> Option<LogSeverity> {
+        *self
+            .severity
+            .get_or_init(|| detect_log_severity(self.source.as_ref()))
     }
 
     pub(crate) fn retained_bytes(&self) -> usize {
@@ -200,6 +217,28 @@ impl LogText {
         self.source_range(display_range)
             .and_then(|range| self.source.get(range))
             .map(str::to_string)
+    }
+}
+
+fn detect_log_severity(text: &str) -> Option<LogSeverity> {
+    let contains_any = |candidates: &[&str]| {
+        text.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+            .any(|word| {
+                candidates
+                    .iter()
+                    .any(|candidate| word.eq_ignore_ascii_case(candidate))
+            })
+    };
+    if contains_any(&["FATAL", "ERROR", "CRITICAL", "SEVERE"]) {
+        Some(LogSeverity::Error)
+    } else if contains_any(&["WARN", "WARNING"]) {
+        Some(LogSeverity::Warning)
+    } else if contains_any(&["INFO", "NOTICE"]) {
+        Some(LogSeverity::Info)
+    } else if contains_any(&["DEBUG", "TRACE", "VERBOSE"]) {
+        Some(LogSeverity::Debug)
+    } else {
+        None
     }
 }
 
@@ -799,6 +838,18 @@ mod tests {
                     .saturating_add(text.display().len())
                     .saturating_add(std::mem::size_of::<TabExpansion>())
         );
+    }
+
+    #[test]
+    fn severity_is_classified_once_per_shared_visible_text() {
+        let text = LogText::new("2026-09-01 ERROR failed".into());
+        let cloned = text.clone();
+
+        assert!(text.severity.get().is_none());
+        assert_eq!(text.severity(), Some(LogSeverity::Error));
+        assert_eq!(cloned.severity(), Some(LogSeverity::Error));
+        assert_eq!(text.severity.get(), Some(&Some(LogSeverity::Error)));
+        assert!(Rc::ptr_eq(&text.severity, &cloned.severity));
     }
 
     impl Render for SelectableLogTextTestView {

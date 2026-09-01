@@ -1512,7 +1512,8 @@ impl TableDelegate for GlobalSearchTableDelegate {
                     .highlight_log_levels
                     .then(|| self.line_text(group_ix, source_row))
                     .flatten()
-                    .and_then(|line| severity_style(line.source(), cx));
+                    .and_then(|line| line.severity())
+                    .map(|severity| severity_style(severity, cx));
                 div()
                     .id(format!(
                         "global-search-result-{}-{source_row}",
@@ -1599,7 +1600,8 @@ impl TableDelegate for GlobalSearchTableDelegate {
                         .highlight_log_levels
                         .then(|| self.line_text(group_ix, source_row))
                         .flatten()
-                        .and_then(|line| severity_style(line.source(), cx))
+                        .and_then(|line| line.severity())
+                        .map(|severity| severity_style(severity, cx))
                         .map(|style| style.accent);
                     h_flex()
                         .relative()
