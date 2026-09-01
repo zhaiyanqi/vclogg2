@@ -12643,16 +12643,21 @@ impl Workspace {
         true
     }
 
-    fn reset_visible_line_owner(
+    fn switch_visible_line_owner(
         &mut self,
         document_id: u64,
         region: WrappedRegion,
+        mode: LogViewportMode,
         cx: &mut Context<Self>,
     ) {
         self.visible_line_tasks.remove(&(document_id, region));
         if region == WrappedRegion::GlobalResults {
-            self.global_table.update(cx, |table, _| {
-                table.delegate_mut().reset_visible_line_owner();
+            self.global_table.update(cx, |table, cx| {
+                if mode == LogViewportMode::Fixed {
+                    table.reacquire_visible_log_rows(cx);
+                } else {
+                    table.delegate_mut().reset_visible_line_owner();
+                }
             });
             return;
         }
@@ -12664,9 +12669,25 @@ impl Workspace {
         } else {
             tab.log_table.clone()
         };
-        table.update(cx, |table, _| {
-            table.delegate_mut().reset_visible_line_owner();
+        table.update(cx, |table, cx| {
+            if mode == LogViewportMode::Fixed {
+                table.reacquire_visible_log_rows(cx);
+            } else {
+                table.delegate_mut().reset_visible_line_owner();
+            }
         });
+    }
+
+    fn refresh_log_surfaces_atomically(
+        surfaces: impl IntoIterator<Item = Entity<LogRegionSurface>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for surface in surfaces {
+            surface.update(cx, |_, cx| cx.notify());
+        }
+        // Switching between two retained renderers must invalidate their cached subtrees together.
+        window.refresh();
     }
 
     fn clear_document_visible_lines(&mut self, document_id: u64, cx: &mut Context<Self>) {
@@ -13055,18 +13076,24 @@ impl Workspace {
             !self.documents[active_ix].log_viewport.is_wrapped()
         };
         let row_height = self.log_row_height();
+        let target_mode = if enabled {
+            LogViewportMode::Wrapped
+        } else {
+            LogViewportMode::Fixed
+        };
+        let mut refreshed_surfaces = Vec::with_capacity(3);
 
         if self.global_search.scope.owns_global_word_wrap()
             && self.global_viewport.is_wrapped() != enabled
         {
             let anchor = self.capture_global_row_viewport_anchor(row_height, cx);
-            self.reset_visible_line_owner(0, WrappedRegion::GlobalResults, cx);
+            self.switch_visible_line_owner(0, WrappedRegion::GlobalResults, target_mode, cx);
             if enabled {
                 self.prime_global_wrapped_frame(row_height, true, window, cx);
             }
             self.global_viewport.set_word_wrap(enabled);
             self.position_global_row_viewport_anchor(anchor, row_height, cx);
-            self.global_surface.update(cx, |_, cx| cx.notify());
+            refreshed_surfaces.push(self.global_surface.clone());
             self.schedule_workspace_search_state_save(window, cx);
         }
 
@@ -13086,8 +13113,13 @@ impl Workspace {
                     cx,
                 );
                 let document_id = self.documents[active_ix].id;
-                self.reset_visible_line_owner(document_id, WrappedRegion::Log, cx);
-                self.reset_visible_line_owner(document_id, WrappedRegion::Results, cx);
+                self.switch_visible_line_owner(document_id, WrappedRegion::Log, target_mode, cx);
+                self.switch_visible_line_owner(
+                    document_id,
+                    WrappedRegion::Results,
+                    target_mode,
+                    cx,
+                );
                 if enabled {
                     self.prime_wrapped_first_frame(active_ix, row_height, window, cx);
                 }
@@ -13112,11 +13144,13 @@ impl Workspace {
                     row_height,
                     cx,
                 );
-                for surface in [tab.log_surface.clone(), tab.result_surface.clone()] {
-                    surface.update(cx, |_, cx| cx.notify());
-                }
+                refreshed_surfaces.extend([tab.log_surface.clone(), tab.result_surface.clone()]);
                 self.schedule_checkpoint(document_id, window, cx);
             }
+        }
+
+        if !refreshed_surfaces.is_empty() {
+            Self::refresh_log_surfaces_atomically(refreshed_surfaces, window, cx);
         }
 
         window.push_notification(

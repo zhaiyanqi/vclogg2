@@ -1509,6 +1509,10 @@ impl LogTableCursor for GlobalSearchTableDelegate {
 }
 
 impl LogTableRows for GlobalSearchTableDelegate {
+    fn reset_visible_log_row_owner(&mut self) {
+        self.reset_visible_line_owner();
+    }
+
     fn schedule_visible_log_rows(
         &mut self,
         visible_range: Range<usize>,

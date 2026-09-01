@@ -270,6 +270,8 @@ pub(crate) trait LogTableCursor {
 }
 
 pub(crate) trait LogTableRows {
+    fn reset_visible_log_row_owner(&mut self);
+
     fn schedule_visible_log_rows(
         &mut self,
         visible_range: Range<usize>,
@@ -287,6 +289,11 @@ pub(crate) trait LogTableStateExt {
     where
         Self: Sized;
     fn refresh_log_rows(&mut self, cx: &mut Context<Self>)
+    where
+        Self: Sized;
+    /// Hands the unchanged visible window to the fixed table owner and invalidates its view in
+    /// the same entity update.
+    fn reacquire_visible_log_rows(&mut self, cx: &mut Context<Self>)
     where
         Self: Sized;
 }
@@ -337,6 +344,15 @@ where
         self.delegate_mut()
             .schedule_visible_log_rows(visible_range, cx);
         self.refresh(cx);
+    }
+
+    fn reacquire_visible_log_rows(&mut self, cx: &mut Context<Self>) {
+        let visible_range = self.visible_range().rows().clone();
+        let delegate = self.delegate_mut();
+        delegate.reset_visible_log_row_owner();
+        delegate.schedule_visible_log_rows(visible_range, cx);
+        self.refresh(cx);
+        cx.notify();
     }
 }
 
@@ -1402,6 +1418,10 @@ impl LogTableCursor for LogTableDelegate {
 }
 
 impl LogTableRows for LogTableDelegate {
+    fn reset_visible_log_row_owner(&mut self) {
+        self.reset_visible_line_owner();
+    }
+
     fn schedule_visible_log_rows(
         &mut self,
         visible_range: Range<usize>,
