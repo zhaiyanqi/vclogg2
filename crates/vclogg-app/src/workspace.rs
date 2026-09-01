@@ -7480,23 +7480,23 @@ impl Workspace {
         if !self.tabs.contains(&tab_id) {
             return;
         }
-        if self.active_tab_id != tab_id
-            && let Some(active) = self.active_document()
-        {
+        let active_tab_changed = self.active_tab_id != tab_id;
+        if active_tab_changed && let Some(active) = self.active_document() {
             let path = active.document.path().to_path_buf();
             let base = active.session_base.clone();
             let state = self.file_session_state(active, cx);
             self.save_file_session(path, base, state, window, cx);
         }
-        if self.active_tab_id != tab_id
-            && let Some(document_id) = self.active_document().map(|tab| tab.id)
-        {
+        if active_tab_changed && let Some(document_id) = self.active_document().map(|tab| tab.id) {
             self.clear_document_visible_lines(document_id, cx);
         }
         self.active_tab_id = tab_id;
         self.sync_active_document_ix();
         self.pending_document_tab_reveal.set(None);
         self.sync_active_document(window, cx);
+        if active_tab_changed {
+            self.refresh_active_document_surfaces_atomically(window, cx);
+        }
         cx.notify();
     }
 
@@ -7771,6 +7771,9 @@ impl Workspace {
             self.refresh_global_result_rows(cx);
         }
         self.sync_active_document(window, cx);
+        if previous_active_id != self.active_tab_id {
+            self.refresh_active_document_surfaces_atomically(window, cx);
+        }
         self.persist_workspace_order(window, cx);
         self.schedule_workspace_search_state_save(window, cx);
         cx.notify();
@@ -12397,8 +12400,48 @@ impl Workspace {
         for surface in surfaces {
             surface.update(cx, |_, cx| cx.notify());
         }
-        // Switching between two retained renderers must invalidate their cached subtrees together.
+        // Renderer ownership and every surface that consumes it must invalidate before the next
+        // frame so retained subtrees cannot outlive a mode or active-tab transition.
         window.refresh();
+    }
+
+    fn refresh_active_document_surfaces_atomically(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab_ix) = self.active_ix else {
+            return;
+        };
+        let row_height = self.log_row_height();
+        let (document_id, log_mode, result_mode, surfaces) = {
+            let tab = &self.documents[tab_ix];
+            (
+                tab.id,
+                if tab.log_viewport.is_wrapped() {
+                    LogViewportMode::Wrapped
+                } else {
+                    LogViewportMode::Fixed
+                },
+                if tab.result_viewport.is_wrapped() {
+                    LogViewportMode::Wrapped
+                } else {
+                    LogViewportMode::Fixed
+                },
+                [tab.log_surface.clone(), tab.result_surface.clone()],
+            )
+        };
+
+        for (region, mode) in [
+            (WrappedRegion::Log, log_mode),
+            (WrappedRegion::Results, result_mode),
+        ] {
+            self.switch_visible_line_owner(document_id, region, mode, cx);
+            if mode == LogViewportMode::Wrapped {
+                self.prime_local_wrapped_frame(tab_ix, region, row_height, false, window, cx);
+            }
+        }
+        Self::refresh_log_surfaces_atomically(surfaces, window, cx);
     }
 
     fn clear_document_visible_lines(&mut self, document_id: u64, cx: &mut Context<Self>) {
