@@ -135,8 +135,14 @@ pub(crate) fn save_to_unique_temp(export: &ResultExport) -> Result<PathBuf> {
 struct TimestampMergeCursor {
     group: ExportGroup,
     next_result_ix: usize,
+    resolution: TimestampResolutionState,
+}
+
+#[derive(Default)]
+struct TimestampResolutionState {
     last_result_row: Option<usize>,
     last_timestamp: Option<u64>,
+    timestamps_absent: bool,
 }
 
 pub(crate) fn save_timestamp_merged_to_unique_temp(export: &ResultExport) -> Result<PathBuf> {
@@ -203,14 +209,13 @@ fn write_timestamp_merged_export(export: &ResultExport, file: File) -> Result<us
         .map(|group| TimestampMergeCursor {
             group,
             next_result_ix: 0,
-            last_result_row: None,
-            last_timestamp: None,
+            resolution: TimestampResolutionState::default(),
         })
         .collect::<Vec<_>>();
     let mut heads = BinaryHeap::<Reverse<(u64, usize, usize)>>::new();
     for (source_ix, cursor) in cursors.iter_mut().enumerate() {
         if let Some(row) = cursor.group.rows.first() {
-            let timestamp = resolve_row_timestamp(cursor, row)?;
+            let timestamp = resolve_row_timestamp(cursor, row);
             heads.push(Reverse((timestamp.unwrap_or(u64::MAX), source_ix, row)));
             cursor.next_result_ix = 1;
         }
@@ -234,7 +239,7 @@ fn write_timestamp_merged_export(export: &ResultExport, file: File) -> Result<us
 
         if let Some(next_row) = cursor.group.rows.get(cursor.next_result_ix) {
             cursor.next_result_ix += 1;
-            let timestamp = resolve_row_timestamp(cursor, next_row)?;
+            let timestamp = resolve_row_timestamp(cursor, next_row);
             heads.push(Reverse((
                 timestamp.unwrap_or(u64::MAX),
                 source_ix,
@@ -253,43 +258,55 @@ fn write_timestamp_merged_export(export: &ResultExport, file: File) -> Result<us
     Ok(row_count)
 }
 
-fn resolve_row_timestamp(cursor: &mut TimestampMergeCursor, row: usize) -> Result<Option<u64>> {
-    let mut timestamp = cursor
-        .group
-        .document
-        .line(row)
-        .and_then(|line| match_log_timestamp(&line));
-    if timestamp.is_none() {
-        let first_unchecked = cursor
-            .last_result_row
-            .map_or(0, |row| row.saturating_add(1));
-        for candidate in (first_unchecked..row).rev() {
-            timestamp = cursor
-                .group
-                .document
+fn resolve_row_timestamp(cursor: &mut TimestampMergeCursor, row: usize) -> Option<u64> {
+    let document = &cursor.group.document;
+    resolve_row_timestamp_with(
+        &mut cursor.resolution,
+        row,
+        document.source_line_count(),
+        |candidate| {
+            document
                 .line(candidate)
-                .and_then(|line| match_log_timestamp(&line));
+                .and_then(|line| match_log_timestamp(&line))
+        },
+    )
+}
+
+fn resolve_row_timestamp_with(
+    state: &mut TimestampResolutionState,
+    row: usize,
+    source_line_count: usize,
+    mut timestamp_at: impl FnMut(usize) -> Option<u64>,
+) -> Option<u64> {
+    if state.timestamps_absent {
+        state.last_result_row = Some(row);
+        return None;
+    }
+    let mut timestamp = timestamp_at(row);
+    if timestamp.is_none() {
+        let first_unchecked = state.last_result_row.map_or(0, |row| row.saturating_add(1));
+        for candidate in (first_unchecked..row).rev() {
+            timestamp = timestamp_at(candidate);
             if timestamp.is_some() {
                 break;
             }
         }
-        timestamp = timestamp.or(cursor.last_timestamp);
+        timestamp = timestamp.or(state.last_timestamp);
         if timestamp.is_none() {
-            for candidate in row.saturating_add(1)..cursor.group.document.source_line_count() {
-                timestamp = cursor
-                    .group
-                    .document
-                    .line(candidate)
-                    .and_then(|line| match_log_timestamp(&line));
+            for candidate in row.saturating_add(1)..source_line_count {
+                timestamp = timestamp_at(candidate);
                 if timestamp.is_some() {
                     break;
                 }
             }
+            if timestamp.is_none() {
+                state.timestamps_absent = true;
+            }
         }
     }
-    cursor.last_result_row = Some(row);
-    cursor.last_timestamp = timestamp;
-    Ok(timestamp)
+    state.last_result_row = Some(row);
+    state.last_timestamp = timestamp;
+    timestamp
 }
 
 fn match_log_timestamp(text: &str) -> Option<u64> {
@@ -443,6 +460,39 @@ fn commit_staging(staging: &Path, target: &Path) -> Result<()> {
             target.display()
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use super::{TimestampResolutionState, resolve_row_timestamp_with};
+
+    #[test]
+    fn timestamp_resolution_scans_a_timestamp_free_source_only_once() {
+        let mut state = TimestampResolutionState::default();
+        let inspected = RefCell::new(Vec::new());
+
+        assert_eq!(
+            resolve_row_timestamp_with(&mut state, 1, 5, |row| {
+                inspected.borrow_mut().push(row);
+                None
+            }),
+            None
+        );
+        assert_eq!(*inspected.borrow(), vec![1, 0, 2, 3, 4]);
+        assert!(state.timestamps_absent);
+
+        inspected.borrow_mut().clear();
+        assert_eq!(
+            resolve_row_timestamp_with(&mut state, 3, 5, |row| {
+                inspected.borrow_mut().push(row);
+                None
+            }),
+            None
+        );
+        assert!(inspected.borrow().is_empty());
+    }
 }
 
 #[cfg(windows)]
