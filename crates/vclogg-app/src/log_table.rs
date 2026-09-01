@@ -1142,6 +1142,11 @@ impl LogTableDelegate {
         self.source.visible_lines.install_loaded(loaded)
     }
 
+    pub(crate) fn reset_visible_line_owner(&mut self) {
+        self.visible_line_task = None;
+        self.source.visible_lines.invalidate_window();
+    }
+
     fn schedule_visible_rows(
         &mut self,
         visible_range: Range<usize>,
@@ -1816,6 +1821,21 @@ mod tests {
         assert!(presentation.highlights.is_empty());
         assert!(!presentation.text.display().is_empty());
         assert!(delegate.line_text(7).is_none());
+    }
+
+    #[test]
+    fn visible_line_owner_reset_reissues_the_same_window() {
+        let document = Arc::new(LogDocument::placeholder("visible-owner-reset.log"));
+        let mut delegate = LogTableDelegate::projected(1, document, [7].into_iter().collect());
+        let stale = delegate
+            .request_visible_rows(0..1)
+            .expect("首个后端应请求可见行")
+            .load(|_, _| Some(LinePreview::new("stale", false)));
+
+        delegate.reset_visible_line_owner();
+
+        assert!(delegate.request_visible_rows(0..1).is_some());
+        assert!(!delegate.install_visible_lines(stale));
     }
 
     #[test]

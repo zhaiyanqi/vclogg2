@@ -1105,6 +1105,11 @@ impl GlobalSearchTableDelegate {
         self.visible_lines.install_loaded(loaded)
     }
 
+    pub(crate) fn reset_visible_line_owner(&mut self) {
+        self.visible_line_task = None;
+        self.visible_lines.invalidate_window();
+    }
+
     fn schedule_visible_rows(
         &mut self,
         visible_range: Range<usize>,

@@ -12510,6 +12510,32 @@ impl Workspace {
         self.visible_line_tasks.insert((document_id, region), task);
     }
 
+    fn reset_visible_line_owner(
+        &mut self,
+        document_id: u64,
+        region: WrappedRegion,
+        cx: &mut Context<Self>,
+    ) {
+        self.visible_line_tasks.remove(&(document_id, region));
+        if region == WrappedRegion::GlobalResults {
+            self.global_table.update(cx, |table, _| {
+                table.delegate_mut().reset_visible_line_owner();
+            });
+            return;
+        }
+        let Some(tab) = self.documents.iter().find(|tab| tab.id == document_id) else {
+            return;
+        };
+        let table = if region == WrappedRegion::Results {
+            tab.result_table.clone()
+        } else {
+            tab.log_table.clone()
+        };
+        table.update(cx, |table, _| {
+            table.delegate_mut().reset_visible_line_owner();
+        });
+    }
+
     fn schedule_global_visible_lines(
         &mut self,
         visible_range: Range<usize>,
@@ -12886,6 +12912,7 @@ impl Workspace {
             && self.global_viewport.is_wrapped() != enabled
         {
             let anchor = self.capture_global_row_viewport_anchor(row_height, cx);
+            self.reset_visible_line_owner(0, WrappedRegion::GlobalResults, cx);
             if enabled {
                 self.prime_global_wrapped_frame(row_height, true, window, cx);
             }
@@ -12910,6 +12937,9 @@ impl Workspace {
                     row_height,
                     cx,
                 );
+                let document_id = self.documents[active_ix].id;
+                self.reset_visible_line_owner(document_id, WrappedRegion::Log, cx);
+                self.reset_visible_line_owner(document_id, WrappedRegion::Results, cx);
                 if enabled {
                     self.prime_wrapped_first_frame(active_ix, row_height, window, cx);
                 }
