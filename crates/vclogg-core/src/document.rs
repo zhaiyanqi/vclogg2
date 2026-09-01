@@ -418,6 +418,7 @@ impl VerifiedFileBytes {
     }
 
     fn load_verified_block(&self, block_ix: usize, retain: bool) -> Option<Arc<[u8]>> {
+        let retain = retain && !self.transient_source_handles.load(Ordering::Acquire);
         {
             let mut state = self.state.lock().ok()?;
             if let Some(block) = state.blocks.get(&block_ix).cloned() {
@@ -2396,7 +2397,7 @@ mod source_snapshot_tests {
 
     use crate::CancellationToken;
 
-    use super::{FileEncoding, LogDocument, build_line_index_while};
+    use super::{DocumentBytes, FileEncoding, LogDocument, build_line_index_while};
 
     fn test_directory(label: &str) -> PathBuf {
         let nonce = SystemTime::now()
@@ -2509,6 +2510,18 @@ mod source_snapshot_tests {
 
         document.release_source_handle();
         assert_eq!(document.line(0).as_deref(), Some("alpha"));
+        let DocumentBytes::Verified(bytes) = document.bytes.as_ref() else {
+            panic!("完整文档应使用校验块存储");
+        };
+        assert_eq!(
+            bytes
+                .state
+                .lock()
+                .expect("校验块缓存锁不应中毒")
+                .cached_bytes,
+            0,
+            "瞬时句柄文档不应长期保留原始文件块"
+        );
 
         let replaced_path = directory.join("replacement.log");
         fs::write(&replaced_path, b"first\nsecond\n").expect("应能写入待替换测试日志");
