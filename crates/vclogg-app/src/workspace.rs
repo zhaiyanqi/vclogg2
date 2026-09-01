@@ -199,6 +199,8 @@ fn persistent_log_scrollbar(scrollbar: Scrollbar, background: gpui::Hsla) -> Scr
 struct PreparedDocument {
     document: Arc<LogDocument>,
     session: Option<FileSessionState>,
+    color_labels_snapshot: Option<Vec<ColorLabel>>,
+    resolved_color_rules: Arc<ResolvedColorRules>,
     search_result: SearchResult,
     search_matcher: Option<SearchMatcher>,
     warning: Option<String>,
@@ -4357,6 +4359,7 @@ impl Workspace {
             target_indices,
         } = overrides;
         let search_result_limit = self.app_settings.search_result_limit();
+        let color_labels = self.color_labels.clone();
 
         self.open_task = Some(cx.spawn_in(window, async move |this, cx| {
             let restore_paths = paths.clone();
@@ -4387,6 +4390,7 @@ impl Workspace {
             let preview_paths = paths.clone();
             let preview_sessions = sessions.clone();
             let preview_store = fallback_store.clone();
+            let preview_color_labels = color_labels.clone();
             let previews = cx
                 .background_spawn(async move {
                     prepare_paths_bounded(preview_paths, |path| {
@@ -4395,6 +4399,7 @@ impl Workspace {
                             preview_store.as_deref(),
                             path_buf_map_get(&preview_sessions, path).cloned(),
                             effective_search_result_limit,
+                            &preview_color_labels,
                         )
                     })
                 })
@@ -4437,6 +4442,7 @@ impl Workspace {
                             full_store.as_deref(),
                             path_buf_map_get(&sessions, path).cloned(),
                             effective_search_result_limit,
+                            &color_labels,
                         )
                     })
                 })
@@ -6711,8 +6717,12 @@ impl Workspace {
                 compute_result_rows(result_mode, Some(&prepared.search_result), &marked_rows);
             let marked_rows_snapshot = marked_rows.clone();
             let keyword_color_rules = session.keyword_color_rules.clone();
-            let resolved_color_rules =
-                resolve_color_rules(&keyword_color_rules, &self.color_labels);
+            let resolved_color_rules = installable_color_rules(
+                prepared.color_labels_snapshot.as_deref(),
+                prepared.resolved_color_rules,
+                &keyword_color_rules,
+                &self.color_labels,
+            );
             let document_id = self.next_document_id;
             self.next_document_id += 1;
             if self.global_search.preference_for(&path).unwrap_or(true) {
@@ -7311,8 +7321,12 @@ impl Workspace {
             tab.pending_restore_row = session.selected_row;
             tab.pending_resume = Some(session.resume.clone());
             tab.keyword_color_rules = session.keyword_color_rules.clone();
-            tab.resolved_color_rules =
-                resolve_color_rules(&tab.keyword_color_rules, &self.color_labels);
+            tab.resolved_color_rules = installable_color_rules(
+                prepared.color_labels_snapshot.as_deref(),
+                prepared.resolved_color_rules.clone(),
+                &tab.keyword_color_rules,
+                &self.color_labels,
+            );
             tab.show_line_numbers = session.show_line_numbers;
             tab.show_row_separators = session.show_row_separators;
             tab.log_viewport.set_word_wrap(session.word_wrap);
@@ -18921,6 +18935,7 @@ fn prepare_document(
     store: Option<&StateStore>,
     session_override: Option<FileSessionState>,
     search_result_limit: Option<usize>,
+    color_labels: &[ColorLabel],
 ) -> Result<PreparedDocument> {
     let (document, pending_index_cache) = if let Some(cache_root) = crate::app_paths::cache_dir() {
         LogDocument::open_with_index_cache(path, cache_root.join("VCLogg2").join("index"))?
@@ -18973,16 +18988,35 @@ fn prepare_document(
             (SearchResult::default(), None)
         }
     };
+    let resolved_color_rules = session
+        .as_ref()
+        .map(|session| resolve_color_rules(&session.keyword_color_rules, color_labels))
+        .unwrap_or_default();
 
     Ok(PreparedDocument {
         document,
         session,
+        color_labels_snapshot: Some(color_labels.to_vec()),
+        resolved_color_rules,
         search_result,
         search_matcher,
         warning,
         load_state: DocumentLoadState::Ready,
         pending_index_cache,
     })
+}
+
+fn installable_color_rules(
+    prepared_labels: Option<&[ColorLabel]>,
+    prepared_rules: Arc<ResolvedColorRules>,
+    keyword_rules: &[KeywordColorRule],
+    current_labels: &[ColorLabel],
+) -> Arc<ResolvedColorRules> {
+    match prepared_labels {
+        None => Arc::default(),
+        Some(labels) if labels == current_labels => prepared_rules,
+        Some(_) => resolve_color_rules(keyword_rules, current_labels),
+    }
 }
 
 fn prepare_document_shell(
@@ -18992,6 +19026,8 @@ fn prepare_document_shell(
     PreparedDocument {
         document: Arc::new(LogDocument::placeholder(path)),
         session,
+        color_labels_snapshot: None,
+        resolved_color_rules: Arc::default(),
         search_result: SearchResult::default(),
         search_matcher: None,
         warning: None,
@@ -19017,6 +19053,7 @@ fn prepare_document_preview(
     store: Option<&StateStore>,
     session_override: Option<FileSessionState>,
     search_result_limit: Option<usize>,
+    color_labels: &[ColorLabel],
 ) -> Result<PreparedDocument> {
     let mut warning = None;
     let session = if session_override.is_some() {
@@ -19080,9 +19117,15 @@ fn prepare_document_preview(
             None
         }
     };
+    let resolved_color_rules = session
+        .as_ref()
+        .map(|session| resolve_color_rules(&session.keyword_color_rules, color_labels))
+        .unwrap_or_default();
     Ok(PreparedDocument {
         document,
         session,
+        color_labels_snapshot: Some(color_labels.to_vec()),
+        resolved_color_rules,
         search_result: SearchResult::default(),
         search_matcher,
         warning,
@@ -19343,6 +19386,50 @@ mod result_snapshot_tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn prepared_document_color_rules_reject_stale_label_snapshots() {
+        let original_label = default_color_labels()[0].clone();
+        let mut changed_label = original_label.clone();
+        changed_label.color = 0x123456;
+        let keyword_rules = vec![KeywordColorRule {
+            label_id: Some(original_label.id.clone()),
+            keyword: "needle".to_string(),
+            color: original_label.color,
+            alpha: original_label.alpha,
+            case_sensitive: true,
+            enabled: true,
+        }];
+        let original_labels = vec![original_label];
+        let prepared = resolve_color_rules(&keyword_rules, &original_labels);
+
+        let reused = installable_color_rules(
+            Some(&original_labels),
+            prepared.clone(),
+            &keyword_rules,
+            &original_labels,
+        );
+        assert!(Arc::ptr_eq(&reused, &prepared));
+
+        let rebuilt = installable_color_rules(
+            Some(&original_labels),
+            prepared,
+            &keyword_rules,
+            std::slice::from_ref(&changed_label),
+        );
+        assert_eq!(
+            rebuilt.matching_ranges("needle")[0].1,
+            color_with_alpha(changed_label.color, changed_label.alpha)
+        );
+
+        let placeholder = installable_color_rules(
+            None,
+            rebuilt,
+            &keyword_rules,
+            std::slice::from_ref(&changed_label),
+        );
+        assert!(placeholder.matching_ranges("needle").is_empty());
     }
 
     #[test]
