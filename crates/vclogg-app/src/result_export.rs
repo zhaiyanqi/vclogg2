@@ -215,7 +215,7 @@ fn write_timestamp_merged_export(export: &ResultExport, file: File) -> Result<us
     let mut heads = BinaryHeap::<Reverse<(u64, usize, usize)>>::new();
     for (source_ix, cursor) in cursors.iter_mut().enumerate() {
         if let Some(row) = cursor.group.rows.first() {
-            let timestamp = resolve_row_timestamp(cursor, row);
+            let timestamp = resolve_row_timestamp(cursor, row)?;
             heads.push(Reverse((timestamp.unwrap_or(u64::MAX), source_ix, row)));
             cursor.next_result_ix = 1;
         }
@@ -239,7 +239,7 @@ fn write_timestamp_merged_export(export: &ResultExport, file: File) -> Result<us
 
         if let Some(next_row) = cursor.group.rows.get(cursor.next_result_ix) {
             cursor.next_result_ix += 1;
-            let timestamp = resolve_row_timestamp(cursor, next_row);
+            let timestamp = resolve_row_timestamp(cursor, next_row)?;
             heads.push(Reverse((
                 timestamp.unwrap_or(u64::MAX),
                 source_ix,
@@ -258,16 +258,22 @@ fn write_timestamp_merged_export(export: &ResultExport, file: File) -> Result<us
     Ok(row_count)
 }
 
-fn resolve_row_timestamp(cursor: &mut TimestampMergeCursor, row: usize) -> Option<u64> {
+fn resolve_row_timestamp(cursor: &mut TimestampMergeCursor, row: usize) -> Result<Option<u64>> {
     let document = &cursor.group.document;
     resolve_row_timestamp_with(
         &mut cursor.resolution,
         row,
         document.source_line_count(),
         |candidate| {
-            document
-                .line(candidate)
-                .and_then(|line| match_log_timestamp(&line))
+            let line = document.line(candidate).ok_or_else(|| {
+                anyhow!(crate::tr_args!(
+                    "{} 的第 {} 行已不在时间戳合并快照中",
+                    "Line {} at row {} is no longer in the timestamp-merge snapshot",
+                    document.path().display(),
+                    candidate + 1
+                ))
+            })?;
+            Ok(match_log_timestamp(&line))
         },
     )
 }
@@ -276,17 +282,17 @@ fn resolve_row_timestamp_with(
     state: &mut TimestampResolutionState,
     row: usize,
     source_line_count: usize,
-    mut timestamp_at: impl FnMut(usize) -> Option<u64>,
-) -> Option<u64> {
+    mut timestamp_at: impl FnMut(usize) -> Result<Option<u64>>,
+) -> Result<Option<u64>> {
     if state.timestamps_absent {
         state.last_result_row = Some(row);
-        return None;
+        return Ok(None);
     }
-    let mut timestamp = timestamp_at(row);
+    let mut timestamp = timestamp_at(row)?;
     if timestamp.is_none() {
         let first_unchecked = state.last_result_row.map_or(0, |row| row.saturating_add(1));
         for candidate in (first_unchecked..row).rev() {
-            timestamp = timestamp_at(candidate);
+            timestamp = timestamp_at(candidate)?;
             if timestamp.is_some() {
                 break;
             }
@@ -294,7 +300,7 @@ fn resolve_row_timestamp_with(
         timestamp = timestamp.or(state.last_timestamp);
         if timestamp.is_none() {
             for candidate in row.saturating_add(1)..source_line_count {
-                timestamp = timestamp_at(candidate);
+                timestamp = timestamp_at(candidate)?;
                 if timestamp.is_some() {
                     break;
                 }
@@ -306,7 +312,7 @@ fn resolve_row_timestamp_with(
     }
     state.last_result_row = Some(row);
     state.last_timestamp = timestamp;
-    timestamp
+    Ok(timestamp)
 }
 
 fn match_log_timestamp(text: &str) -> Option<u64> {
@@ -476,8 +482,9 @@ mod tests {
         assert_eq!(
             resolve_row_timestamp_with(&mut state, 1, 5, |row| {
                 inspected.borrow_mut().push(row);
-                None
-            }),
+                Ok(None)
+            })
+            .expect("时间戳探测应完成"),
             None
         );
         assert_eq!(*inspected.borrow(), vec![1, 0, 2, 3, 4]);
@@ -487,11 +494,27 @@ mod tests {
         assert_eq!(
             resolve_row_timestamp_with(&mut state, 3, 5, |row| {
                 inspected.borrow_mut().push(row);
-                None
-            }),
+                Ok(None)
+            })
+            .expect("已知无时间戳时应直接完成"),
             None
         );
         assert!(inspected.borrow().is_empty());
+    }
+
+    #[test]
+    fn timestamp_resolution_propagates_unavailable_source_rows() {
+        let mut state = TimestampResolutionState::default();
+
+        let result = resolve_row_timestamp_with(&mut state, 2, 4, |row| {
+            if row == 1 {
+                anyhow::bail!("source row unavailable");
+            }
+            Ok(None)
+        });
+
+        assert!(result.is_err());
+        assert!(!state.timestamps_absent);
     }
 }
 
