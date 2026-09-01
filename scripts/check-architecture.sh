@@ -31,6 +31,31 @@ require_file .agents/skills/vclogg-core/SKILL.md
 require_file .agents/skills/vclogg-data/SKILL.md
 require_file .agents/skills/vclogg-app/SKILL.md
 
+workspace_capabilities=(
+  document_commands
+  document_lifecycle
+  document_opening
+  document_tasks
+  log_presentation
+  preferences
+  quick_find
+  render_shell
+  result_export_flow
+  search_orchestration
+  tab_lifecycle
+  viewport_orchestration
+  window_registry
+)
+for capability in "${workspace_capabilities[@]}"; do
+  require_file "crates/vclogg-app/src/workspace/${capability}.rs"
+done
+
+workspace_line_limit=4000
+workspace_line_count="$(wc -l < crates/vclogg-app/src/workspace.rs)"
+if (( workspace_line_count > workspace_line_limit )); then
+  fail "workspace.rs has ${workspace_line_count} lines; move capabilities into workspace/* modules before exceeding ${workspace_line_limit}"
+fi
+
 for layer in core data app; do
   skill=".agents/skills/vclogg-${layer}/SKILL.md"
   rg --quiet "^name: vclogg-${layer}$" "$skill" \
