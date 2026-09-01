@@ -96,6 +96,7 @@ struct GlobalSearchProjectionState {
     layout_revision: u64,
     group_starts: Vec<usize>,
     rows_len: usize,
+    max_line_columns: usize,
 }
 
 struct GlobalRowPresenter {
@@ -132,6 +133,7 @@ impl Default for GlobalSearchProjectionState {
             layout_revision: 1,
             group_starts: Vec::new(),
             rows_len: 0,
+            max_line_columns: 0,
         }
     }
 }
@@ -577,6 +579,13 @@ impl GlobalSearchTableDelegate {
             debug_assert_eq!(self.projection.group_by_document.len(), groups.len());
         }
         self.projection.groups = groups;
+        self.projection.max_line_columns = self
+            .projection
+            .groups
+            .iter()
+            .map(|group| group.source.document.metadata().longest_line_columns)
+            .max()
+            .unwrap_or_default();
         if let Some((selected_rows, active_row, selection_anchor)) = stable_interaction {
             self.interaction.row_bounds.borrow_mut().clear();
             self.rebuild_layout();
@@ -1375,12 +1384,7 @@ impl TableDelegate for GlobalSearchTableDelegate {
             2 => Column::new("global-message", crate::tr!("文件与日志", "File & log"))
                 .p_0()
                 .width(message_column_width(
-                    self.projection
-                        .groups
-                        .iter()
-                        .map(|group| group.source.document.metadata().longest_line_columns)
-                        .max()
-                        .unwrap_or_default(),
+                    self.projection.max_line_columns,
                     self.resolved_font_family(cx),
                     self.presenter.log_font_size,
                     cx,
