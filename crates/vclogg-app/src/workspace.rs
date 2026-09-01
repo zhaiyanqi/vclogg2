@@ -11483,6 +11483,11 @@ impl Workspace {
                         this.activity = Activity::Ready;
                         false
                     }
+                    Ok((SearchRun::SourceChanged, _)) => {
+                        window.push_notification("搜索期间文件内容已改变，请重新加载后重试。", cx);
+                        this.activity = Activity::Error;
+                        false
+                    }
                     Err(error) => {
                         let message: SharedString = error.to_string().into();
                         window.push_notification(message.clone(), cx);
@@ -11687,6 +11692,12 @@ impl Workspace {
                                     }
                                     let (search_result, failure) = match run {
                                         Ok(SearchRun::Completed(result)) => (result, None),
+                                        Ok(SearchRun::SourceChanged) => (
+                                            SearchResult::default(),
+                                            Some(
+                                                "搜索期间文件内容已改变，请重新加载后重试。".into(),
+                                            ),
+                                        ),
                                         Ok(SearchRun::Cancelled) => return None,
                                         Err(error) => (
                                             SearchResult::default(),
@@ -11850,6 +11861,10 @@ impl Workspace {
                                 }
                                 Ok(None)
                             }
+                            SearchRun::SourceChanged => Err(anyhow::anyhow!(
+                                "搜索期间文件内容已改变，请重新加载后重试：{}",
+                                path.display()
+                            )),
                             SearchRun::Cancelled => Ok(None),
                         }
                         },
@@ -19140,7 +19155,7 @@ fn search_document_with_matcher(
     let cancellation = SearchCancellation::default();
     match search_with_compiled_matcher(document, matcher, query.max_results, &cancellation) {
         SearchRun::Completed(result) => result,
-        SearchRun::Cancelled => SearchResult::default(),
+        SearchRun::SourceChanged | SearchRun::Cancelled => SearchResult::default(),
     }
 }
 

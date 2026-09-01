@@ -7,7 +7,8 @@ use std::{
 
 use rayon::ThreadPoolBuilder;
 use vclogg_core::{
-    LogDocument, SearchCancellation, SearchProgress, SearchQuery, SearchRun, search_with_progress,
+    LogDocument, SearchCancellation, SearchProgress, SearchQuery, SearchRun, search,
+    search_with_progress,
 };
 
 const LINE_COUNT: usize = 60_000;
@@ -146,4 +147,26 @@ fn pre_cancelled_parallel_search_does_not_scan() {
     assert!(matches!(run, SearchRun::Cancelled));
     assert_eq!(progress.snapshot().scanned_lines, 0);
     assert_eq!(progress.snapshot().matched_lines, 0);
+}
+
+#[test]
+fn source_changes_never_publish_partial_search_results() {
+    let temporary = TemporaryDirectory::new("changed-source-search");
+    let path = temporary.0.join("changed.log");
+    fs::write(&path, b"target-token\nordinary\n").expect("应能写入原始搜索日志");
+    let document = LogDocument::open(&path).expect("应能打开原始搜索日志");
+    fs::write(&path, b"ordinary-tok\nordinary\n").expect("应能原地改写搜索日志");
+    let query = SearchQuery {
+        text: "target-token".into(),
+        case_sensitive: true,
+        regex: false,
+        max_results: None,
+    };
+    let progress = SearchProgress::new(document.line_count());
+
+    let run = search_with_progress(&document, &query, &SearchCancellation::default(), &progress)
+        .expect("源文件变化应作为显式搜索结果返回");
+
+    assert!(matches!(run, SearchRun::SourceChanged));
+    assert!(search(&document, &query).is_err());
 }

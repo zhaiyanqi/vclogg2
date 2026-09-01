@@ -325,10 +325,13 @@ impl SearchResult {
 /// Backwards-compatible feature name for the core cancellation signal.
 pub type SearchCancellation = CancellationToken;
 
-/// Outcome of a cancellable scan. Cancellation is expected control flow, not an error.
+/// Outcome of a cancellable scan.
 #[derive(Clone, Debug)]
 pub enum SearchRun {
     Completed(SearchResult),
+    /// The source bytes no longer match the immutable document snapshot.
+    SourceChanged,
+    /// Cooperative cancellation is expected control flow, not an error.
     Cancelled,
 }
 
@@ -421,6 +424,10 @@ impl SearchProgress {
 pub fn search(document: &LogDocument, query: &SearchQuery) -> Result<SearchResult> {
     match search_cancellable(document, query, &SearchCancellation::default())? {
         SearchRun::Completed(result) => Ok(result),
+        SearchRun::SourceChanged => Err(anyhow::anyhow!(
+            "搜索期间源文件内容已改变，请重新加载后重试：{}",
+            document.path().display()
+        )),
         SearchRun::Cancelled => Ok(SearchResult::default()),
     }
 }
@@ -525,6 +532,12 @@ fn search_with_compiled_matcher_inner(
     {
         return SearchRun::Cancelled;
     }
+    if chunks
+        .iter()
+        .any(|chunk| matches!(chunk, SearchChunkRun::SourceChanged))
+    {
+        return SearchRun::SourceChanged;
+    }
 
     let mut line_indices = RoaringTreemap::new();
     let mut truncated = false;
@@ -582,6 +595,7 @@ struct SearchChunkResult {
 
 enum SearchChunkRun {
     Completed(SearchChunkResult),
+    SourceChanged,
     Cancelled,
 }
 
@@ -614,7 +628,7 @@ fn scan_search_chunk(
         pending_scanned_lines += 1;
 
         let Some(line) = search_lines.bytes_at_local_row(row_ix) else {
-            continue;
+            return SearchChunkRun::SourceChanged;
         };
         if !matcher.is_match(&line) {
             continue;
