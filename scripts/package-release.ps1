@@ -54,6 +54,19 @@ if (Test-Path -LiteralPath $stageDirectory) {
 New-Item -ItemType Directory -Path $stageDirectory -Force | Out-Null
 
 $releaseExecutable = Join-Path $repositoryRoot 'target\release\vclogg2.exe'
+$releaseExecutableText = [System.Text.Encoding]::UTF8.GetString(
+    [System.IO.File]::ReadAllBytes($releaseExecutable)
+)
+foreach ($forbiddenMarker in @(
+    'Apply-VCLogg2Update.ps1',
+    'Expand-Archive -LiteralPath',
+    '-ExecutionPolicyBypass'
+)) {
+    if ($releaseExecutableText.Contains($forbiddenMarker)) {
+        throw "Windows 可执行文件仍包含已禁用的 PowerShell 更新脚本特征：$forbiddenMarker"
+    }
+}
+$releaseExecutableText = $null
 Copy-Item -LiteralPath $releaseExecutable -Destination (Join-Path $stageDirectory 'vclogg2.exe')
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'README.md') -Destination $stageDirectory
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination $stageDirectory

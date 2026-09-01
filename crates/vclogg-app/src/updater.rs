@@ -2,13 +2,15 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
+
+#[cfg(unix)]
+use std::process::{Command, Stdio};
 
 use reqwest::{
     blocking::{Client, Response},
@@ -422,54 +424,11 @@ pub fn launch_installer(update: &DownloadedUpdate) -> anyhow::Result<()> {
             ))
         })?
         .to_path_buf();
-    let helper_path = update
-        .archive_path
-        .parent()
-        .ok_or_else(|| {
-            anyhow::anyhow!(crate::tr!(
-                "无法确定更新暂存目录",
-                "Couldn’t determine the update staging directory"
-            ))
-        })?
-        .join("Apply-VCLogg2Update.ps1");
-    fs::write(
-        &helper_path,
-        include_str!("../../../scripts/Apply-VCLogg2Update.ps1"),
-    )?;
-    let powershell = std::env::var_os("SystemRoot")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))
-        .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
-    if !powershell.is_file() {
-        anyhow::bail!(crate::tr!(
-            "找不到系统 PowerShell，无法启动更新安装助手",
-            "System PowerShell wasn’t found, so the update installer couldn’t start"
-        ));
-    }
-    let log_path = helper_path.with_extension("log");
-    let log = File::create(log_path)?;
-    let error_log = log.try_clone()?;
-    let mut command = Command::new(powershell);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        command.creation_flags(0x0800_0000);
-    }
-    command
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-        .arg(&helper_path)
-        .arg("-ArchivePath")
-        .arg(&update.archive_path)
-        .arg("-InstallDirectory")
-        .arg(install_directory)
-        .arg("-WaitForProcessId")
-        .arg(std::process::id().to_string())
-        .arg("-Launch")
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(error_log))
-        .spawn()?;
-    Ok(())
+    crate::windows_update_helper::launch(
+        &current_executable,
+        &update.archive_path,
+        &install_directory,
+    )
 }
 
 #[cfg(unix)]

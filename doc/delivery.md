@@ -40,7 +40,7 @@ powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 .\vclogg2.exe
 ```
 
-Windows Release 不附带 PowerShell 安装或更新脚本，不创建开始菜单快捷方式，也不注册文件关联。应用内更新助手由可执行程序内置，退出应用后直接从已校验的更新包替换程序与随附文档并重新启动。
+Windows Release 不附带 PowerShell 安装或更新脚本，不创建开始菜单快捷方式，也不注册文件关联。应用内更新助手使用可执行程序自身的原生助手模式，退出应用后直接解析已校验的 ZIP、替换程序与随附文档并重新启动；该流程不内嵌、生成或调用 PowerShell 脚本。
 
 旧版 Windows 更新助手会在下载包内查找 `Install-VCLogg2.ps1`，因此从这类旧版本迁移到首个纯三文件版本时不能依赖应用内更新，必须发布为手动替换，或者先发布一个仍含旧安装脚本的过渡版本。用户启动纯三文件版本一次后，后续版本均走新的内置替换流程。
 
