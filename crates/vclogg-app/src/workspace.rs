@@ -2503,6 +2503,27 @@ struct CopiedLogLines {
     first_source_row: Option<usize>,
 }
 
+enum DocumentLineTask<T> {
+    Completed(T),
+    Cancelled,
+    SourceUnavailable,
+}
+
+#[cfg(test)]
+impl<T> DocumentLineTask<T> {
+    fn expect(self, message: &str) -> T {
+        match self {
+            Self::Completed(value) => value,
+            Self::Cancelled => panic!("{message}: task was cancelled"),
+            Self::SourceUnavailable => panic!("{message}: source was unavailable"),
+        }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TabCloseGroup {
     Current,
@@ -8948,8 +8969,19 @@ impl Workspace {
                 }
                 this.line_copy_task = None;
                 this.line_copy_cancellation = None;
-                let Some(copied) = copied else {
-                    return;
+                let copied = match copied {
+                    DocumentLineTask::Completed(copied) => copied,
+                    DocumentLineTask::Cancelled => return,
+                    DocumentLineTask::SourceUnavailable => {
+                        window.push_notification(
+                            crate::tr!(
+                                "所选日志的文件内容已改变，请重新加载后再复制",
+                                "The selected log file changed. Reload it before copying."
+                            ),
+                            cx,
+                        );
+                        return;
+                    }
                 };
                 if copied.text.is_empty() {
                     window.push_notification(
@@ -16612,8 +16644,19 @@ impl Workspace {
                 }
                 this.color_rule_task = None;
                 this.color_rule_cancellation = None;
-                let Some(prepared) = prepared else {
-                    return;
+                let prepared = match prepared {
+                    DocumentLineTask::Completed(prepared) => prepared,
+                    DocumentLineTask::Cancelled => return,
+                    DocumentLineTask::SourceUnavailable => {
+                        window.push_notification(
+                            crate::tr!(
+                                "所选日志的文件内容已改变，请重新加载后再应用颜色标签",
+                                "The selected log file changed. Reload it before applying a color label."
+                            ),
+                            cx,
+                        );
+                        return;
+                    }
                 };
                 this.finish_color_rule_update(prepared, window, cx);
             });
@@ -18738,17 +18781,17 @@ fn collect_log_lines_for_clipboard(
     documents: Vec<(Arc<LogDocument>, CompressedRows)>,
     include_line_number: bool,
     cancellation: &SearchCancellation,
-) -> Option<CopiedLogLines> {
+) -> DocumentLineTask<CopiedLogLines> {
     let mut text = String::new();
     let mut count = 0_usize;
     let mut first_source_row = None;
     for (document, rows) in documents {
         for source_row in rows.iter() {
             if cancellation.is_cancelled() {
-                return None;
+                return DocumentLineTask::Cancelled;
             }
             let Some(line) = document.line(source_row) else {
-                continue;
+                return DocumentLineTask::SourceUnavailable;
             };
             if count > 0 {
                 text.push('\n');
@@ -18762,7 +18805,7 @@ fn collect_log_lines_for_clipboard(
             count = count.saturating_add(1);
         }
     }
-    Some(CopiedLogLines {
+    DocumentLineTask::Completed(CopiedLogLines {
         text,
         count,
         first_source_row,
@@ -18773,9 +18816,9 @@ fn prepare_color_keywords(
     target: ColorKeywordTarget,
     collect_keywords: bool,
     cancellation: &SearchCancellation,
-) -> Option<PreparedColorKeywords> {
+) -> DocumentLineTask<PreparedColorKeywords> {
     if cancellation.is_cancelled() {
-        return None;
+        return DocumentLineTask::Cancelled;
     }
     let keywords = if !collect_keywords {
         BTreeSet::new()
@@ -18786,10 +18829,10 @@ fn prepare_color_keywords(
                 let mut keywords = BTreeSet::new();
                 for source_row in rows.iter() {
                     if cancellation.is_cancelled() {
-                        return None;
+                        return DocumentLineTask::Cancelled;
                     }
                     let Some(line) = target.document.line(source_row) else {
-                        continue;
+                        return DocumentLineTask::SourceUnavailable;
                     };
                     let line = line.trim();
                     if !line.is_empty() {
@@ -18800,7 +18843,7 @@ fn prepare_color_keywords(
             }
         }
     };
-    Some(PreparedColorKeywords {
+    DocumentLineTask::Completed(PreparedColorKeywords {
         document_id: target.document_id,
         document: target.document,
         keywords,
@@ -18815,10 +18858,14 @@ fn prepare_color_rule_update(
     labels: Vec<ColorLabel>,
     mut last_color_label_id: Option<String>,
     cancellation: &SearchCancellation,
-) -> Option<PreparedColorRuleUpdate> {
-    let prepared = prepare_color_keywords(target, collect_keywords, cancellation)?;
+) -> DocumentLineTask<PreparedColorRuleUpdate> {
+    let prepared = match prepare_color_keywords(target, collect_keywords, cancellation) {
+        DocumentLineTask::Completed(prepared) => prepared,
+        DocumentLineTask::Cancelled => return DocumentLineTask::Cancelled,
+        DocumentLineTask::SourceUnavailable => return DocumentLineTask::SourceUnavailable,
+    };
     if cancellation.is_cancelled() {
-        return None;
+        return DocumentLineTask::Cancelled;
     }
     let expected_rules = rules.clone();
     let expected_labels = labels.clone();
@@ -18870,7 +18917,7 @@ fn prepare_color_rule_update(
             clear_all: false,
         } => {
             let Some(label) = labels.iter().find(|label| label.id == label_id) else {
-                return Some(PreparedColorRuleUpdate {
+                return DocumentLineTask::Completed(PreparedColorRuleUpdate {
                     document_id: prepared.document_id,
                     document: prepared.document,
                     expected_rules,
@@ -18902,15 +18949,15 @@ fn prepare_color_rule_update(
         None
     } else {
         if cancellation.is_cancelled() {
-            return None;
+            return DocumentLineTask::Cancelled;
         }
         let resolved = resolve_color_rules(&rules, &labels);
         if cancellation.is_cancelled() {
-            return None;
+            return DocumentLineTask::Cancelled;
         }
         Some(resolved)
     };
-    Some(PreparedColorRuleUpdate {
+    DocumentLineTask::Completed(PreparedColorRuleUpdate {
         document_id: prepared.document_id,
         document: prepared.document,
         expected_rules,
@@ -19342,8 +19389,44 @@ mod result_snapshot_tests {
                 false,
                 &cancellation,
             )
-            .is_none()
+            .is_cancelled()
         );
+    }
+
+    #[test]
+    fn changed_sources_abort_copy_and_color_keyword_tasks() {
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("测试时间应晚于 Unix epoch")
+            .as_nanos();
+        let temporary = TemporaryFile(std::env::temp_dir().join(format!(
+            "vclogg2-changed-line-task-{}-{nonce}.log",
+            std::process::id()
+        )));
+        fs::write(&temporary.0, b"alpha\n").expect("应能创建原始行任务日志");
+        let document = Arc::new(LogDocument::open(&temporary.0).expect("应能打开原始行任务日志"));
+        fs::write(&temporary.0, b"omega\n").expect("应能原地改写行任务日志");
+
+        assert!(matches!(
+            collect_log_lines_for_clipboard(
+                vec![(document.clone(), [0].into_iter().collect())],
+                false,
+                &SearchCancellation::default(),
+            ),
+            DocumentLineTask::SourceUnavailable
+        ));
+        assert!(matches!(
+            prepare_color_keywords(
+                ColorKeywordTarget {
+                    document_id: 3,
+                    document,
+                    selection: ColorKeywordSelection::Rows([0].into_iter().collect()),
+                },
+                true,
+                &SearchCancellation::default(),
+            ),
+            DocumentLineTask::SourceUnavailable
+        ));
     }
 
     #[test]
@@ -19389,7 +19472,7 @@ mod result_snapshot_tests {
             selection: ColorKeywordSelection::Rows([0].into_iter().collect()),
         };
 
-        assert!(prepare_color_keywords(target, true, &cancellation).is_none());
+        assert!(prepare_color_keywords(target, true, &cancellation).is_cancelled());
     }
 
     #[test]
@@ -19495,7 +19578,7 @@ mod result_snapshot_tests {
                 None,
                 &cancellation,
             )
-            .is_none()
+            .is_cancelled()
         );
     }
 
