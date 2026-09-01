@@ -1,9 +1,11 @@
 //! File indexing and search services used by the VCLogg2 desktop application.
 
+mod cancellation;
 mod document;
 mod index_cache;
 mod search;
 
+pub use cancellation::CancellationToken;
 pub use document::{
     DocumentMetadata, DocumentRefreshKind, LinePreview, LogDocument, PendingIndexCacheWrite,
 };

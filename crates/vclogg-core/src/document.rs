@@ -21,6 +21,8 @@ use memchr::{memchr_iter, memchr2};
 use memmap2::{Mmap, MmapOptions};
 use sha2::{Digest as _, Sha256};
 
+use crate::CancellationToken;
+
 #[cfg(windows)]
 use windows_sys::Win32::{
     Storage::FileSystem::{
@@ -40,6 +42,8 @@ const MAX_CACHE_ENCODING_BYTES: usize = 64;
 const ENCODING_DETECTION_BYTES: usize = 1024 * 1024;
 const BINARY_BYTES_PER_LINE: usize = 16;
 const PARALLEL_INDEX_HASH_MIN_BYTES: usize = 8 * 1024 * 1024;
+const INDEX_CANCELLATION_BATCH_LINES: usize = 4 * 1024;
+const CACHE_CANCELLATION_BATCH_LINES: usize = 4 * 1024;
 
 /// Stable metadata captured from the source file when its index is built.
 #[derive(Clone, Debug)]
@@ -323,6 +327,21 @@ impl LogDocument {
 
     /// Open a file and build its line index in one sequential pass.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let cancellation = CancellationToken::default();
+        Ok(Self::open_cancellable(path, &cancellation)?
+            .expect("a fresh cancellation token cannot cancel document opening"))
+    }
+
+    /// Open a file while allowing a caller to stop line-index construction.
+    ///
+    /// Cancellation is expected control flow and returns `Ok(None)`.
+    pub fn open_cancellable(
+        path: impl AsRef<Path>,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<Self>> {
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
         let path = path.as_ref().to_path_buf();
         let mut file =
             File::open(&path).with_context(|| format!("无法打开日志文件：{}", path.display()))?;
@@ -332,10 +351,19 @@ impl LogDocument {
 
         let encoding = detect_file_encoding(&mut file, file_metadata.len())
             .with_context(|| format!("无法检测日志编码：{}", path.display()))?;
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
         let bytes = map_snapshot(&file, file_metadata.len(), &path)?;
-        let (indexed_lines, integrity_blocks) = build_line_index_with_integrity(&bytes, encoding);
+        let Some((indexed_lines, integrity_blocks)) =
+            build_line_index_with_integrity_while(&bytes, encoding, &|| {
+                cancellation.is_cancelled()
+            })
+        else {
+            return Ok(None);
+        };
 
-        Ok(Self::from_parts(
+        Ok(Some(Self::from_parts(
             path,
             bytes,
             indexed_lines,
@@ -343,7 +371,7 @@ impl LogDocument {
             file_metadata.len(),
             encoding,
             Some(integrity_blocks),
-        ))
+        )))
     }
 
     /// Open a complete document, reusing a line index only when the cached
@@ -352,6 +380,24 @@ impl LogDocument {
         path: impl AsRef<Path>,
         cache_dir: impl AsRef<Path>,
     ) -> Result<(Self, Option<PendingIndexCacheWrite>)> {
+        let cancellation = CancellationToken::default();
+        Ok(
+            Self::open_with_index_cache_cancellable(path, cache_dir, &cancellation)?
+                .expect("a fresh cancellation token cannot cancel document opening"),
+        )
+    }
+
+    /// Open a complete document with a validated index cache while observing cancellation.
+    ///
+    /// Cancellation is expected control flow and returns `Ok(None)`.
+    pub fn open_with_index_cache_cancellable(
+        path: impl AsRef<Path>,
+        cache_dir: impl AsRef<Path>,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<(Self, Option<PendingIndexCacheWrite>)>> {
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
         let path = path.as_ref().to_path_buf();
         let mut file =
             File::open(&path).with_context(|| format!("无法打开日志文件：{}", path.display()))?;
@@ -363,13 +409,17 @@ impl LogDocument {
         let modified_millis = system_time_millis(modified);
         let identity = read_file_identity(&file);
         let cache_path = index_cache_path(cache_dir.as_ref(), &path);
-        let cached = read_index_cache(
+        let cached = read_index_cache_while(
             &cache_path,
             &path,
             file_size,
             modified_millis,
             identity.as_ref(),
+            &|| cancellation.is_cancelled(),
         );
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
 
         let cache_missed = cached.is_none();
         let encoding = match cached.as_ref() {
@@ -377,12 +427,23 @@ impl LogDocument {
             None => detect_file_encoding(&mut file, file_size)
                 .with_context(|| format!("无法检测日志编码：{}", path.display()))?,
         };
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
         let bytes = map_snapshot(&file, file_size, &path)?;
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
         let (indexed_lines, integrity_blocks) = match cached {
             Some(cached) => (cached.indexed_lines, Some(cached.integrity_blocks)),
             None => {
-                let (indexed_lines, integrity_blocks) =
-                    build_line_index_with_integrity(&bytes, encoding);
+                let Some((indexed_lines, integrity_blocks)) =
+                    build_line_index_with_integrity_while(&bytes, encoding, &|| {
+                        cancellation.is_cancelled()
+                    })
+                else {
+                    return Ok(None);
+                };
                 (indexed_lines, Some(integrity_blocks))
             }
         };
@@ -409,7 +470,11 @@ impl LogDocument {
             longest_line_columns: document.metadata.longest_line_columns,
             longest_completed_line_columns: document.longest_completed_line_columns,
         });
-        Ok((document, pending_cache_write))
+        if cancellation.is_cancelled() {
+            Ok(None)
+        } else {
+            Ok(Some((document, pending_cache_write)))
+        }
     }
 
     /// Open a bounded head preview without scanning the remainder of the file.
@@ -837,10 +902,22 @@ impl LogDocument {
 }
 
 fn calculate_integrity_blocks(bytes: &[u8]) -> Vec<[u8; 32]> {
-    bytes
-        .chunks(APPEND_INTEGRITY_BLOCK_BYTES)
-        .map(|block| Sha256::digest(block).into())
-        .collect()
+    calculate_integrity_blocks_while(bytes, &|| false)
+        .expect("a non-cancelling integrity scan must complete")
+}
+
+fn calculate_integrity_blocks_while(
+    bytes: &[u8],
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+) -> Option<Vec<[u8; 32]>> {
+    let mut blocks = Vec::with_capacity(bytes.len().div_ceil(APPEND_INTEGRITY_BLOCK_BYTES));
+    for block in bytes.chunks(APPEND_INTEGRITY_BLOCK_BYTES) {
+        if is_cancelled() {
+            return None;
+        }
+        blocks.push(Sha256::digest(block).into());
+    }
+    (!is_cancelled()).then_some(blocks)
 }
 
 fn digest_integrity_blocks(blocks: &[[u8; 32]]) -> [u8; 32] {
@@ -853,28 +930,31 @@ fn digest_integrity_blocks(blocks: &[[u8; 32]]) -> [u8; 32] {
     digest.finalize().into()
 }
 
-fn build_line_index_with_integrity(
+fn build_line_index_with_integrity_while(
     bytes: &[u8],
     encoding: FileEncoding,
-) -> (IndexedLines, Arc<[[u8; 32]]>) {
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+) -> Option<(IndexedLines, Arc<[[u8; 32]]>)> {
+    if is_cancelled() {
+        return None;
+    }
     let parallel = bytes.len() >= PARALLEL_INDEX_HASH_MIN_BYTES
         && std::thread::available_parallelism().is_ok_and(|parallelism| parallelism.get() > 1);
     if !parallel {
-        return (
-            build_line_index(bytes, encoding),
-            calculate_integrity_blocks(bytes).into(),
-        );
+        let indexed_lines = build_line_index_while(bytes, encoding, is_cancelled)?;
+        let integrity_blocks = calculate_integrity_blocks_while(bytes, is_cancelled)?.into();
+        return Some((indexed_lines, integrity_blocks));
     }
 
-    std::thread::scope(|scope| {
-        let integrity_task = scope.spawn(|| calculate_integrity_blocks(bytes));
-        let indexed_lines = build_line_index(bytes, encoding);
+    let (indexed_lines, integrity_blocks) = std::thread::scope(|scope| {
+        let integrity_task = scope.spawn(|| calculate_integrity_blocks_while(bytes, is_cancelled));
+        let indexed_lines = build_line_index_while(bytes, encoding, is_cancelled);
         let integrity_blocks = integrity_task
             .join()
-            .expect("日志完整性摘要线程不应异常终止")
-            .into();
+            .expect("日志完整性摘要线程不应异常终止");
         (indexed_lines, integrity_blocks)
-    })
+    });
+    Some((indexed_lines?, integrity_blocks?.into()))
 }
 
 fn integrity_blocks_match(bytes: &[u8], expected: &[[u8; 32]]) -> bool {
@@ -924,6 +1004,27 @@ fn read_index_cache(
     modified_millis: u64,
     identity: Option<&FileIdentity>,
 ) -> Option<CachedIndex> {
+    read_index_cache_while(
+        cache_path,
+        source_path,
+        file_size,
+        modified_millis,
+        identity,
+        &|| false,
+    )
+}
+
+fn read_index_cache_while(
+    cache_path: &Path,
+    source_path: &Path,
+    file_size: u64,
+    modified_millis: u64,
+    identity: Option<&FileIdentity>,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Option<CachedIndex> {
+    if is_cancelled() {
+        return None;
+    }
     let identity = identity?;
     let file = File::open(cache_path).ok()?;
     let cache_size = file.metadata().ok()?.len();
@@ -998,6 +1099,9 @@ fn read_index_cache(
     let mut previous = 0_u64;
     let mut consumed = 0_usize;
     for line_ix in 0..line_count {
+        if line_ix % CACHE_CANCELLATION_BATCH_LINES == 0 && is_cancelled() {
+            return None;
+        }
         let delta = read_varint(&mut reader, &mut consumed)?;
         if (line_ix == 0 && delta != 0) || (line_ix > 0 && delta == 0) {
             return None;
@@ -1019,12 +1123,15 @@ fn read_index_cache(
 
     let mut integrity_blocks = Vec::with_capacity(integrity_block_count);
     for _ in 0..integrity_block_count {
+        if is_cancelled() {
+            return None;
+        }
         let mut digest = [0_u8; 32];
         reader.read_exact(&mut digest).ok()?;
         integrity_blocks.push(digest);
     }
 
-    Some(CachedIndex {
+    (!is_cancelled()).then_some(CachedIndex {
         indexed_lines: IndexedLines {
             starts,
             longest_line_bytes,
@@ -1483,37 +1590,61 @@ fn preview_visible_len(bytes: &[u8], encoding: FileEncoding, line_limit: usize) 
 }
 
 fn build_line_index(bytes: &[u8], encoding: FileEncoding) -> IndexedLines {
+    build_line_index_while(bytes, encoding, &|| false)
+        .expect("a non-cancelling line-index scan must complete")
+}
+
+fn build_line_index_while(
+    bytes: &[u8],
+    encoding: FileEncoding,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Option<IndexedLines> {
+    if is_cancelled() {
+        return None;
+    }
     if bytes.is_empty() {
-        return IndexedLines {
+        return Some(IndexedLines {
             starts: Vec::new(),
             longest_line_bytes: 0,
             longest_completed_line_bytes: 0,
             longest_line_columns: 0,
             longest_completed_line_columns: 0,
-        };
+        });
     }
 
     if matches!(encoding, FileEncoding::Binary) {
-        let starts = (0..bytes.len())
-            .step_by(BINARY_BYTES_PER_LINE)
-            .collect::<Vec<_>>();
+        let line_count = bytes.len().div_ceil(BINARY_BYTES_PER_LINE);
+        let mut starts = Vec::with_capacity(line_count);
+        for line_ix in 0..line_count {
+            if line_ix % INDEX_CANCELLATION_BATCH_LINES == 0 && is_cancelled() {
+                return None;
+            }
+            starts.push(line_ix.saturating_mul(BINARY_BYTES_PER_LINE));
+        }
         let longest_line_bytes = bytes.len().min(BINARY_BYTES_PER_LINE);
         let longest_line_columns = longest_line_bytes.saturating_mul(3).saturating_sub(1);
-        return IndexedLines {
+        return Some(IndexedLines {
             starts,
             longest_line_bytes,
             longest_completed_line_bytes: longest_line_bytes,
             longest_line_columns,
             longest_completed_line_columns: longest_line_columns,
-        };
+        });
     }
 
     let mut line_starts = vec![0];
     let mut longest_completed_line_bytes = 0;
     let mut longest_completed_line_columns = 0;
     let mut current_start = 0;
+    let mut indexed_lines = 0;
+    let mut cancelled = false;
 
     _ = for_each_line_break(encoding, bytes, |line_end, width| {
+        if indexed_lines % INDEX_CANCELLATION_BATCH_LINES == 0 && is_cancelled() {
+            cancelled = true;
+            return ControlFlow::Break(());
+        }
+        indexed_lines += 1;
         longest_completed_line_bytes =
             longest_completed_line_bytes.max(line_end.saturating_sub(current_start));
         longest_completed_line_columns =
@@ -1529,6 +1660,9 @@ fn build_line_index(bytes: &[u8], encoding: FileEncoding) -> IndexedLines {
         }
         ControlFlow::Continue(())
     });
+    if cancelled || is_cancelled() {
+        return None;
+    }
 
     let trailing_line_bytes = if current_start < bytes.len() {
         bytes.len() - current_start
@@ -1543,13 +1677,13 @@ fn build_line_index(bytes: &[u8], encoding: FileEncoding) -> IndexedLines {
     };
     let longest_line_columns = longest_completed_line_columns.max(trailing_line_columns);
 
-    IndexedLines {
+    Some(IndexedLines {
         starts: line_starts,
         longest_line_bytes,
         longest_completed_line_bytes,
         longest_line_columns,
         longest_completed_line_columns,
-    }
+    })
 }
 
 fn display_columns_encoded(encoding: FileEncoding, bytes: &[u8], first_line: bool) -> usize {
@@ -1647,9 +1781,16 @@ fn display_columns(bytes: &[u8], first_line: bool) -> usize {
 
 #[cfg(test)]
 mod source_snapshot_tests {
-    use std::{fs, path::PathBuf, time::SystemTime};
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::atomic::{AtomicUsize, Ordering},
+        time::SystemTime,
+    };
 
-    use super::LogDocument;
+    use crate::CancellationToken;
+
+    use super::{FileEncoding, LogDocument, build_line_index_while};
 
     fn test_directory(label: &str) -> PathBuf {
         let nonce = SystemTime::now()
@@ -1662,6 +1803,38 @@ mod source_snapshot_tests {
         ));
         fs::create_dir_all(&directory).expect("应能创建文档快照测试目录");
         directory
+    }
+
+    #[test]
+    fn pre_cancelled_open_avoids_source_io() {
+        let cancellation = CancellationToken::default();
+        cancellation.cancel();
+        let missing = PathBuf::from("this-source-does-not-need-to-exist.log");
+
+        let document = LogDocument::open_cancellable(&missing, &cancellation)
+            .expect("pre-cancelled opening should not fail");
+        let cached = LogDocument::open_with_index_cache_cancellable(
+            &missing,
+            PathBuf::from("unused-cache"),
+            &cancellation,
+        )
+        .expect("pre-cancelled cached opening should not fail");
+
+        assert!(document.is_none());
+        assert!(cached.is_none());
+    }
+
+    #[test]
+    fn line_index_construction_polls_cancellation() {
+        let bytes = b"line\n".repeat(10_000);
+        let checks = AtomicUsize::new(0);
+
+        let indexed = build_line_index_while(&bytes, FileEncoding::Utf8, &|| {
+            checks.fetch_add(1, Ordering::Relaxed) >= 1
+        });
+
+        assert!(indexed.is_none());
+        assert!(checks.load(Ordering::Relaxed) >= 2);
     }
 
     #[test]

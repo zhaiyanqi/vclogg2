@@ -2,7 +2,7 @@ use std::{
     ops::Range,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -12,7 +12,7 @@ use rayon::prelude::{IntoParallelIterator as _, ParallelIterator as _};
 use regex::bytes::{Regex, RegexBuilder};
 use roaring::RoaringTreemap;
 
-use crate::LogDocument;
+use crate::{CancellationToken, LogDocument};
 
 const PARALLEL_SEARCH_MIN_BYTES: u64 = 1024 * 1024;
 const SEARCH_TASKS_PER_THREAD: usize = 4;
@@ -135,20 +135,8 @@ impl SearchResult {
 }
 
 /// Cooperative cancellation shared between the UI task and the blocking scan.
-#[derive(Clone, Debug, Default)]
-pub struct SearchCancellation {
-    cancelled: Arc<AtomicBool>,
-}
-
-impl SearchCancellation {
-    pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Release);
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
-    }
-}
+/// Backwards-compatible feature name for the core cancellation signal.
+pub type SearchCancellation = CancellationToken;
 
 /// Outcome of a cancellable scan. Cancellation is expected control flow, not an error.
 #[derive(Clone, Debug)]

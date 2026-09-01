@@ -11769,15 +11769,20 @@ impl Workspace {
                         if cancellation_for_search.is_cancelled() {
                             return Ok(None);
                         }
-                        let (document, pending_index_cache) =
+                        let opened =
                             if let Some(cache_root) = crate::app_paths::cache_dir() {
-                                LogDocument::open_with_index_cache(
+                                LogDocument::open_with_index_cache_cancellable(
                                     path,
                                     cache_root.join("VCLogg2").join("index"),
+                                    &cancellation_for_search,
                                 )?
                             } else {
-                                (LogDocument::open(path)?, None)
+                                LogDocument::open_cancellable(path, &cancellation_for_search)?
+                                    .map(|document| (document, None))
                             };
+                        let Some((document, pending_index_cache)) = opened else {
+                            return Ok(None);
+                        };
                         let document = Arc::new(document);
                         let run = search_with_compiled_matcher(
                             &document,
@@ -11790,13 +11795,17 @@ impl Workspace {
                                 if !search_result.line_indices.is_empty()
                                     || path_match_set_contains(&open_document_paths, path) =>
                             {
-                                if let Some(cache_write) = pending_index_cache {
+                                if !cancellation_for_search.is_cancelled()
+                                    && let Some(cache_write) = pending_index_cache
+                                {
                                     _ = cache_write.persist();
                                 }
                                 Ok(Some((document, search_result)))
                             }
                             SearchRun::Completed(_) => {
-                                if let Some(cache_write) = pending_index_cache {
+                                if !cancellation_for_search.is_cancelled()
+                                    && let Some(cache_write) = pending_index_cache
+                                {
                                     _ = cache_write.persist();
                                 }
                                 Ok(None)
