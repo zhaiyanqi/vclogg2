@@ -7548,7 +7548,6 @@ dependencies = [
  "chardetng",
  "encoding_rs",
  "memchr",
- "memmap2",
  "rayon",
  "regex",
  "roaring",

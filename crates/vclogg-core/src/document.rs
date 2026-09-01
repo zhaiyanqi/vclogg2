@@ -24,8 +24,7 @@ use std::os::unix::{ffi::OsStrExt as _, fs::FileExt as _, fs::MetadataExt as _};
 use anyhow::{Context as _, Result};
 use chardetng::EncodingDetector;
 use encoding_rs::{CoderResult, Decoder, Encoding, UTF_8, UTF_16BE, UTF_16LE};
-use memchr::{memchr_iter, memchr2};
-use memmap2::{Mmap, MmapOptions};
+use memchr::memchr2;
 use sha2::{Digest as _, Sha256};
 
 use crate::{CancellationToken, search::CompressedRows};
@@ -39,7 +38,6 @@ use windows_sys::Win32::{
     System::{IO::DeviceIoControl, Ioctl::FSCTL_READ_FILE_USN_DATA},
 };
 
-const APPEND_SAMPLE_BYTES: usize = 64 * 1024;
 const APPEND_INTEGRITY_BLOCK_BYTES: usize = 4 * 1024 * 1024;
 const VERIFIED_BLOCK_CACHE_BYTES: usize = 8 * 1024 * 1024;
 const INDEX_CACHE_MAGIC: &[u8; 8] = b"VCLOGG05";
@@ -307,15 +305,6 @@ impl DocumentBytes {
         }
     }
 
-    fn read_unverified_range(&self, range: std::ops::Range<usize>) -> Option<Vec<u8>> {
-        match self {
-            Self::Empty if range.is_empty() => Some(Vec::new()),
-            Self::Empty => None,
-            Self::Owned(bytes) => Some(bytes.get(range)?.to_vec()),
-            Self::Verified(bytes) => bytes.read_unverified_range(range),
-        }
-    }
-
     fn resident_slice(&self) -> Option<&[u8]> {
         match self {
             Self::Empty => Some(&[]),
@@ -403,19 +392,6 @@ impl VerifiedFileBytes {
         })
     }
 
-    fn read_unverified_range(&self, range: std::ops::Range<usize>) -> Option<Vec<u8>> {
-        if range.start > range.end || range.end > self.len {
-            return None;
-        }
-        let mut bytes = vec![0_u8; range.len()];
-        if bytes.is_empty() {
-            return Some(bytes);
-        }
-        let file = self.source_file()?;
-        read_file_exact_at(&file, &mut bytes, range.start as u64).ok()?;
-        Some(bytes)
-    }
-
     fn load_verified_block(&self, block_ix: usize, retain: bool) -> Option<Arc<[u8]>> {
         let retain = retain && !self.transient_source_handles.load(Ordering::Acquire);
         {
@@ -500,8 +476,6 @@ fn read_file_exact_at(file: &File, mut bytes: &mut [u8], mut offset: u64) -> std
 
 #[derive(Clone)]
 struct AppendFingerprint {
-    head: Arc<[u8]>,
-    tail: Arc<[u8]>,
     integrity_blocks: Arc<[[u8; 32]]>,
 }
 
@@ -1392,7 +1366,7 @@ impl LogDocument {
     }
 
     fn try_refresh_appended(&self) -> Result<Option<Self>> {
-        if self.source_rows.is_some() {
+        if !self.has_complete_line_index() {
             return Ok(None);
         }
         if !matches!(self.encoding, FileEncoding::Utf8 | FileEncoding::Utf8Bom) {
@@ -1406,45 +1380,42 @@ impl LogDocument {
             .with_context(|| format!("无法读取文件信息：{}", path.display()))?;
         let new_size = file_metadata.len();
         let old_size = self.metadata.file_size;
-        if new_size <= old_size {
+        if old_size == 0 || new_size <= old_size {
             return Ok(None);
         }
 
-        let mapped = map_snapshot(&file, new_size, path)?;
-        let scan_bytes = mapped.as_deref().unwrap_or_default();
-        if !self.append_prefix_matches(scan_bytes) {
-            return Ok(None);
-        }
-
-        let old_size = usize::try_from(old_size)
+        let new_size_usize = usize::try_from(new_size)
             .with_context(|| format!("日志文件过大，无法建立索引：{}", path.display()))?;
+        let old_size_usize = usize::try_from(old_size)
+            .with_context(|| format!("日志文件过大，无法校验追加：{}", path.display()))?;
         let mut line_starts = MutableLineStarts::from_immutable(&self.line_starts);
-        let (
-            longest_line_bytes,
-            longest_completed_line_bytes,
-            longest_line_columns,
-            longest_completed_line_columns,
-        ) = extend_line_index(
-            scan_bytes,
-            old_size,
-            &mut line_starts,
+        if line_starts.last() == Some(old_size_usize) {
+            line_starts.truncate(line_starts.len().saturating_sub(1));
+        }
+        let indexer = StreamingLineIndexer::resume(
+            new_size_usize,
+            self.encoding,
+            line_starts,
             self.longest_completed_line_bytes,
             self.longest_completed_line_columns,
         );
-        let indexed_lines = IndexedLines {
-            starts: line_starts,
-            longest_line_bytes,
-            longest_completed_line_bytes,
-            longest_line_columns,
-            longest_completed_line_columns,
+        let Some((indexed_lines, integrity_blocks)) = build_appended_file_index_with_integrity(
+            &file,
+            new_size_usize,
+            file_metadata.modified().ok(),
+            read_file_identity(&file),
+            old_size_usize,
+            self.append_fingerprint.integrity_blocks.as_ref(),
+            indexer,
+            path,
+        )?
+        else {
+            return Ok(None);
         };
-        let integrity_blocks: Arc<[[u8; 32]]> = calculate_integrity_blocks(scan_bytes).into();
-        drop(mapped);
         let bytes = DocumentBytes::verified(
             file,
             path.to_path_buf(),
-            usize::try_from(new_size)
-                .with_context(|| format!("日志文件过大，无法读取：{}", path.display()))?,
+            new_size_usize,
             integrity_blocks.clone(),
         );
 
@@ -1457,24 +1428,6 @@ impl LogDocument {
             self.encoding,
             Some(integrity_blocks),
         )))
-    }
-
-    fn append_prefix_matches(&self, bytes: &[u8]) -> bool {
-        let old_size = self.bytes.len();
-        if old_size != usize::try_from(self.metadata.file_size).unwrap_or(usize::MAX)
-            || bytes.len() < old_size
-        {
-            return false;
-        }
-        let tail_start = old_size.saturating_sub(self.append_fingerprint.tail.len());
-
-        bytes.get(..self.append_fingerprint.head.len())
-            == Some(self.append_fingerprint.head.as_ref())
-            && bytes.get(tail_start..old_size) == Some(self.append_fingerprint.tail.as_ref())
-            && integrity_blocks_match(
-                &bytes[..old_size],
-                self.append_fingerprint.integrity_blocks.as_ref(),
-            )
     }
 
     fn from_parts(
@@ -1511,8 +1464,6 @@ impl LogDocument {
         integrity_blocks: Option<Arc<[[u8; 32]]>>,
     ) -> Self {
         let file_size = source_size;
-        let sample_len = bytes.len().min(APPEND_SAMPLE_BYTES);
-        let tail_start = bytes.len().saturating_sub(sample_len);
         let integrity_blocks = integrity_blocks.unwrap_or_else(|| {
             calculate_integrity_blocks(
                 bytes
@@ -1522,17 +1473,7 @@ impl LogDocument {
             .into()
         });
         let content_digest = digest_integrity_blocks(&integrity_blocks);
-        let append_fingerprint = AppendFingerprint {
-            head: bytes
-                .read_unverified_range(0..sample_len)
-                .unwrap_or_default()
-                .into(),
-            tail: bytes
-                .read_unverified_range(tail_start..bytes.len())
-                .unwrap_or_default()
-                .into(),
-            integrity_blocks,
-        };
+        let append_fingerprint = AppendFingerprint { integrity_blocks };
         let metadata = DocumentMetadata {
             path,
             file_size,
@@ -1705,6 +1646,30 @@ impl StreamingLineIndexer {
             completed_lines: 0,
             pending_cr: None,
             bom_remaining: encoding.bom_len(),
+        }
+    }
+
+    fn resume(
+        file_size: usize,
+        encoding: FileEncoding,
+        mut starts: MutableLineStarts,
+        longest_completed_line_bytes: usize,
+        longest_completed_line_columns: usize,
+    ) -> Self {
+        if file_size > 0 && starts.is_empty() {
+            starts.push(0);
+        }
+        let current_start = starts.last().unwrap_or_default();
+        Self {
+            encoding,
+            starts,
+            columns: StreamingLineColumns::new(encoding),
+            current_start,
+            longest_completed_line_bytes,
+            longest_completed_line_columns,
+            completed_lines: 0,
+            pending_cr: None,
+            bom_remaining: usize::from(current_start == 0).saturating_mul(encoding.bom_len()),
         }
     }
 
@@ -1933,6 +1898,73 @@ fn build_file_index_with_integrity_while(
     Ok(Some((indexed_lines, integrity_blocks.into())))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn build_appended_file_index_with_integrity(
+    file: &File,
+    new_size: usize,
+    expected_modified: Option<SystemTime>,
+    expected_identity: Option<FileIdentity>,
+    old_size: usize,
+    old_integrity_blocks: &[[u8; 32]],
+    mut indexer: StreamingLineIndexer,
+    path: &Path,
+) -> Result<Option<IndexedFileSnapshot>> {
+    if old_size >= new_size
+        || old_integrity_blocks.len() != old_size.div_ceil(APPEND_INTEGRITY_BLOCK_BYTES)
+    {
+        return Ok(None);
+    }
+    let rescan_start = indexer.current_start;
+    let mut integrity_blocks = Vec::with_capacity(new_size.div_ceil(APPEND_INTEGRITY_BLOCK_BYTES));
+    let mut block_start = 0usize;
+    let mut block = vec![0_u8; new_size.min(APPEND_INTEGRITY_BLOCK_BYTES)];
+    while block_start < new_size {
+        let block_len = (new_size - block_start).min(APPEND_INTEGRITY_BLOCK_BYTES);
+        block.resize(block_len, 0);
+        read_file_exact_at(file, &mut block, block_start as u64)
+            .with_context(|| format!("校验追加内容时无法读取日志文件：{}", path.display()))?;
+
+        if block_start < old_size {
+            let old_block_len = (old_size - block_start).min(APPEND_INTEGRITY_BLOCK_BYTES);
+            let block_ix = block_start / APPEND_INTEGRITY_BLOCK_BYTES;
+            let old_digest: [u8; 32] = Sha256::digest(&block[..old_block_len]).into();
+            if old_integrity_blocks.get(block_ix) != Some(&old_digest) {
+                return Ok(None);
+            }
+        }
+        integrity_blocks.push(Sha256::digest(&block).into());
+
+        let block_end = block_start.saturating_add(block_len);
+        let scan_start = block_start.max(rescan_start);
+        if scan_start < block_end {
+            let slice_start = scan_start - block_start;
+            indexer
+                .feed(
+                    scan_start,
+                    &block[slice_start..],
+                    block_end == new_size,
+                    &|| false,
+                )
+                .expect("a non-cancelling append scan must complete");
+        }
+        block_start = block_end;
+    }
+
+    let current_metadata = file
+        .metadata()
+        .with_context(|| format!("校验追加后无法读取文件信息：{}", path.display()))?;
+    if current_metadata.len() != new_size as u64
+        || current_metadata.modified().ok() != expected_modified
+        || expected_identity
+            .as_ref()
+            .is_some_and(|expected| read_file_identity(file).as_ref() != Some(expected))
+    {
+        anyhow::bail!("日志文件在校验追加时发生了变化：{}", path.display());
+    }
+
+    Ok(Some((indexer.finish(new_size), integrity_blocks.into())))
+}
+
 fn build_binary_line_index(
     file_size: usize,
     is_cancelled: &dyn Fn() -> bool,
@@ -1963,29 +1995,6 @@ fn build_binary_line_index(
         longest_line_columns,
         longest_completed_line_columns: longest_line_columns,
     })
-}
-
-fn integrity_blocks_match(bytes: &[u8], expected: &[[u8; 32]]) -> bool {
-    bytes.len().div_ceil(APPEND_INTEGRITY_BLOCK_BYTES) == expected.len()
-        && bytes
-            .chunks(APPEND_INTEGRITY_BLOCK_BYTES)
-            .zip(expected)
-            .all(|(block, expected)| <[u8; 32]>::from(Sha256::digest(block)) == *expected)
-}
-
-fn map_snapshot(file: &File, file_size: u64, path: &Path) -> Result<Option<Mmap>> {
-    if file_size == 0 {
-        return Ok(None);
-    }
-    let mapped_len = usize::try_from(file_size)
-        .with_context(|| format!("日志文件过大，无法映射：{}", path.display()))?;
-
-    // SAFETY: The mapping is read-only, has the metadata length captured above,
-    // and remains local to background index construction. Installed documents
-    // use verified positional reads instead of retaining this mapping.
-    unsafe { MmapOptions::new().len(mapped_len).map(file) }
-        .map(Some)
-        .with_context(|| format!("无法映射日志文件：{}", path.display()))
 }
 
 fn index_cache_path(cache_dir: &Path, source_path: &Path) -> PathBuf {
@@ -2744,66 +2753,6 @@ fn display_columns_encoded(encoding: FileEncoding, bytes: &[u8], first_line: boo
     }
 }
 
-fn extend_line_index(
-    bytes: &[u8],
-    old_size: usize,
-    line_starts: &mut MutableLineStarts,
-    mut longest_completed_line_bytes: usize,
-    mut longest_completed_line_columns: usize,
-) -> (usize, usize, usize, usize) {
-    let mut current_start = if old_size == 0 {
-        line_starts.push(0);
-        0
-    } else if bytes.get(old_size - 1) == Some(&b'\n') {
-        if line_starts.last() != Some(old_size) {
-            line_starts.push(old_size);
-        }
-        old_size
-    } else {
-        line_starts.last().unwrap_or_default()
-    };
-
-    for relative_newline_ix in memchr_iter(b'\n', &bytes[old_size..]) {
-        let newline_ix = old_size + relative_newline_ix;
-        let line_end = if newline_ix > current_start && bytes[newline_ix - 1] == b'\r' {
-            newline_ix - 1
-        } else {
-            newline_ix
-        };
-        longest_completed_line_bytes =
-            longest_completed_line_bytes.max(line_end.saturating_sub(current_start));
-        longest_completed_line_columns = longest_completed_line_columns.max(display_columns(
-            &bytes[current_start..line_end],
-            current_start == 0,
-        ));
-
-        current_start = newline_ix + 1;
-        if current_start <= bytes.len() && line_starts.last() != Some(current_start) {
-            line_starts.push(current_start);
-        }
-    }
-
-    let trailing_line_bytes = if current_start < bytes.len() {
-        bytes.len() - current_start
-    } else {
-        0
-    };
-    let longest_line_bytes = longest_completed_line_bytes.max(trailing_line_bytes);
-    let trailing_line_columns = if current_start < bytes.len() {
-        display_columns(&bytes[current_start..], current_start == 0)
-    } else {
-        0
-    };
-    let longest_line_columns = longest_completed_line_columns.max(trailing_line_columns);
-
-    (
-        longest_line_bytes,
-        longest_completed_line_bytes,
-        longest_line_columns,
-        longest_completed_line_columns,
-    )
-}
-
 fn display_columns(bytes: &[u8], first_line: bool) -> usize {
     let bytes = if first_line && bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
         &bytes[3..]
@@ -2831,9 +2780,9 @@ mod source_snapshot_tests {
     use crate::CancellationToken;
 
     use super::{
-        APPEND_INTEGRITY_BLOCK_BYTES, DocumentBytes, FileEncoding, LogDocument,
-        build_file_index_with_integrity_while, build_line_index, build_line_index_while,
-        calculate_integrity_blocks, read_file_identity,
+        APPEND_INTEGRITY_BLOCK_BYTES, DocumentBytes, DocumentRefreshKind, FileEncoding,
+        LogDocument, build_file_index_with_integrity_while, build_line_index,
+        build_line_index_while, calculate_integrity_blocks, read_file_identity,
     };
 
     fn test_directory(label: &str) -> PathBuf {
@@ -2919,6 +2868,74 @@ mod source_snapshot_tests {
             FileEncoding::Legacy(SHIFT_JIS),
         );
 
+        _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn positional_append_refresh_matches_a_complete_rebuild() {
+        let directory = test_directory("positional-append");
+        let path = directory.join("append.log");
+        fs::write(&path, b"\xef\xbb\xbfalpha\nunfinished\r").expect("应能写入追加刷新测试日志");
+        let original = LogDocument::open(&path).expect("应能打开追加刷新测试日志");
+        fs::write(
+            &path,
+            b"\xef\xbb\xbfalpha\nunfinished\r\nnext\rstandalone\nlast",
+        )
+        .expect("应能追加刷新测试内容");
+
+        let (refreshed, kind) = original.refresh().expect("位置读取追加刷新应成功");
+        let rebuilt = LogDocument::open(&path).expect("完整重建应成功");
+
+        assert_eq!(kind, DocumentRefreshKind::Appended);
+        assert!(refreshed.same_source_snapshot(&rebuilt));
+        assert_eq!(refreshed.line_count(), rebuilt.line_count());
+        assert_eq!(
+            refreshed.metadata().longest_line_bytes,
+            rebuilt.metadata().longest_line_bytes
+        );
+        assert_eq!(
+            refreshed.metadata().longest_line_columns,
+            rebuilt.metadata().longest_line_columns
+        );
+        assert_eq!(
+            (0..refreshed.line_count())
+                .map(|row| refreshed.line(row))
+                .collect::<Vec<_>>(),
+            (0..rebuilt.line_count())
+                .map(|row| rebuilt.line(row))
+                .collect::<Vec<_>>()
+        );
+        _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn changed_prefix_with_a_larger_file_forces_a_rebuild() {
+        let directory = test_directory("changed-append-prefix");
+        let path = directory.join("append.log");
+        fs::write(&path, b"old\n").expect("应能写入追加前缀测试日志");
+        let original = LogDocument::open(&path).expect("应能打开追加前缀测试日志");
+        fs::write(&path, b"NEW\nmore\n").expect("应能覆盖追加前缀测试日志");
+
+        let (refreshed, kind) = original.refresh().expect("前缀变化后应能完整重建");
+
+        assert_eq!(kind, DocumentRefreshKind::Rebuilt);
+        assert_eq!(refreshed.line(0).as_deref(), Some("NEW"));
+        _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn empty_source_growth_rebuilds_to_redetect_encoding() {
+        let directory = test_directory("empty-growth-encoding");
+        let path = directory.join("append.log");
+        fs::write(&path, []).expect("应能创建空日志");
+        let original = LogDocument::open(&path).expect("应能打开空日志");
+        fs::write(&path, [0xff, 0xfe, b'a', 0, b'\n', 0]).expect("应能写入 UTF-16LE 日志");
+
+        let (refreshed, kind) = original.refresh().expect("空日志增长后应能重建");
+
+        assert_eq!(kind, DocumentRefreshKind::Rebuilt);
+        assert_eq!(refreshed.metadata().encoding_name, "UTF-16LE BOM");
+        assert_eq!(refreshed.line(0).as_deref(), Some("a"));
         _ = fs::remove_dir_all(directory);
     }
 
