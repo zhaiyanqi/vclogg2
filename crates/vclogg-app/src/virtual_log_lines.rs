@@ -2,6 +2,10 @@ use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet},
     ops::Range,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use vclogg_core::{CompressedRows, LinePreview};
@@ -39,6 +43,7 @@ pub(crate) struct VisibleLineLoadRequest<K> {
     keys: Vec<K>,
     source_limits: Vec<usize>,
     retained_limits: Vec<usize>,
+    cancellation: Arc<AtomicBool>,
 }
 
 impl<K> VisibleLineLoadRequest<K> {
@@ -50,16 +55,19 @@ impl<K> VisibleLineLoadRequest<K> {
         self,
         mut load: impl FnMut(&K, usize) -> Option<LinePreview>,
     ) -> VisibleLineLoadResult<K> {
-        let lines = self
+        let mut lines = Vec::with_capacity(self.keys.len());
+        for ((key, source_limit), retained_limit) in self
             .keys
             .into_iter()
             .zip(self.source_limits)
             .zip(self.retained_limits)
-            .map(|((key, source_limit), retained_limit)| {
-                let preview = load(&key, source_limit);
-                (key, preview, retained_limit)
-            })
-            .collect();
+        {
+            if self.cancellation.load(Ordering::Acquire) {
+                break;
+            }
+            let preview = load(&key, source_limit);
+            lines.push((key, preview, retained_limit));
+        }
         VisibleLineLoadResult {
             revision: self.revision,
             lines,
@@ -115,6 +123,7 @@ pub(crate) struct VisibleLineStore<K> {
     max_line_source_bytes: Cell<usize>,
     max_cache_retained_bytes: Cell<usize>,
     revision: Cell<u64>,
+    load_cancellation: RefCell<Option<Arc<AtomicBool>>>,
 }
 
 impl<K> Default for VisibleLineStore<K> {
@@ -128,6 +137,15 @@ impl<K> Default for VisibleLineStore<K> {
             max_line_source_bytes: Cell::new(DEFAULT_MAX_LINE_SOURCE_BYTES),
             max_cache_retained_bytes: Cell::new(DEFAULT_MAX_CACHE_RETAINED_BYTES),
             revision: Cell::new(1),
+            load_cancellation: RefCell::default(),
+        }
+    }
+}
+
+impl<K> Drop for VisibleLineStore<K> {
+    fn drop(&mut self) {
+        if let Some(cancellation) = self.load_cancellation.get_mut().take() {
+            cancellation.store(true, Ordering::Release);
         }
     }
 }
@@ -140,6 +158,9 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
     }
 
     pub(crate) fn invalidate_window(&self) {
+        if let Some(cancellation) = self.load_cancellation.borrow_mut().take() {
+            cancellation.store(true, Ordering::Release);
+        }
         self.revision.set(self.revision.get().saturating_add(1));
         self.window.set(None);
         self.prepared_keys.borrow_mut().clear();
@@ -201,6 +222,9 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
         if self.window.get() == Some(window) && *self.prepared_priority.borrow() == priority_keys {
             return None;
         }
+        if let Some(cancellation) = self.load_cancellation.borrow_mut().take() {
+            cancellation.store(true, Ordering::Release);
+        }
         let revision = self.revision.get().saturating_add(1);
         self.revision.set(revision);
         self.window.set(Some(window));
@@ -243,11 +267,17 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
             reserved_bytes = reserved_bytes.saturating_add(retained_limit);
         }
         *self.lines.borrow_mut() = next;
-        (!keys.is_empty()).then_some(VisibleLineLoadRequest {
+        if keys.is_empty() {
+            return None;
+        }
+        let cancellation = Arc::new(AtomicBool::new(false));
+        *self.load_cancellation.borrow_mut() = Some(cancellation.clone());
+        Some(VisibleLineLoadRequest {
             revision,
             keys,
             source_limits,
             retained_limits,
+            cancellation,
         })
     }
 
@@ -255,6 +285,7 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
         if loaded.revision != self.revision.get() {
             return false;
         }
+        self.load_cancellation.borrow_mut().take();
         let mut loaded = loaded
             .lines
             .into_iter()
@@ -537,5 +568,24 @@ mod tests {
             cache.line(1).expect("新窗口正文应被安装").source().as_ref(),
             "line 1"
         );
+    }
+
+    #[test]
+    fn invalidating_a_window_stops_its_remaining_source_reads() {
+        let cache = VisibleLineStore::<usize>::default();
+        cache.set_overscan(0);
+        let request = cache
+            .request_visible_rows(0..3, 3, Some)
+            .expect("首个窗口应请求正文");
+        let loaded_rows = RefCell::new(Vec::new());
+
+        let stale = request.load(|source_row, _| {
+            loaded_rows.borrow_mut().push(*source_row);
+            cache.invalidate_window();
+            Some(LinePreview::new(format!("line {source_row}"), false))
+        });
+
+        assert_eq!(*loaded_rows.borrow(), [0]);
+        assert!(!cache.install_loaded(stale));
     }
 }
