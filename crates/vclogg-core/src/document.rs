@@ -1,18 +1,22 @@
 use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fmt::Write as _,
     fs::{self, File},
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     ops::{ControlFlow, Deref},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(windows)]
-use std::{os::windows::ffi::OsStrExt as _, os::windows::io::AsRawHandle as _};
+use std::{
+    os::windows::ffi::OsStrExt as _, os::windows::fs::FileExt as _,
+    os::windows::io::AsRawHandle as _,
+};
 
 #[cfg(unix)]
-use std::os::unix::{ffi::OsStrExt as _, fs::MetadataExt as _};
+use std::os::unix::{ffi::OsStrExt as _, fs::FileExt as _, fs::MetadataExt as _};
 
 use anyhow::{Context as _, Result};
 use chardetng::EncodingDetector;
@@ -34,6 +38,7 @@ use windows_sys::Win32::{
 
 const APPEND_SAMPLE_BYTES: usize = 64 * 1024;
 const APPEND_INTEGRITY_BLOCK_BYTES: usize = 4 * 1024 * 1024;
+const VERIFIED_BLOCK_CACHE_BYTES: usize = 8 * 1024 * 1024;
 const INDEX_CACHE_MAGIC: &[u8; 8] = b"VCLOGG05";
 const INDEX_CACHE_VERSION: u32 = 3;
 const INDEX_CACHE_HEADER_BYTES: u64 = 8 + 4 + 4 + 2 + 8 + 8 + 1 + 8 + 16 + 8 + 8 * 7;
@@ -130,6 +135,15 @@ impl FileEncoding {
         }
     }
 
+    fn decode_for_search(self, bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+        match self {
+            Self::Utf8 | Self::Utf8Bom => std::borrow::Cow::Borrowed(bytes),
+            Self::Utf16Le | Self::Utf16Be | Self::Legacy(_) | Self::Binary => {
+                std::borrow::Cow::Owned(self.decode(bytes).into_bytes())
+            }
+        }
+    }
+
     fn trim_line_bytes(self, bytes: &[u8]) -> &[u8] {
         match self {
             Self::Utf16Le => bytes
@@ -191,20 +205,244 @@ pub enum DocumentRefreshKind {
 
 enum DocumentBytes {
     Empty,
-    Mapped(Mmap),
+    Owned(Box<[u8]>),
+    Verified(VerifiedFileBytes),
+}
+
+struct VerifiedFileBytes {
+    len: usize,
+    integrity_blocks: Arc<[[u8; 32]]>,
+    file: File,
+    state: Mutex<VerifiedFileState>,
+}
+
+struct VerifiedFileState {
+    blocks: BTreeMap<usize, Arc<[u8]>>,
+    invalid_blocks: BTreeSet<usize>,
+    block_order: VecDeque<usize>,
+    cached_bytes: usize,
+}
+
+enum DocumentByteStorage<'a> {
+    Borrowed(&'a [u8]),
+    Shared(Arc<[u8]>),
     Owned(Box<[u8]>),
 }
 
-impl Deref for DocumentBytes {
+pub(crate) struct DocumentLineBytes<'a> {
+    storage: DocumentByteStorage<'a>,
+    range: std::ops::Range<usize>,
+}
+
+impl Deref for DocumentLineBytes<'_> {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        match self {
-            Self::Empty => &[],
-            Self::Mapped(bytes) => bytes,
-            Self::Owned(bytes) => bytes,
+        let bytes = match &self.storage {
+            DocumentByteStorage::Borrowed(bytes) => *bytes,
+            DocumentByteStorage::Shared(bytes) => bytes,
+            DocumentByteStorage::Owned(bytes) => bytes,
+        };
+        &bytes[self.range.clone()]
+    }
+}
+
+impl DocumentLineBytes<'_> {
+    fn truncate(&mut self, len: usize) {
+        self.range.end = self.range.start.saturating_add(len).min(self.range.end);
+    }
+}
+
+impl DocumentBytes {
+    fn verified(file: File, len: usize, integrity_blocks: Arc<[[u8; 32]]>) -> Self {
+        if len == 0 {
+            Self::Empty
+        } else {
+            Self::Verified(VerifiedFileBytes {
+                len,
+                integrity_blocks,
+                file,
+                state: Mutex::new(VerifiedFileState {
+                    blocks: BTreeMap::new(),
+                    invalid_blocks: BTreeSet::new(),
+                    block_order: VecDeque::new(),
+                    cached_bytes: 0,
+                }),
+            })
         }
     }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Empty => 0,
+            Self::Owned(bytes) => bytes.len(),
+            Self::Verified(bytes) => bytes.len,
+        }
+    }
+
+    fn read_range(&self, range: std::ops::Range<usize>) -> Option<DocumentLineBytes<'_>> {
+        match self {
+            Self::Empty if range.is_empty() => Some(DocumentLineBytes {
+                storage: DocumentByteStorage::Borrowed(&[]),
+                range: 0..0,
+            }),
+            Self::Empty => None,
+            Self::Owned(bytes) => {
+                bytes.get(range.clone())?;
+                Some(DocumentLineBytes {
+                    storage: DocumentByteStorage::Borrowed(bytes),
+                    range,
+                })
+            }
+            Self::Verified(bytes) => bytes.read_range(range),
+        }
+    }
+
+    fn read_unverified_range(&self, range: std::ops::Range<usize>) -> Option<Vec<u8>> {
+        match self {
+            Self::Empty if range.is_empty() => Some(Vec::new()),
+            Self::Empty => None,
+            Self::Owned(bytes) => Some(bytes.get(range)?.to_vec()),
+            Self::Verified(bytes) => bytes.read_unverified_range(range),
+        }
+    }
+
+    fn resident_slice(&self) -> Option<&[u8]> {
+        match self {
+            Self::Empty => Some(&[]),
+            Self::Owned(bytes) => Some(bytes),
+            Self::Verified(_) => None,
+        }
+    }
+}
+
+impl VerifiedFileBytes {
+    fn read_range(&self, range: std::ops::Range<usize>) -> Option<DocumentLineBytes<'_>> {
+        if range.start > range.end || range.end > self.len {
+            return None;
+        }
+        if range.is_empty() {
+            return Some(DocumentLineBytes {
+                storage: DocumentByteStorage::Borrowed(&[]),
+                range: 0..0,
+            });
+        }
+        let first_block = range.start / APPEND_INTEGRITY_BLOCK_BYTES;
+        let last_block = (range.end - 1) / APPEND_INTEGRITY_BLOCK_BYTES;
+        if first_block == last_block {
+            let block = self.load_verified_block(first_block, true)?;
+            let block_start = first_block.saturating_mul(APPEND_INTEGRITY_BLOCK_BYTES);
+            return Some(DocumentLineBytes {
+                storage: DocumentByteStorage::Shared(block),
+                range: range.start - block_start..range.end - block_start,
+            });
+        }
+
+        let mut joined = Vec::with_capacity(range.len());
+        for block_ix in first_block..=last_block {
+            let block = self.load_verified_block(block_ix, true)?;
+            let block_start = block_ix.saturating_mul(APPEND_INTEGRITY_BLOCK_BYTES);
+            let start = range.start.saturating_sub(block_start).min(block.len());
+            let end = range.end.saturating_sub(block_start).min(block.len());
+            joined.extend_from_slice(block.get(start..end)?);
+        }
+        let len = joined.len();
+        Some(DocumentLineBytes {
+            storage: DocumentByteStorage::Owned(joined.into_boxed_slice()),
+            range: 0..len,
+        })
+    }
+
+    fn read_unverified_range(&self, range: std::ops::Range<usize>) -> Option<Vec<u8>> {
+        if range.start > range.end || range.end > self.len {
+            return None;
+        }
+        let mut bytes = vec![0_u8; range.len()];
+        if bytes.is_empty() {
+            return Some(bytes);
+        }
+        read_file_exact_at(&self.file, &mut bytes, range.start as u64).ok()?;
+        Some(bytes)
+    }
+
+    fn load_verified_block(&self, block_ix: usize, retain: bool) -> Option<Arc<[u8]>> {
+        {
+            let mut state = self.state.lock().ok()?;
+            if let Some(block) = state.blocks.get(&block_ix).cloned() {
+                if let Some(position) = state
+                    .block_order
+                    .iter()
+                    .position(|entry| *entry == block_ix)
+                {
+                    state.block_order.remove(position);
+                }
+                state.block_order.push_back(block_ix);
+                return Some(block);
+            }
+            if state.invalid_blocks.contains(&block_ix) {
+                return None;
+            }
+        }
+
+        let block = (|| {
+            let block_start = block_ix.checked_mul(APPEND_INTEGRITY_BLOCK_BYTES)?;
+            let block_end = block_start
+                .checked_add(APPEND_INTEGRITY_BLOCK_BYTES)?
+                .min(self.len);
+            let mut block = vec![0_u8; block_end.checked_sub(block_start)?];
+            read_file_exact_at(&self.file, &mut block, block_start as u64).ok()?;
+            let expected = self.integrity_blocks.get(block_ix)?;
+            (<[u8; 32]>::from(Sha256::digest(&block)) == *expected).then_some(block)
+        })();
+        let Some(block) = block else {
+            let mut state = self.state.lock().ok()?;
+            if let Some(block) = state.blocks.get(&block_ix).cloned() {
+                return Some(block);
+            }
+            state.invalid_blocks.insert(block_ix);
+            return None;
+        };
+
+        let block: Arc<[u8]> = block.into();
+        if !retain {
+            return Some(block);
+        }
+        let mut state = self.state.lock().ok()?;
+        if let Some(block) = state.blocks.get(&block_ix).cloned() {
+            return Some(block);
+        }
+        if state.invalid_blocks.contains(&block_ix) {
+            return None;
+        }
+        while state.cached_bytes.saturating_add(block.len()) > VERIFIED_BLOCK_CACHE_BYTES {
+            let evicted_ix = state.block_order.pop_front()?;
+            if let Some(evicted) = state.blocks.remove(&evicted_ix) {
+                state.cached_bytes = state.cached_bytes.saturating_sub(evicted.len());
+            }
+        }
+        state.cached_bytes = state.cached_bytes.saturating_add(block.len());
+        state.blocks.insert(block_ix, block.clone());
+        state.block_order.push_back(block_ix);
+        Some(block)
+    }
+}
+
+#[cfg(unix)]
+fn read_file_exact_at(file: &File, bytes: &mut [u8], offset: u64) -> std::io::Result<()> {
+    file.read_exact_at(bytes, offset)
+}
+
+#[cfg(windows)]
+fn read_file_exact_at(file: &File, mut bytes: &mut [u8], mut offset: u64) -> std::io::Result<()> {
+    while !bytes.is_empty() {
+        let read = file.seek_read(bytes, offset)?;
+        if read == 0 {
+            return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+        }
+        offset = offset.saturating_add(read as u64);
+        bytes = &mut bytes[read..];
+    }
+    Ok(())
 }
 
 struct AppendFingerprint {
@@ -447,7 +685,7 @@ impl PendingIndexCacheWrite {
     }
 }
 
-/// A read-only log snapshot backed by a memory map and a line-start index.
+/// A read-only log snapshot backed by verified positional reads and a line-start index.
 ///
 /// The document owns no UI state. Reopening a changed source creates a new snapshot,
 /// which lets the application swap generations atomically after background work ends.
@@ -461,6 +699,70 @@ pub struct LogDocument {
     append_fingerprint: AppendFingerprint,
     content_digest: [u8; 32],
     encoding: FileEncoding,
+}
+
+pub(crate) struct DocumentSearchLines<'a> {
+    document: &'a LogDocument,
+    verified_block: Option<(usize, Option<Arc<[u8]>>)>,
+}
+
+impl DocumentSearchLines<'_> {
+    pub(crate) fn bytes_at_local_row(
+        &mut self,
+        row_ix: usize,
+    ) -> Option<std::borrow::Cow<'_, [u8]>> {
+        let document = self.document;
+        let range = document.line_byte_range_at_local_row(row_ix)?;
+        match document.bytes.as_ref() {
+            DocumentBytes::Empty => range.is_empty().then_some(std::borrow::Cow::Borrowed(&[])),
+            DocumentBytes::Owned(bytes) => {
+                let bytes = bytes.get(range)?;
+                Some(
+                    document
+                        .encoding
+                        .decode_for_search(document.encoding.trim_line_bytes(bytes)),
+                )
+            }
+            DocumentBytes::Verified(bytes) => {
+                if range.is_empty() {
+                    return Some(std::borrow::Cow::Borrowed(&[]));
+                }
+                let first_block = range.start / APPEND_INTEGRITY_BLOCK_BYTES;
+                let last_block = (range.end - 1) / APPEND_INTEGRITY_BLOCK_BYTES;
+                if first_block != last_block {
+                    let mut joined = Vec::with_capacity(range.len());
+                    for block_ix in first_block..=last_block {
+                        let block = bytes.load_verified_block(block_ix, false)?;
+                        let block_start = block_ix.saturating_mul(APPEND_INTEGRITY_BLOCK_BYTES);
+                        let start = range.start.saturating_sub(block_start).min(block.len());
+                        let end = range.end.saturating_sub(block_start).min(block.len());
+                        joined.extend_from_slice(block.get(start..end)?);
+                    }
+                    let trimmed_len = document.encoding.trim_line_bytes(&joined).len();
+                    joined.truncate(trimmed_len);
+                    return Some(std::borrow::Cow::Owned(
+                        document.encoding.decode_for_search(&joined).into_owned(),
+                    ));
+                }
+                if self
+                    .verified_block
+                    .as_ref()
+                    .is_none_or(|(block_ix, _)| *block_ix != first_block)
+                {
+                    self.verified_block =
+                        Some((first_block, bytes.load_verified_block(first_block, false)));
+                }
+                let block = self.verified_block.as_ref()?.1.as_ref()?;
+                let block_start = first_block.saturating_mul(APPEND_INTEGRITY_BLOCK_BYTES);
+                let line = block.get(range.start - block_start..range.end - block_start)?;
+                Some(
+                    document
+                        .encoding
+                        .decode_for_search(document.encoding.trim_line_bytes(line)),
+                )
+            }
+        }
+    }
 }
 
 impl LogDocument {
@@ -513,14 +815,22 @@ impl LogDocument {
         if cancellation.is_cancelled() {
             return Ok(None);
         }
-        let bytes = map_snapshot(&file, file_metadata.len(), &path)?;
+        let mapped = map_snapshot(&file, file_metadata.len(), &path)?;
+        let scan_bytes = mapped.as_deref().unwrap_or_default();
         let Some((indexed_lines, integrity_blocks)) =
-            build_line_index_with_integrity_while(&bytes, encoding, &|| {
+            build_line_index_with_integrity_while(scan_bytes, encoding, &|| {
                 cancellation.is_cancelled()
             })
         else {
             return Ok(None);
         };
+        drop(mapped);
+        let bytes = DocumentBytes::verified(
+            file,
+            usize::try_from(file_metadata.len())
+                .with_context(|| format!("日志文件过大，无法读取：{}", path.display()))?,
+            integrity_blocks.clone(),
+        );
 
         Ok(Some(Self::from_parts(
             path,
@@ -589,15 +899,13 @@ impl LogDocument {
         if cancellation.is_cancelled() {
             return Ok(None);
         }
-        let bytes = map_snapshot(&file, file_size, &path)?;
-        if cancellation.is_cancelled() {
-            return Ok(None);
-        }
         let (indexed_lines, integrity_blocks) = match cached {
             Some(cached) => (cached.indexed_lines, Some(cached.integrity_blocks)),
             None => {
+                let mapped = map_snapshot(&file, file_size, &path)?;
+                let scan_bytes = mapped.as_deref().unwrap_or_default();
                 let Some((indexed_lines, integrity_blocks)) =
-                    build_line_index_with_integrity_while(&bytes, encoding, &|| {
+                    build_line_index_with_integrity_while(scan_bytes, encoding, &|| {
                         cancellation.is_cancelled()
                     })
                 else {
@@ -606,6 +914,17 @@ impl LogDocument {
                 (indexed_lines, Some(integrity_blocks))
             }
         };
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
+        let integrity_blocks = integrity_blocks
+            .expect("complete documents always carry integrity blocks from cache or indexing");
+        let bytes = DocumentBytes::verified(
+            file,
+            usize::try_from(file_size)
+                .with_context(|| format!("日志文件过大，无法读取：{}", path.display()))?,
+            integrity_blocks.clone(),
+        );
         let document = Self::from_parts(
             path.clone(),
             bytes,
@@ -613,7 +932,7 @@ impl LogDocument {
             modified,
             file_size,
             encoding,
-            integrity_blocks,
+            Some(integrity_blocks),
         );
         let pending_cache_write = cache_missed.then(|| PendingIndexCacheWrite {
             cache_path,
@@ -666,7 +985,12 @@ impl LogDocument {
         let visible_len = preview_visible_len(&preview, encoding, line_limit);
         preview.truncate(visible_len);
         let bytes = DocumentBytes::Owned(preview.into_boxed_slice());
-        let mut indexed_lines = build_line_index(&bytes, encoding);
+        let mut indexed_lines = build_line_index(
+            bytes
+                .resident_slice()
+                .expect("bounded previews always keep resident bytes"),
+            encoding,
+        );
         let within_line_limit = indexed_lines.starts.len() <= line_limit;
         if !matches!(encoding, FileEncoding::Binary) && indexed_lines.starts.len() > line_limit {
             indexed_lines.starts.truncate(line_limit);
@@ -877,44 +1201,52 @@ impl LogDocument {
     /// Decode one logical line without retaining its text in memory.
     pub fn line(&self, source_row: usize) -> Option<String> {
         self.line_bytes(source_row)
-            .map(|bytes| self.encoding.decode(bytes))
+            .map(|bytes| self.encoding.decode(&bytes))
     }
 
     /// Decode a bounded prefix of one logical line for interactive display.
     pub fn line_preview(&self, source_row: usize, max_bytes: usize) -> Option<LinePreview> {
-        self.line_bytes(source_row)
-            .map(|bytes| self.encoding.decode_preview(bytes, max_bytes))
+        let row_ix = self.local_row(source_row)?;
+        let range = self.line_byte_range_at_local_row(row_ix)?;
+        let read_end = range
+            .end
+            .min(range.start.saturating_add(max_bytes).saturating_add(4));
+        let mut bytes = self.bytes.read_range(range.start..read_end)?;
+        if read_end == range.end {
+            let trimmed_len = self.encoding.trim_line_bytes(&bytes).len();
+            bytes.truncate(trimmed_len);
+        }
+        let mut preview = self.encoding.decode_preview(&bytes, max_bytes);
+        preview.truncated |= read_end < range.end;
+        Some(preview)
     }
 
-    pub(crate) fn line_bytes(&self, source_row: usize) -> Option<&[u8]> {
+    pub(crate) fn line_bytes(&self, source_row: usize) -> Option<DocumentLineBytes<'_>> {
         let row_ix = self.local_row(source_row)?;
         self.line_bytes_at_local_row(row_ix)
     }
 
-    fn line_bytes_at_local_row(&self, row_ix: usize) -> Option<&[u8]> {
+    fn line_bytes_at_local_row(&self, row_ix: usize) -> Option<DocumentLineBytes<'_>> {
+        let range = self.line_byte_range_at_local_row(row_ix)?;
+        let mut bytes = self.bytes.read_range(range)?;
+        let trimmed_len = self.encoding.trim_line_bytes(&bytes).len();
+        bytes.truncate(trimmed_len);
+        Some(bytes)
+    }
+
+    fn line_byte_range_at_local_row(&self, row_ix: usize) -> Option<std::ops::Range<usize>> {
         let mut start = self.line_starts.get(row_ix)?;
         let end = self.line_starts.get(row_ix + 1).unwrap_or(self.bytes.len());
         if self.segment_start_row == 0 && row_ix == 0 {
             start = start.saturating_add(self.encoding.bom_len()).min(end);
         }
-        self.bytes
-            .get(start..end)
-            .map(|bytes| self.encoding.trim_line_bytes(bytes))
+        Some(start..end)
     }
 
-    pub(crate) fn search_bytes_at_local_row(
-        &self,
-        row_ix: usize,
-    ) -> Option<std::borrow::Cow<'_, [u8]>> {
-        let bytes = self.line_bytes_at_local_row(row_ix)?;
-        match self.encoding {
-            FileEncoding::Utf8 | FileEncoding::Utf8Bom => Some(std::borrow::Cow::Borrowed(bytes)),
-            FileEncoding::Utf16Le
-            | FileEncoding::Utf16Be
-            | FileEncoding::Legacy(_)
-            | FileEncoding::Binary => Some(std::borrow::Cow::Owned(
-                self.encoding.decode(bytes).into_bytes(),
-            )),
+    pub(crate) fn search_lines(&self) -> DocumentSearchLines<'_> {
+        DocumentSearchLines {
+            document: self,
+            verified_block: None,
         }
     }
 
@@ -934,8 +1266,9 @@ impl LogDocument {
             return Ok(None);
         }
 
-        let bytes = map_snapshot(&file, new_size, path)?;
-        if !self.append_prefix_matches(&bytes) {
+        let mapped = map_snapshot(&file, new_size, path)?;
+        let scan_bytes = mapped.as_deref().unwrap_or_default();
+        if !self.append_prefix_matches(scan_bytes) {
             return Ok(None);
         }
 
@@ -948,7 +1281,7 @@ impl LogDocument {
             longest_line_columns,
             longest_completed_line_columns,
         ) = extend_line_index(
-            &bytes,
+            scan_bytes,
             old_size,
             &mut line_starts,
             self.longest_completed_line_bytes,
@@ -961,6 +1294,14 @@ impl LogDocument {
             longest_line_columns,
             longest_completed_line_columns,
         };
+        let integrity_blocks: Arc<[[u8; 32]]> = calculate_integrity_blocks(scan_bytes).into();
+        drop(mapped);
+        let bytes = DocumentBytes::verified(
+            file,
+            usize::try_from(new_size)
+                .with_context(|| format!("日志文件过大，无法读取：{}", path.display()))?,
+            integrity_blocks.clone(),
+        );
 
         Ok(Some(Self::from_parts(
             path.to_path_buf(),
@@ -969,7 +1310,7 @@ impl LogDocument {
             file_metadata.modified().ok(),
             new_size,
             self.encoding,
-            None,
+            Some(integrity_blocks),
         )))
     }
 
@@ -1027,12 +1368,24 @@ impl LogDocument {
         let file_size = source_size;
         let sample_len = bytes.len().min(APPEND_SAMPLE_BYTES);
         let tail_start = bytes.len().saturating_sub(sample_len);
-        let integrity_blocks =
-            integrity_blocks.unwrap_or_else(|| calculate_integrity_blocks(&bytes).into());
+        let integrity_blocks = integrity_blocks.unwrap_or_else(|| {
+            calculate_integrity_blocks(
+                bytes
+                    .resident_slice()
+                    .expect("only resident previews may omit integrity blocks"),
+            )
+            .into()
+        });
         let content_digest = digest_integrity_blocks(&integrity_blocks);
         let append_fingerprint = AppendFingerprint {
-            head: Arc::from(&bytes[..sample_len]),
-            tail: Arc::from(&bytes[tail_start..]),
+            head: bytes
+                .read_unverified_range(0..sample_len)
+                .unwrap_or_default()
+                .into(),
+            tail: bytes
+                .read_unverified_range(tail_start..bytes.len())
+                .unwrap_or_default()
+                .into(),
             integrity_blocks,
         };
         let metadata = DocumentMetadata {
@@ -1123,17 +1476,18 @@ fn integrity_blocks_match(bytes: &[u8], expected: &[[u8; 32]]) -> bool {
             .all(|(block, expected)| <[u8; 32]>::from(Sha256::digest(block)) == *expected)
 }
 
-fn map_snapshot(file: &File, file_size: u64, path: &Path) -> Result<DocumentBytes> {
+fn map_snapshot(file: &File, file_size: u64, path: &Path) -> Result<Option<Mmap>> {
     if file_size == 0 {
-        return Ok(DocumentBytes::Empty);
+        return Ok(None);
     }
     let mapped_len = usize::try_from(file_size)
         .with_context(|| format!("日志文件过大，无法映射：{}", path.display()))?;
 
-    // SAFETY: The mapping is read-only and its length is fixed to the metadata
-    // captured above. VCLogg2 never exposes mutable access to mapped bytes.
+    // SAFETY: The mapping is read-only, has the metadata length captured above,
+    // and remains local to background index construction. Installed documents
+    // use verified positional reads instead of retaining this mapping.
     unsafe { MmapOptions::new().len(mapped_len).map(file) }
-        .map(DocumentBytes::Mapped)
+        .map(Some)
         .with_context(|| format!("无法映射日志文件：{}", path.display()))
 }
 
@@ -2050,6 +2404,47 @@ mod source_snapshot_tests {
 
         assert_eq!(first.metadata().file_size, second.metadata().file_size);
         assert!(!first.same_source_snapshot(&second));
+        _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn unread_blocks_reject_external_overwrites() {
+        let directory = test_directory("external-overwrite");
+        let path = directory.join("source.log");
+        fs::write(&path, b"alpha\nbeta\n").expect("应能写入原始测试日志");
+        let document = LogDocument::open(&path).expect("应能打开原始测试日志");
+
+        fs::write(&path, b"omega\nbeta\n").expect("应能原地覆盖测试日志");
+
+        assert_eq!(document.line(0), None);
+        _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn verified_blocks_preserve_bytes_after_external_overwrite() {
+        let directory = test_directory("cached-external-overwrite");
+        let path = directory.join("source.log");
+        fs::write(&path, b"alpha\nbeta\n").expect("应能写入原始测试日志");
+        let document = LogDocument::open(&path).expect("应能打开原始测试日志");
+        assert_eq!(document.line(0).as_deref(), Some("alpha"));
+
+        fs::write(&path, b"omega\nbeta\n").expect("应能原地覆盖测试日志");
+
+        assert_eq!(document.line(0).as_deref(), Some("alpha"));
+        assert_eq!(document.line(1).as_deref(), Some("beta"));
+        _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn unread_blocks_handle_external_truncation_without_mapping_access() {
+        let directory = test_directory("external-truncate");
+        let path = directory.join("source.log");
+        fs::write(&path, b"alpha\nbeta\n").expect("应能写入原始测试日志");
+        let document = LogDocument::open(&path).expect("应能打开原始测试日志");
+
+        fs::File::create(&path).expect("应能截断测试日志");
+
+        assert_eq!(document.line(0), None);
         _ = fs::remove_dir_all(directory);
     }
 

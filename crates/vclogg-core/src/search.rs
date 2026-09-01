@@ -16,7 +16,6 @@ use roaring::RoaringTreemap;
 use crate::{CancellationToken, LogDocument};
 
 const PARALLEL_SEARCH_MIN_BYTES: u64 = 1024 * 1024;
-const SEARCH_TASKS_PER_THREAD: usize = 4;
 const SEARCH_PROGRESS_BATCH_LINES: usize = 1024;
 
 /// Search options owned by the feature layer and passed to the core as one snapshot.
@@ -573,10 +572,7 @@ fn search_chunk_count(document: &LogDocument) -> usize {
         return 1;
     }
 
-    thread_count
-        .saturating_mul(SEARCH_TASKS_PER_THREAD)
-        .min(line_count)
-        .max(1)
+    thread_count.min(line_count).max(1)
 }
 
 struct SearchChunkResult {
@@ -602,6 +598,7 @@ fn scan_search_chunk(
     let max_results_u64 = max_results.map(|limit| u64::try_from(limit).unwrap_or(u64::MAX));
     let mut pending_scanned_lines = 0;
     let mut pending_matched_lines = 0;
+    let mut search_lines = document.search_lines();
 
     for row_ix in rows {
         if pending_scanned_lines == SEARCH_PROGRESS_BATCH_LINES {
@@ -616,7 +613,7 @@ fn scan_search_chunk(
         }
         pending_scanned_lines += 1;
 
-        let Some(line) = document.search_bytes_at_local_row(row_ix) else {
+        let Some(line) = search_lines.bytes_at_local_row(row_ix) else {
             continue;
         };
         if !matcher.is_match(&line) {
