@@ -470,8 +470,9 @@ impl LogDocument {
         cache_dir: impl AsRef<Path>,
         preferred_row: usize,
         line_limit: usize,
+        byte_limit: usize,
     ) -> Result<Option<Self>> {
-        if line_limit == 0 {
+        if line_limit == 0 || byte_limit == 0 {
             return Ok(None);
         }
         let path = path.as_ref().to_path_buf();
@@ -506,20 +507,40 @@ impl LogDocument {
 
         let window_count = line_limit.min(source_line_count);
         let anchor = preferred_row.min(source_line_count - 1);
-        let start_row = anchor
+        let mut start_row = anchor
             .saturating_sub(window_count / 2)
             .min(source_line_count - window_count);
-        let end_row = start_row + window_count;
-        let byte_start = cached.starts[start_row];
-        let byte_end = if end_row < source_line_count {
-            cached.starts[end_row]
-        } else {
-            usize::try_from(source_size)
-                .with_context(|| format!("日志文件过大，无法读取缓存预览：{}", path.display()))?
+        let mut end_row = start_row + window_count;
+        let source_size_usize = usize::try_from(source_size)
+            .with_context(|| format!("日志文件过大，无法读取缓存预览：{}", path.display()))?;
+        let byte_end_for = |end_row: usize| {
+            cached
+                .starts
+                .get(end_row)
+                .copied()
+                .unwrap_or(source_size_usize)
         };
+        while end_row - start_row > 1
+            && byte_end_for(end_row).saturating_sub(cached.starts[start_row]) > byte_limit
+        {
+            let rows_before_anchor = anchor - start_row;
+            let rows_after_anchor = end_row - anchor - 1;
+            if rows_after_anchor >= rows_before_anchor && end_row - 1 > anchor {
+                end_row -= 1;
+            } else if start_row < anchor {
+                start_row += 1;
+            } else {
+                end_row -= 1;
+            }
+        }
+        let byte_start = cached.starts[start_row];
+        let byte_end = byte_end_for(end_row);
         let byte_count = byte_end
             .checked_sub(byte_start)
             .with_context(|| format!("索引缓存中的预览范围无效：{}", cache_path.display()))?;
+        if byte_count > byte_limit {
+            return Ok(None);
+        }
         file.seek(SeekFrom::Start(byte_start as u64))?;
         let mut preview = vec![0_u8; byte_count];
         file.read_exact(&mut preview)
@@ -1703,7 +1724,7 @@ mod source_snapshot_tests {
             .persist()
             .expect("应能写入测试索引缓存");
 
-        let preview = LogDocument::open_cached_preview(&path, &cache_directory, 2, 1)
+        let preview = LogDocument::open_cached_preview(&path, &cache_directory, 2, 1, 1024)
             .expect("应能读取缓存预览")
             .expect("缓存预览应存在");
 
@@ -1712,6 +1733,49 @@ mod source_snapshot_tests {
         assert_eq!(preview.local_row(2), Some(0));
         assert_eq!(preview.local_row(1), None);
         assert_eq!(preview.local_row(3), None);
+        _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn cached_preview_never_reads_an_anchor_line_beyond_the_byte_budget() {
+        let directory = test_directory("bounded-cached-preview");
+        let path = directory.join("source.log");
+        let cache_directory = directory.join("cache");
+        fs::write(&path, b"short\nthis line is much too large\ntail").expect("应能写入测试日志");
+        let (_, pending_cache) = LogDocument::open_with_index_cache(&path, &cache_directory)
+            .expect("应能为测试日志建立索引缓存");
+        pending_cache
+            .expect("首次打开应生成待写入的索引缓存")
+            .persist()
+            .expect("应能写入测试索引缓存");
+
+        let preview = LogDocument::open_cached_preview(&path, &cache_directory, 1, 3, 8)
+            .expect("缓存预览检查不应失败");
+
+        assert!(preview.is_none());
+        _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn cached_preview_shrinks_to_complete_lines_around_the_anchor() {
+        let directory = test_directory("shrunk-cached-preview");
+        let path = directory.join("source.log");
+        let cache_directory = directory.join("cache");
+        fs::write(&path, b"zero\none\ntwo\nthree\nfour").expect("应能写入测试日志");
+        let (_, pending_cache) = LogDocument::open_with_index_cache(&path, &cache_directory)
+            .expect("应能为测试日志建立索引缓存");
+        pending_cache
+            .expect("首次打开应生成待写入的索引缓存")
+            .persist()
+            .expect("应能写入测试索引缓存");
+
+        let preview = LogDocument::open_cached_preview(&path, &cache_directory, 2, 5, 9)
+            .expect("应能读取缩小后的缓存预览")
+            .expect("锚点行在预算内时缓存预览应存在");
+
+        assert!(preview.contains_source_row(2));
+        assert!(preview.bytes.len() <= 9);
+        assert_eq!(preview.line(2).as_deref(), Some("two"));
         _ = fs::remove_dir_all(directory);
     }
 }

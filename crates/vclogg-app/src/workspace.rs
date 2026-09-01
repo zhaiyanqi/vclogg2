@@ -18731,6 +18731,7 @@ fn prepare_document_preview(
                 cache_root.join("VCLogg2").join("index"),
                 preferred_row,
                 PREVIEW_LINE_LIMIT,
+                PREVIEW_BYTE_LIMIT,
             )?
         }
         _ => None,
