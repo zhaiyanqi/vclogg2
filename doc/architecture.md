@@ -22,6 +22,7 @@ vclogg-core          vclogg-data
 - `vclogg-core` 负责文件读取、行索引建立、搜索执行与结果集合运算；`result_set` 独立维护压缩行集合、集合拼接、位置区间和稳定源行映射。core 不依赖 GPUI，也不包含持久化或界面状态。
 - `vclogg-data` 负责 SQLite 持久化、缓存生命周期和可恢复状态的存取；它不依赖 GPUI，也不决定界面如何呈现这些状态。
 - `vclogg-app` 是应用外壳和界面呈现所有者，对外构建 `vclogg2`；用户高亮、选择、选词、字号、行高、换行、标记与交互状态都在这一层组合，渲染路径不直接执行文件 I/O。
+- `workspace.rs` 只保留窗口级组合入口；后台文档准备与结果快照算法位于 `workspace/document_tasks.rs`，滚动、结果快照和文档准备回归分别位于同目录测试模块。新增 workspace 能力必须进入命名子模块，不再扩张单体文件。
 - app 可以组合 core 与 data；core 不依赖 data 或 app，data 不依赖 app。跨层传递稳定 DTO、领域 ID、命令结果或小型协议，不共享 GPUI 实体。
 - `bash scripts/check-architecture.sh` 是三层边界的可执行守卫，CI 会拒绝 core/data 引入 GPUI、core 反向依赖 data/app，或 data 反向依赖 app。
 - `crash_report` 在任何单实例、窗口或后台任务初始化之前安装全局 panic hook。每次 Rust panic 都在本机应用数据目录的 `VCLogg2/crashes` 下以 `create_new` 写入独立报告，包含版本、平台、进程、线程、源码位置及不依赖环境变量的完整 Backtrace；报告刷新到磁盘后继续调用原有 hook，保留 Debug 控制台输出。目录不可用时回退系统临时目录，正常启动只保留最近 20 份。发行构建生成最小行号调试信息，交付脚本按版本生成独立符号包供开发侧崩溃分析留存；PDB 不进入用户分发包或安装目录。
