@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
+use vclogg_core::CompressedRows;
 
 pub(crate) const SEARCH_CONTEXT_VERSION: u32 = 1;
 const PIXEL_SCALE: f32 = 1_000.;
+const COMPRESSED_ROWS_PREFIX: &str = "rb1:";
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -31,7 +33,34 @@ pub(crate) struct PersistedRowRange {
 #[serde(default)]
 pub(crate) struct PersistedPathSelection {
     pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compressed_rows: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rows: Vec<PersistedRowRange>,
+}
+
+impl PersistedPathSelection {
+    pub(crate) fn new(path: String, rows: &CompressedRows) -> Self {
+        Self {
+            path,
+            compressed_rows: Some(encode_compressed_rows(rows)),
+            rows: Vec::new(),
+        }
+    }
+
+    pub(crate) fn decoded_rows(&self) -> CompressedRows {
+        self.compressed_rows
+            .as_deref()
+            .and_then(decode_compressed_rows)
+            .unwrap_or_else(|| {
+                CompressedRows::from_inclusive_ranges(self.rows.iter().filter_map(|range| {
+                    Some((
+                        usize::try_from(range.start).ok()?,
+                        usize::try_from(range.end).ok()?,
+                    ))
+                }))
+            })
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -164,21 +193,41 @@ impl WorkspaceSearchState {
     }
 }
 
-pub(crate) fn compress_rows(rows: impl IntoIterator<Item = usize>) -> Vec<PersistedRowRange> {
-    let mut ranges = Vec::<PersistedRowRange>::new();
-    for row in rows.into_iter().filter_map(|row| u64::try_from(row).ok()) {
-        if let Some(last) = ranges.last_mut()
-            && row <= last.end.saturating_add(1)
-        {
-            last.end = last.end.max(row);
-        } else {
-            ranges.push(PersistedRowRange {
-                start: row,
-                end: row,
-            });
-        }
+fn encode_compressed_rows(rows: &CompressedRows) -> String {
+    let bytes = rows.to_portable_bytes();
+    let mut encoded = String::with_capacity(COMPRESSED_ROWS_PREFIX.len() + bytes.len() * 2);
+    encoded.push_str(COMPRESSED_ROWS_PREFIX);
+    push_hex(&mut encoded, &bytes);
+    encoded
+}
+
+fn decode_compressed_rows(encoded: &str) -> Option<CompressedRows> {
+    let bytes = decode_hex(encoded.strip_prefix(COMPRESSED_ROWS_PREFIX)?)?;
+    CompressedRows::from_portable_bytes(&bytes)
+}
+
+fn push_hex(destination: &mut String, bytes: &[u8]) {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    for byte in bytes {
+        destination.push(DIGITS[usize::from(byte >> 4)] as char);
+        destination.push(DIGITS[usize::from(byte & 0x0f)] as char);
     }
-    ranges
+}
+
+fn decode_hex(encoded: &str) -> Option<Vec<u8>> {
+    if !encoded.len().is_multiple_of(2) {
+        return None;
+    }
+    let (pairs, remainder) = encoded.as_bytes().as_chunks::<2>();
+    debug_assert!(remainder.is_empty());
+    pairs
+        .iter()
+        .map(|digits| {
+            let high = (digits[0] as char).to_digit(16)?;
+            let low = (digits[1] as char).to_digit(16)?;
+            Some(((high << 4) | low) as u8)
+        })
+        .collect()
 }
 
 fn encode_pixels(value: f32) -> i64 {
@@ -191,4 +240,33 @@ fn encode_pixels(value: f32) -> i64 {
 
 fn decode_pixels(value: i64) -> f32 {
     value as f32 / PIXEL_SCALE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persisted_selection_keeps_dense_rows_compressed() {
+        let rows = CompressedRows::from_inclusive_ranges([(0, 999_999), (2_000_000, 2_000_010)]);
+        let selection = PersistedPathSelection::new("source.log".to_owned(), &rows);
+
+        let json = serde_json::to_string(&selection).expect("selection should serialize");
+        let restored: PersistedPathSelection =
+            serde_json::from_str(&json).expect("selection should deserialize");
+
+        assert_eq!(restored.decoded_rows(), rows);
+        assert!(json.len() < 2048);
+        assert!(!json.contains("\"rows\""));
+    }
+
+    #[test]
+    fn persisted_selection_accepts_legacy_ranges() {
+        let selection: PersistedPathSelection = serde_json::from_str(
+            r#"{"path":"source.log","rows":[{"start":3,"end":5},{"start":9,"end":9}]}"#,
+        )
+        .expect("legacy selection should deserialize");
+
+        assert_eq!(selection.decoded_rows(), [3, 4, 5, 9].into_iter().collect());
+    }
 }

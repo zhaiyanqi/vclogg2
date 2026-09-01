@@ -108,7 +108,7 @@ use crate::{
     search_context::{
         PersistedDirectorySearchOptions, PersistedGlobalSearchContext, PersistedPathSelection,
         PersistedSearchQuery, PersistedSearchRowKey, PersistedSearchScope, PersistedSearchViewport,
-        WorkspaceSearchState, compress_rows,
+        WorkspaceSearchState,
     },
     selectable_log_text::{LogText, LogTextSelection, SelectableLogText, TextSelectionCache},
     settings_dialog::{
@@ -10652,10 +10652,7 @@ impl Workspace {
             .iter()
             .filter_map(|(document_id, rows)| {
                 self.global_context_path(context, *document_id)
-                    .map(|path| PersistedPathSelection {
-                        path: encode_persisted_path(path),
-                        rows: compress_rows(rows.iter()),
-                    })
+                    .map(|path| PersistedPathSelection::new(encode_persisted_path(path), rows))
             })
             .collect();
         let row_key = |key: LogRowKey| {
@@ -10912,15 +10909,7 @@ impl Workspace {
             .iter()
             .filter_map(|selection| {
                 let document_id = self.global_document_id_for_path(&selection.path)?;
-                let rows = CompressedRows::from_inclusive_ranges(selection.rows.iter().filter_map(
-                    |range| {
-                        Some((
-                            usize::try_from(range.start).ok()?,
-                            usize::try_from(range.end).ok()?,
-                        ))
-                    },
-                ));
-                Some((document_id, rows))
+                Some((document_id, selection.decoded_rows()))
             })
             .collect();
         let restore_key = |key: &PersistedSearchRowKey| {
