@@ -57,7 +57,7 @@ use gpui_component::{
 use rayon::prelude::{IntoParallelIterator as _, ParallelIterator as _};
 use vclogg_core::{
     CompressedRows, LogDocument, PendingIndexCacheWrite, SearchCancellation, SearchMatcher,
-    SearchProgress, SearchQuery, SearchResult, SearchRun, search_with_compiled_matcher,
+    SearchQuery, SearchResult, SearchRun, search_with_compiled_matcher,
 };
 
 use crate::{
@@ -11371,7 +11371,6 @@ impl Workspace {
         let revision = tab.search_revision;
         let document_id = tab.id;
         let document = tab.document.clone();
-        let progress = SearchProgress::new(document.line_count());
         let target = SearchTarget::Document(document_id);
         self.searches.begin(target, revision, cancellation.clone());
         self.activity = Activity::Searching;
@@ -11387,7 +11386,6 @@ impl Workspace {
                         matcher.as_ref(),
                         query_for_search.max_results,
                         &cancellation,
-                        &progress,
                     );
                     Ok::<_, anyhow::Error>((run, matcher))
                 })
@@ -11590,7 +11588,6 @@ impl Workspace {
                     tab.title.clone(),
                     tab.document.path().to_path_buf(),
                     tab.document.clone(),
-                    SearchProgress::new(tab.document.line_count()),
                 )
             })
             .collect::<Vec<_>>();
@@ -11609,13 +11606,11 @@ impl Workspace {
                     let outcomes = targets
                         .into_par_iter()
                         .map(|target| {
-                            let progress = target.4.clone();
                             let run = search_with_compiled_matcher(
                                 &target.3,
                                 matcher_for_search,
                                 max_results,
                                 &cancellation,
-                                &progress,
                             );
                             (target, Ok::<_, anyhow::Error>(run))
                         })
@@ -11647,7 +11642,7 @@ impl Workspace {
                             let results = outcomes
                                 .into_iter()
                                 .filter_map(|(target, run)| {
-                                    let (document_id, title, path, document, _) = target;
+                                    let (document_id, title, path, document) = target;
                                     if !open_document_ids.contains(&document_id) {
                                         return None;
                                     }
@@ -11779,13 +11774,11 @@ impl Workspace {
                                 (LogDocument::open(path)?, None)
                             };
                         let document = Arc::new(document);
-                        let progress = SearchProgress::new(document.line_count());
                         let run = search_with_compiled_matcher(
                             &document,
                             matcher.as_ref(),
                             max_results,
                             &cancellation_for_search,
-                            &progress,
                         );
                         if let Some(cache_write) = pending_index_cache {
                             _ = cache_write.persist();
@@ -18680,14 +18673,7 @@ fn search_document_with_matcher(
     matcher: Option<&SearchMatcher>,
 ) -> SearchResult {
     let cancellation = SearchCancellation::default();
-    let progress = SearchProgress::new(document.line_count());
-    match search_with_compiled_matcher(
-        document,
-        matcher,
-        query.max_results,
-        &cancellation,
-        &progress,
-    ) {
+    match search_with_compiled_matcher(document, matcher, query.max_results, &cancellation) {
         SearchRun::Completed(result) => result,
         SearchRun::Cancelled => SearchResult::default(),
     }

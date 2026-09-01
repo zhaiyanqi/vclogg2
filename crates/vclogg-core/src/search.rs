@@ -271,33 +271,49 @@ pub fn search_with_progress(
         return Ok(SearchRun::Cancelled);
     }
     let matcher = SearchMatcher::new(query)?;
-    Ok(search_with_compiled_matcher(
+    Ok(search_with_compiled_matcher_inner(
         document,
         matcher.as_ref(),
         query.max_results,
         cancellation,
-        progress,
+        Some(progress),
     ))
 }
 
-/// Scan with an already compiled matcher so one query can be shared across
-/// several documents without repeating regex or automaton construction.
+/// Scan with an already compiled matcher without collecting presentation progress.
+///
+/// This is the preferred entry point for background searches whose caller only
+/// consumes the completed result. Use [`search_with_progress`] when progress is
+/// actually sampled by a presenter.
 pub fn search_with_compiled_matcher(
     document: &LogDocument,
     matcher: Option<&SearchMatcher>,
     max_results: Option<usize>,
     cancellation: &SearchCancellation,
-    progress: &SearchProgress,
+) -> SearchRun {
+    search_with_compiled_matcher_inner(document, matcher, max_results, cancellation, None)
+}
+
+fn search_with_compiled_matcher_inner(
+    document: &LogDocument,
+    matcher: Option<&SearchMatcher>,
+    max_results: Option<usize>,
+    cancellation: &SearchCancellation,
+    progress: Option<&SearchProgress>,
 ) -> SearchRun {
     if cancellation.is_cancelled() {
         return SearchRun::Cancelled;
     }
     let Some(matcher) = matcher else {
-        progress.update(document.line_count(), 0);
+        if let Some(progress) = progress {
+            progress.update(document.line_count(), 0);
+        }
         return SearchRun::Completed(SearchResult::default());
     };
 
-    progress.update(0, 0);
+    if let Some(progress) = progress {
+        progress.update(0, 0);
+    }
     let line_count = document.line_count();
     let chunk_count = search_chunk_count(document);
     let chunk_size = line_count.div_ceil(chunk_count);
@@ -356,10 +372,12 @@ pub fn search_with_compiled_matcher(
         }
     }
 
-    progress.update(
-        line_count,
-        usize::try_from(line_indices.len()).unwrap_or(usize::MAX),
-    );
+    if let Some(progress) = progress {
+        progress.update(
+            line_count,
+            usize::try_from(line_indices.len()).unwrap_or(usize::MAX),
+        );
+    }
 
     SearchRun::Completed(SearchResult {
         line_indices: CompressedRows {
@@ -401,7 +419,7 @@ fn scan_search_chunk(
     rows: Range<usize>,
     max_results: Option<usize>,
     cancellation: &SearchCancellation,
-    progress: &SearchProgress,
+    progress: Option<&SearchProgress>,
 ) -> SearchChunkRun {
     let mut line_indices = RoaringTreemap::new();
     let mut truncated = false;
@@ -411,7 +429,9 @@ fn scan_search_chunk(
 
     for row_ix in rows {
         if pending_scanned_lines == SEARCH_PROGRESS_BATCH_LINES {
-            progress.advance(pending_scanned_lines, pending_matched_lines, max_results);
+            if let Some(progress) = progress {
+                progress.advance(pending_scanned_lines, pending_matched_lines, max_results);
+            }
             pending_scanned_lines = 0;
             pending_matched_lines = 0;
             if cancellation.is_cancelled() {
@@ -439,7 +459,9 @@ fn scan_search_chunk(
         }
     }
 
-    progress.advance(pending_scanned_lines, pending_matched_lines, max_results);
+    if let Some(progress) = progress {
+        progress.advance(pending_scanned_lines, pending_matched_lines, max_results);
+    }
     if cancellation.is_cancelled() {
         SearchChunkRun::Cancelled
     } else {
