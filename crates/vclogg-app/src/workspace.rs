@@ -6336,9 +6336,7 @@ impl Workspace {
     fn file_session_state(&self, tab: &DocumentTab, cx: &App) -> FileSessionState {
         let marked_rows = tab
             .marked_rows
-            .iter()
-            .chain(tab.pending_restore_marked_rows.iter())
-            .collect::<BTreeSet<_>>();
+            .union(tab.pending_restore_marked_rows.iter());
         let selected_row = tab
             .log_table
             .read(cx)
@@ -6382,7 +6380,7 @@ impl Workspace {
             case_sensitive: tab.search_query.case_sensitive,
             regex: tab.search_query.regex,
             result_mode: tab.result_mode.database_value(),
-            marked_rows: marked_rows.into_iter().collect(),
+            marked_rows: marked_rows.iter().collect(),
             show_line_numbers: tab.show_line_numbers,
             show_row_separators: tab.show_row_separators,
             word_wrap: tab.log_viewport.is_wrapped(),
