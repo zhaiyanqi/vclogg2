@@ -14,6 +14,7 @@ use gpui_component::{
     input::{Input, InputEvent, InputState},
     v_flex,
 };
+use vclogg_core::SearchCancellation;
 
 const DEFAULT_FILE_TYPE_PATTERNS: &str =
     "*.log|*.vclog|*.out|*.trace|*.txt|*.text|*.csv|*.json|*.xml|*.yaml|*.yml";
@@ -115,7 +116,11 @@ pub struct DirectorySearchEnumeration {
 
 pub fn enumerate_directory_search_paths(
     options: &DirectorySearchOptions,
-) -> Result<DirectorySearchEnumeration> {
+    cancellation: &SearchCancellation,
+) -> Result<Option<DirectorySearchEnumeration>> {
+    if cancellation.is_cancelled() {
+        return Ok(None);
+    }
     let Some(root) = options.directory.as_deref() else {
         bail!(crate::tr!(
             "尚未选择搜索目录",
@@ -138,6 +143,9 @@ pub fn enumerate_directory_search_paths(
     let mut pending = vec![root.to_path_buf()];
     let mut unreadable_directory_count = 0;
     while let Some(directory) = pending.pop() {
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
         let entries = match std::fs::read_dir(&directory) {
             Ok(entries) => entries,
             Err(error) if directory == root => {
@@ -150,6 +158,9 @@ pub fn enumerate_directory_search_paths(
             }
         };
         for entry in entries.flatten() {
+            if cancellation.is_cancelled() {
+                return Ok(None);
+            }
             let Ok(file_type) = entry.file_type() else {
                 continue;
             };
@@ -166,10 +177,10 @@ pub fn enumerate_directory_search_paths(
         }
     }
     sort_directory_search_paths(&mut paths);
-    Ok(DirectorySearchEnumeration {
+    Ok(Some(DirectorySearchEnumeration {
         paths,
         unreadable_directory_count,
-    })
+    }))
 }
 
 fn sort_directory_search_paths(paths: &mut [PathBuf]) {
@@ -458,8 +469,11 @@ impl Render for DirectorySearchDialog {
 
 #[cfg(test)]
 mod tests {
-    use super::sort_directory_search_paths;
+    use super::{
+        DirectorySearchOptions, enumerate_directory_search_paths, sort_directory_search_paths,
+    };
     use std::path::PathBuf;
+    use vclogg_core::SearchCancellation;
 
     #[test]
     fn directory_paths_have_a_deterministic_case_insensitive_order() {
@@ -476,6 +490,22 @@ mod tests {
                 .into_iter()
                 .map(PathBuf::from)
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn cancelled_enumeration_does_not_touch_the_directory_tree() {
+        let cancellation = SearchCancellation::default();
+        cancellation.cancel();
+        let options = DirectorySearchOptions {
+            directory: Some(PathBuf::from("missing-directory")),
+            ..Default::default()
+        };
+
+        assert!(
+            enumerate_directory_search_paths(&options, &cancellation)
+                .expect("cancellation is not an enumeration error")
+                .is_none()
         );
     }
 }

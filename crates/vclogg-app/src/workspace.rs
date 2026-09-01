@@ -11707,7 +11707,19 @@ impl Workspace {
             let result = cx
                 .background_spawn(async move {
                     let matcher = SearchMatcher::new(&query_for_search)?;
-                    let enumeration = enumerate_directory_search_paths(&options)?;
+                    let Some(enumeration) = enumerate_directory_search_paths(
+                        &options,
+                        &cancellation_for_search,
+                    )? else {
+                        return Ok::<_, anyhow::Error>((
+                            true,
+                            Vec::new(),
+                            matcher,
+                            0,
+                            0,
+                            0,
+                        ));
+                    };
                     let file_count = enumeration.paths.len();
                     let unreadable_directory_count = enumeration.unreadable_directory_count;
                     let max_results = query_for_search.max_results;
