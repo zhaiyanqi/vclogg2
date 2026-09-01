@@ -102,11 +102,30 @@ impl<K> StagedVisibleLineLoadRequest<K> {
         self,
         mut load: impl FnMut(&K, usize) -> Option<LinePreview>,
     ) -> StagedVisibleLineLoadResult<K> {
+        self.load_with_cancellation(None, &mut load)
+    }
+
+    pub(crate) fn load_cancellable(
+        self,
+        cancellation: &AtomicBool,
+        mut load: impl FnMut(&K, usize) -> Option<LinePreview>,
+    ) -> StagedVisibleLineLoadResult<K> {
+        self.load_with_cancellation(Some(cancellation), &mut load)
+    }
+
+    fn load_with_cancellation(
+        self,
+        cancellation: Option<&AtomicBool>,
+        load: &mut impl FnMut(&K, usize) -> Option<LinePreview>,
+    ) -> StagedVisibleLineLoadResult<K> {
         let lines = self
             .keys
             .into_iter()
             .zip(self.source_limits)
             .zip(self.retained_limits)
+            .take_while(|_| {
+                cancellation.is_none_or(|cancellation| !cancellation.load(Ordering::Acquire))
+            })
             .map(|((key, source_limit), retained_limit)| {
                 let preview = load(&key, source_limit);
                 (key, preview, retained_limit)
@@ -490,7 +509,10 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use std::{
+        cell::RefCell,
+        sync::atomic::{AtomicBool, Ordering},
+    };
 
     use vclogg_core::LinePreview;
 
@@ -788,6 +810,25 @@ mod tests {
         cache.install_staged(staged);
         assert_eq!(cache.line(1).unwrap().source().as_ref(), "line 1");
         assert_eq!(cache.line(2).unwrap().source().as_ref(), "line 2");
+    }
+
+    #[test]
+    fn cancelling_a_staged_window_stops_its_remaining_source_reads() {
+        let cache = VisibleLineStore::<usize>::default();
+        cache.set_overscan(0);
+        let request = cache
+            .stage_visible_rows(0..3, 3, Some)
+            .expect("首屏预装应产生读取请求");
+        let cancellation = AtomicBool::new(false);
+        let loaded_rows = RefCell::new(Vec::new());
+
+        let _staged = request.load_cancellable(&cancellation, |source_row, _| {
+            loaded_rows.borrow_mut().push(*source_row);
+            cancellation.store(true, Ordering::Release);
+            Some(LinePreview::new(format!("line {source_row}"), false))
+        });
+
+        assert_eq!(*loaded_rows.borrow(), [0]);
     }
 
     #[test]

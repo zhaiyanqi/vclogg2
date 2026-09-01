@@ -125,6 +125,17 @@ fn log_jump_preload_range_covers_the_target_and_viewport_edges() {
 }
 
 #[test]
+fn search_scope_switch_preloads_the_restored_viewport_before_commit() {
+    assert_eq!(
+        search_scope_switch_preload_range(50, false, 100, 10),
+        35..65
+    );
+    assert_eq!(search_scope_switch_preload_range(2, false, 100, 10), 0..30);
+    assert_eq!(search_scope_switch_preload_range(0, true, 100, 10), 70..100);
+    assert_eq!(search_scope_switch_preload_range(0, false, 0, 10), 0..0);
+}
+
+#[test]
 fn scrollbar_preload_range_clamps_to_the_target_viewport() {
     assert_eq!(
         scrollbar_preload_range(point(px(0.), px(-400.)), 100, px(200.), px(20.)),

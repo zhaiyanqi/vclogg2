@@ -342,35 +342,21 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(super) fn refresh_global_result_rows(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let session_color_rules = match self.global_search.scope {
-            SearchScope::AllOpenFiles => self
-                .global_search
-                .all_open_context
-                .resolved_color_rules
-                .clone(),
-            SearchScope::Directory => self
-                .global_search
-                .directory_context
-                .resolved_color_rules
-                .clone(),
-            SearchScope::CurrentFile => Arc::default(),
-        };
-        let groups = match self.global_search.scope {
+    fn global_result_groups_for_context(
+        &self,
+        scope: SearchScope,
+        context: &SearchSessionState,
+    ) -> Vec<GlobalSearchGroup> {
+        match scope {
             SearchScope::AllOpenFiles => self
                 .documents
                 .iter()
                 .filter(|tab| {
                     self.global_search.selected_documents.contains(&tab.id)
-                        && (self.global_search.result_scope != Some(SearchScope::AllOpenFiles)
-                            || self.global_search.results.get(&tab.id).is_some())
+                        && (!context.initialized || context.results.get(&tab.id).is_some())
                 })
                 .map(|tab| {
-                    let result = self.global_search.results.get(&tab.id);
+                    let result = context.results.get(&tab.id);
                     let search_result = result.map(|result| &result.search_result);
                     GlobalSearchGroup {
                         source: crate::global_search_table::GlobalSearchGroupSource {
@@ -385,7 +371,7 @@ impl Workspace {
                         },
                         projection: crate::global_search_table::GlobalSearchGroupProjection {
                             rows: compute_result_rows(
-                                self.global_search.result_mode,
+                                context.result_mode,
                                 search_result,
                                 &tab.file.marked_rows,
                             ),
@@ -396,25 +382,23 @@ impl Workspace {
                                 .unwrap_or_default(),
                             marked_rows: tab.file.marked_rows.clone(),
                             truncated: search_result.is_some_and(|result| result.truncated)
-                                && self.global_search.result_mode.includes_matches(),
+                                && context.result_mode.includes_matches(),
                             failure: result.and_then(|result| result.failure.clone()),
                             color_rules: ResolvedColorRules::layered(
                                 tab.file.resolved_color_rules.clone(),
-                                session_color_rules.clone(),
+                                context.resolved_color_rules.clone(),
                             ),
                         },
                     }
                 })
                 .collect::<Vec<_>>(),
-            SearchScope::Directory
-                if self.global_search.result_scope == Some(SearchScope::Directory) =>
-            {
+            SearchScope::Directory if context.initialized => {
                 let open_documents_by_path = self
                     .documents
                     .iter()
                     .map(|tab| (path_match_key(tab.document.path()), tab))
                     .collect::<BTreeMap<_, _>>();
-                self.global_search
+                context
                     .results
                     .iter()
                     .filter_map(|(document_id, result)| {
@@ -431,7 +415,7 @@ impl Workspace {
                             .map(|tab| tab.file.marked_rows.clone())
                             .unwrap_or_default();
                         let rows = compute_result_rows(
-                            self.global_search.result_mode,
+                            context.result_mode,
                             Some(&result.search_result),
                             &marked_rows,
                         );
@@ -454,13 +438,13 @@ impl Workspace {
                                     matched_rows: result.search_result.line_indices.clone(),
                                     marked_rows,
                                     truncated: result.search_result.truncated
-                                        && self.global_search.result_mode.includes_matches(),
+                                        && context.result_mode.includes_matches(),
                                     failure: result.failure.clone(),
                                     color_rules: ResolvedColorRules::layered(
                                         open_tab
                                             .map(|tab| tab.file.resolved_color_rules.clone())
                                             .unwrap_or_else(Arc::default),
-                                        session_color_rules.clone(),
+                                        context.resolved_color_rules.clone(),
                                     ),
                                 },
                         })
@@ -468,7 +452,39 @@ impl Workspace {
                     .collect::<Vec<_>>()
             }
             SearchScope::CurrentFile | SearchScope::Directory => Vec::new(),
+        }
+    }
+
+    fn active_global_result_context(&self) -> SearchSessionState {
+        let retained = match self.global_search.scope {
+            SearchScope::AllOpenFiles => &self.global_search.all_open_context,
+            SearchScope::Directory => &self.global_search.directory_context,
+            SearchScope::CurrentFile => return SearchSessionState::default(),
         };
+        SearchSessionState {
+            query: match self.global_search.scope {
+                SearchScope::AllOpenFiles => self.global_search.query.clone(),
+                SearchScope::Directory => self.global_search.directory_query.clone(),
+                SearchScope::CurrentFile => SearchQuery::default(),
+            },
+            keyword_color_rules: retained.keyword_color_rules.clone(),
+            resolved_color_rules: retained.resolved_color_rules.clone(),
+            initialized: self.global_search.result_scope == Some(self.global_search.scope),
+            results: self.global_search.results.clone(),
+            matcher: self.global_search.matcher.clone(),
+            result_mode: self.global_search.result_mode,
+            results_visible: self.global_search.results_visible,
+            ..SearchSessionState::default()
+        }
+    }
+
+    pub(super) fn refresh_global_result_rows(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let context = self.active_global_result_context();
+        let groups = self.global_result_groups_for_context(self.global_search.scope, &context);
 
         let matcher = self.global_result_matcher();
         let virtual_content_changed = !self
@@ -1587,6 +1603,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(cancellation) = self.search_scope_switch_cancellation.take() {
+            cancellation.store(true, Ordering::Release);
+        }
+        self.search_scope_switch_task.take();
+        self.search_scope_switch_revision = self.search_scope_switch_revision.saturating_add(1);
         if self.global_search.scope == next_scope {
             return;
         }
@@ -1612,6 +1633,97 @@ impl Workspace {
         if self.global_search.scope == SearchScope::Directory {
             self.remember_current_directory_session();
         }
+
+        if matches!(
+            next_scope,
+            SearchScope::AllOpenFiles | SearchScope::Directory
+        ) {
+            self.prepare_global_search_scope_switch(next_scope, window, cx);
+            return;
+        }
+        self.commit_search_scope(next_scope, None, false, window, cx);
+    }
+
+    fn prepare_global_search_scope_switch(
+        &mut self,
+        next_scope: SearchScope,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let context = match next_scope {
+            SearchScope::AllOpenFiles => self.global_search.all_open_context.clone(),
+            SearchScope::Directory => self.global_search.directory_context.clone(),
+            SearchScope::CurrentFile => return,
+        };
+        let groups = self.global_result_groups_for_context(next_scope, &context);
+        let mut delegate = GlobalSearchTableDelegate::new();
+        delegate.set_groups(groups);
+        delegate.restore_collapsed_document_ids(&context.collapsed_document_ids);
+        let row_count = delegate.rows_len();
+        let anchor_row = context
+            .viewport
+            .and_then(|anchor| delegate.nearest_row_ix_for_key(anchor.key))
+            .or_else(|| context.viewport.map(|anchor| anchor.fallback_ix))
+            .unwrap_or_default();
+        let visible_row_count = (window.viewport_size().height / self.log_row_height().max(px(1.)))
+            .ceil()
+            .max(1.) as usize;
+        let preload_range = search_scope_switch_preload_range(
+            anchor_row,
+            context.viewport.is_some_and(|anchor| anchor.at_end),
+            row_count,
+            visible_row_count,
+        );
+        let request = delegate.stage_visible_rows(preload_range);
+        let documents = request
+            .as_ref()
+            .map(|request| delegate.staged_visible_documents(request))
+            .unwrap_or_default();
+        let revision = self.search_scope_switch_revision;
+        let previous_scope = self.global_search.scope;
+
+        let Some(request) = request else {
+            self.commit_search_scope(next_scope, None, true, window, cx);
+            return;
+        };
+        let cancellation = Arc::new(AtomicBool::new(false));
+        self.search_scope_switch_cancellation = Some(cancellation.clone());
+        self.search_scope_switch_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let staged = cx
+                .background_spawn(async move {
+                    let mut readers = BTreeMap::<u64, LinePreviewReader>::new();
+                    request.load_cancellable(
+                        &cancellation,
+                        |(document_id, source_row), max_bytes| {
+                            let document = documents.get(document_id)?;
+                            readers.entry(*document_id).or_default().line_preview(
+                                document,
+                                *source_row,
+                                max_bytes,
+                            )
+                        },
+                    )
+                })
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                if this.search_scope_switch_revision != revision
+                    || this.global_search.scope != previous_scope
+                {
+                    return;
+                }
+                this.commit_search_scope(next_scope, Some(staged), true, window, cx);
+            });
+        }));
+    }
+
+    fn commit_search_scope(
+        &mut self,
+        next_scope: SearchScope,
+        staged_global_lines: Option<StagedVisibleLineLoadResult<(u64, usize)>>,
+        target_was_prepared: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.global_search.scope = next_scope;
         self.view_state.active_search = match next_scope {
             SearchScope::CurrentFile => self
@@ -1667,16 +1779,39 @@ impl Workspace {
         };
         self.case_sensitive = case_sensitive;
         self.regex = regex;
-        self.query
-            .update(cx, |state, cx| state.set_value(text, window, cx));
+        if self.query.read(cx).value().as_ref() != text {
+            self.query
+                .update(cx, |state, cx| state.set_value(text, window, cx));
+        }
         if next_scope == SearchScope::CurrentFile {
             self.refresh_global_result_rows(window, cx);
         }
         self.maybe_restore_persisted_search(window, cx);
         self.schedule_workspace_search_state_save(window, cx);
         self.close_search_autocomplete();
-        self.query.focus_handle(cx).focus(window, cx);
-        self.refresh_active_search_surfaces_atomically(window, cx);
+        if !self.query.focus_handle(cx).is_focused(window) {
+            self.query.focus_handle(cx).focus(window, cx);
+        }
+        if target_was_prepared {
+            if let Some(staged) = staged_global_lines {
+                self.global_table.update(cx, |table, cx| {
+                    table.delegate().install_staged_visible_lines(staged);
+                    table.refresh(cx);
+                    cx.notify();
+                });
+            }
+            self.bind_active_display_tables(cx);
+            Self::refresh_log_surfaces_atomically(
+                [
+                    self.log_viewer.surface.clone(),
+                    self.search_results_viewer.surface.clone(),
+                ],
+                window,
+                cx,
+            );
+        } else {
+            self.refresh_active_search_surfaces_atomically(window, cx);
+        }
         cx.notify();
     }
 

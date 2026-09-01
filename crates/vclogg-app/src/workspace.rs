@@ -1483,6 +1483,24 @@ fn centered_log_jump_preload_range(
     start..start + preload_count
 }
 
+fn search_scope_switch_preload_range(
+    anchor_row: usize,
+    at_end: bool,
+    row_count: usize,
+    visible_row_count: usize,
+) -> Range<usize> {
+    if row_count == 0 {
+        return 0..0;
+    }
+    let visible_row_count = visible_row_count.max(1);
+    let anchor_row = if at_end {
+        row_count.saturating_sub(1)
+    } else {
+        anchor_row.min(row_count - 1)
+    };
+    centered_log_jump_preload_range(anchor_row, row_count, visible_row_count)
+}
+
 fn viewport_anchor_row(
     count: usize,
     first_visible: usize,
@@ -2519,6 +2537,9 @@ pub struct Workspace {
     pending_log_scroll_frames: PendingLogScrollFrames,
     global_group_toggle_task: Option<Task<()>>,
     global_group_toggle_revision: u64,
+    search_scope_switch_task: Option<Task<()>>,
+    search_scope_switch_cancellation: Option<Arc<AtomicBool>>,
+    search_scope_switch_revision: u64,
     tab_activation_task: Option<Task<()>>,
     tab_activation_revision: u64,
     open_task: Option<Task<()>>,
@@ -3096,6 +3117,9 @@ impl Workspace {
             pending_log_scroll_frames: PendingLogScrollFrames::default(),
             global_group_toggle_task: None,
             global_group_toggle_revision: 0,
+            search_scope_switch_task: None,
+            search_scope_switch_cancellation: None,
+            search_scope_switch_revision: 0,
             tab_activation_task: None,
             tab_activation_revision: 0,
             open_task: None,
