@@ -2484,6 +2484,19 @@ struct PreparedColorRuleUpdate {
     outcome: ColorRuleOutcome,
 }
 
+struct ColorRuleResolutionInput {
+    document_id: u64,
+    document: Arc<LogDocument>,
+    rules: Vec<KeywordColorRule>,
+}
+
+struct PreparedColorRuleResolution {
+    document_id: u64,
+    document: Arc<LogDocument>,
+    rules: Vec<KeywordColorRule>,
+    resolved: Arc<ResolvedColorRules>,
+}
+
 struct CopiedLogLines {
     text: String,
     count: usize,
@@ -2641,6 +2654,9 @@ pub struct Workspace {
     color_rule_task: Option<Task<()>>,
     color_rule_cancellation: Option<SearchCancellation>,
     color_rule_revision: u64,
+    color_labels_resolution_task: Option<Task<()>>,
+    color_labels_resolution_cancellation: Option<SearchCancellation>,
+    color_labels_resolution_revision: u64,
     file_drop_visible: bool,
     file_drop_tab_transfer: Option<TabTransferMode>,
     cross_window_drop_ix: Option<usize>,
@@ -3750,6 +3766,9 @@ impl Workspace {
             color_rule_task: None,
             color_rule_cancellation: None,
             color_rule_revision: 0,
+            color_labels_resolution_task: None,
+            color_labels_resolution_cancellation: None,
+            color_labels_resolution_revision: 0,
             file_drop_visible: false,
             file_drop_tab_transfer: None,
             cross_window_drop_ix: None,
@@ -5121,6 +5140,7 @@ impl Workspace {
 
     fn apply_color_labels(&mut self, labels: Vec<ColorLabel>, cx: &mut Context<Self>) {
         self.cancel_color_rule_action();
+        self.cancel_color_labels_resolution();
         self.color_labels = labels;
         if self
             .last_color_label_id
@@ -5129,16 +5149,72 @@ impl Workspace {
         {
             self.last_color_label_id = None;
         }
-        for tab in &mut self.documents {
-            let resolved = resolve_color_rules(&tab.keyword_color_rules, &self.color_labels);
-            tab.resolved_color_rules = resolved.clone();
-            for table in [tab.log_table.clone(), tab.result_table.clone()] {
-                table.update(cx, |table, cx| {
-                    table.delegate_mut().set_color_rules(resolved.clone());
-                    table.refresh(cx);
-                });
-            }
+        let revision = self.color_labels_resolution_revision;
+        let labels = self.color_labels.clone();
+        let inputs = self
+            .documents
+            .iter()
+            .map(|tab| ColorRuleResolutionInput {
+                document_id: tab.id,
+                document: tab.document.clone(),
+                rules: tab.keyword_color_rules.clone(),
+            })
+            .collect();
+        let cancellation = SearchCancellation::default();
+        self.color_labels_resolution_cancellation = Some(cancellation.clone());
+        self.color_labels_resolution_task = Some(cx.spawn(async move |this, cx| {
+            let prepared = cx
+                .background_spawn(async move {
+                    prepare_color_rule_resolutions(inputs, &labels, &cancellation)
+                        .map(|prepared| (labels, prepared))
+                })
+                .await;
+            _ = this.update(cx, |this, cx| {
+                if this.color_labels_resolution_revision != revision {
+                    return;
+                }
+                this.color_labels_resolution_task = None;
+                this.color_labels_resolution_cancellation = None;
+                let Some((labels, prepared)) = prepared else {
+                    return;
+                };
+                if this.color_labels != labels {
+                    return;
+                }
+                for prepared in prepared {
+                    let Some(tab) = this.documents.iter_mut().find(|tab| {
+                        tab.id == prepared.document_id
+                            && Arc::ptr_eq(&tab.document, &prepared.document)
+                            && tab.keyword_color_rules == prepared.rules
+                    }) else {
+                        continue;
+                    };
+                    tab.resolved_color_rules = prepared.resolved.clone();
+                    for table in [tab.log_table.clone(), tab.result_table.clone()] {
+                        table.update(cx, |table, cx| {
+                            table
+                                .delegate_mut()
+                                .set_color_rules(prepared.resolved.clone());
+                            table.refresh(cx);
+                        });
+                    }
+                }
+                this.refresh_global_color_rules(cx);
+                cx.notify();
+            });
+        }));
+    }
+
+    fn cancel_color_labels_resolution(&mut self) {
+        self.color_labels_resolution_revision =
+            self.color_labels_resolution_revision.saturating_add(1);
+        if let Some(cancellation) = self.color_labels_resolution_cancellation.take() {
+            cancellation.cancel();
         }
+        self.color_labels_resolution_task = None;
+    }
+
+    fn refresh_global_color_rules(&mut self, cx: &mut Context<Self>) {
         let color_rules_by_path = self
             .documents
             .iter()
@@ -5160,7 +5236,6 @@ impl Workspace {
             });
             table.refresh(cx);
         });
-        cx.notify();
     }
 
     fn open_color_labels_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -18859,6 +18934,27 @@ fn apply_color_label_to_keywords(
     }
 }
 
+fn prepare_color_rule_resolutions(
+    inputs: Vec<ColorRuleResolutionInput>,
+    labels: &[ColorLabel],
+    cancellation: &SearchCancellation,
+) -> Option<Vec<PreparedColorRuleResolution>> {
+    let mut prepared = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        if cancellation.is_cancelled() {
+            return None;
+        }
+        let resolved = resolve_color_rules(&input.rules, labels);
+        prepared.push(PreparedColorRuleResolution {
+            document_id: input.document_id,
+            document: input.document,
+            rules: input.rules,
+            resolved,
+        });
+    }
+    (!cancellation.is_cancelled()).then_some(prepared)
+}
+
 fn prepare_paths_bounded<T, F>(paths: Vec<PathBuf>, operation: F) -> Vec<(PathBuf, T)>
 where
     T: Send,
@@ -19430,6 +19526,59 @@ mod result_snapshot_tests {
             std::slice::from_ref(&changed_label),
         );
         assert!(placeholder.matching_ranges("needle").is_empty());
+    }
+
+    #[test]
+    fn color_label_resolution_batch_preserves_document_inputs() {
+        let document = Arc::new(LogDocument::placeholder("batch-color-rules.log"));
+        let label = default_color_labels()[0].clone();
+        let rule = KeywordColorRule {
+            label_id: Some(label.id.clone()),
+            keyword: "needle".to_string(),
+            color: 0,
+            alpha: 0,
+            case_sensitive: true,
+            enabled: true,
+        };
+
+        let prepared = prepare_color_rule_resolutions(
+            vec![ColorRuleResolutionInput {
+                document_id: 17,
+                document: document.clone(),
+                rules: vec![rule.clone()],
+            }],
+            std::slice::from_ref(&label),
+            &SearchCancellation::default(),
+        )
+        .expect("颜色标签批量解析应完成");
+
+        assert_eq!(prepared.len(), 1);
+        assert_eq!(prepared[0].document_id, 17);
+        assert!(Arc::ptr_eq(&prepared[0].document, &document));
+        assert_eq!(prepared[0].rules, vec![rule]);
+        assert_eq!(
+            prepared[0].resolved.matching_ranges("needle")[0].1,
+            color_with_alpha(label.color, label.alpha)
+        );
+    }
+
+    #[test]
+    fn cancelled_color_label_resolution_batch_stops_before_work() {
+        let cancellation = SearchCancellation::default();
+        cancellation.cancel();
+
+        assert!(
+            prepare_color_rule_resolutions(
+                vec![ColorRuleResolutionInput {
+                    document_id: 17,
+                    document: Arc::new(LogDocument::placeholder("cancelled-label-batch.log")),
+                    rules: Vec::new(),
+                }],
+                &default_color_labels(),
+                &cancellation,
+            )
+            .is_none()
+        );
     }
 
     #[test]
