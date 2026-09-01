@@ -72,7 +72,7 @@ use crate::{
     },
     cloud_filters::CloudClient,
     color_labels::{
-        ColorLabel, KeywordColorRule, ResolvedColorRule, color_with_alpha, default_color_labels,
+        ColorLabel, KeywordColorRule, ResolvedColorRules, color_with_alpha, default_color_labels,
         resolve_color_rules,
     },
     color_labels_dialog::ColorLabelsDialog,
@@ -623,7 +623,7 @@ struct DocumentTab {
     marked_rows: CompressedRows,
     pending_restore_marked_rows: CompressedRows,
     keyword_color_rules: Vec<KeywordColorRule>,
-    resolved_color_rules: Arc<[ResolvedColorRule]>,
+    resolved_color_rules: Arc<ResolvedColorRules>,
     log_text_selection_scope: TextSelectionScopeId,
     result_text_selection_scope: TextSelectionScopeId,
     log_focus_handle: FocusHandle,
@@ -10185,9 +10185,7 @@ impl Workspace {
                                     failure: result.failure.clone(),
                                     color_rules: open_tab
                                         .map(|tab| tab.resolved_color_rules.clone())
-                                        .unwrap_or_else(|| {
-                                            Arc::from(Vec::<ResolvedColorRule>::new())
-                                        }),
+                                        .unwrap_or_else(Arc::default),
                                 },
                         })
                     })

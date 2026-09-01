@@ -12,6 +12,7 @@ license = "Apache-2.0"
 version = "2.0.6"
 
 [workspace.dependencies]
+aho-corasick = "1.1"
 anyhow = "1"
 async-channel = "2"
 chrono = "0.4"

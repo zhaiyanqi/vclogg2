@@ -24,7 +24,7 @@ use vclogg_core::{CompressedRows, LogDocument, SearchMatcher};
 #[cfg(test)]
 use vclogg_core::LinePreview;
 
-use crate::color_labels::ResolvedColorRule;
+use crate::color_labels::ResolvedColorRules;
 use crate::selectable_log_text::{LogText, SelectableLogText, TextSelectionCache};
 use crate::state_store::{AppSettings, DEFAULT_WORD_BOUNDARY_CHARACTERS, LogFontFamily};
 use crate::ui_theme;
@@ -557,7 +557,7 @@ fn ordered_range(first: usize, second: usize) -> (usize, usize) {
 
 pub(crate) fn combined_match_ranges(
     text: &str,
-    color_rules: &[ResolvedColorRule],
+    color_rules: &ResolvedColorRules,
     search_matcher: Option<&SearchMatcher>,
     quick_find_matcher: Option<&SearchMatcher>,
 ) -> Vec<(Range<usize>, TextHighlight)> {
@@ -569,15 +569,7 @@ pub(crate) fn combined_match_ranges(
         highlight: TextHighlight,
     }
 
-    let mut color_matches = color_rules
-        .iter()
-        .enumerate()
-        .flat_map(|(order, rule)| {
-            rule.ranges(text)
-                .into_iter()
-                .map(move |range| (range, rule.color(), order))
-        })
-        .collect::<Vec<_>>();
+    let mut color_matches = color_rules.matching_ranges(text);
     color_matches.sort_by(|(left, _, left_order), (right, _, right_order)| {
         left.start
             .cmp(&right.start)
@@ -678,7 +670,7 @@ struct LogRowPresenter {
     search_matcher: Option<SearchMatcher>,
     matched_rows: CompressedRows,
     quick_find_matcher: Option<SearchMatcher>,
-    color_rules: Arc<[ResolvedColorRule]>,
+    color_rules: Arc<ResolvedColorRules>,
 }
 
 struct LogInteractionState {
@@ -991,7 +983,7 @@ impl LogTableDelegate {
         self.presenter.quick_find_matcher = quick_find_matcher;
     }
 
-    pub fn set_color_rules(&mut self, color_rules: Arc<[ResolvedColorRule]>) {
+    pub fn set_color_rules(&mut self, color_rules: Arc<ResolvedColorRules>) {
         self.presenter.color_rules = color_rules;
     }
 

@@ -9,7 +9,7 @@ license.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-aho-corasick = "1.1"
+aho-corasick.workspace = true
 anyhow.workspace = true
 chardetng = "0.1"
 encoding_rs = "0.8"

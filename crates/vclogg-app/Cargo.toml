@@ -13,6 +13,7 @@ path = "src/main.rs"
 ui-performance-profiler = ["gpui/profiler"]
 
 [dependencies]
+aho-corasick.workspace = true
 anyhow.workspace = true
 async-channel.workspace = true
 chrono.workspace = true

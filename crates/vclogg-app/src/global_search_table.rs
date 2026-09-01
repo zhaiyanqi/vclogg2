@@ -22,7 +22,7 @@ use gpui_component::{
 };
 use vclogg_core::{CompressedRows, LogDocument, SearchMatcher};
 
-use crate::color_labels::ResolvedColorRule;
+use crate::color_labels::ResolvedColorRules;
 use crate::log_table::{
     LogTableCursor, LogTableRows, LogTableStateExt, RowSelection, combined_match_ranges,
     line_marker, line_marker_column_width, log_cell_horizontal_padding, log_line_height,
@@ -60,7 +60,7 @@ pub struct GlobalSearchGroupPresentation {
     pub marked_rows: CompressedRows,
     pub truncated: bool,
     pub failure: Option<SharedString>,
-    pub color_rules: Arc<[ResolvedColorRule]>,
+    pub color_rules: Arc<ResolvedColorRules>,
 }
 
 #[derive(Clone)]
@@ -159,7 +159,7 @@ impl Default for GlobalRowPresenter {
 }
 
 impl GlobalRowPresenter {
-    fn present(&self, text: LogText, color_rules: &[ResolvedColorRule]) -> GlobalRowPresentation {
+    fn present(&self, text: LogText, color_rules: &ResolvedColorRules) -> GlobalRowPresentation {
         let source_highlights = combined_match_ranges(
             text.source(),
             color_rules,
@@ -601,7 +601,7 @@ impl GlobalSearchTableDelegate {
 
     pub fn update_color_rules(
         &mut self,
-        mut rules_for: impl FnMut(&GlobalSearchGroupSource) -> Arc<[ResolvedColorRule]>,
+        mut rules_for: impl FnMut(&GlobalSearchGroupSource) -> Arc<ResolvedColorRules>,
     ) {
         for group in &mut self.projection.groups {
             group.presentation.color_rules = rules_for(&group.source);
