@@ -31,6 +31,7 @@ pub(crate) const MAX_VISIBLE_LINE_COLUMNS: usize = DEFAULT_MAX_LINE_SOURCE_BYTES
 struct CachedLogLine {
     text: LogText,
     retained_bytes: usize,
+    source_unavailable: bool,
 }
 
 pub(crate) struct VisibleLineLoadRequest<K> {
@@ -54,9 +55,9 @@ impl<K> VisibleLineLoadRequest<K> {
             .into_iter()
             .zip(self.source_limits)
             .zip(self.retained_limits)
-            .filter_map(|((key, source_limit), retained_limit)| {
-                let preview = load(&key, source_limit)?;
-                Some((key, preview, retained_limit))
+            .map(|((key, source_limit), retained_limit)| {
+                let preview = load(&key, source_limit);
+                (key, preview, retained_limit)
             })
             .collect();
         VisibleLineLoadResult {
@@ -68,16 +69,31 @@ impl<K> VisibleLineLoadRequest<K> {
 
 pub(crate) struct VisibleLineLoadResult<K> {
     revision: u64,
-    lines: Vec<(K, LinePreview, usize)>,
+    lines: Vec<(K, Option<LinePreview>, usize)>,
 }
 
 impl CachedLogLine {
-    fn from_preview(preview: LinePreview, retained_limit: usize) -> Option<Self> {
-        let (text, truncated) = preview.into_parts();
+    fn from_preview(preview: Option<LinePreview>, retained_limit: usize) -> Option<Self> {
+        let (text, truncated, source_unavailable) = match preview {
+            Some(preview) => {
+                let (text, truncated) = preview.into_parts();
+                (text, truncated, false)
+            }
+            None => (
+                crate::tr!(
+                    "源文件已改变，无法读取该快照行",
+                    "The source changed; this snapshot line is unavailable"
+                )
+                .to_string(),
+                false,
+                true,
+            ),
+        };
         let text = LogText::preview_with_retained_limit(text, truncated, retained_limit)?;
         Some(Self {
             retained_bytes: text.retained_bytes(),
             text,
+            source_unavailable,
         })
     }
 }
@@ -145,6 +161,15 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
             return None;
         }
         self.lines.borrow().get(&key).map(|line| line.text.clone())
+    }
+
+    pub(crate) fn source_unavailable(&self, key: K) -> bool {
+        self.prepared_keys.borrow().contains(&key)
+            && self
+                .lines
+                .borrow()
+                .get(&key)
+                .is_some_and(|line| line.source_unavailable)
     }
 
     pub(crate) fn request_visible_rows(
@@ -473,6 +498,21 @@ mod tests {
                 .sum::<usize>()
                 <= 192
         );
+    }
+
+    #[test]
+    fn unavailable_source_is_distinct_from_a_pending_visible_line() {
+        let cache = VisibleLineStore::<usize>::default();
+        cache.set_overscan(0);
+        let request = cache
+            .request_visible_rows(0..1, 1, Some)
+            .expect("可见行应产生加载请求");
+
+        assert!(cache.line(0).is_none());
+        assert!(!cache.source_unavailable(0));
+        assert!(cache.install_loaded(request.load(|_, _| None)));
+        assert!(cache.line(0).is_some());
+        assert!(cache.source_unavailable(0));
     }
 
     #[test]

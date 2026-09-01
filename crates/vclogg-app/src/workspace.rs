@@ -16340,6 +16340,7 @@ impl Workspace {
                 let selected_below = row_ix + 1 < table.read(cx).delegate().row_count()
                     && table.read(cx).delegate().is_row_selected(row_ix + 1);
                 let source_row = row.source_row;
+                let source_unavailable = row.source_unavailable;
                 let selection = {
                     let viewport = if region == WrappedRegion::Results {
                         &self.documents[tab_ix].result_viewport
@@ -16350,8 +16351,7 @@ impl Workspace {
                 };
                 let styled_text = StyledText::new(row.text.display().clone())
                     .with_highlights(Self::highlight_styles(&row.highlights, cx));
-                let severity = row
-                    .highlight_severity
+                let severity = (!source_unavailable && row.highlight_severity)
                     .then(|| row.text.severity())
                     .flatten()
                     .map(|severity| severity_style(severity, cx));
@@ -16456,6 +16456,9 @@ impl Workspace {
                                 .text_size(px(font_size as f32))
                                 .line_height(base_height)
                                 .font_family(font_family.clone())
+                                .when(source_unavailable, |cell| {
+                                    cell.text_color(cx.theme().danger)
+                                })
                                 .when(row.selected, |cell| {
                                     cell.bg(log_row_selection_color(cx)).child(
                                         log_row_selection_overlay(
@@ -17738,6 +17741,7 @@ impl Workspace {
                         marked,
                         matched,
                         highlight_severity,
+                        source_unavailable,
                         highlights,
                     } => {
                         let selected_above = row_ix > 0
@@ -17761,7 +17765,7 @@ impl Workspace {
                         );
                         let styled_text = StyledText::new(text.display().clone())
                             .with_highlights(Self::highlight_styles(&highlights, cx));
-                        let severity = highlight_severity
+                        let severity = (!source_unavailable && highlight_severity)
                             .then(|| text.severity())
                             .flatten()
                             .map(|severity| severity_style(severity, cx));
@@ -17850,6 +17854,9 @@ impl Workspace {
                                         .text_size(px(font_size as f32))
                                         .line_height(base_height)
                                         .font_family(font_family.clone())
+                                        .when(source_unavailable, |cell| {
+                                            cell.text_color(cx.theme().danger)
+                                        })
                                         .when(selected, |cell| {
                                             cell.bg(log_row_selection_color(cx)).child(
                                                 log_row_selection_overlay(

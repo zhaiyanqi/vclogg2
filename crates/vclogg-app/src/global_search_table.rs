@@ -182,6 +182,7 @@ impl GlobalRowPresenter {
                 })
                 .collect(),
             text,
+            source_unavailable: false,
         }
     }
 }
@@ -206,6 +207,7 @@ impl Default for GlobalInteractionState {
 struct GlobalRowPresentation {
     text: LogText,
     highlights: Arc<[(Range<usize>, crate::log_table::TextHighlight)]>,
+    source_unavailable: bool,
 }
 
 pub(crate) enum WrappedGlobalRow {
@@ -226,6 +228,7 @@ pub(crate) enum WrappedGlobalRow {
         marked: bool,
         matched: bool,
         highlight_severity: bool,
+        source_unavailable: bool,
         highlights: Arc<[(Range<usize>, crate::log_table::TextHighlight)]>,
     },
 }
@@ -1054,6 +1057,7 @@ impl GlobalSearchTableDelegate {
                     highlights: presentation.highlights,
                     text: presentation.text,
                     highlight_severity: self.presenter.highlight_log_levels,
+                    source_unavailable: presentation.source_unavailable,
                 })
             }
         }
@@ -1134,8 +1138,10 @@ impl GlobalSearchTableDelegate {
 
     fn line_text(&self, group_ix: usize, source_row: usize) -> Option<LogText> {
         let group = self.projection.groups.get(group_ix)?;
-        self.visible_lines
-            .line((group.source.document_id, source_row))
+        let key = (group.source.document_id, source_row);
+        (!self.visible_lines.source_unavailable(key))
+            .then(|| self.visible_lines.line(key))
+            .flatten()
     }
 
     fn row_presentation(
@@ -1144,7 +1150,15 @@ impl GlobalSearchTableDelegate {
         source_row: usize,
     ) -> Option<GlobalRowPresentation> {
         let group = self.projection.groups.get(group_ix)?;
-        let text = self.line_text(group_ix, source_row)?;
+        let key = (group.source.document_id, source_row);
+        let text = self.visible_lines.line(key)?;
+        if self.visible_lines.source_unavailable(key) {
+            return Some(GlobalRowPresentation {
+                text,
+                highlights: Arc::default(),
+                source_unavailable: true,
+            });
+        }
         Some(
             self.presenter
                 .present(text, &group.presentation.color_rules),
@@ -1718,7 +1732,9 @@ impl TableDelegate for GlobalSearchTableDelegate {
                             .unwrap_or_else(|| GlobalRowPresentation {
                                 text: LogText::default(),
                                 highlights: Arc::default(),
+                                source_unavailable: false,
                             });
+                    let source_unavailable = presentation.source_unavailable;
                     let text = presentation.text;
                     let highlights = presentation
                         .highlights
@@ -1753,6 +1769,9 @@ impl TableDelegate for GlobalSearchTableDelegate {
                         .text_size(px(self.presenter.log_font_size as f32))
                         .line_height(line_height)
                         .font_family(self.resolved_font_family(cx))
+                        .when(source_unavailable, |cell| {
+                            cell.text_color(cx.theme().danger)
+                        })
                         .when(self.presenter.show_row_separators && !selected, |cell| {
                             cell.border_b_1().border_color(cx.theme().border)
                         })
@@ -1818,10 +1837,13 @@ impl TableDelegate for GlobalSearchTableDelegate {
             FlatRow::Match {
                 group_ix,
                 source_row,
-            } if col_ix == 2 => self
-                .line_text(group_ix, source_row)
-                .map(|text| text.display().to_string())
-                .unwrap_or_default(),
+            } if col_ix == 2 => {
+                let group = &self.projection.groups[group_ix];
+                self.visible_lines
+                    .line((group.source.document_id, source_row))
+                    .map(|text| text.display().to_string())
+                    .unwrap_or_default()
+            }
             _ => String::new(),
         }
     }
@@ -1928,6 +1950,28 @@ mod tests {
             .line((1, 0))
             .expect("the prepared replacement line should be available");
         assert_eq!(reloaded.source().as_ref(), "reloaded global line");
+    }
+
+    #[test]
+    fn unavailable_global_rows_bypass_result_highlighting() {
+        let mut delegate = GlobalSearchTableDelegate::new();
+        delegate.set_groups(vec![test_group(Arc::new(LogDocument::placeholder(
+            "unavailable-global.log",
+        )))]);
+        delegate.set_search_matcher(
+            vclogg_core::SearchMatcher::literal_phrase("source").expect("搜索匹配器应能编译"),
+        );
+        delegate
+            .visible_lines
+            .prepare_visible_rows(0..1, 1, |_| Some((1, 0)), |_, _| None);
+
+        let presentation = delegate
+            .row_presentation(0, 0)
+            .expect("不可用全局结果行应有显式呈现");
+        assert!(presentation.source_unavailable);
+        assert!(presentation.highlights.is_empty());
+        assert!(!presentation.text.display().is_empty());
+        assert!(delegate.line_text(0, 0).is_none());
     }
 
     #[test]

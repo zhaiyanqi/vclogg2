@@ -840,7 +840,9 @@ impl LogRowSource {
     }
 
     fn line_text(&self, source_row: usize) -> Option<LogText> {
-        self.visible_lines.line(source_row)
+        (!self.visible_lines.source_unavailable(source_row))
+            .then(|| self.visible_lines.line(source_row))
+            .flatten()
     }
 }
 
@@ -881,6 +883,7 @@ impl LogRowPresenter {
                 })
                 .collect(),
             text,
+            source_unavailable: false,
         }
     }
 }
@@ -903,6 +906,7 @@ impl Default for LogInteractionState {
 struct LogRowPresentation {
     text: LogText,
     highlights: Arc<[(Range<usize>, TextHighlight)]>,
+    source_unavailable: bool,
 }
 
 pub(crate) struct WrappedLogRow {
@@ -912,6 +916,7 @@ pub(crate) struct WrappedLogRow {
     pub marked: bool,
     pub matched: bool,
     pub highlight_severity: bool,
+    pub source_unavailable: bool,
     pub highlights: Arc<[(Range<usize>, TextHighlight)]>,
 }
 
@@ -1116,6 +1121,7 @@ impl LogTableDelegate {
             marked: self.presenter.marked_rows.contains(source_row),
             matched: self.presenter.matched_rows.contains(source_row),
             highlight_severity: self.presenter.highlight_log_levels,
+            source_unavailable: presentation.source_unavailable,
             highlights: presentation.highlights,
             text: presentation.text,
         })
@@ -1167,7 +1173,15 @@ impl LogTableDelegate {
     }
 
     fn row_presentation(&self, source_row: usize) -> Option<LogRowPresentation> {
-        Some(self.presenter.present(self.line_text(source_row)?))
+        let text = self.source.visible_lines.line(source_row)?;
+        if self.source.visible_lines.source_unavailable(source_row) {
+            return Some(LogRowPresentation {
+                text,
+                highlights: Arc::default(),
+                source_unavailable: true,
+            });
+        }
+        Some(self.presenter.present(text))
     }
 
     pub(crate) fn begin_pointer_selection(
@@ -1533,7 +1547,9 @@ impl TableDelegate for LogTableDelegate {
                     .unwrap_or_else(|| LogRowPresentation {
                         text: LogText::default(),
                         highlights: Arc::default(),
+                        source_unavailable: false,
                     });
+            let source_unavailable = presentation.source_unavailable;
             let text = presentation.text;
             let highlights = presentation
                 .highlights
@@ -1564,6 +1580,9 @@ impl TableDelegate for LogTableDelegate {
                 .text_size(px(self.presenter.log_font_size as f32))
                 .line_height(line_height)
                 .font_family(self.resolved_font_family(cx))
+                .when(source_unavailable, |cell| {
+                    cell.text_color(cx.theme().danger)
+                })
                 .when(self.presenter.show_row_separators && !selected, |cell| {
                     cell.border_b_1().border_color(cx.theme().border)
                 })
@@ -1618,7 +1637,9 @@ impl TableDelegate for LogTableDelegate {
         if self.presenter.show_line_numbers && col_ix == 0 {
             (source_row + 1).to_string()
         } else if col_ix == usize::from(self.presenter.show_line_numbers) {
-            self.line_text(source_row)
+            self.source
+                .visible_lines
+                .line(source_row)
                 .map(|text| text.display().to_string())
                 .unwrap_or_default()
         } else {
@@ -1774,6 +1795,27 @@ mod tests {
                 .iter()
                 .any(|(_, highlight)| *highlight == TextHighlight::Search)
         );
+    }
+
+    #[test]
+    fn unavailable_source_rows_bypass_log_highlighting() {
+        let document = Arc::new(LogDocument::placeholder("unavailable-source.log"));
+        let mut delegate = LogTableDelegate::all(1, document);
+        delegate.set_search_matcher(
+            SearchMatcher::literal_phrase("source").expect("搜索匹配器应能编译"),
+        );
+        delegate
+            .source
+            .visible_lines
+            .prepare_visible_rows(0..1, 1, |_| Some(7), |_, _| None);
+
+        let presentation = delegate
+            .row_presentation(7)
+            .expect("不可用源行应有显式呈现");
+        assert!(presentation.source_unavailable);
+        assert!(presentation.highlights.is_empty());
+        assert!(!presentation.text.display().is_empty());
+        assert!(delegate.line_text(7).is_none());
     }
 
     #[test]
