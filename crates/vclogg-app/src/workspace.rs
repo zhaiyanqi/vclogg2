@@ -6372,7 +6372,7 @@ impl Workspace {
     }
 
     fn take_quit_snapshot(&mut self, cx: &mut Context<Self>) -> QuitWorkspaceSnapshot {
-        self.persistence.checkpoint_task.take();
+        self.persistence.checkpoint_tasks.clear();
         self.capture_retained_global_context(self.global_search.scope, cx);
         let search_state = self.primary_window.then(|| self.workspace_search_state());
         let store = self.persistence.store.clone();
@@ -6461,22 +6461,32 @@ impl Workspace {
         if !self.documents.iter().any(|tab| tab.id == document_id) {
             return;
         }
-        self.persistence.checkpoint_task = Some(cx.spawn_in(window, async move |this, cx| {
+        let generation = self.persistence.checkpoint_tasks.reserve(document_id);
+        let task = cx.spawn_in(window, async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(1_500))
                 .await;
             _ = this.update_in(cx, |this, window, cx| {
+                if this
+                    .persistence
+                    .checkpoint_tasks
+                    .take_if_current(document_id, generation)
+                    .is_none()
+                {
+                    return;
+                }
                 let Some(tab) = this.documents.iter().find(|tab| tab.id == document_id) else {
-                    this.persistence.checkpoint_task = None;
                     return;
                 };
                 let path = tab.document.path().to_path_buf();
                 let base = tab.session_base.clone();
                 let state = this.file_session_state(tab, cx);
-                this.persistence.checkpoint_task = None;
                 this.save_file_session(path, base, state, window, cx);
             });
-        }));
+        });
+        self.persistence
+            .checkpoint_tasks
+            .install(document_id, generation, task);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -7736,6 +7746,10 @@ impl Workspace {
                 )
             })
             .collect::<Vec<_>>();
+
+        for document_id in &document_ids {
+            self.persistence.checkpoint_tasks.remove(*document_id);
+        }
 
         if self
             .searches

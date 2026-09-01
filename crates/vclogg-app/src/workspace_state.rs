@@ -745,9 +745,53 @@ impl SearchController {
     }
 }
 
+pub(crate) struct DocumentTaskRegistry<T> {
+    next_generation: u64,
+    tasks: BTreeMap<u64, (u64, T)>,
+}
+
+impl<T> Default for DocumentTaskRegistry<T> {
+    fn default() -> Self {
+        Self {
+            next_generation: 0,
+            tasks: BTreeMap::new(),
+        }
+    }
+}
+
+impl<T> DocumentTaskRegistry<T> {
+    pub(crate) fn reserve(&mut self, document_id: u64) -> u64 {
+        self.tasks.remove(&document_id);
+        self.next_generation = self.next_generation.saturating_add(1);
+        self.next_generation
+    }
+
+    pub(crate) fn install(&mut self, document_id: u64, generation: u64, task: T) {
+        let previous = self.tasks.insert(document_id, (generation, task));
+        debug_assert!(previous.is_none(), "document task must be reserved first");
+    }
+
+    pub(crate) fn take_if_current(&mut self, document_id: u64, generation: u64) -> Option<T> {
+        self.tasks
+            .get(&document_id)
+            .is_some_and(|(current, _)| *current == generation)
+            .then(|| self.tasks.remove(&document_id))
+            .flatten()
+            .map(|(_, task)| task)
+    }
+
+    pub(crate) fn remove(&mut self, document_id: u64) -> Option<T> {
+        self.tasks.remove(&document_id).map(|(_, task)| task)
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.tasks.clear();
+    }
+}
+
 pub(crate) struct PersistenceController {
     pub(crate) state_tasks: Vec<Task<()>>,
-    pub(crate) checkpoint_task: Option<Task<()>>,
+    pub(crate) checkpoint_tasks: DocumentTaskRegistry<Task<()>>,
     pub(crate) workspace_order_task: Option<Task<()>>,
     pub(crate) search_history_save_task: Option<Task<()>>,
     pub(crate) app_settings_save_task: Option<Task<()>>,
@@ -768,7 +812,7 @@ impl PersistenceController {
     pub(crate) fn new(bootstrap_task: Task<()>) -> Self {
         Self {
             state_tasks: Vec::new(),
-            checkpoint_task: None,
+            checkpoint_tasks: DocumentTaskRegistry::default(),
             workspace_order_task: None,
             search_history_save_task: None,
             app_settings_save_task: None,
@@ -1066,6 +1110,30 @@ mod state_controller_tests {
 
         controller.begin(SearchTarget::Document(7), 3, SearchCancellation::default());
         assert!(!controller.is_affected_by_added_documents());
+    }
+
+    #[test]
+    fn document_tasks_debounce_independently_and_reject_stale_generations() {
+        let mut tasks = DocumentTaskRegistry::default();
+        let first_generation = tasks.reserve(1);
+        tasks.install(1, first_generation, "first");
+        let second_generation = tasks.reserve(2);
+        tasks.install(2, second_generation, "second");
+
+        assert_eq!(tasks.tasks.len(), 2);
+        assert!(tasks.tasks.contains_key(&1));
+        assert!(tasks.tasks.contains_key(&2));
+
+        let replacement_generation = tasks.reserve(1);
+        tasks.install(1, replacement_generation, "replacement");
+        assert_eq!(tasks.take_if_current(1, first_generation), None);
+        assert!(tasks.tasks.contains_key(&1));
+        assert_eq!(
+            tasks.take_if_current(1, replacement_generation),
+            Some("replacement")
+        );
+        assert_eq!(tasks.remove(2), Some("second"));
+        assert!(tasks.tasks.is_empty());
     }
 
     #[test]
