@@ -15,6 +15,7 @@ App owns GPUI entities, rendering, commands and user presentation state. Read [d
 - `workspace/result_export_flow.rs`: capture immutable local/global result projections and orchestrate save, timestamp-merge and open-in-new-tab export flows.
 - `workspace/search_orchestration.rs`: committed local/global/directory search scope, history and persisted presentation, cancellable task dispatch, result installation and clearing.
 - `workspace/tab_lifecycle.rs`: prewarm and activate tabs, close/reorder them, transfer them across windows, persist their order, rename or trash files, and build tab context menus.
+- `workspace/viewport_orchestration.rs`: line height and wrapping mode, atomic scroll-frame preparation, cancellable visible-line scheduling, viewport ownership and keyboard navigation.
 - `workspace/window_registry.rs`: window registration/focus order, cross-window tab drag state, external open routing and process-quit persistence snapshots.
 - `workspace/*_tests.rs`: capability-focused workspace regression suites kept outside the production orchestration file.
 - `workspace_state.rs`: retained controllers, task registries and presentation/search coordination state.
