@@ -14,8 +14,9 @@ use roaring::RoaringTreemap;
 use rusqlite::{Connection, OptionalExtension as _, TransactionBehavior, params, params_from_iter};
 
 use crate::{
-    DatabaseInfo, FileSessionRecord, FileSessionRecords, HistorySession, LastWorkspaceFile,
-    RecentFile, SessionRecordSaveResult, decode_persisted_path, encode_persisted_path,
+    CloudSettings, ColorLabelRecord, DatabaseInfo, FileSessionRecord, FileSessionRecords,
+    HistorySession, LastWorkspaceFile, PredefinedFilterRecord, RecentFile, SessionRecordSaveResult,
+    decode_persisted_path, encode_persisted_path,
 };
 
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
@@ -383,6 +384,232 @@ impl StateRepository {
                 .with_context(|| format!("无法保存工作区文件：{}", path.display()))?;
         }
         transaction.commit().context("无法提交退出状态事务")
+    }
+
+    pub fn load_ui_value(&self, key: &str) -> Result<Option<String>> {
+        let connection = self.lock()?;
+        connection
+            .query_row("SELECT value FROM ui_state WHERE key = ?1", [key], |row| {
+                row.get(0)
+            })
+            .optional()
+            .with_context(|| format!("无法读取界面状态：{key}"))
+    }
+
+    pub fn save_ui_value(&self, key: &str, value: &str) -> Result<()> {
+        let connection = self.lock()?;
+        connection
+            .execute(
+                "INSERT INTO ui_state(key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )
+            .with_context(|| format!("无法保存界面状态：{key}"))?;
+        Ok(())
+    }
+
+    pub fn global_search_preferences(&self) -> Result<BTreeMap<PathBuf, bool>> {
+        let connection = self.lock()?;
+        let mut statement = connection
+            .prepare("SELECT path, selected FROM global_search_preferences ORDER BY path")
+            .context("无法读取全局搜索参与偏好")?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    decode_persisted_path(&row.get::<_, String>(0)?),
+                    row.get::<_, i64>(1)? != 0,
+                ))
+            })
+            .context("无法查询全局搜索参与偏好")?;
+        rows.collect::<rusqlite::Result<BTreeMap<_, _>>>()
+            .context("无法解析全局搜索参与偏好")
+    }
+
+    pub fn save_global_search_preferences(&self, preferences: &[(PathBuf, bool)]) -> Result<()> {
+        if preferences.is_empty() {
+            return Ok(());
+        }
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .context("无法开始全局搜索参与偏好事务")?;
+        for (path, selected) in preferences {
+            transaction
+                .execute(
+                    "INSERT INTO global_search_preferences(path, selected)
+                     VALUES (?1, ?2)
+                     ON CONFLICT(path) DO UPDATE SET selected = excluded.selected",
+                    params![encode_persisted_path(path), selected],
+                )
+                .with_context(|| format!("无法保存全局搜索参与偏好：{}", path.display()))?;
+        }
+        transaction.commit().context("无法提交全局搜索参与偏好事务")
+    }
+
+    pub fn load_search_history(&self) -> Result<Vec<String>> {
+        let connection = self.lock()?;
+        let mut statement = connection
+            .prepare("SELECT query_text FROM search_history ORDER BY position ASC")
+            .context("无法读取搜索历史")?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .context("无法查询搜索历史")?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("无法解析搜索历史")
+    }
+
+    pub fn save_search_history(&self, history: &[String]) -> Result<()> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction().context("无法开始搜索历史事务")?;
+        transaction
+            .execute("DELETE FROM search_history", [])
+            .context("无法重置搜索历史")?;
+        for (position, query) in history.iter().enumerate() {
+            transaction
+                .execute(
+                    "INSERT INTO search_history(position, query_text) VALUES (?1, ?2)",
+                    params![i64::try_from(position).unwrap_or(i64::MAX), query],
+                )
+                .context("无法写入搜索历史")?;
+        }
+        transaction.commit().context("无法提交搜索历史事务")
+    }
+
+    pub fn load_predefined_filters(&self) -> Result<Vec<PredefinedFilterRecord>> {
+        let connection = self.lock()?;
+        let mut statement = connection
+            .prepare("SELECT filter_id, item_json FROM predefined_filters ORDER BY position ASC")
+            .context("无法读取预定义过滤器")?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(PredefinedFilterRecord {
+                    id: row.get(0)?,
+                    json: row.get(1)?,
+                })
+            })
+            .context("无法查询预定义过滤器")?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("无法解析预定义过滤器记录")
+    }
+
+    pub fn save_predefined_filters(&self, filters: &[PredefinedFilterRecord]) -> Result<()> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .context("无法开始预定义过滤器事务")?;
+        transaction
+            .execute("DELETE FROM predefined_filters", [])
+            .context("无法重置预定义过滤器")?;
+        for (position, filter) in filters.iter().enumerate() {
+            transaction
+                .execute(
+                    "INSERT INTO predefined_filters(position, filter_id, item_json)
+                     VALUES (?1, ?2, ?3)",
+                    params![
+                        i64::try_from(position).unwrap_or(i64::MAX),
+                        filter.id,
+                        filter.json,
+                    ],
+                )
+                .with_context(|| format!("无法保存预定义过滤器：{}", filter.id))?;
+        }
+        transaction.commit().context("无法提交预定义过滤器事务")
+    }
+
+    pub fn load_cloud_settings(&self) -> Result<CloudSettings> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                "SELECT server_url, display_name FROM cloud_settings WHERE id = 1",
+                [],
+                |row| {
+                    Ok(CloudSettings {
+                        server_url: row.get(0)?,
+                        display_name: row.get(1)?,
+                    })
+                },
+            )
+            .optional()
+            .context("无法读取云端过滤器设置")
+            .map(|settings| settings.unwrap_or_default())
+    }
+
+    pub fn save_cloud_settings(&self, settings: &CloudSettings) -> Result<()> {
+        let connection = self.lock()?;
+        connection
+            .execute(
+                "INSERT INTO cloud_settings(id, server_url, display_name)
+                 VALUES (1, ?1, ?2)
+                 ON CONFLICT(id) DO UPDATE SET
+                     server_url = excluded.server_url,
+                     display_name = excluded.display_name",
+                params![settings.server_url.trim(), settings.display_name.trim()],
+            )
+            .context("无法保存云端过滤器设置")?;
+        Ok(())
+    }
+
+    pub fn load_color_labels(&self) -> Result<Option<Vec<ColorLabelRecord>>> {
+        let connection = self.lock()?;
+        let initialized = connection
+            .query_row(
+                "SELECT initialized FROM color_label_settings WHERE id = 1",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .optional()
+            .context("无法读取颜色标签初始化状态")?
+            .unwrap_or(false);
+        if !initialized {
+            return Ok(None);
+        }
+        let mut statement = connection
+            .prepare("SELECT label_id, name, color, alpha FROM color_labels ORDER BY position ASC")
+            .context("无法读取颜色标签")?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(ColorLabelRecord {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    color: row.get(2)?,
+                    alpha: u8::try_from(row.get::<_, i64>(3)?).unwrap_or(u8::MAX),
+                })
+            })
+            .context("无法查询颜色标签")?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("无法解析颜色标签")
+            .map(Some)
+    }
+
+    pub fn save_color_labels(&self, labels: &[ColorLabelRecord]) -> Result<()> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction().context("无法开始颜色标签事务")?;
+        transaction
+            .execute("DELETE FROM color_labels", [])
+            .context("无法重置颜色标签")?;
+        for (position, label) in labels.iter().enumerate() {
+            transaction
+                .execute(
+                    "INSERT INTO color_labels(position, label_id, name, color, alpha)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        i64::try_from(position).unwrap_or(i64::MAX),
+                        label.id,
+                        label.name,
+                        label.color,
+                        label.alpha,
+                    ],
+                )
+                .with_context(|| format!("无法保存颜色标签：{}", label.name))?;
+        }
+        transaction
+            .execute(
+                "INSERT INTO color_label_settings(id, initialized) VALUES (1, 1)
+                 ON CONFLICT(id) DO UPDATE SET initialized = 1",
+                [],
+            )
+            .context("无法保存颜色标签初始化状态")?;
+        transaction.commit().context("无法提交颜色标签事务")
     }
 
     pub fn database_info(&self) -> Result<DatabaseInfo> {

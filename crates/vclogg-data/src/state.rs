@@ -66,3 +66,17 @@ pub struct SessionRecordSaveResult {
 }
 
 pub type FileSessionRecords = BTreeMap<PathBuf, FileSessionRecord>;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PredefinedFilterRecord {
+    pub id: String,
+    pub json: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ColorLabelRecord {
+    pub id: String,
+    pub name: String,
+    pub color: u32,
+    pub alpha: u8,
+}

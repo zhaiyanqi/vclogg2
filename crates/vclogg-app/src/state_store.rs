@@ -10,14 +10,13 @@ use anyhow::{Context as _, Result};
 use rusqlite::{Connection, OptionalExtension as _, params};
 use vclogg_core::CompressedRows;
 pub use vclogg_data::{CloudSettings, DatabaseInfo, HistorySession, LastWorkspaceFile, RecentFile};
-use vclogg_data::{FileSessionRecord, StateRepository};
+use vclogg_data::{ColorLabelRecord, FileSessionRecord, PredefinedFilterRecord, StateRepository};
 
 use crate::app_log::AppLogLevel;
 use crate::color_labels::{
     ColorLabel, KeywordColorRule, decode_rules, default_color_labels, encode_rules,
 };
 use crate::i18n::Language;
-use crate::path_identity::{decode_persisted_path, encode_persisted_path};
 use crate::predefined_filters::{
     PredefinedFilter, normalize_predefined_filters, parse_stored_filter,
 };
@@ -651,40 +650,18 @@ impl StateStore {
     }
 
     pub fn load_last_settings_category(&self) -> Result<Option<String>> {
-        let connection = self.lock()?;
-        connection
-            .query_row(
-                "SELECT value FROM ui_state WHERE key = 'settings.active_category'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .context("无法读取上次设置分类")
+        self.repository.load_ui_value("settings.active_category")
     }
 
     pub fn save_last_settings_category(&self, category: &str) -> Result<()> {
-        let connection = self.lock()?;
-        connection
-            .execute(
-                "INSERT INTO ui_state(key, value)
-                 VALUES ('settings.active_category', ?1)
-                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                params![category],
-            )
-            .context("无法保存当前设置分类")?;
-        Ok(())
+        self.repository
+            .save_ui_value("settings.active_category", category)
     }
 
     pub fn load_search_panel_height(&self) -> Result<Option<f32>> {
-        let connection = self.lock()?;
-        let value = connection
-            .query_row(
-                "SELECT value FROM ui_state WHERE key = 'workspace.search_panel_height'",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .context("无法读取搜索面板高度")?;
+        let value = self
+            .repository
+            .load_ui_value("workspace.search_panel_height")?;
         Ok(value.and_then(|value| {
             value
                 .parse::<f32>()
@@ -697,28 +674,12 @@ impl StateStore {
         if !height.is_finite() || height <= 0. {
             anyhow::bail!("搜索面板高度无效：{height}");
         }
-        let connection = self.lock()?;
-        connection
-            .execute(
-                "INSERT INTO ui_state(key, value)
-                 VALUES ('workspace.search_panel_height', ?1)
-                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                params![height.to_string()],
-            )
-            .context("无法保存搜索面板高度")?;
-        Ok(())
+        self.repository
+            .save_ui_value("workspace.search_panel_height", &height.to_string())
     }
 
     pub fn load_workspace_search_state(&self) -> Result<WorkspaceSearchState> {
-        let connection = self.lock()?;
-        let value = connection
-            .query_row(
-                "SELECT value FROM ui_state WHERE key = 'workspace.search_contexts'",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .context("无法读取搜索上下文")?;
+        let value = self.repository.load_ui_value("workspace.search_contexts")?;
         Ok(value
             .as_deref()
             .and_then(|value| serde_json::from_str(value).ok())
@@ -728,131 +689,49 @@ impl StateStore {
 
     pub fn save_workspace_search_state(&self, state: &WorkspaceSearchState) -> Result<()> {
         let value = serde_json::to_string(state).context("无法序列化搜索上下文")?;
-        let connection = self.lock()?;
-        connection
-            .execute(
-                "INSERT INTO ui_state(key, value)
-                 VALUES ('workspace.search_contexts', ?1)
-                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                params![value],
-            )
-            .context("无法保存搜索上下文")?;
-        Ok(())
+        self.repository
+            .save_ui_value("workspace.search_contexts", &value)
     }
 
     pub fn global_search_preferences(&self) -> Result<BTreeMap<PathBuf, bool>> {
-        let connection = self.lock()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT path, selected
-                 FROM global_search_preferences
-                 ORDER BY path",
-            )
-            .context("无法读取全局搜索参与偏好")?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((
-                    path_from_database(row.get::<_, String>(0)?),
-                    row.get::<_, i64>(1)? != 0,
-                ))
-            })
-            .context("无法查询全局搜索参与偏好")?;
-        rows.collect::<rusqlite::Result<BTreeMap<_, _>>>()
-            .context("无法解析全局搜索参与偏好")
+        self.repository.global_search_preferences()
     }
 
     pub fn save_global_search_preferences(&self, preferences: &[(PathBuf, bool)]) -> Result<()> {
-        if preferences.is_empty() {
-            return Ok(());
-        }
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction()
-            .context("无法开始全局搜索参与偏好事务")?;
-        for (path, selected) in preferences {
-            transaction
-                .execute(
-                    "INSERT INTO global_search_preferences(path, selected)
-                     VALUES (?1, ?2)
-                     ON CONFLICT(path) DO UPDATE SET selected = excluded.selected",
-                    params![path_to_database(path), selected],
-                )
-                .with_context(|| format!("无法保存全局搜索参与偏好：{}", path.display()))?;
-        }
-        transaction.commit().context("无法提交全局搜索参与偏好事务")
+        self.repository.save_global_search_preferences(preferences)
     }
 
     pub fn load_search_history(&self) -> Result<Vec<String>> {
-        let connection = self.lock()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT query_text
-                 FROM search_history
-                 ORDER BY position ASC",
-            )
-            .context("无法读取搜索历史")?;
-        let rows = statement
-            .query_map([], |row| row.get::<_, String>(0))
-            .context("无法查询搜索历史")?;
-        let history = rows
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .context("无法解析搜索历史")?;
-        Ok(normalize_search_history(history))
+        self.repository
+            .load_search_history()
+            .map(normalize_search_history)
     }
 
     pub fn save_search_history(&self, history: &[String]) -> Result<()> {
         let history = normalize_search_history(history.iter().cloned());
-        let mut connection = self.lock()?;
-        let transaction = connection.transaction().context("无法开始搜索历史事务")?;
-        transaction
-            .execute("DELETE FROM search_history", [])
-            .context("无法重置搜索历史")?;
-        for (position, query) in history.iter().enumerate() {
-            transaction
-                .execute(
-                    "INSERT INTO search_history(position, query_text) VALUES (?1, ?2)",
-                    params![i64::try_from(position).unwrap_or(i64::MAX), query],
-                )
-                .context("无法写入搜索历史")?;
-        }
-        transaction.commit().context("无法提交搜索历史事务")
+        self.repository.save_search_history(&history)
     }
 
     pub fn load_predefined_filters(&self) -> Result<Vec<PredefinedFilter>> {
-        let (filters, needs_migration) = {
-            let connection = self.lock()?;
-            let mut statement = connection
-                .prepare(
-                    "SELECT filter_id, item_json
-                     FROM predefined_filters
-                     ORDER BY position ASC",
-                )
-                .context("无法读取预定义过滤器")?;
-            let rows = statement
-                .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })
-                .context("无法查询预定义过滤器")?;
-            let mut filters = Vec::new();
-            let mut needs_migration = false;
-            for row in rows {
-                let (stored_id, json) = row.context("无法解析预定义过滤器记录")?;
-                let value = serde_json::from_str::<serde_json::Value>(&json)
-                    .context("预定义过滤器记录格式无效")?;
-                let filter = parse_stored_filter(&json).context("预定义过滤器记录格式无效")?;
-                needs_migration |= value.get("id").is_some()
-                    || value.get("source").is_some()
-                    || value.get("published").is_some()
-                    || value
-                        .get("uuid")
-                        .and_then(serde_json::Value::as_str)
-                        .and_then(crate::predefined_filters::FilterBranchId::parse)
-                        .is_none()
-                    || stored_id != filter.id.to_string();
-                filters.push(filter);
-            }
-            (normalize_predefined_filters(filters), needs_migration)
-        };
+        let records = self.repository.load_predefined_filters()?;
+        let mut filters = Vec::with_capacity(records.len());
+        let mut needs_migration = false;
+        for record in records {
+            let value = serde_json::from_str::<serde_json::Value>(&record.json)
+                .context("预定义过滤器记录格式无效")?;
+            let filter = parse_stored_filter(&record.json).context("预定义过滤器记录格式无效")?;
+            needs_migration |= value.get("id").is_some()
+                || value.get("source").is_some()
+                || value.get("published").is_some()
+                || value
+                    .get("uuid")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(crate::predefined_filters::FilterBranchId::parse)
+                    .is_none()
+                || record.id != filter.id.to_string();
+            filters.push(filter);
+        }
+        let filters = normalize_predefined_filters(filters);
         if needs_migration {
             self.save_predefined_filters(&filters)
                 .context("无法将预定义过滤器迁移到 v5")?;
@@ -862,126 +741,53 @@ impl StateStore {
 
     pub fn save_predefined_filters(&self, filters: &[PredefinedFilter]) -> Result<()> {
         let filters = normalize_predefined_filters(filters.to_vec());
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction()
-            .context("无法开始预定义过滤器事务")?;
-        transaction
-            .execute("DELETE FROM predefined_filters", [])
-            .context("无法重置预定义过滤器")?;
-        for (position, filter) in filters.iter().enumerate() {
-            transaction
-                .execute(
-                    "INSERT INTO predefined_filters(position, filter_id, item_json)
-                     VALUES (?1, ?2, ?3)",
-                    params![
-                        i64::try_from(position).unwrap_or(i64::MAX),
-                        filter.id.to_string(),
-                        serde_json::to_string(filter).context("无法编码预定义过滤器")?,
-                    ],
-                )
-                .with_context(|| format!("无法保存预定义过滤器：{}", filter.name))?;
-        }
-        transaction.commit().context("无法提交预定义过滤器事务")
+        let records = filters
+            .iter()
+            .map(|filter| {
+                Ok(PredefinedFilterRecord {
+                    id: filter.id.to_string(),
+                    json: serde_json::to_string(filter).context("无法编码预定义过滤器")?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.repository.save_predefined_filters(&records)
     }
 
     pub fn load_cloud_settings(&self) -> Result<CloudSettings> {
-        let connection = self.lock()?;
-        connection
-            .query_row(
-                "SELECT server_url, display_name FROM cloud_settings WHERE id = 1",
-                [],
-                |row| {
-                    Ok(CloudSettings {
-                        server_url: row.get(0)?,
-                        display_name: row.get(1)?,
-                    })
-                },
-            )
-            .optional()
-            .context("无法读取云端过滤器设置")
-            .map(|settings| settings.unwrap_or_default())
+        self.repository.load_cloud_settings()
     }
 
     pub fn save_cloud_settings(&self, settings: &CloudSettings) -> Result<()> {
-        let connection = self.lock()?;
-        connection
-            .execute(
-                "INSERT INTO cloud_settings(id, server_url, display_name)
-                 VALUES (1, ?1, ?2)
-                 ON CONFLICT(id) DO UPDATE SET
-                     server_url = excluded.server_url,
-                     display_name = excluded.display_name",
-                params![settings.server_url.trim(), settings.display_name.trim()],
-            )
-            .context("无法保存云端过滤器设置")?;
-        Ok(())
+        self.repository.save_cloud_settings(settings)
     }
 
     pub fn load_color_labels(&self) -> Result<Vec<ColorLabel>> {
-        let connection = self.lock()?;
-        let initialized = connection
-            .query_row(
-                "SELECT initialized FROM color_label_settings WHERE id = 1",
-                [],
-                |row| row.get::<_, bool>(0),
-            )
-            .optional()
-            .context("无法读取颜色标签初始化状态")?
-            .unwrap_or(false);
-        if !initialized {
-            return Ok(default_color_labels());
-        }
-        let mut statement = connection
-            .prepare(
-                "SELECT label_id, name, color, alpha
-                 FROM color_labels
-                 ORDER BY position ASC",
-            )
-            .context("无法读取颜色标签")?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok(ColorLabel {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    color: row.get(2)?,
-                    alpha: u8::try_from(row.get::<_, i64>(3)?).unwrap_or(u8::MAX),
-                })
+        self.repository.load_color_labels().map(|labels| {
+            labels.map_or_else(default_color_labels, |labels| {
+                labels
+                    .into_iter()
+                    .map(|label| ColorLabel {
+                        id: label.id,
+                        name: label.name,
+                        color: label.color,
+                        alpha: label.alpha,
+                    })
+                    .collect()
             })
-            .context("无法查询颜色标签")?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .context("无法解析颜色标签")
+        })
     }
 
     pub fn save_color_labels(&self, labels: &[ColorLabel]) -> Result<()> {
-        let mut connection = self.lock()?;
-        let transaction = connection.transaction().context("无法开始颜色标签事务")?;
-        transaction
-            .execute("DELETE FROM color_labels", [])
-            .context("无法重置颜色标签")?;
-        for (position, label) in labels.iter().enumerate() {
-            transaction
-                .execute(
-                    "INSERT INTO color_labels(position, label_id, name, color, alpha)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![
-                        i64::try_from(position).unwrap_or(i64::MAX),
-                        label.id,
-                        label.name,
-                        label.color,
-                        label.alpha,
-                    ],
-                )
-                .with_context(|| format!("无法保存颜色标签：{}", label.name))?;
-        }
-        transaction
-            .execute(
-                "INSERT INTO color_label_settings(id, initialized) VALUES (1, 1)
-                 ON CONFLICT(id) DO UPDATE SET initialized = 1",
-                [],
-            )
-            .context("无法保存颜色标签初始化状态")?;
-        transaction.commit().context("无法提交颜色标签事务")
+        let labels = labels
+            .iter()
+            .map(|label| ColorLabelRecord {
+                id: label.id.clone(),
+                name: label.name.clone(),
+                color: label.color,
+                alpha: label.alpha,
+            })
+            .collect::<Vec<_>>();
+        self.repository.save_color_labels(&labels)
     }
 
     pub fn recent_files(&self, limit: usize) -> Result<Vec<RecentFile>> {
@@ -1290,14 +1096,6 @@ fn normalize_optional_hex_color(value: Option<String>) -> Option<String> {
     .then_some(value)
 }
 
-fn path_to_database(path: &Path) -> String {
-    encode_persisted_path(path)
-}
-
-fn path_from_database(stored: String) -> PathBuf {
-    decode_persisted_path(&stored)
-}
-
 fn decode_hex(encoded: &str) -> Option<Vec<u8>> {
     if !encoded.len().is_multiple_of(2) {
         return None;
@@ -1353,9 +1151,10 @@ mod session_load_tests {
 
     use super::{
         COMPRESSED_MARKED_ROWS_PREFIX, FileSessionState, StateStore, count_marked_rows,
-        decode_marked_rows, encode_marked_rows, path_from_database, path_to_database,
+        decode_marked_rows, encode_marked_rows,
     };
     use vclogg_core::CompressedRows;
+    use vclogg_data::{decode_persisted_path, encode_persisted_path};
 
     struct TemporaryDatabase(PathBuf);
 
@@ -1446,7 +1245,7 @@ mod session_load_tests {
             .expect("应能锁定测试状态库")
             .query_row(
                 "SELECT marked_rows FROM file_sessions WHERE path = ?1",
-                [path_to_database(&path)],
+                [encode_persisted_path(&path)],
                 |row| row.get::<_, String>(0),
             )
             .expect("应能读取原始标记字段");
@@ -1473,9 +1272,12 @@ mod session_load_tests {
         let first = directory.join(OsString::from_vec(b"source-\x80.log".to_vec()));
         let second = directory.join(OsString::from_vec(b"source-\x81.log".to_vec()));
         assert_eq!(first.to_string_lossy(), second.to_string_lossy());
-        assert_ne!(path_to_database(&first), path_to_database(&second));
+        assert_ne!(
+            encode_persisted_path(&first),
+            encode_persisted_path(&second)
+        );
         assert_eq!(
-            path_from_database(path_to_database(&first)),
+            decode_persisted_path(&encode_persisted_path(&first)),
             first,
             "原生路径编码应能无损往返"
         );
