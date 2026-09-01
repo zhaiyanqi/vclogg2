@@ -9189,6 +9189,7 @@ impl Workspace {
             self.global_search.results_visible = true;
         }
         self.refresh_global_result_rows(cx);
+        self.schedule_workspace_search_state_save(window, cx);
         let action = if is_marking {
             crate::tr!("已标记", "Marked")
         } else {
