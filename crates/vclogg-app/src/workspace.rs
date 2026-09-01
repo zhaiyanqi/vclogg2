@@ -93,7 +93,11 @@ use crate::{
         log_row_separator_overlay, scroll_uniform_log_row_to_viewport_y, severity_accent_overlay,
         severity_style, text_highlight_style,
     },
-    path_identity::{path_match_key, path_match_map_get, path_match_set_contains, paths_match},
+    path_identity::{
+        PathMatchKey, deduplicate_paths, path_buf_map_get, path_buf_map_insert,
+        path_buf_map_remove, path_match_key, path_match_map_get, path_match_set_contains,
+        paths_match,
+    },
     predefined_filters::{PredefinedFilter, query_includes_filter, toggle_filter_in_query},
     predefined_filters_dialog::{PredefinedFiltersDialog, PredefinedFiltersDialogEvent},
     rename_tab_dialog::RenameTabDialog,
@@ -224,6 +228,8 @@ fn should_upgrade_loading_document(
         (DocumentLoadState::Opening, DocumentLoadState::Preview)
             | (DocumentLoadState::Opening, DocumentLoadState::Ready)
             | (DocumentLoadState::Preview, DocumentLoadState::Ready)
+            | (DocumentLoadState::IndexFailed, DocumentLoadState::Preview)
+            | (DocumentLoadState::IndexFailed, DocumentLoadState::Ready)
     )
 }
 
@@ -1700,6 +1706,16 @@ mod scroll_position_tests {
             DocumentLoadState::Ready,
             false,
         ));
+        assert!(should_upgrade_loading_document(
+            DocumentLoadState::IndexFailed,
+            DocumentLoadState::Preview,
+            false,
+        ));
+        assert!(should_upgrade_loading_document(
+            DocumentLoadState::IndexFailed,
+            DocumentLoadState::Ready,
+            false,
+        ));
     }
 }
 
@@ -2474,7 +2490,7 @@ pub struct Workspace {
     global_results_focus_handle: FocusHandle,
     active_log_region: LogRegion,
     last_user_log_region: LogRegion,
-    transient_paths: BTreeSet<PathBuf>,
+    transient_paths: BTreeSet<PathMatchKey>,
     pending_tab_moves: BTreeSet<u64>,
     documents: Vec<DocumentTab>,
     tabs: Vec<WorkspaceTabId>,
@@ -3515,7 +3531,12 @@ impl Workspace {
                         let open_paths = this
                             .documents
                             .iter()
-                            .filter(|tab| !this.transient_paths.contains(tab.document.path()))
+                            .filter(|tab| {
+                                !path_match_set_contains(
+                                    &this.transient_paths,
+                                    tab.document.path(),
+                                )
+                            })
                             .map(|tab| tab.document.path().to_path_buf())
                             .collect();
                         this.record_recent_paths(open_paths, window, cx);
@@ -3769,7 +3790,7 @@ impl Workspace {
                 this.result_export_operation = None;
                 match result {
                     Ok((path, row_count)) if this.open_task.is_none() => {
-                        this.transient_paths.insert(path.clone());
+                        this.transient_paths.insert(path_match_key(&path));
                         this.begin_open_paths(vec![path], window, cx);
                         window.push_notification(
                             crate::tr_args!(
@@ -3827,7 +3848,7 @@ impl Workspace {
                 this.result_export_operation = None;
                 match result {
                     Ok((path, row_count)) if this.open_task.is_none() => {
-                        this.transient_paths.insert(path.clone());
+                        this.transient_paths.insert(path_match_key(&path));
                         this.begin_open_paths(vec![path], window, cx);
                         window.push_notification(
                             crate::tr_args!(
@@ -4010,7 +4031,12 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         for path in paths {
-            if !path.as_os_str().is_empty() && !self.pending_external_paths.contains(&path) {
+            if !path.as_os_str().is_empty()
+                && !self
+                    .pending_external_paths
+                    .iter()
+                    .any(|queued| paths_match(queued, &path))
+            {
                 self.pending_external_paths.push(path);
             }
         }
@@ -4041,7 +4067,7 @@ impl Workspace {
             .all(|initial| initial.replace_new_tab);
         for initial in initial_documents {
             if initial.transient {
-                self.transient_paths.insert(initial.path.clone());
+                self.transient_paths.insert(path_match_key(&initial.path));
             }
             if let Some(completion) = initial.move_completion {
                 overrides
@@ -4049,12 +4075,14 @@ impl Workspace {
                     .insert(initial.path.clone(), completion);
             }
             if let Some(target_ix) = initial.target_ix {
-                overrides
-                    .target_indices
-                    .insert(initial.path.clone(), target_ix);
+                path_buf_map_insert(
+                    &mut overrides.target_indices,
+                    initial.path.clone(),
+                    target_ix,
+                );
             }
             if let Some(session) = initial.session {
-                overrides.sessions.insert(initial.path.clone(), session);
+                path_buf_map_insert(&mut overrides.sessions, initial.path.clone(), session);
             }
             paths.push(initial.path);
         }
@@ -4095,14 +4123,20 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let paths = deduplicate_paths(
+            paths
+                .into_iter()
+                .filter(|path| !path.as_os_str().is_empty()),
+        );
         if paths.is_empty() || self.open_task.is_some() {
             return;
         }
         for path in &paths {
-            if !overrides.sessions.contains_key(path)
-                && let Some(session) = self.persistence.pending_session_overrides.get(path)
+            if path_buf_map_get(&overrides.sessions, path).is_none()
+                && let Some(session) =
+                    path_buf_map_get(&self.persistence.pending_session_overrides, path)
             {
-                overrides.sessions.insert(path.clone(), session.clone());
+                path_buf_map_insert(&mut overrides.sessions, path.clone(), session.clone());
             }
         }
         self.activity = Activity::Opening;
@@ -4120,7 +4154,7 @@ impl Workspace {
                     path.clone(),
                     Ok(prepare_document_shell(
                         path,
-                        overrides.sessions.get(path).cloned(),
+                        path_buf_map_get(&overrides.sessions, path).cloned(),
                     )),
                 )
             })
@@ -4134,6 +4168,29 @@ impl Workspace {
             window,
             cx,
         );
+        let paths = paths
+            .into_iter()
+            .filter(|path| {
+                self.documents
+                    .iter()
+                    .find(|tab| paths_match(tab.document.path(), path))
+                    .is_some_and(|tab| tab.load_state != DocumentLoadState::Ready)
+            })
+            .collect::<Vec<_>>();
+        if paths.is_empty() {
+            self.activity = Activity::Ready;
+            self.maybe_restore_persisted_search(window, cx);
+            for (path, completion) in overrides.move_completions {
+                let installed = self.documents.iter().any(|tab| {
+                    paths_match(tab.document.path(), &path)
+                        && tab.load_state == DocumentLoadState::Ready
+                });
+                completion.finish(installed, cx);
+            }
+            self.open_queued_external_paths_if_idle(window, cx);
+            cx.notify();
+            return;
+        }
         let opening_ids = paths
             .iter()
             .filter_map(|path| {
@@ -4141,7 +4198,12 @@ impl Workspace {
                     .iter()
                     .find(|tab| {
                         paths_match(tab.document.path(), path)
-                            && tab.load_state == DocumentLoadState::Opening
+                            && matches!(
+                                tab.load_state,
+                                DocumentLoadState::Opening
+                                    | DocumentLoadState::Preview
+                                    | DocumentLoadState::IndexFailed
+                            )
                     })
                     .map(|tab| (path.clone(), tab.id))
             })
@@ -4167,7 +4229,9 @@ impl Workspace {
                     let (sessions, fallback_store) = match restore_store {
                         Some(store) => match store.load_sessions(&restore_paths) {
                             Ok(mut restored) => {
-                                restored.extend(sessions);
+                                for (path, session) in sessions {
+                                    path_buf_map_insert(&mut restored, path, session);
+                                }
                                 (restored, None)
                             }
                             Err(_) => (sessions, Some(store)),
@@ -4187,7 +4251,7 @@ impl Workspace {
                         prepare_document_preview(
                             path,
                             preview_store.as_deref(),
-                            preview_sessions.get(path).cloned(),
+                            path_buf_map_get(&preview_sessions, path).cloned(),
                             effective_search_result_limit,
                         )
                     })
@@ -4198,11 +4262,14 @@ impl Workspace {
                 let previews = previews
                     .into_iter()
                     .filter(|(path, _)| {
-                        opening_ids.get(path).is_some_and(|expected_id| {
+                        path_buf_map_get(&opening_ids, path).is_some_and(|expected_id| {
                             this.documents.iter().any(|tab| {
                                 tab.id == *expected_id
                                     && paths_match(tab.document.path(), path)
-                                    && tab.load_state == DocumentLoadState::Opening
+                                    && matches!(
+                                        tab.load_state,
+                                        DocumentLoadState::Opening | DocumentLoadState::IndexFailed
+                                    )
                             })
                         })
                     })
@@ -4226,7 +4293,7 @@ impl Workspace {
                         prepare_document(
                             path,
                             full_store.as_deref(),
-                            sessions.get(path).cloned(),
+                            path_buf_map_get(&sessions, path).cloned(),
                             effective_search_result_limit,
                         )
                     })
@@ -6111,12 +6178,14 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.transient_paths.contains(&path) {
+        if path_match_set_contains(&self.transient_paths, &path) {
             return;
         }
-        self.persistence
-            .pending_session_overrides
-            .insert(path.clone(), state.clone());
+        path_buf_map_insert(
+            &mut self.persistence.pending_session_overrides,
+            path.clone(),
+            state.clone(),
+        );
         let Some(store) = self.persistence.store.clone() else {
             self.persistence.pending_sessions.push((path, base, state));
             return;
@@ -6130,9 +6199,7 @@ impl Workspace {
             }
             let effective_base = this
                 .update_in(cx, |this, _, _| {
-                    this.persistence
-                        .last_saved_sessions
-                        .get(&saved_path)
+                    path_buf_map_get(&this.persistence.last_saved_sessions, &saved_path)
                         .filter(|saved| saved.revision > base.revision)
                         .cloned()
                 })
@@ -6144,19 +6211,19 @@ impl Workspace {
                 .await;
             _ = this.update_in(cx, |this, window, cx| match result {
                 Ok(result) => {
-                    if this
-                        .persistence
-                        .pending_session_overrides
-                        .get(&saved_path)
+                    if path_buf_map_get(&this.persistence.pending_session_overrides, &saved_path)
                         .is_some_and(|latest| Self::session_contents_equal(latest, &desired_state))
                     {
-                        this.persistence
-                            .pending_session_overrides
-                            .remove(&saved_path);
+                        path_buf_map_remove(
+                            &mut this.persistence.pending_session_overrides,
+                            &saved_path,
+                        );
                     }
-                    this.persistence
-                        .last_saved_sessions
-                        .insert(saved_path.clone(), result.state.clone());
+                    path_buf_map_insert(
+                        &mut this.persistence.last_saved_sessions,
+                        saved_path.clone(),
+                        result.state.clone(),
+                    );
                     if let Some(tab) = this
                         .documents
                         .iter_mut()
@@ -6263,38 +6330,41 @@ impl Workspace {
             .global::<WorkspaceWindowRegistry>()
             .predefined_filters
             .clone();
-        let mut sessions = std::mem::take(&mut self.persistence.pending_sessions)
+        let mut sessions = BTreeMap::new();
+        for (path, _, state) in std::mem::take(&mut self.persistence.pending_sessions)
             .into_iter()
-            .filter(|(path, _, _)| !self.transient_paths.contains(path))
-            .map(|(path, _, state)| (path, state))
-            .collect::<BTreeMap<_, _>>();
-        sessions.extend(
-            self.persistence
-                .pending_session_overrides
-                .iter()
-                .filter(|(path, _)| !self.transient_paths.contains(*path))
-                .map(|(path, state)| (path.clone(), state.clone())),
-        );
-        sessions.extend(
-            self.documents
-                .iter()
-                .filter(|tab| !self.transient_paths.contains(tab.document.path()))
-                .map(|tab| {
-                    (
-                        tab.document.path().to_path_buf(),
-                        self.file_session_state(tab, cx),
-                    )
-                }),
-        );
+            .filter(|(path, _, _)| !path_match_set_contains(&self.transient_paths, path))
+        {
+            path_buf_map_insert(&mut sessions, path, state);
+        }
+        for (path, state) in self
+            .persistence
+            .pending_session_overrides
+            .iter()
+            .filter(|(path, _)| !path_match_set_contains(&self.transient_paths, path))
+        {
+            path_buf_map_insert(&mut sessions, path.clone(), state.clone());
+        }
+        for tab in self
+            .documents
+            .iter()
+            .filter(|tab| !path_match_set_contains(&self.transient_paths, tab.document.path()))
+        {
+            path_buf_map_insert(
+                &mut sessions,
+                tab.document.path().to_path_buf(),
+                self.file_session_state(tab, cx),
+            );
+        }
         let open_paths = self
             .documents
             .iter()
-            .filter(|tab| !self.transient_paths.contains(tab.document.path()))
+            .filter(|tab| !path_match_set_contains(&self.transient_paths, tab.document.path()))
             .map(|tab| tab.document.path().to_path_buf())
             .collect::<Vec<_>>();
         let active_path = self
             .active_document()
-            .filter(|tab| !self.transient_paths.contains(tab.document.path()))
+            .filter(|tab| !path_match_set_contains(&self.transient_paths, tab.document.path()))
             .map(|tab| tab.document.path().to_path_buf());
 
         let mut state_tasks = std::mem::take(&mut self.persistence.state_tasks);
@@ -6428,7 +6498,7 @@ impl Workspace {
                     let ready = prepared.load_state == DocumentLoadState::Ready;
                     self.upgrade_loading_document(existing_ix, prepared, window, cx);
                     global_sources_changed = true;
-                    if ready && !self.transient_paths.contains(&path) {
+                    if ready && !path_match_set_contains(&self.transient_paths, &path) {
                         recorded_paths.push(path.clone());
                     }
                 }
@@ -6439,7 +6509,7 @@ impl Workspace {
             }
 
             if prepared.load_state == DocumentLoadState::Ready
-                && !self.transient_paths.contains(&path)
+                && !path_match_set_contains(&self.transient_paths, &path)
             {
                 recorded_paths.push(path.clone());
             }
@@ -6784,7 +6854,7 @@ impl Workspace {
                 } else {
                     self.tabs.push(workspace_tab_id);
                 }
-            } else if let Some(target_ix) = target_indices.get(&path).copied() {
+            } else if let Some(target_ix) = path_buf_map_get(target_indices, &path).copied() {
                 let target_ix = target_ix.min(self.tabs.len());
                 self.tabs.insert(target_ix, workspace_tab_id);
             } else {
@@ -6884,13 +6954,15 @@ impl Workspace {
     ) {
         let mut accepted = Vec::new();
         for (path, result) in opened {
-            if let Some(expected_id) = opening_ids.get(&path).copied() {
+            if let Some(expected_id) = path_buf_map_get(opening_ids, &path).copied() {
                 let still_open = self.documents.iter().any(|tab| {
                     tab.id == expected_id
                         && paths_match(tab.document.path(), &path)
                         && matches!(
                             tab.load_state,
-                            DocumentLoadState::Opening | DocumentLoadState::Preview
+                            DocumentLoadState::Opening
+                                | DocumentLoadState::Preview
+                                | DocumentLoadState::IndexFailed
                         )
                 });
                 if !still_open {
@@ -7687,7 +7759,7 @@ impl Workspace {
         let sessions = self
             .documents
             .iter()
-            .filter(|tab| !self.transient_paths.contains(tab.document.path()))
+            .filter(|tab| !path_match_set_contains(&self.transient_paths, tab.document.path()))
             .map(|tab| {
                 (
                     tab.document.path().to_path_buf(),
@@ -7701,7 +7773,7 @@ impl Workspace {
             .collect::<Vec<_>>();
         let active_path = self
             .active_document()
-            .filter(|tab| !self.transient_paths.contains(tab.document.path()))
+            .filter(|tab| !path_match_set_contains(&self.transient_paths, tab.document.path()))
             .map(|tab| tab.document.path().to_path_buf());
         let primary_window = self.primary_window;
         let previous_task = self.persistence.workspace_order_task.take();
@@ -7831,7 +7903,7 @@ impl Workspace {
         };
         let path = tab.document.path().to_path_buf();
         let session = self.file_session_state(tab, cx);
-        let transient = self.transient_paths.contains(&path);
+        let transient = path_match_set_contains(&self.transient_paths, &path);
         let initial = match mode {
             TabTransferMode::Copy => InitialDocument::new(path, session, transient),
             TabTransferMode::Move => InitialDocument::moving(
@@ -7974,7 +8046,7 @@ impl Workspace {
         let path = tab.document.path().to_path_buf();
         let file_name = tab.title.clone();
         let session = self.file_session_state(tab, cx);
-        let transient = self.transient_paths.contains(&path);
+        let transient = path_match_set_contains(&self.transient_paths, &path);
         let mut initial = match mode {
             TabTransferMode::Copy => InitialDocument::new(path, session, transient),
             TabTransferMode::Move => InitialDocument::moving(
