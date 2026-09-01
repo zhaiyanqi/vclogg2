@@ -23,7 +23,7 @@ use std::os::unix::{ffi::OsStrExt as _, fs::FileExt as _, fs::MetadataExt as _};
 
 use anyhow::{Context as _, Result};
 use chardetng::EncodingDetector;
-use encoding_rs::{Encoding, UTF_8, UTF_16BE, UTF_16LE};
+use encoding_rs::{CoderResult, Decoder, Encoding, UTF_8, UTF_16BE, UTF_16LE};
 use memchr::{memchr_iter, memchr2};
 use memmap2::{Mmap, MmapOptions};
 use sha2::{Digest as _, Sha256};
@@ -49,7 +49,6 @@ const MAX_CACHE_PATH_BYTES: usize = 32 * 1024;
 const MAX_CACHE_ENCODING_BYTES: usize = 64;
 const ENCODING_DETECTION_BYTES: usize = 1024 * 1024;
 const BINARY_BYTES_PER_LINE: usize = 16;
-const PARALLEL_INDEX_HASH_MIN_BYTES: usize = 8 * 1024 * 1024;
 const INDEX_CANCELLATION_BATCH_LINES: usize = 4 * 1024;
 const CACHE_CANCELLATION_BATCH_LINES: usize = 4 * 1024;
 
@@ -514,6 +513,8 @@ struct IndexedLines {
     longest_completed_line_columns: usize,
 }
 
+type IndexedFileSnapshot = (IndexedLines, Arc<[[u8; 32]]>);
+
 /// Immutable line offsets compacted to four bytes whenever the snapshot fits in `u32`.
 ///
 /// Index construction and append refreshes use the matching mutable width, so common files never
@@ -872,16 +873,18 @@ impl LogDocument {
         if cancellation.is_cancelled() {
             return Ok(None);
         }
-        let mapped = map_snapshot(&file, file_metadata.len(), &path)?;
-        let scan_bytes = mapped.as_deref().unwrap_or_default();
-        let Some((indexed_lines, integrity_blocks)) =
-            build_line_index_with_integrity_while(scan_bytes, encoding, &|| {
-                cancellation.is_cancelled()
-            })
+        let Some((indexed_lines, integrity_blocks)) = build_file_index_with_integrity_while(
+            &file,
+            file_metadata.len(),
+            file_metadata.modified().ok(),
+            read_file_identity(&file),
+            encoding,
+            &path,
+            &|| cancellation.is_cancelled(),
+        )?
         else {
             return Ok(None);
         };
-        drop(mapped);
         let bytes = DocumentBytes::verified(
             file,
             path.clone(),
@@ -960,12 +963,16 @@ impl LogDocument {
         let (indexed_lines, integrity_blocks) = match cached {
             Some(cached) => (cached.indexed_lines, Some(cached.integrity_blocks)),
             None => {
-                let mapped = map_snapshot(&file, file_size, &path)?;
-                let scan_bytes = mapped.as_deref().unwrap_or_default();
                 let Some((indexed_lines, integrity_blocks)) =
-                    build_line_index_with_integrity_while(scan_bytes, encoding, &|| {
-                        cancellation.is_cancelled()
-                    })
+                    build_file_index_with_integrity_while(
+                        &file,
+                        file_size,
+                        modified,
+                        identity.clone(),
+                        encoding,
+                        &path,
+                        &|| cancellation.is_cancelled(),
+                    )?
                 else {
                     return Ok(None);
                 };
@@ -1581,31 +1588,381 @@ fn digest_integrity_blocks(blocks: &[[u8; 32]]) -> [u8; 32] {
     digest.finalize().into()
 }
 
-fn build_line_index_with_integrity_while(
-    bytes: &[u8],
-    encoding: FileEncoding,
-    is_cancelled: &(dyn Fn() -> bool + Sync),
-) -> Option<(IndexedLines, Arc<[[u8; 32]]>)> {
-    if is_cancelled() {
-        return None;
-    }
-    let parallel = bytes.len() >= PARALLEL_INDEX_HASH_MIN_BYTES
-        && std::thread::available_parallelism().is_ok_and(|parallelism| parallelism.get() > 1);
-    if !parallel {
-        let indexed_lines = build_line_index_while(bytes, encoding, is_cancelled)?;
-        let integrity_blocks = calculate_integrity_blocks_while(bytes, is_cancelled)?.into();
-        return Some((indexed_lines, integrity_blocks));
+enum StreamingLineColumns {
+    Bytes(usize),
+    Decoded {
+        encoding: &'static Encoding,
+        decoder: Decoder,
+        columns: usize,
+    },
+}
+
+impl StreamingLineColumns {
+    fn new(encoding: FileEncoding) -> Self {
+        match encoding {
+            FileEncoding::Utf8 | FileEncoding::Utf8Bom => Self::Bytes(0),
+            FileEncoding::Utf16Le => Self::decoded(UTF_16LE),
+            FileEncoding::Utf16Be => Self::decoded(UTF_16BE),
+            FileEncoding::Legacy(encoding) => Self::decoded(encoding),
+            FileEncoding::Binary => Self::Bytes(0),
+        }
     }
 
-    let (indexed_lines, integrity_blocks) = std::thread::scope(|scope| {
-        let integrity_task = scope.spawn(|| calculate_integrity_blocks_while(bytes, is_cancelled));
-        let indexed_lines = build_line_index_while(bytes, encoding, is_cancelled);
-        let integrity_blocks = integrity_task
-            .join()
-            .expect("日志完整性摘要线程不应异常终止");
-        (indexed_lines, integrity_blocks)
-    });
-    Some((indexed_lines?, integrity_blocks?.into()))
+    fn decoded(encoding: &'static Encoding) -> Self {
+        Self::Decoded {
+            encoding,
+            decoder: encoding.new_decoder_without_bom_handling(),
+            columns: 0,
+        }
+    }
+
+    fn feed(&mut self, bytes: &[u8]) {
+        match self {
+            Self::Bytes(columns) => update_byte_columns(columns, bytes),
+            Self::Decoded {
+                decoder, columns, ..
+            } => update_decoded_columns(decoder, columns, bytes, false),
+        }
+    }
+
+    fn finish_line(&mut self) -> usize {
+        match self {
+            Self::Bytes(columns) => std::mem::take(columns),
+            Self::Decoded {
+                encoding,
+                decoder,
+                columns,
+            } => {
+                update_decoded_columns(decoder, columns, &[], true);
+                let completed = std::mem::take(columns);
+                *decoder = encoding.new_decoder_without_bom_handling();
+                completed
+            }
+        }
+    }
+}
+
+fn update_byte_columns(columns: &mut usize, bytes: &[u8]) {
+    for byte in bytes {
+        *columns = match byte {
+            b'\t' => columns.saturating_add(8 - *columns % 8),
+            b'\r' => *columns,
+            _ => columns.saturating_add(1),
+        };
+    }
+}
+
+fn update_decoded_columns(
+    decoder: &mut Decoder,
+    columns: &mut usize,
+    mut bytes: &[u8],
+    last: bool,
+) {
+    let mut output = [0_u8; 8 * 1024];
+    loop {
+        let (result, read, written, _) = decoder.decode_to_utf8(bytes, &mut output, last);
+        let decoded =
+            std::str::from_utf8(&output[..written]).expect("encoding_rs always emits valid UTF-8");
+        for character in decoded.chars() {
+            *columns = match character {
+                '\t' => columns.saturating_add(8 - *columns % 8),
+                '\r' => *columns,
+                _ => columns.saturating_add(1),
+            };
+        }
+        bytes = &bytes[read..];
+        if result == CoderResult::InputEmpty {
+            break;
+        }
+    }
+}
+
+struct StreamingLineIndexer {
+    encoding: FileEncoding,
+    starts: MutableLineStarts,
+    columns: StreamingLineColumns,
+    current_start: usize,
+    longest_completed_line_bytes: usize,
+    longest_completed_line_columns: usize,
+    completed_lines: usize,
+    pending_cr: Option<usize>,
+    bom_remaining: usize,
+}
+
+impl StreamingLineIndexer {
+    fn new(file_size: usize, encoding: FileEncoding) -> Self {
+        let mut starts = MutableLineStarts::with_capacity(file_size as u64, 0);
+        if file_size > 0 {
+            starts.push(0);
+        }
+        Self {
+            encoding,
+            starts,
+            columns: StreamingLineColumns::new(encoding),
+            current_start: 0,
+            longest_completed_line_bytes: 0,
+            longest_completed_line_columns: 0,
+            completed_lines: 0,
+            pending_cr: None,
+            bom_remaining: encoding.bom_len(),
+        }
+    }
+
+    fn feed(
+        &mut self,
+        block_start: usize,
+        bytes: &[u8],
+        final_block: bool,
+        is_cancelled: &dyn Fn() -> bool,
+    ) -> Option<()> {
+        match self.encoding {
+            FileEncoding::Utf16Le | FileEncoding::Utf16Be => {
+                self.feed_utf16(block_start, bytes, final_block, is_cancelled)
+            }
+            FileEncoding::Utf8 | FileEncoding::Utf8Bom | FileEncoding::Legacy(_) => {
+                self.feed_single_byte(block_start, bytes, final_block, is_cancelled)
+            }
+            FileEncoding::Binary => Some(()),
+        }
+    }
+
+    fn feed_content(&mut self, bytes: &[u8]) {
+        let skip = self.bom_remaining.min(bytes.len());
+        self.bom_remaining -= skip;
+        self.columns.feed(&bytes[skip..]);
+    }
+
+    fn complete_line(
+        &mut self,
+        line_end: usize,
+        delimiter_width: usize,
+        is_cancelled: &dyn Fn() -> bool,
+    ) -> Option<()> {
+        self.completed_lines = self.completed_lines.saturating_add(1);
+        if self
+            .completed_lines
+            .is_multiple_of(INDEX_CANCELLATION_BATCH_LINES)
+            && is_cancelled()
+        {
+            return None;
+        }
+        self.longest_completed_line_bytes = self
+            .longest_completed_line_bytes
+            .max(line_end.saturating_sub(self.current_start));
+        self.longest_completed_line_columns = self
+            .longest_completed_line_columns
+            .max(self.columns.finish_line());
+        self.current_start = line_end.saturating_add(delimiter_width);
+        if self.starts.last() != Some(self.current_start) {
+            self.starts.push(self.current_start);
+        }
+        Some(())
+    }
+
+    fn feed_single_byte(
+        &mut self,
+        block_start: usize,
+        bytes: &[u8],
+        final_block: bool,
+        is_cancelled: &dyn Fn() -> bool,
+    ) -> Option<()> {
+        let mut content_start = 0;
+        if let Some(pending_cr) = self.pending_cr.take() {
+            if bytes.first() == Some(&b'\n') {
+                self.complete_line(pending_cr, 2, is_cancelled)?;
+                content_start = 1;
+            } else {
+                self.complete_line(pending_cr, 1, is_cancelled)?;
+            }
+        }
+
+        let mut search_start = content_start;
+        while let Some(relative) = memchr2(b'\r', b'\n', &bytes[search_start..]) {
+            let position = search_start + relative;
+            self.feed_content(&bytes[content_start..position]);
+            let absolute = block_start.saturating_add(position);
+            if bytes[position] == b'\r' && position + 1 == bytes.len() && !final_block {
+                self.pending_cr = Some(absolute);
+                return Some(());
+            }
+            let width =
+                usize::from(bytes[position] == b'\r' && bytes.get(position + 1) == Some(&b'\n'))
+                    + 1;
+            self.complete_line(absolute, width, is_cancelled)?;
+            content_start = position + width;
+            search_start = content_start;
+        }
+        self.feed_content(&bytes[content_start..]);
+        Some(())
+    }
+
+    fn feed_utf16(
+        &mut self,
+        block_start: usize,
+        bytes: &[u8],
+        final_block: bool,
+        is_cancelled: &dyn Fn() -> bool,
+    ) -> Option<()> {
+        let little_endian = matches!(self.encoding, FileEncoding::Utf16Le);
+        let code_unit_at = |position: usize| {
+            if little_endian {
+                u16::from_le_bytes([bytes[position], bytes[position + 1]])
+            } else {
+                u16::from_be_bytes([bytes[position], bytes[position + 1]])
+            }
+        };
+        let mut content_start = 0;
+        if let Some(pending_cr) = self.pending_cr.take() {
+            if bytes.len() >= 2 && code_unit_at(0) == u16::from(b'\n') {
+                self.complete_line(pending_cr, 4, is_cancelled)?;
+                content_start = 2;
+            } else {
+                self.complete_line(pending_cr, 2, is_cancelled)?;
+            }
+        }
+
+        let mut position = content_start;
+        while position + 1 < bytes.len() {
+            let code_unit = code_unit_at(position);
+            if code_unit != u16::from(b'\r') && code_unit != u16::from(b'\n') {
+                position += 2;
+                continue;
+            }
+            self.feed_content(&bytes[content_start..position]);
+            let absolute = block_start.saturating_add(position);
+            if code_unit == u16::from(b'\r') && position + 2 == bytes.len() && !final_block {
+                self.pending_cr = Some(absolute);
+                return Some(());
+            }
+            let followed_by_lf = code_unit == u16::from(b'\r')
+                && position + 3 < bytes.len()
+                && code_unit_at(position + 2) == u16::from(b'\n');
+            let width = if followed_by_lf { 4 } else { 2 };
+            self.complete_line(absolute, width, is_cancelled)?;
+            content_start = position + width;
+            position = content_start;
+        }
+        self.feed_content(&bytes[content_start..]);
+        Some(())
+    }
+
+    fn finish(mut self, file_size: usize) -> IndexedLines {
+        let trailing_line_bytes = file_size.saturating_sub(self.current_start);
+        let trailing_line_columns = if self.current_start < file_size {
+            self.columns.finish_line()
+        } else {
+            0
+        };
+        IndexedLines {
+            starts: self.starts,
+            longest_line_bytes: self.longest_completed_line_bytes.max(trailing_line_bytes),
+            longest_completed_line_bytes: self.longest_completed_line_bytes,
+            longest_line_columns: self
+                .longest_completed_line_columns
+                .max(trailing_line_columns),
+            longest_completed_line_columns: self.longest_completed_line_columns,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_file_index_with_integrity_while(
+    file: &File,
+    file_size: u64,
+    expected_modified: Option<SystemTime>,
+    expected_identity: Option<FileIdentity>,
+    encoding: FileEncoding,
+    path: &Path,
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<Option<IndexedFileSnapshot>> {
+    if is_cancelled() {
+        return Ok(None);
+    }
+    let file_size_usize = usize::try_from(file_size)
+        .with_context(|| format!("日志文件过大，无法建立索引：{}", path.display()))?;
+    let mut indexer = (!matches!(encoding, FileEncoding::Binary))
+        .then(|| StreamingLineIndexer::new(file_size_usize, encoding));
+    let mut integrity_blocks =
+        Vec::with_capacity(file_size_usize.div_ceil(APPEND_INTEGRITY_BLOCK_BYTES));
+    let mut block_start = 0usize;
+    let mut block = vec![0_u8; file_size_usize.min(APPEND_INTEGRITY_BLOCK_BYTES)];
+    while block_start < file_size_usize {
+        if is_cancelled() {
+            return Ok(None);
+        }
+        let block_len = (file_size_usize - block_start).min(APPEND_INTEGRITY_BLOCK_BYTES);
+        block.resize(block_len, 0);
+        read_file_exact_at(file, &mut block, block_start as u64)
+            .with_context(|| format!("建立索引时无法读取日志文件：{}", path.display()))?;
+        integrity_blocks.push(Sha256::digest(&block).into());
+        if let Some(indexer) = indexer.as_mut() {
+            let final_block = block_start.saturating_add(block_len) == file_size_usize;
+            if indexer
+                .feed(block_start, &block, final_block, is_cancelled)
+                .is_none()
+            {
+                return Ok(None);
+            }
+        }
+        block_start = block_start.saturating_add(block_len);
+    }
+    if is_cancelled() {
+        return Ok(None);
+    }
+    let current_metadata = file
+        .metadata()
+        .with_context(|| format!("建立索引后无法读取文件信息：{}", path.display()))?;
+    if current_metadata.len() != file_size
+        || current_metadata.modified().ok() != expected_modified
+        || expected_identity
+            .as_ref()
+            .is_some_and(|expected| read_file_identity(file).as_ref() != Some(expected))
+    {
+        anyhow::bail!("日志文件在建立索引时发生了变化：{}", path.display());
+    }
+
+    let indexed_lines = match indexer {
+        Some(indexer) => indexer.finish(file_size_usize),
+        None => {
+            let Some(indexed_lines) = build_binary_line_index(file_size_usize, is_cancelled) else {
+                return Ok(None);
+            };
+            indexed_lines
+        }
+    };
+    Ok(Some((indexed_lines, integrity_blocks.into())))
+}
+
+fn build_binary_line_index(
+    file_size: usize,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Option<IndexedLines> {
+    if file_size == 0 {
+        return Some(IndexedLines {
+            starts: MutableLineStarts::Compact(Vec::new()),
+            longest_line_bytes: 0,
+            longest_completed_line_bytes: 0,
+            longest_line_columns: 0,
+            longest_completed_line_columns: 0,
+        });
+    }
+    let line_count = file_size.div_ceil(BINARY_BYTES_PER_LINE);
+    let mut starts = MutableLineStarts::with_capacity(file_size as u64, line_count);
+    for line_ix in 0..line_count {
+        if line_ix.is_multiple_of(INDEX_CANCELLATION_BATCH_LINES) && is_cancelled() {
+            return None;
+        }
+        starts.push(line_ix.saturating_mul(BINARY_BYTES_PER_LINE));
+    }
+    let longest_line_bytes = file_size.min(BINARY_BYTES_PER_LINE);
+    let longest_line_columns = longest_line_bytes.saturating_mul(3).saturating_sub(1);
+    Some(IndexedLines {
+        starts,
+        longest_line_bytes,
+        longest_completed_line_bytes: longest_line_bytes,
+        longest_line_columns,
+        longest_completed_line_columns: longest_line_columns,
+    })
 }
 
 fn integrity_blocks_match(bytes: &[u8], expected: &[[u8; 32]]) -> bool {
@@ -2463,15 +2820,21 @@ fn display_columns(bytes: &[u8], first_line: bool) -> usize {
 #[cfg(test)]
 mod source_snapshot_tests {
     use std::{
-        fs,
+        fs::{self, File},
         path::PathBuf,
         sync::atomic::{AtomicUsize, Ordering},
         time::SystemTime,
     };
 
+    use encoding_rs::SHIFT_JIS;
+
     use crate::CancellationToken;
 
-    use super::{DocumentBytes, FileEncoding, LogDocument, build_line_index_while};
+    use super::{
+        APPEND_INTEGRITY_BLOCK_BYTES, DocumentBytes, FileEncoding, LogDocument,
+        build_file_index_with_integrity_while, build_line_index, build_line_index_while,
+        calculate_integrity_blocks, read_file_identity,
+    };
 
     fn test_directory(label: &str) -> PathBuf {
         let nonce = SystemTime::now()
@@ -2484,6 +2847,79 @@ mod source_snapshot_tests {
         ));
         fs::create_dir_all(&directory).expect("应能创建文档快照测试目录");
         directory
+    }
+
+    fn assert_streaming_index_matches_slice(
+        directory: &std::path::Path,
+        name: &str,
+        bytes: &[u8],
+        encoding: FileEncoding,
+    ) {
+        let path = directory.join(name);
+        fs::write(&path, bytes).expect("应能写入流式索引测试日志");
+        let file = File::open(&path).expect("应能打开流式索引测试日志");
+        let metadata = file.metadata().expect("应能读取流式索引测试元数据");
+        let expected = build_line_index(bytes, encoding);
+
+        let (actual, integrity_blocks) = build_file_index_with_integrity_while(
+            &file,
+            metadata.len(),
+            metadata.modified().ok(),
+            read_file_identity(&file),
+            encoding,
+            &path,
+            &|| false,
+        )
+        .expect("流式索引不应失败")
+        .expect("流式索引不应取消");
+
+        assert_eq!(
+            actual.starts.into_immutable().iter().collect::<Vec<_>>(),
+            expected.starts.into_immutable().iter().collect::<Vec<_>>()
+        );
+        assert_eq!(actual.longest_line_bytes, expected.longest_line_bytes);
+        assert_eq!(
+            actual.longest_completed_line_bytes,
+            expected.longest_completed_line_bytes
+        );
+        assert_eq!(actual.longest_line_columns, expected.longest_line_columns);
+        assert_eq!(
+            actual.longest_completed_line_columns,
+            expected.longest_completed_line_columns
+        );
+        assert_eq!(integrity_blocks.as_ref(), calculate_integrity_blocks(bytes));
+    }
+
+    #[test]
+    fn streaming_index_matches_slice_across_integrity_block_boundaries() {
+        let directory = test_directory("streaming-index-boundaries");
+
+        let mut utf8 = vec![b'a'; APPEND_INTEGRITY_BLOCK_BYTES - 1];
+        utf8.extend_from_slice(b"\r\ntail\rstandalone\n");
+        assert_streaming_index_matches_slice(&directory, "utf8.log", &utf8, FileEncoding::Utf8);
+
+        let mut utf16 = Vec::with_capacity(APPEND_INTEGRITY_BLOCK_BYTES + 16);
+        for _ in 0..(APPEND_INTEGRITY_BLOCK_BYTES / 2 - 1) {
+            utf16.extend_from_slice(&[b'a', 0]);
+        }
+        utf16.extend_from_slice(&[b'\r', 0, b'\n', 0, b'b', 0, b'\n', 0]);
+        assert_streaming_index_matches_slice(
+            &directory,
+            "utf16.log",
+            &utf16,
+            FileEncoding::Utf16Le,
+        );
+
+        let mut shift_jis = vec![b'a'; APPEND_INTEGRITY_BLOCK_BYTES - 1];
+        shift_jis.extend_from_slice(&[0x82, 0xa0, b'\n']);
+        assert_streaming_index_matches_slice(
+            &directory,
+            "shift-jis.log",
+            &shift_jis,
+            FileEncoding::Legacy(SHIFT_JIS),
+        );
+
+        _ = fs::remove_dir_all(directory);
     }
 
     #[test]
