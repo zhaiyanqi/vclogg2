@@ -94,6 +94,10 @@ pub(crate) struct StagedVisibleLineLoadRequest<K> {
 }
 
 impl<K> StagedVisibleLineLoadRequest<K> {
+    pub(crate) fn keys(&self) -> &[K] {
+        &self.keys
+    }
+
     pub(crate) fn load(
         self,
         mut load: impl FnMut(&K, usize) -> Option<LinePreview>,
@@ -193,6 +197,10 @@ impl<K> Drop for VisibleLineStore<K> {
 }
 
 impl<K: Clone + Ord> VisibleLineStore<K> {
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision.get()
+    }
+
     fn visible_window(
         &self,
         visible_range: Range<usize>,
@@ -359,6 +367,7 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
         let mut keys = Vec::new();
         let mut source_limits = Vec::new();
         let mut retained_limits = Vec::new();
+        let lines = self.lines.borrow();
         for (key_ix, key) in priority_keys.iter().enumerate() {
             if reserved_bytes >= byte_budget {
                 break;
@@ -374,12 +383,18 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
             if retained_limit < MIN_TRUNCATED_PREVIEW_RETAINED_BYTES {
                 break;
             }
+            if let Some(line) = lines.get(key)
+                && line.retained_bytes <= retained_limit
+            {
+                reserved_bytes = reserved_bytes.saturating_add(line.retained_bytes);
+                continue;
+            }
             keys.push(key.clone());
             source_limits.push(self.max_line_source_bytes.get().min(retained_limit));
             retained_limits.push(retained_limit);
             reserved_bytes = reserved_bytes.saturating_add(retained_limit);
         }
-        (!keys.is_empty()).then_some(StagedVisibleLineLoadRequest {
+        Some(StagedVisibleLineLoadRequest {
             window,
             priority_keys,
             keys,
@@ -501,6 +516,20 @@ mod tests {
             Some(LinePreview::new(format!("line {source_row}"), false))
         });
         assert_eq!(*loaded.borrow(), vec![10, 11, 12, 9, 13, 14]);
+    }
+
+    #[test]
+    fn staging_a_window_without_source_rows_still_produces_an_atomic_frame() {
+        let cache = VisibleLineStore::<usize>::default();
+        let staged = cache
+            .stage_visible_rows(0..2, 2, |_| None)
+            .expect("a group-only window still needs a staged ownership handoff")
+            .load(|_, _| panic!("group rows do not read source lines"));
+
+        cache.install_staged(staged);
+
+        assert_eq!(cache.window.get(), Some((0, 2, 0, 2)));
+        assert!(cache.prepared_keys.borrow().is_empty());
     }
 
     #[test]
@@ -736,6 +765,29 @@ mod tests {
         assert!(cache.line(0).is_none());
         assert_eq!(cache.line(10).unwrap().source().as_ref(), "line 10");
         assert_eq!(cache.line(11).unwrap().source().as_ref(), "line 11");
+    }
+
+    #[test]
+    fn staged_window_reuses_overlapping_cached_lines() {
+        let cache = VisibleLineStore::<usize>::default();
+        cache.set_overscan(0);
+        cache.prepare_visible_rows(0..2, 20, Some, |source_row, _| {
+            Some(LinePreview::new(format!("line {source_row}"), false))
+        });
+        let loaded = RefCell::new(Vec::new());
+
+        let staged = cache
+            .stage_visible_rows(1..3, 20, Some)
+            .expect("the shifted window needs a staged ownership handoff")
+            .load(|source_row, _| {
+                loaded.borrow_mut().push(*source_row);
+                Some(LinePreview::new(format!("line {source_row}"), false))
+            });
+
+        assert_eq!(*loaded.borrow(), vec![2]);
+        cache.install_staged(staged);
+        assert_eq!(cache.line(1).unwrap().source().as_ref(), "line 1");
+        assert_eq!(cache.line(2).unwrap().source().as_ref(), "line 2");
     }
 
     #[test]

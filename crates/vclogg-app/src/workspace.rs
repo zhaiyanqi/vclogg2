@@ -82,8 +82,8 @@ use crate::{
     },
     global_search_files_dialog::{GlobalSearchFileOption, GlobalSearchFilesDialog},
     global_search_table::{
-        GlobalSearchGroup, GlobalSearchGroupHeader, GlobalSearchRow, GlobalSearchTableDelegate,
-        WrappedGlobalRow,
+        GlobalGroupTogglePlan, GlobalSearchGroup, GlobalSearchGroupHeader, GlobalSearchRow,
+        GlobalSearchTableDelegate, WrappedGlobalRow,
     },
     history_dialog::{HistoryDialog, HistoryDialogEvent},
     log_table::{
@@ -125,7 +125,7 @@ use crate::{
     },
     tab_resume::{PersistedLogRegion, TabResumeState, ViewportBookmark},
     ui_theme,
-    virtual_log_lines::LogRowKey,
+    virtual_log_lines::{LogRowKey, StagedVisibleLineLoadResult},
     workspace_state::{
         CloudController, GlobalSearchDocumentResult, GlobalSearchResults, GlobalSearchState,
         PersistenceController, QuickFindBoundary, QuickFindDirection, QuickFindMatch,
@@ -641,6 +641,23 @@ struct DocumentTab {
     pending_resume: Option<TabResumeState>,
 }
 
+struct PreparedTabFrame {
+    document_id: u64,
+    document: Arc<LogDocument>,
+    log_revision: u64,
+    result_revision: u64,
+    log_lines: Option<StagedVisibleLineLoadResult<usize>>,
+    result_lines: Option<StagedVisibleLineLoadResult<usize>>,
+}
+
+struct PreparedGlobalGroupToggle {
+    plan: GlobalGroupTogglePlan,
+    staged: Option<StagedVisibleLineLoadResult<(u64, usize)>>,
+    anchor: Option<RowViewportAnchor<LogRowKey>>,
+    measured_heights: BTreeMap<LogRowKey, Pixels>,
+    row_height: Pixels,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum WrappedRegion {
     Log,
@@ -658,7 +675,7 @@ struct WrappedListState<K> {
     scroll_handle: SparseVirtualListScrollHandle,
     text_selections: RefCell<TextSelectionCache<K>>,
     measurement_anchor: Rc<Cell<Option<RowViewportPosition>>>,
-    scrollbar_measurement_pending: Rc<Cell<bool>>,
+    pending_scrollbar_offset: Rc<Cell<Option<Point<Pixels>>>>,
     layout_key: RefCell<Option<WrappedLayoutKey>>,
     row_bounds: Rc<RefCell<BTreeMap<usize, Bounds<Pixels>>>>,
 }
@@ -669,9 +686,16 @@ enum LogViewportMode {
     Wrapped,
 }
 
+#[derive(Clone, Copy)]
+struct WrappedFramePrimeOptions {
+    minimum_viewport_height: Pixels,
+    reset_for_mode_switch: bool,
+}
+
 #[derive(Clone)]
 struct FixedListState {
     scroll_handle: UniformListScrollHandle,
+    pending_scrollbar_offset: Rc<Cell<Option<Point<Pixels>>>>,
     row_bounds: Rc<RefCell<BTreeMap<usize, Bounds<Pixels>>>>,
 }
 
@@ -695,6 +719,7 @@ impl<K: Clone + Ord> LogViewportState<K> {
             }),
             fixed: FixedListState {
                 scroll_handle,
+                pending_scrollbar_offset: Rc::default(),
                 row_bounds,
             },
             wrapped: WrappedListState::default(),
@@ -706,6 +731,8 @@ impl<K: Clone + Ord> LogViewportState<K> {
     }
 
     fn set_word_wrap(&self, enabled: bool) {
+        self.fixed.pending_scrollbar_offset.set(None);
+        self.wrapped.pending_scrollbar_offset.set(None);
         self.mode.set(if enabled {
             LogViewportMode::Wrapped
         } else {
@@ -952,6 +979,44 @@ impl<K: Clone + Ord> LogViewportState<K> {
         self.wrapped.logical_scroll_handle(item_count, slot_height)
     }
 
+    fn atomic_fixed_scroll_handle(&self) -> AtomicUniformScrollHandle {
+        AtomicUniformScrollHandle {
+            handle: self.fixed.scroll_handle.clone(),
+            pending_offset: self.fixed.pending_scrollbar_offset.clone(),
+        }
+    }
+
+    fn take_pending_scrollbar_offset(&self) -> Option<Point<Pixels>> {
+        if self.is_wrapped() {
+            self.wrapped.pending_scrollbar_offset.take()
+        } else {
+            self.fixed.pending_scrollbar_offset.take()
+        }
+    }
+
+    fn committed_scroll_offset(&self) -> Point<Pixels> {
+        if self.is_wrapped() {
+            self.wrapped.scroll_handle.offset()
+        } else {
+            self.fixed.scroll_handle.0.borrow().base_handle.offset()
+        }
+    }
+
+    fn commit_scrollbar_offset(
+        &self,
+        offset: Point<Pixels>,
+        item_count: usize,
+        slot_height: Pixels,
+    ) {
+        if self.is_wrapped() {
+            self.wrapped
+                .apply_logical_scrollbar_offset(offset, item_count, slot_height);
+        } else {
+            let base = self.fixed.scroll_handle.0.borrow().base_handle.clone();
+            base.set_offset(point(base.offset().x, offset.y));
+        }
+    }
+
     fn queue_wrapped_measured_height(
         &self,
         row_ix: usize,
@@ -1035,10 +1100,6 @@ impl<K: Clone + Ord> LogViewportState<K> {
 
     fn wrapped_first_visible_row(&self) -> usize {
         self.wrapped.first_visible_row()
-    }
-
-    fn take_wrapped_scrollbar_measurement_request(&self) -> bool {
-        self.wrapped.take_scrollbar_measurement_request()
     }
 }
 
@@ -1138,8 +1199,7 @@ struct LogicalVirtualScrollHandle {
     handle: SparseVirtualListScrollHandle,
     measured_heights: Rc<RefCell<BTreeMap<usize, Pixels>>>,
     height_corrections: Rc<RefCell<Vec<(usize, Pixels)>>>,
-    measurement_anchor: Rc<Cell<Option<RowViewportPosition>>>,
-    scrollbar_measurement_pending: Rc<Cell<bool>>,
+    pending_offset: Rc<Cell<Option<Point<Pixels>>>>,
     item_count: usize,
     slot_height: Pixels,
 }
@@ -1176,32 +1236,7 @@ impl ScrollbarHandle for LogicalVirtualScrollHandle {
     }
 
     fn set_offset(&self, offset: Point<Pixels>) {
-        self.measurement_anchor.set(None);
-        self.scrollbar_measurement_pending.set(true);
-        let viewport_height = self.handle.bounds().size.height;
-        let logical_height = self.slot_height * self.item_count as f32;
-        let logical_max = (logical_height - viewport_height).max(px(0.));
-        let requested_top = (-offset.y).clamp(px(0.), logical_max);
-        let actual_top = if requested_top >= logical_max - px(0.5) {
-            self.handle.max_offset().y.max(px(0.))
-        } else {
-            let row = (requested_top / self.slot_height).floor().max(0.) as usize;
-            let row = row.min(self.item_count.saturating_sub(1));
-            let logical_row_top = self.slot_height * row as f32;
-            let fraction = ((requested_top - logical_row_top) / self.slot_height).clamp(0., 1.);
-            let corrections = self.height_corrections.borrow();
-            let actual_row_top = prefix_height_for(self.slot_height, &corrections, row);
-            let actual_row_height = self
-                .measured_heights
-                .borrow()
-                .get(&row)
-                .copied()
-                .unwrap_or(self.slot_height)
-                .max(self.slot_height);
-            actual_row_top + actual_row_height * fraction
-        };
-        self.handle
-            .set_offset(point(self.handle.offset().x, -actual_top));
+        self.pending_offset.set(Some(offset));
     }
 
     fn content_size(&self) -> Size<Pixels> {
@@ -1209,6 +1244,32 @@ impl ScrollbarHandle for LogicalVirtualScrollHandle {
             self.handle.bounds().size.width,
             self.slot_height * self.item_count as f32,
         )
+    }
+}
+
+#[derive(Clone)]
+struct AtomicUniformScrollHandle {
+    handle: UniformListScrollHandle,
+    pending_offset: Rc<Cell<Option<Point<Pixels>>>>,
+}
+
+impl ScrollbarHandle for AtomicUniformScrollHandle {
+    fn viewport_bounds(&self) -> Bounds<Pixels> {
+        self.handle.0.borrow().base_handle.bounds()
+    }
+
+    fn offset(&self) -> Point<Pixels> {
+        self.handle.0.borrow().base_handle.offset()
+    }
+
+    fn set_offset(&self, offset: Point<Pixels>) {
+        self.pending_offset.set(Some(offset));
+    }
+
+    fn content_size(&self) -> Size<Pixels> {
+        let state = self.handle.0.borrow();
+        let base = &state.base_handle;
+        (base.max_offset() + base.bounds().size.into()).into()
     }
 }
 
@@ -1302,6 +1363,28 @@ fn wrapped_viewport_measurement_range(
             .min(count)
 }
 
+fn scrollbar_preload_range(
+    offset: Point<Pixels>,
+    row_count: usize,
+    viewport_height: Pixels,
+    row_height: Pixels,
+) -> Range<usize> {
+    if row_count == 0 {
+        return 0..0;
+    }
+    let row_height = row_height.max(px(1.));
+    let max_top = (row_height * row_count as f32 - viewport_height).max(px(0.));
+    let top = (-offset.y).clamp(px(0.), max_top);
+    let first = (top / row_height).floor().max(0.) as usize;
+    let first = first.min(row_count.saturating_sub(1));
+    let visible_count = (viewport_height / row_height).ceil().max(1.) as usize;
+    first.saturating_sub(2)
+        ..first
+            .saturating_add(visible_count)
+            .saturating_add(2)
+            .min(row_count)
+}
+
 #[cfg(test)]
 mod scroll_position_tests {
     use super::*;
@@ -1373,6 +1456,50 @@ mod scroll_position_tests {
         assert_eq!(centered_log_jump_preload_range(2, 100, 10), 0..30);
         assert_eq!(centered_log_jump_preload_range(98, 100, 10), 70..100);
         assert_eq!(centered_log_jump_preload_range(0, 0, 10), 0..0);
+    }
+
+    #[test]
+    fn scrollbar_preload_range_clamps_to_the_target_viewport() {
+        assert_eq!(
+            scrollbar_preload_range(point(px(0.), px(-400.)), 100, px(200.), px(20.)),
+            18..32
+        );
+        assert_eq!(
+            scrollbar_preload_range(point(px(0.), px(-10_000.)), 100, px(200.), px(20.)),
+            88..100
+        );
+        assert_eq!(
+            scrollbar_preload_range(point(px(0.), px(-400.)), 0, px(200.), px(20.)),
+            0..0
+        );
+    }
+
+    #[test]
+    fn atomic_scrollbar_handle_keeps_the_committed_list_position_until_install() {
+        let handle = UniformListScrollHandle::new();
+        let pending_offset = Rc::new(Cell::new(None));
+        let atomic = AtomicUniformScrollHandle {
+            handle: handle.clone(),
+            pending_offset: pending_offset.clone(),
+        };
+        let requested = point(px(0.), px(-420.));
+
+        atomic.set_offset(requested);
+
+        assert_eq!(handle.0.borrow().base_handle.offset(), Point::default());
+        assert_eq!(pending_offset.get(), Some(requested));
+    }
+
+    #[test]
+    fn wrapped_scrollbar_keeps_the_committed_list_position_until_install() {
+        let state = WrappedListState::<usize>::default();
+        let logical = state.logical_scroll_handle(100, px(20.));
+        let requested = point(px(0.), px(-420.));
+
+        logical.set_offset(requested);
+
+        assert_eq!(state.scroll_handle.offset(), Point::default());
+        assert_eq!(state.pending_scrollbar_offset.get(), Some(requested));
     }
 
     #[test]
@@ -1809,7 +1936,7 @@ impl<K> Default for WrappedListState<K> {
             scroll_handle: SparseVirtualListScrollHandle::new(),
             text_selections: RefCell::default(),
             measurement_anchor: Rc::new(Cell::new(None)),
-            scrollbar_measurement_pending: Rc::new(Cell::new(false)),
+            pending_scrollbar_offset: Rc::default(),
             layout_key: RefCell::new(None),
             row_bounds: Rc::default(),
         }
@@ -1826,8 +1953,7 @@ impl<K: Clone + Ord> WrappedListState<K> {
             handle: self.scroll_handle.clone(),
             measured_heights: self.measured_heights.clone(),
             height_corrections: self.height_corrections.clone(),
-            measurement_anchor: self.measurement_anchor.clone(),
-            scrollbar_measurement_pending: self.scrollbar_measurement_pending.clone(),
+            pending_offset: self.pending_scrollbar_offset.clone(),
             item_count,
             slot_height,
         }
@@ -1990,7 +2116,7 @@ impl<K: Clone + Ord> WrappedListState<K> {
         self.height_corrections.borrow_mut().clear();
         self.text_selections.borrow_mut().clear();
         self.row_bounds.borrow_mut().clear();
-        self.scrollbar_measurement_pending.set(false);
+        self.pending_scrollbar_offset.set(None);
     }
 
     fn invalidate_for_layout(&self, key: WrappedLayoutKey) -> bool {
@@ -2006,7 +2132,7 @@ impl<K: Clone + Ord> WrappedListState<K> {
         self.height_corrections.borrow_mut().clear();
         self.text_selections.borrow_mut().clear();
         self.row_bounds.borrow_mut().clear();
-        self.scrollbar_measurement_pending.set(false);
+        self.pending_scrollbar_offset.set(None);
         true
     }
 
@@ -2078,11 +2204,40 @@ impl<K: Clone + Ord> WrappedListState<K> {
     fn reset_scroll_for_mode_switch(&mut self) {
         self.scroll_handle = SparseVirtualListScrollHandle::new();
         self.clear_measurement_anchor();
-        self.scrollbar_measurement_pending.set(false);
+        self.pending_scrollbar_offset.set(None);
     }
 
-    fn take_scrollbar_measurement_request(&self) -> bool {
-        self.scrollbar_measurement_pending.replace(false)
+    fn apply_logical_scrollbar_offset(
+        &self,
+        offset: Point<Pixels>,
+        item_count: usize,
+        slot_height: Pixels,
+    ) {
+        self.measurement_anchor.set(None);
+        let viewport_height = self.scroll_handle.bounds().size.height;
+        let logical_height = slot_height * item_count as f32;
+        let logical_max = (logical_height - viewport_height).max(px(0.));
+        let requested_top = (-offset.y).clamp(px(0.), logical_max);
+        let actual_top = if requested_top >= logical_max - px(0.5) {
+            self.scroll_handle.max_offset().y.max(px(0.))
+        } else {
+            let row = (requested_top / slot_height).floor().max(0.) as usize;
+            let row = row.min(item_count.saturating_sub(1));
+            let logical_row_top = slot_height * row as f32;
+            let fraction = ((requested_top - logical_row_top) / slot_height).clamp(0., 1.);
+            let corrections = self.height_corrections.borrow();
+            let actual_row_top = prefix_height_for(slot_height, &corrections, row);
+            let actual_row_height = self
+                .measured_heights
+                .borrow()
+                .get(&row)
+                .copied()
+                .unwrap_or(slot_height)
+                .max(slot_height);
+            actual_row_top + actual_row_height * fraction
+        };
+        self.scroll_handle
+            .set_offset(point(self.scroll_handle.offset().x, -actual_top));
     }
 
     fn clear_measurement_anchor(&self) {
@@ -2696,6 +2851,12 @@ pub struct Workspace {
     row_drag_selection: Option<RowDragSelection>,
     row_drag_frame_scheduled: bool,
     visible_line_tasks: BTreeMap<(u64, WrappedRegion), Task<()>>,
+    scrollbar_frame_tasks: BTreeMap<(u64, WrappedRegion), Task<()>>,
+    scrollbar_frame_revisions: BTreeMap<(u64, WrappedRegion), u64>,
+    global_group_toggle_task: Option<Task<()>>,
+    global_group_toggle_revision: u64,
+    tab_activation_task: Option<Task<()>>,
+    tab_activation_revision: u64,
     open_task: Option<Task<()>>,
     pending_external_paths: Vec<PathBuf>,
     searches: SearchController,
@@ -3440,36 +3601,21 @@ impl Workspace {
                     this.global_search.restoring_selection = false;
                     return;
                 }
+                let mut save_search_state_immediately = true;
                 match row {
                     GlobalSearchRow::Group { document_id } => {
                         if table.read(cx).delegate().group_has_results(document_id) {
-                            table.update(cx, |table, cx| {
-                                table.delegate_mut().toggle_group(document_id);
-                                table.delegate().clear_row_selection();
-                                table.clear_selection(cx);
-                                if word_wrap {
-                                    table.delegate_mut().reset_visible_line_owner();
-                                    table.refresh(cx);
-                                    cx.notify();
-                                } else {
-                                    table.reacquire_visible_log_rows(cx);
-                                }
-                            });
-                            if let Some((anchor, measured_heights)) = wrapped_group_state {
-                                let base_height = this.log_row_height();
-                                this.prime_global_wrapped_group_toggle(
-                                    anchor,
-                                    measured_heights,
-                                    base_height,
-                                    window,
-                                    cx,
-                                );
-                            }
-                            Self::refresh_log_surfaces_atomically(
-                                [this.global_surface.clone()],
+                            let (anchor, measured_heights) =
+                                wrapped_group_state.unwrap_or_else(|| (None, BTreeMap::new()));
+                            this.prepare_global_group_toggle(
+                                document_id,
+                                anchor,
+                                measured_heights,
+                                this.log_row_height(),
                                 window,
                                 cx,
                             );
+                            save_search_state_immediately = false;
                         } else {
                             this.activate_global_group(document_id, window, cx);
                         }
@@ -3483,7 +3629,9 @@ impl Workspace {
                     this.global_results_focus_handle.focus(window, cx);
                 }
                 this.active_log_region = LogRegion::GlobalResults;
-                this.schedule_workspace_search_state_save(window, cx);
+                if save_search_state_immediately {
+                    this.schedule_workspace_search_state_save(window, cx);
+                }
                 cx.notify();
             },
         ));
@@ -3782,6 +3930,12 @@ impl Workspace {
             row_drag_selection: None,
             row_drag_frame_scheduled: false,
             visible_line_tasks: BTreeMap::new(),
+            scrollbar_frame_tasks: BTreeMap::new(),
+            scrollbar_frame_revisions: BTreeMap::new(),
+            global_group_toggle_task: None,
+            global_group_toggle_revision: 0,
+            tab_activation_task: None,
+            tab_activation_revision: 0,
             open_task: None,
             pending_external_paths: Vec::new(),
             searches: SearchController::default(),
@@ -7492,9 +7646,75 @@ impl Workspace {
         }));
     }
 
-    fn activate_workspace_tab(
+    fn cancel_pending_tab_activation(&mut self) {
+        self.tab_activation_revision = self.tab_activation_revision.saturating_add(1);
+        self.tab_activation_task = None;
+    }
+
+    fn tab_frame_visible_range(
+        &self,
+        tab_ix: usize,
+        region: WrappedRegion,
+        window: &Window,
+        cx: &App,
+    ) -> Range<usize> {
+        let tab = &self.documents[tab_ix];
+        let (table, viewport) = if region == WrappedRegion::Results {
+            (&tab.result_table, &tab.result_viewport)
+        } else {
+            (&tab.log_table, &tab.log_viewport)
+        };
+        let row_count = table.read(cx).delegate().row_count();
+        if row_count == 0 {
+            return 0..0;
+        }
+
+        let bounds = self
+            .row_drag_bounds
+            .get(&(tab.id, region))
+            .or_else(|| {
+                (region == WrappedRegion::Results)
+                    .then(|| self.row_drag_bounds.get(&(tab.id, WrappedRegion::Log)))
+                    .flatten()
+            })
+            .copied();
+        let row_height = self.log_row_height();
+        if viewport.is_wrapped() {
+            let viewport_height = viewport
+                .wrapped_viewport_height()
+                .max(bounds.map_or(px(0.), |bounds| bounds.size.height))
+                .max(window.viewport_size().height);
+            return wrapped_viewport_measurement_range(
+                viewport.wrapped_first_visible_row(),
+                viewport_height,
+                row_height,
+                row_count,
+            );
+        }
+
+        let visible_range = table.read(cx).visible_range().rows().clone();
+        let first_visible = viewport.first_visible(row_count, row_height);
+        let viewport_height = bounds
+            .map_or(px(0.), |bounds| bounds.size.height)
+            .max(window.viewport_size().height);
+        let visible_count = (viewport_height / row_height.max(px(1.))).ceil().max(1.) as usize;
+        let visible_start = visible_range.start.min(row_count);
+        let visible_end = visible_range.end.min(row_count);
+        let preload_end = first_visible.saturating_add(visible_count).min(row_count);
+        if visible_start < visible_end
+            && visible_start <= preload_end
+            && first_visible <= visible_end
+        {
+            visible_start.min(first_visible)..visible_end.max(preload_end)
+        } else {
+            first_visible..preload_end
+        }
+    }
+
+    fn commit_workspace_tab_activation(
         &mut self,
         tab_id: WorkspaceTabId,
+        prepared_frame: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -7516,16 +7736,145 @@ impl Workspace {
         self.pending_document_tab_reveal.set(None);
         self.sync_active_document(window, cx);
         if active_tab_changed {
-            self.refresh_active_document_surfaces_atomically(window, cx);
+            if prepared_frame {
+                self.refresh_prepared_active_document_surfaces_atomically(window, cx);
+            } else {
+                self.refresh_active_document_surfaces_atomically(window, cx);
+            }
         }
         cx.notify();
+    }
+
+    fn activate_workspace_tab(
+        &mut self,
+        tab_id: WorkspaceTabId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.tabs.contains(&tab_id) {
+            return;
+        }
+        self.cancel_pending_tab_activation();
+        if self.active_tab_id == tab_id || tab_id.document_id().is_none() {
+            self.commit_workspace_tab_activation(tab_id, false, window, cx);
+            return;
+        }
+
+        let Some(tab_ix) = tab_id
+            .document_id()
+            .and_then(|document_id| self.documents.iter().position(|tab| tab.id == document_id))
+        else {
+            return;
+        };
+        let log_range = self.tab_frame_visible_range(tab_ix, WrappedRegion::Log, window, cx);
+        let result_range = self.tab_frame_visible_range(tab_ix, WrappedRegion::Results, window, cx);
+        let tab = &self.documents[tab_ix];
+        let document_id = tab.id;
+        let document = tab.document.clone();
+        let log_table = tab.log_table.clone();
+        let result_table = tab.result_table.clone();
+        let (log_revision, log_request) = {
+            let table = log_table.read(cx);
+            (
+                table.delegate().visible_line_revision(),
+                table.delegate().stage_visible_rows(log_range),
+            )
+        };
+        let (result_revision, result_request) = {
+            let table = result_table.read(cx);
+            (
+                table.delegate().visible_line_revision(),
+                table.delegate().stage_visible_rows(result_range),
+            )
+        };
+        if log_request.is_none() && result_request.is_none() {
+            self.commit_workspace_tab_activation(tab_id, false, window, cx);
+            return;
+        }
+
+        let source_tab_id = self.active_tab_id;
+        let activation_revision = self.tab_activation_revision;
+        self.tab_activation_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let prepared = cx
+                .background_spawn(async move {
+                    let mut reader = LinePreviewReader::default();
+                    let log_lines = log_request.map(|request| {
+                        request.load(|source_row, max_bytes| {
+                            reader.line_preview(&document, *source_row, max_bytes)
+                        })
+                    });
+                    let result_lines = result_request.map(|request| {
+                        request.load(|source_row, max_bytes| {
+                            reader.line_preview(&document, *source_row, max_bytes)
+                        })
+                    });
+                    PreparedTabFrame {
+                        document_id,
+                        document,
+                        log_revision,
+                        result_revision,
+                        log_lines,
+                        result_lines,
+                    }
+                })
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                if this.tab_activation_revision != activation_revision {
+                    return;
+                }
+                this.tab_activation_task = None;
+                if this.active_tab_id != source_tab_id {
+                    return;
+                }
+                let Some(tab_ix) = this
+                    .documents
+                    .iter()
+                    .position(|tab| tab.id == prepared.document_id)
+                else {
+                    return;
+                };
+                let frame_is_current = {
+                    let tab = &this.documents[tab_ix];
+                    Arc::ptr_eq(&tab.document, &prepared.document)
+                        && tab.log_table.read(cx).delegate().visible_line_revision()
+                            == prepared.log_revision
+                        && tab.result_table.read(cx).delegate().visible_line_revision()
+                            == prepared.result_revision
+                };
+                if !frame_is_current {
+                    this.activate_workspace_tab(tab_id, window, cx);
+                    return;
+                }
+
+                if let Some(lines) = prepared.log_lines {
+                    let table = this.documents[tab_ix].log_table.clone();
+                    table.update(cx, |table, cx| {
+                        table.delegate().install_staged_visible_lines(lines);
+                        table.refresh(cx);
+                        cx.notify();
+                    });
+                }
+                if let Some(lines) = prepared.result_lines {
+                    let table = this.documents[tab_ix].result_table.clone();
+                    table.update(cx, |table, cx| {
+                        table.delegate().install_staged_visible_lines(lines);
+                        table.refresh(cx);
+                        cx.notify();
+                    });
+                }
+                this.tab_activation_revision = this.tab_activation_revision.saturating_add(1);
+                this.commit_workspace_tab_activation(tab_id, true, window, cx);
+            });
+        }));
     }
 
     fn activate_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         if ix >= self.documents.len() {
             return;
         }
-        self.activate_workspace_tab(WorkspaceTabId::Document(self.documents[ix].id), window, cx);
+        let tab_id = WorkspaceTabId::Document(self.documents[ix].id);
+        self.cancel_pending_tab_activation();
+        self.commit_workspace_tab_activation(tab_id, false, window, cx);
     }
 
     fn reveal_pending_document_tab(&self) {
@@ -7728,6 +8077,7 @@ impl Workspace {
         if ids.is_empty() {
             return;
         }
+        self.cancel_pending_tab_activation();
         let previous_active_id = self.active_tab_id;
         let previous_active_ix = self.active_workspace_tab_ix().unwrap_or_default();
         let document_ids = ids
@@ -12271,6 +12621,268 @@ impl Workspace {
         }
     }
 
+    fn next_scrollbar_frame_revision(&mut self, key: (u64, WrappedRegion)) -> u64 {
+        self.scrollbar_frame_tasks.remove(&key);
+        let revision = self
+            .scrollbar_frame_revisions
+            .get(&key)
+            .copied()
+            .unwrap_or_default()
+            .saturating_add(1);
+        self.scrollbar_frame_revisions.insert(key, revision);
+        revision
+    }
+
+    fn prepare_local_scrollbar_frame(
+        &mut self,
+        document_id: u64,
+        region: WrappedRegion,
+        offset: Point<Pixels>,
+        row_height: Pixels,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab_ix) = self.documents.iter().position(|tab| tab.id == document_id) else {
+            return;
+        };
+        let table = if region == WrappedRegion::Results {
+            self.documents[tab_ix].result_table.clone()
+        } else {
+            self.documents[tab_ix].log_table.clone()
+        };
+        let (wrapped, viewport_height, start_offset_y) = {
+            let viewport = if region == WrappedRegion::Results {
+                &self.documents[tab_ix].result_viewport
+            } else {
+                &self.documents[tab_ix].log_viewport
+            };
+            let wrapped = viewport.is_wrapped();
+            let viewport_height = if wrapped {
+                viewport.wrapped_viewport_height()
+            } else {
+                viewport
+                    .fixed
+                    .scroll_handle
+                    .0
+                    .borrow()
+                    .base_handle
+                    .bounds()
+                    .size
+                    .height
+            };
+            (
+                wrapped,
+                viewport_height,
+                viewport.committed_scroll_offset().y,
+            )
+        };
+        let (row_count, content_revision, visible_line_revision, document, request) = {
+            let table = table.read(cx);
+            let delegate = table.delegate();
+            let row_count = delegate.row_count();
+            let range = scrollbar_preload_range(offset, row_count, viewport_height, row_height);
+            (
+                row_count,
+                delegate.content_revision(),
+                delegate.visible_line_revision(),
+                delegate.visible_document(),
+                delegate.stage_visible_rows(range),
+            )
+        };
+        let key = (document_id, region);
+        let revision = self.next_scrollbar_frame_revision(key);
+        let Some(request) = request else {
+            let viewport = if region == WrappedRegion::Results {
+                &self.documents[tab_ix].result_viewport
+            } else {
+                &self.documents[tab_ix].log_viewport
+            };
+            viewport.commit_scrollbar_offset(offset, row_count, row_height);
+            if wrapped {
+                self.prime_local_wrapped_frame(tab_ix, region, row_height, false, window, cx);
+            }
+            return;
+        };
+
+        let expected_document = document.clone();
+        let task = cx.spawn_in(window, async move |this, cx| {
+            let staged = cx
+                .background_spawn(async move {
+                    let mut reader = LinePreviewReader::default();
+                    request.load(|source_row, max_bytes| {
+                        reader.line_preview(&document, *source_row, max_bytes)
+                    })
+                })
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                if this.scrollbar_frame_revisions.get(&key).copied() != Some(revision) {
+                    return;
+                }
+                let Some(tab_ix) = this.documents.iter().position(|tab| tab.id == document_id)
+                else {
+                    return;
+                };
+                let (current_table, current_viewport) = if region == WrappedRegion::Results {
+                    (
+                        this.documents[tab_ix].result_table.clone(),
+                        &this.documents[tab_ix].result_viewport,
+                    )
+                } else {
+                    (
+                        this.documents[tab_ix].log_table.clone(),
+                        &this.documents[tab_ix].log_viewport,
+                    )
+                };
+                if current_table.entity_id() != table.entity_id()
+                    || current_viewport.is_wrapped() != wrapped
+                    || (current_viewport.committed_scroll_offset().y - start_offset_y).abs()
+                        >= px(0.5)
+                {
+                    return;
+                }
+                let valid = {
+                    let table = current_table.read(cx);
+                    let delegate = table.delegate();
+                    delegate.row_count() == row_count
+                        && delegate.content_revision() == content_revision
+                        && delegate.visible_line_revision() == visible_line_revision
+                        && Arc::ptr_eq(&delegate.visible_document(), &expected_document)
+                };
+                if !valid {
+                    return;
+                }
+                current_table.update(cx, |table, cx| {
+                    table.delegate().install_staged_visible_lines(staged);
+                    table.refresh(cx);
+                    cx.notify();
+                });
+                current_viewport.commit_scrollbar_offset(offset, row_count, row_height);
+                if wrapped {
+                    this.prime_local_wrapped_frame(tab_ix, region, row_height, false, window, cx);
+                }
+                let surface = if region == WrappedRegion::Results {
+                    this.documents[tab_ix].result_surface.clone()
+                } else {
+                    this.documents[tab_ix].log_surface.clone()
+                };
+                Self::refresh_log_surfaces_atomically([surface], window, cx);
+            });
+        });
+        self.scrollbar_frame_tasks.insert(key, task);
+    }
+
+    fn prepare_global_scrollbar_frame(
+        &mut self,
+        offset: Point<Pixels>,
+        row_height: Pixels,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.global_group_toggle_task.take();
+        self.global_group_toggle_revision = self.global_group_toggle_revision.saturating_add(1);
+        let wrapped = self.global_viewport.is_wrapped();
+        let viewport_height = if wrapped {
+            self.global_viewport.wrapped_viewport_height()
+        } else {
+            self.global_viewport
+                .fixed
+                .scroll_handle
+                .0
+                .borrow()
+                .base_handle
+                .bounds()
+                .size
+                .height
+        };
+        let start_offset_y = self.global_viewport.committed_scroll_offset().y;
+        let table = self.global_table.clone();
+        let (
+            row_count,
+            content_revision,
+            layout_revision,
+            visible_line_revision,
+            request,
+            documents,
+        ) = {
+            let table = table.read(cx);
+            let delegate = table.delegate();
+            let row_count = delegate.rows_len();
+            let range = scrollbar_preload_range(offset, row_count, viewport_height, row_height);
+            let request = delegate.stage_visible_rows(range);
+            let documents = request
+                .as_ref()
+                .map(|request| delegate.staged_visible_documents(request))
+                .unwrap_or_default();
+            (
+                row_count,
+                delegate.content_revision(),
+                delegate.layout_revision(),
+                delegate.visible_line_revision(),
+                request,
+                documents,
+            )
+        };
+        let key = (0, WrappedRegion::GlobalResults);
+        let revision = self.next_scrollbar_frame_revision(key);
+        let Some(request) = request else {
+            self.global_viewport
+                .commit_scrollbar_offset(offset, row_count, row_height);
+            if wrapped {
+                self.prime_global_wrapped_frame(row_height, false, window, cx);
+            }
+            return;
+        };
+
+        let task = cx.spawn_in(window, async move |this, cx| {
+            let staged = cx
+                .background_spawn(async move {
+                    let mut readers = BTreeMap::<u64, LinePreviewReader>::new();
+                    request.load(|(document_id, source_row), max_bytes| {
+                        let document = documents.get(document_id)?;
+                        readers.entry(*document_id).or_default().line_preview(
+                            document,
+                            *source_row,
+                            max_bytes,
+                        )
+                    })
+                })
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                if this.scrollbar_frame_revisions.get(&key).copied() != Some(revision)
+                    || this.global_table.entity_id() != table.entity_id()
+                    || this.global_viewport.is_wrapped() != wrapped
+                    || (this.global_viewport.committed_scroll_offset().y - start_offset_y).abs()
+                        >= px(0.5)
+                {
+                    return;
+                }
+                let valid = {
+                    let table = table.read(cx);
+                    let delegate = table.delegate();
+                    delegate.rows_len() == row_count
+                        && delegate.content_revision() == content_revision
+                        && delegate.layout_revision() == layout_revision
+                        && delegate.visible_line_revision() == visible_line_revision
+                };
+                if !valid {
+                    return;
+                }
+                table.update(cx, |table, cx| {
+                    table.delegate().install_staged_visible_lines(staged);
+                    table.refresh(cx);
+                    cx.notify();
+                });
+                this.global_viewport
+                    .commit_scrollbar_offset(offset, row_count, row_height);
+                if wrapped {
+                    this.prime_global_wrapped_frame(row_height, false, window, cx);
+                }
+                Self::refresh_log_surfaces_atomically([this.global_surface.clone()], window, cx);
+            });
+        });
+        self.scrollbar_frame_tasks.insert(key, task);
+    }
+
     fn schedule_local_visible_lines(
         &mut self,
         document_id: u64,
@@ -12397,6 +13009,7 @@ impl Workspace {
         mode: LogViewportMode,
         cx: &mut Context<Self>,
     ) {
+        self.next_scrollbar_frame_revision((document_id, region));
         self.visible_line_tasks.remove(&(document_id, region));
         if region == WrappedRegion::GlobalResults {
             self.global_table.update(cx, |table, cx| {
@@ -12477,6 +13090,48 @@ impl Workspace {
         Self::refresh_log_surfaces_atomically(surfaces, window, cx);
     }
 
+    fn refresh_prepared_active_document_surfaces_atomically(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab_ix) = self.active_ix else {
+            return;
+        };
+        let row_height = self.log_row_height();
+        let (log_wrapped, result_wrapped, surfaces) = {
+            let tab = &self.documents[tab_ix];
+            (
+                tab.log_viewport.is_wrapped(),
+                tab.result_viewport.is_wrapped(),
+                [tab.log_surface.clone(), tab.result_surface.clone()],
+            )
+        };
+
+        // The staged windows already own complete first-frame data. Do not run the ordinary
+        // owner handoff here: a fixed table with no previous layout would otherwise replace the
+        // staged range with its old empty visible range before the new tab is painted.
+        for (region, wrapped) in [
+            (WrappedRegion::Log, log_wrapped),
+            (WrappedRegion::Results, result_wrapped),
+        ] {
+            if wrapped {
+                self.prime_local_wrapped_frame_with_minimum_height(
+                    tab_ix,
+                    region,
+                    row_height,
+                    WrappedFramePrimeOptions {
+                        minimum_viewport_height: window.viewport_size().height,
+                        reset_for_mode_switch: false,
+                    },
+                    window,
+                    cx,
+                );
+            }
+        }
+        Self::refresh_log_surfaces_atomically(surfaces, window, cx);
+    }
+
     fn refresh_global_result_surface_atomically(
         &mut self,
         window: &mut Window,
@@ -12494,10 +13149,170 @@ impl Workspace {
         Self::refresh_log_surfaces_atomically([self.global_surface.clone()], window, cx);
     }
 
+    fn commit_global_group_toggle(
+        &mut self,
+        prepared: PreparedGlobalGroupToggle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let applied = self.global_table.update(cx, |table, cx| {
+            if !table
+                .delegate_mut()
+                .apply_group_toggle(prepared.plan, prepared.staged)
+            {
+                return false;
+            }
+            table.delegate().clear_row_selection();
+            table.clear_selection(cx);
+            table.refresh(cx);
+            cx.notify();
+            true
+        });
+        if !applied {
+            return false;
+        }
+        if self.global_viewport.is_wrapped() {
+            self.prime_global_wrapped_group_toggle(
+                prepared.anchor,
+                prepared.measured_heights,
+                prepared.row_height,
+                window,
+                cx,
+            );
+        }
+        Self::refresh_log_surfaces_atomically([self.global_surface.clone()], window, cx);
+        self.schedule_workspace_search_state_save(window, cx);
+        cx.notify();
+        true
+    }
+
+    fn prepare_global_group_toggle(
+        &mut self,
+        document_id: u64,
+        anchor: Option<RowViewportAnchor<LogRowKey>>,
+        measured_heights: BTreeMap<LogRowKey, Pixels>,
+        row_height: Pixels,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let scrollbar_key = (0, WrappedRegion::GlobalResults);
+        self.global_viewport.take_pending_scrollbar_offset();
+        self.next_scrollbar_frame_revision(scrollbar_key);
+        let table = self.global_table.clone();
+        let (plan, request, documents) = {
+            let table = table.read(cx);
+            let delegate = table.delegate();
+            let Some(plan) = delegate.plan_group_toggle(document_id) else {
+                return;
+            };
+            let row_count = delegate.group_toggle_rows_len(&plan);
+            let visible_range = if self.global_viewport.is_wrapped() {
+                let viewport_height = self.global_viewport.wrapped_viewport_height();
+                let visible_count =
+                    (viewport_height / row_height.max(px(1.))).ceil().max(1.) as usize;
+                let anchor_ix = anchor
+                    .as_ref()
+                    .and_then(|anchor| delegate.group_toggle_row_ix_for_key(&plan, anchor.key))
+                    .unwrap_or_else(|| {
+                        anchor
+                            .as_ref()
+                            .map_or(0, |anchor| anchor.fallback_ix)
+                            .min(row_count.saturating_sub(1))
+                    });
+                anchor_ix.saturating_sub(visible_count.saturating_add(2))
+                    ..anchor_ix
+                        .saturating_add(visible_count)
+                        .saturating_add(2)
+                        .min(row_count)
+            } else {
+                scrollbar_preload_range(
+                    self.global_viewport.committed_scroll_offset(),
+                    row_count,
+                    self.global_viewport
+                        .fixed
+                        .scroll_handle
+                        .0
+                        .borrow()
+                        .base_handle
+                        .bounds()
+                        .size
+                        .height,
+                    row_height,
+                )
+            };
+            let request = delegate.stage_group_toggle_visible_rows(&plan, visible_range);
+            let documents = request
+                .as_ref()
+                .map(|request| delegate.staged_visible_documents(request))
+                .unwrap_or_default();
+            (plan, request, documents)
+        };
+
+        self.global_group_toggle_task.take();
+        self.global_group_toggle_revision = self.global_group_toggle_revision.saturating_add(1);
+        let revision = self.global_group_toggle_revision;
+        let Some(request) = request else {
+            self.commit_global_group_toggle(
+                PreparedGlobalGroupToggle {
+                    plan,
+                    staged: None,
+                    anchor,
+                    measured_heights,
+                    row_height,
+                },
+                window,
+                cx,
+            );
+            return;
+        };
+
+        self.global_group_toggle_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let staged = cx
+                .background_spawn(async move {
+                    let mut readers = BTreeMap::<u64, LinePreviewReader>::new();
+                    request.load(|(document_id, source_row), max_bytes| {
+                        let document = documents.get(document_id)?;
+                        readers.entry(*document_id).or_default().line_preview(
+                            document,
+                            *source_row,
+                            max_bytes,
+                        )
+                    })
+                })
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                if this.global_group_toggle_revision != revision
+                    || this.global_table.entity_id() != table.entity_id()
+                {
+                    return;
+                }
+                this.commit_global_group_toggle(
+                    PreparedGlobalGroupToggle {
+                        plan,
+                        staged: Some(staged),
+                        anchor,
+                        measured_heights,
+                        row_height,
+                    },
+                    window,
+                    cx,
+                );
+            });
+        }));
+    }
+
     fn clear_document_visible_lines(&mut self, document_id: u64, cx: &mut Context<Self>) {
         self.visible_line_tasks
             .remove(&(document_id, WrappedRegion::Log));
         self.visible_line_tasks
+            .remove(&(document_id, WrappedRegion::Results));
+        self.scrollbar_frame_tasks
+            .remove(&(document_id, WrappedRegion::Log));
+        self.scrollbar_frame_tasks
+            .remove(&(document_id, WrappedRegion::Results));
+        self.scrollbar_frame_revisions
+            .remove(&(document_id, WrappedRegion::Log));
+        self.scrollbar_frame_revisions
             .remove(&(document_id, WrappedRegion::Results));
         let Some(tab) = self.documents.iter().find(|tab| tab.id == document_id) else {
             return;
@@ -12560,6 +13375,28 @@ impl Workspace {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
+        self.prime_local_wrapped_frame_with_minimum_height(
+            tab_ix,
+            region,
+            base_height,
+            WrappedFramePrimeOptions {
+                minimum_viewport_height: px(0.),
+                reset_for_mode_switch,
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn prime_local_wrapped_frame_with_minimum_height(
+        &mut self,
+        tab_ix: usize,
+        region: WrappedRegion,
+        base_height: Pixels,
+        options: WrappedFramePrimeOptions,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         let document_id = self.documents[tab_ix].id;
         let table = if region == WrappedRegion::Results {
             self.documents[tab_ix].result_table.clone()
@@ -12575,20 +13412,19 @@ impl Workspace {
                     .flatten()
             })
             .copied();
-        let wrapped_range = (!reset_for_mode_switch).then(|| {
+        let wrapped_range = (!options.reset_for_mode_switch).then(|| {
             let wrapped = if region == WrappedRegion::Results {
                 &self.documents[tab_ix].result_viewport
             } else {
                 &self.documents[tab_ix].log_viewport
             };
-            let viewport_height = wrapped.wrapped_viewport_height();
+            let viewport_height = wrapped
+                .wrapped_viewport_height()
+                .max(bounds.map_or(px(0.), |bounds| bounds.size.height))
+                .max(options.minimum_viewport_height);
             wrapped_viewport_measurement_range(
                 wrapped.wrapped_first_visible_row(),
-                if viewport_height > px(0.) {
-                    viewport_height
-                } else {
-                    bounds.map_or(base_height, |bounds| bounds.size.height)
-                },
+                viewport_height,
                 base_height,
                 table.read(cx).delegate().row_count(),
             )
@@ -12650,7 +13486,7 @@ impl Workspace {
         } else {
             &mut self.documents[tab_ix].log_viewport
         };
-        if reset_for_mode_switch {
+        if options.reset_for_mode_switch {
             wrapped.reset_wrapped_scroll_for_mode_switch();
         }
         wrapped.invalidate_wrapped_layout_preserving_position(
@@ -17967,6 +18803,7 @@ impl Workspace {
 
     fn render_headerless_data_table<D>(
         table: &Entity<TableState<D>>,
+        vertical_scroll_handle: AtomicUniformScrollHandle,
         row_height: Pixels,
         cx: &mut Context<Self>,
     ) -> AnyElement
@@ -17975,14 +18812,13 @@ impl Workspace {
     {
         let _performance_scope =
             crate::ui_performance::scope("Workspace::render_headerless_data_table");
-        let (vertical_scroll_handle, horizontal_scroll_handle, horizontal_content_width) = {
+        let (horizontal_scroll_handle, horizontal_content_width) = {
             let table = table.read(cx);
             let delegate = table.delegate();
             let horizontal_content_width = (0..delegate.columns_count(cx))
                 .map(|col_ix| delegate.column(col_ix, cx).width)
                 .fold(px(0.), |width, column_width| width + column_width);
             (
-                table.vertical_scroll_handle.clone(),
                 table.horizontal_scroll_handle.clone(),
                 horizontal_content_width,
             )
@@ -18081,20 +18917,34 @@ impl Workspace {
             crate::ui_performance::scope("Workspace::render_log_region_surface");
         let row_height = self.log_row_height();
         if region == WrappedRegion::GlobalResults {
+            if let Some(offset) = self.global_viewport.take_pending_scrollbar_offset() {
+                self.prepare_global_scrollbar_frame(offset, row_height, window, cx);
+            }
             if self.global_viewport.is_wrapped() {
-                if self
-                    .global_viewport
-                    .take_wrapped_scrollbar_measurement_request()
-                {
-                    self.prime_global_wrapped_frame(row_height, false, window, cx);
-                }
                 return self.render_wrapped_global_table(surface, cx.weak_entity(), cx);
             }
-            return Self::render_headerless_data_table(&self.global_table, row_height, cx);
+            return Self::render_headerless_data_table(
+                &self.global_table,
+                self.global_viewport.atomic_fixed_scroll_handle(),
+                row_height,
+                cx,
+            );
         }
         let Some(tab_ix) = self.documents.iter().position(|tab| tab.id == document_id) else {
             return div().into_any_element();
         };
+        let pending_offset = if region == WrappedRegion::Results {
+            self.documents[tab_ix]
+                .result_viewport
+                .take_pending_scrollbar_offset()
+        } else {
+            self.documents[tab_ix]
+                .log_viewport
+                .take_pending_scrollbar_offset()
+        };
+        if let Some(offset) = pending_offset {
+            self.prepare_local_scrollbar_frame(document_id, region, offset, row_height, window, cx);
+        }
         let tab = &self.documents[tab_ix];
         let table = if region == WrappedRegion::Results {
             &tab.result_table
@@ -18107,19 +18957,14 @@ impl Workspace {
             &tab.log_viewport
         };
         if viewport.is_wrapped() {
-            let measurement_pending = if region == WrappedRegion::Results {
-                tab.result_viewport
-                    .take_wrapped_scrollbar_measurement_request()
-            } else {
-                tab.log_viewport
-                    .take_wrapped_scrollbar_measurement_request()
-            };
-            if measurement_pending {
-                self.prime_local_wrapped_frame(tab_ix, region, row_height, false, window, cx);
-            }
             self.render_wrapped_log_table(document_id, region, surface, cx.weak_entity(), cx)
         } else {
-            Self::render_headerless_data_table(table, row_height, cx)
+            Self::render_headerless_data_table(
+                table,
+                viewport.atomic_fixed_scroll_handle(),
+                row_height,
+                cx,
+            )
         }
     }
 

@@ -33,7 +33,8 @@ use crate::selectable_log_text::{LogText, SelectableLogText, TextSelectionCache}
 use crate::state_store::{AppSettings, DEFAULT_WORD_BOUNDARY_CHARACTERS, LogFontFamily};
 use crate::ui_theme;
 use crate::virtual_log_lines::{
-    LogRowKey, VisibleLineLoadRequest, VisibleLineLoadResult, VisibleLineStore,
+    LogRowKey, StagedVisibleLineLoadRequest, StagedVisibleLineLoadResult, VisibleLineLoadRequest,
+    VisibleLineLoadResult, VisibleLineStore,
 };
 
 #[derive(Clone)]
@@ -103,6 +104,16 @@ struct GlobalSearchProjectionState {
     results_count: usize,
     has_truncated_results: bool,
     max_line_columns: usize,
+}
+
+pub(crate) struct GlobalGroupTogglePlan {
+    document_id: u64,
+    expected_content_revision: u64,
+    expected_layout_revision: u64,
+    collapsed_documents: BTreeSet<u64>,
+    group_starts: Vec<usize>,
+    expanded_result_groups: Vec<usize>,
+    rows_len: usize,
 }
 
 struct GlobalRowPresenter {
@@ -937,6 +948,7 @@ impl GlobalSearchTableDelegate {
         );
     }
 
+    #[cfg(test)]
     pub fn toggle_group(&mut self, document_id: u64) {
         let Some(group_ix) = self.projection.group_by_document.get(&document_id).copied() else {
             return;
@@ -954,6 +966,120 @@ impl GlobalSearchTableDelegate {
             stable_interaction.1,
             stable_interaction.2,
         );
+    }
+
+    pub(crate) fn plan_group_toggle(&self, document_id: u64) -> Option<GlobalGroupTogglePlan> {
+        let group_ix = self
+            .projection
+            .group_by_document
+            .get(&document_id)
+            .copied()?;
+        if self.projection.groups[group_ix].projection.rows.is_empty() {
+            return None;
+        }
+        let mut collapsed_documents = self.interaction.collapsed_documents.clone();
+        if !collapsed_documents.remove(&document_id) {
+            collapsed_documents.insert(document_id);
+        }
+        let (group_starts, expanded_result_groups, rows_len) =
+            Self::layout_for_collapsed_documents(&self.projection.groups, &collapsed_documents);
+        Some(GlobalGroupTogglePlan {
+            document_id,
+            expected_content_revision: self.projection.content_revision,
+            expected_layout_revision: self.projection.layout_revision,
+            collapsed_documents,
+            group_starts,
+            expanded_result_groups,
+            rows_len,
+        })
+    }
+
+    pub(crate) fn group_toggle_rows_len(&self, plan: &GlobalGroupTogglePlan) -> usize {
+        plan.rows_len
+    }
+
+    pub(crate) fn group_toggle_row_ix_for_key(
+        &self,
+        plan: &GlobalGroupTogglePlan,
+        key: LogRowKey,
+    ) -> Option<usize> {
+        let document_id = match key {
+            LogRowKey::FileGroup { document_id } | LogRowKey::Row { document_id, .. } => {
+                document_id
+            }
+        };
+        let group_ix = *self.projection.group_by_document.get(&document_id)?;
+        match key {
+            LogRowKey::FileGroup { .. } => plan.group_starts.get(group_ix).copied(),
+            LogRowKey::Row { source_row, .. }
+                if !plan.collapsed_documents.contains(&document_id) =>
+            {
+                self.projection.groups[group_ix]
+                    .projection
+                    .rows
+                    .position(source_row)
+                    .and_then(|position| {
+                        plan.group_starts
+                            .get(group_ix)
+                            .copied()
+                            .and_then(|start| start.checked_add(position.saturating_add(1)))
+                    })
+            }
+            LogRowKey::Row { .. } => None,
+        }
+    }
+
+    pub(crate) fn stage_group_toggle_visible_rows(
+        &self,
+        plan: &GlobalGroupTogglePlan,
+        visible_range: Range<usize>,
+    ) -> Option<StagedVisibleLineLoadRequest<(u64, usize)>> {
+        self.visible_lines
+            .stage_visible_rows(visible_range, plan.rows_len, |row_ix| {
+                match self.flat_row_for_group_toggle(plan, row_ix) {
+                    Some(FlatRow::Match {
+                        group_ix,
+                        source_row,
+                    }) => self
+                        .projection
+                        .groups
+                        .get(group_ix)
+                        .map(|group| (group.source.document_id, source_row)),
+                    _ => None,
+                }
+            })
+    }
+
+    pub(crate) fn apply_group_toggle(
+        &mut self,
+        plan: GlobalGroupTogglePlan,
+        staged: Option<StagedVisibleLineLoadResult<(u64, usize)>>,
+    ) -> bool {
+        if self.projection.content_revision != plan.expected_content_revision
+            || self.projection.layout_revision != plan.expected_layout_revision
+            || !self
+                .projection
+                .group_by_document
+                .contains_key(&plan.document_id)
+        {
+            return false;
+        }
+        let stable_interaction = self.stable_interaction_rows();
+        if let Some(staged) = staged {
+            self.visible_lines.install_staged(staged);
+        }
+        self.interaction.collapsed_documents = plan.collapsed_documents;
+        self.projection.group_starts = plan.group_starts;
+        self.projection.expanded_result_groups = plan.expanded_result_groups;
+        self.projection.rows_len = plan.rows_len;
+        self.projection.layout_revision = self.projection.layout_revision.saturating_add(1);
+        self.interaction.row_bounds.borrow_mut().clear();
+        self.restore_stable_interaction_rows(
+            stable_interaction.0,
+            stable_interaction.1,
+            stable_interaction.2,
+        );
+        true
     }
 
     pub fn group_has_results(&self, document_id: u64) -> bool {
@@ -1083,9 +1209,44 @@ impl GlobalSearchTableDelegate {
             })
     }
 
+    pub(crate) fn stage_visible_rows(
+        &self,
+        visible_range: Range<usize>,
+    ) -> Option<StagedVisibleLineLoadRequest<(u64, usize)>> {
+        self.visible_lines
+            .stage_visible_rows(visible_range, self.projection.rows_len, |row_ix| match self
+                .flat_row(row_ix)
+            {
+                Some(FlatRow::Match {
+                    group_ix,
+                    source_row,
+                }) => self
+                    .projection
+                    .groups
+                    .get(group_ix)
+                    .map(|group| (group.source.document_id, source_row)),
+                _ => None,
+            })
+    }
+
     pub(crate) fn visible_documents(
         &self,
         request: &VisibleLineLoadRequest<(u64, usize)>,
+    ) -> BTreeMap<u64, Arc<LogDocument>> {
+        request
+            .keys()
+            .iter()
+            .filter_map(|(document_id, _)| {
+                let group_ix = self.projection.group_by_document.get(document_id)?;
+                let group = self.projection.groups.get(*group_ix)?;
+                Some((*document_id, group.source.document.clone()))
+            })
+            .collect()
+    }
+
+    pub(crate) fn staged_visible_documents(
+        &self,
+        request: &StagedVisibleLineLoadRequest<(u64, usize)>,
     ) -> BTreeMap<u64, Arc<LogDocument>> {
         request
             .keys()
@@ -1103,6 +1264,17 @@ impl GlobalSearchTableDelegate {
         loaded: VisibleLineLoadResult<(u64, usize)>,
     ) -> bool {
         self.visible_lines.install_loaded(loaded)
+    }
+
+    pub(crate) fn install_staged_visible_lines(
+        &self,
+        loaded: StagedVisibleLineLoadResult<(u64, usize)>,
+    ) {
+        self.visible_lines.install_staged(loaded);
+    }
+
+    pub(crate) fn visible_line_revision(&self) -> u64 {
+        self.visible_lines.revision()
     }
 
     pub(crate) fn reset_visible_line_owner(&mut self) {
@@ -1436,26 +1608,63 @@ impl GlobalSearchTableDelegate {
                 .is_some_and(|rows| rows.contains(*source_row))
         });
         self.projection.layout_revision = self.projection.layout_revision.saturating_add(1);
-        self.projection.group_starts.clear();
-        self.projection.expanded_result_groups.clear();
-        self.projection.rows_len = 0;
-        for (group_ix, group) in self.projection.groups.iter().enumerate() {
-            self.projection.group_starts.push(self.projection.rows_len);
-            self.projection.rows_len = self.projection.rows_len.saturating_add(1);
-            if !self
-                .interaction
-                .collapsed_documents
-                .contains(&group.source.document_id)
-            {
+        let (group_starts, expanded_result_groups, rows_len) = Self::layout_for_collapsed_documents(
+            &self.projection.groups,
+            &self.interaction.collapsed_documents,
+        );
+        self.projection.group_starts = group_starts;
+        self.projection.expanded_result_groups = expanded_result_groups;
+        self.projection.rows_len = rows_len;
+    }
+
+    fn layout_for_collapsed_documents(
+        groups: &[GlobalSearchGroup],
+        collapsed_documents: &BTreeSet<u64>,
+    ) -> (Vec<usize>, Vec<usize>, usize) {
+        let mut group_starts = Vec::with_capacity(groups.len());
+        let mut expanded_result_groups = Vec::new();
+        let mut rows_len = 0usize;
+        for (group_ix, group) in groups.iter().enumerate() {
+            group_starts.push(rows_len);
+            rows_len = rows_len.saturating_add(1);
+            if !collapsed_documents.contains(&group.source.document_id) {
                 if !group.projection.rows.is_empty() {
-                    self.projection.expanded_result_groups.push(group_ix);
+                    expanded_result_groups.push(group_ix);
                 }
-                self.projection.rows_len = self
-                    .projection
-                    .rows_len
-                    .saturating_add(group.projection.rows.len());
+                rows_len = rows_len.saturating_add(group.projection.rows.len());
             }
         }
+        (group_starts, expanded_result_groups, rows_len)
+    }
+
+    fn flat_row_for_group_toggle(
+        &self,
+        plan: &GlobalGroupTogglePlan,
+        row_ix: usize,
+    ) -> Option<FlatRow> {
+        if row_ix >= plan.rows_len {
+            return None;
+        }
+        let group_ix = plan
+            .group_starts
+            .partition_point(|start| *start <= row_ix)
+            .saturating_sub(1);
+        let group_start = *plan.group_starts.get(group_ix)?;
+        if row_ix == group_start {
+            return Some(FlatRow::Group { group_ix });
+        }
+        let group = self.projection.groups.get(group_ix)?;
+        if plan.collapsed_documents.contains(&group.source.document_id) {
+            return None;
+        }
+        let source_row = group
+            .projection
+            .rows
+            .get(row_ix.saturating_sub(group_start + 1))?;
+        Some(FlatRow::Match {
+            group_ix,
+            source_row,
+        })
     }
 
     fn flat_row(&self, row_ix: usize) -> Option<FlatRow> {
@@ -1883,14 +2092,14 @@ mod tests {
     };
 
     use gpui::Bounds;
-    use vclogg_core::{CompressedRows, LogDocument};
+    use vclogg_core::{CompressedRows, LinePreview, LogDocument};
 
     use crate::log_table::LogTableCursor;
 
     use super::{
         GlobalSearchGroup, GlobalSearchGroupIcon, GlobalSearchGroupPresentation,
         GlobalSearchGroupProjection, GlobalSearchGroupSource, GlobalSearchRow,
-        GlobalSearchTableDelegate, LogRowKey, format_group_result_count,
+        GlobalSearchTableDelegate, LogRowKey, WrappedGlobalRow, format_group_result_count,
         global_search_group_header_presentation, global_search_group_title,
     };
 
@@ -2061,6 +2270,35 @@ mod tests {
         assert!(delegate.selected_matches().is_empty());
         assert_eq!(delegate.active_log_row(), None);
         assert_eq!(delegate.selected_rows_count(), 0);
+    }
+
+    #[test]
+    fn expanding_a_group_keeps_the_old_projection_until_the_staged_frame_is_ready() {
+        let mut group = test_group(Arc::new(LogDocument::placeholder("atomic-expand.log")));
+        group.source.document_id = 11;
+        group.projection.rows = [2].into_iter().collect();
+        let mut delegate = GlobalSearchTableDelegate::new();
+        delegate.set_groups(vec![group]);
+        delegate.toggle_group(11);
+        assert_eq!(delegate.rows_len(), 1);
+
+        let plan = delegate.plan_group_toggle(11).expect("group can expand");
+        let request = delegate
+            .stage_group_toggle_visible_rows(&plan, 0..2)
+            .expect("expanded rows are staged before projection replacement");
+
+        assert_eq!(delegate.rows_len(), 1);
+        assert!(delegate.collapsed_document_ids().contains(&11));
+
+        let staged = request.load(|_, _| Some(LinePreview::new("prepared row", false)));
+        assert!(delegate.apply_group_toggle(plan, Some(staged)));
+
+        assert_eq!(delegate.rows_len(), 2);
+        assert!(!delegate.collapsed_document_ids().contains(&11));
+        assert!(matches!(
+            delegate.wrapped_row(1),
+            Some(WrappedGlobalRow::Match { text, .. }) if text.display().as_ref() == "prepared row"
+        ));
     }
 
     #[test]

@@ -1178,6 +1178,10 @@ impl LogTableDelegate {
         self.source.document.clone()
     }
 
+    pub(crate) fn visible_line_revision(&self) -> u64 {
+        self.source.visible_lines.revision()
+    }
+
     pub(crate) fn install_visible_lines(&self, loaded: VisibleLineLoadResult<usize>) -> bool {
         self.source.visible_lines.install_loaded(loaded)
     }
@@ -1889,6 +1893,20 @@ mod tests {
 
         assert!(delegate.request_visible_rows(0..1).is_some());
         assert!(!delegate.install_visible_lines(stale));
+    }
+
+    #[test]
+    fn staged_tab_frame_revision_detects_projection_changes() {
+        let document = Arc::new(LogDocument::placeholder("staged-tab-frame.log"));
+        let mut delegate = LogTableDelegate::projected(1, document, [3, 7].into_iter().collect());
+        let frame_revision = delegate.visible_line_revision();
+        let _staged = delegate
+            .stage_visible_rows(0..2)
+            .expect("非空标签帧应产生预加载请求");
+
+        delegate.set_row_projection([7, 9].into_iter().collect());
+
+        assert_ne!(delegate.visible_line_revision(), frame_revision);
     }
 
     #[test]
