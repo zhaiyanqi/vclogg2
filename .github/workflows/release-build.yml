@@ -23,7 +23,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 90
     env:
-      WINDOWS_SIGNING_PROVIDER: ${{ vars.WINDOWS_SIGNING_PROVIDER }}
+      WINDOWS_SIGNING_PROVIDER: ${{ vars.WINDOWS_SIGNING_PROVIDER || 'unsigned' }}
     permissions:
       contents: read
       id-token: write
@@ -46,9 +46,16 @@ jobs:
       - name: Validate Windows signing provider
         shell: powershell
         run: |
-          if ($env:WINDOWS_SIGNING_PROVIDER -notin @('pfx', 'artifact-signing')) {
-            throw 'Signed Windows releases require WINDOWS_SIGNING_PROVIDER=pfx or artifact-signing.'
+          if ($env:WINDOWS_SIGNING_PROVIDER -notin @('unsigned', 'pfx', 'artifact-signing')) {
+            throw 'WINDOWS_SIGNING_PROVIDER must be unsigned, pfx, or artifact-signing.'
           }
+
+      - name: Build unsigned Windows release package
+        if: env.WINDOWS_SIGNING_PROVIDER == 'unsigned'
+        shell: powershell
+        run: >-
+          powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
+          -SigningMode None
 
       - name: Build Windows release executable
         if: env.WINDOWS_SIGNING_PROVIDER == 'artifact-signing'
@@ -128,6 +135,7 @@ jobs:
           }
 
       - name: Verify signature in packaged Windows release
+        if: env.WINDOWS_SIGNING_PROVIDER != 'unsigned'
         shell: powershell
         run: |
           $archives = @(Get-ChildItem -LiteralPath 'dist\windows-x86_64' -Filter 'vclogg2-*-windows-x86_64.zip')
@@ -274,8 +282,13 @@ jobs:
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
+          windows_packages=(release-assets/windows-x86_64/vclogg2-*-windows-x86_64.zip)
+          if (( ${#windows_packages[@]} != 1 )) || [[ ! -s "${windows_packages[0]}" ]]; then
+            echo "Expected exactly one non-empty Windows release package." >&2
+            exit 1
+          fi
           packages=(
-            "release-assets/windows-x86_64/vclogg2-${version}-windows-x86_64.zip"
+            "${windows_packages[0]}"
             "release-assets/macos-aarch64/vclogg2-${version}-macos-aarch64.zip"
             "release-assets/linux-x86_64/vclogg2-${version}-linux-x86_64.tar.gz"
           )

@@ -23,7 +23,7 @@ macOS/Linux 可先构建再启动 Debug 二进制：
 
 ### Windows x86_64
 
-Windows 打包只允许 `Pfx` 或 `PreSigned` 模式。PFX 模式从 `VCLOGG2_WINDOWS_SIGNING_CERTIFICATE_PATH`、`VCLOGG2_WINDOWS_SIGNING_CERTIFICATE_PASSWORD` 和 `VCLOGG2_WINDOWS_TIMESTAMP_URL` 读取配置并完成构建、签名和打包；外部硬件、HSM 或云签名服务先签署 `target\release\vclogg2.exe`，再使用 `package-release.ps1 -SigningMode PreSigned -SkipBuild` 验证和打包。证书、可信签名或 RFC 3161 时间戳缺失时禁止生成发行 ZIP。
+Windows 打包默认使用 `None` 模式生成 `vclogg2-<version>-unsigned-windows-x86_64.zip`。PFX 模式从 `VCLOGG2_WINDOWS_SIGNING_CERTIFICATE_PATH`、`VCLOGG2_WINDOWS_SIGNING_CERTIFICATE_PASSWORD` 和 `VCLOGG2_WINDOWS_TIMESTAMP_URL` 读取配置并完成构建、签名和打包；外部硬件、HSM 或云签名服务先签署 `target\release\vclogg2.exe`，再使用 `package-release.ps1 -SigningMode PreSigned -SkipBuild` 验证和打包。启用签名时，证书、可信签名或 RFC 3161 时间戳缺失会阻止生成发行 ZIP。
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
@@ -32,7 +32,8 @@ powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 输出位于 `dist/windows-x86_64/`：
 
 - `vclogg2-<version>-windows-x86_64/`：便携目录，仅包含程序、README 和许可证；
-- `vclogg2-<version>-windows-x86_64.zip`：用户分发包；
+- `vclogg2-<version>-windows-x86_64.zip`：已签名用户分发包；
+- `vclogg2-<version>-unsigned-windows-x86_64.zip`：未签名用户分发包；
 - `vclogg2-<version>-windows-x86_64-symbols.zip`：开发侧崩溃分析 PDB；
 
 解压后直接启动：
@@ -108,13 +109,13 @@ git tag -a "v${VERSION}" -m "VCLogg2 v${VERSION}"
 
 脚本只接受干净且与 `origin/main` 完全一致的 `main`，校验已存在且指向当前提交的标签，运行 `scripts/check.sh` 后推送标签。GitHub Action 收到标签后负责三平台构建与 Release 创建；`--yes` 可跳过交互确认，`--remote <名称>` 可替换默认 `origin`。普通推送 `main` 只触发 CI；手动运行 release workflow 只保留 Artifacts，不创建 GitHub Release。
 
-GitHub 仓库写权限构成发布信任边界。Windows 必须选择 Microsoft Artifact Signing 或 PFX 后端：前者通过 GitHub OIDC 使用 HSM 托管私钥，后者从加密 Secrets 临时还原适用的可导出证书。两种后端都必须通过 Authenticode 信任链与 RFC 3161 时间戳验证，上传前还会解压最终 ZIP 再验证一次；PFX 临时文件会在成功或失败后删除。macOS 正式公开分发仍应增加 Developer ID 签名和公证。
+GitHub 仓库写权限构成发布信任边界。Windows 未配置签名时生成带 `unsigned` 标识的发行包；Microsoft Artifact Signing 与 PFX 后端中，前者通过 GitHub OIDC 使用 HSM 托管私钥，后者从加密 Secrets 临时还原适用的可导出证书。启用任一后端时必须通过 Authenticode 信任链与 RFC 3161 时间戳验证，上传前还会解压最终 ZIP 再验证一次；PFX 临时文件会在成功或失败后删除。macOS 正式公开分发仍应增加 Developer ID 签名和公证。
 
 ## GitHub Actions
 
 `.github/workflows/release-build.yml` 包含三个独立 job：
 
-- Windows Server 2022 x64：必须配置 `WINDOWS_SIGNING_PROVIDER=artifact-signing`，通过 Azure OIDC 与 Artifact Signing 完成 HSM 签名和 Microsoft RFC 3161 时间戳；或配置为 `pfx`，从 `WINDOWS_SIGNING_CERTIFICATE_BASE64` 与 `WINDOWS_SIGNING_CERTIFICATE_PASSWORD` Secrets 临时还原证书，并使用可选 `WINDOWS_TIMESTAMP_URL`；
+- Windows Server 2022 x64：默认 `unsigned` 模式不读取签名 Secrets，并在包名加入 `unsigned`；配置 `WINDOWS_SIGNING_PROVIDER=artifact-signing` 时通过 Azure OIDC 与 Artifact Signing 完成 HSM 签名和 Microsoft RFC 3161 时间戳；配置为 `pfx` 时从 `WINDOWS_SIGNING_CERTIFICATE_BASE64` 与 `WINDOWS_SIGNING_CERTIFICATE_PASSWORD` Secrets 临时还原证书，并使用可选 `WINDOWS_TIMESTAMP_URL`；
 - macOS 15 ARM64：`check.sh` + `package-release-macos.sh`；
 - Ubuntu 22.04 x86_64：安装 GPUI 原生依赖后执行 `check.sh` + `package-release-linux.sh`。
 
