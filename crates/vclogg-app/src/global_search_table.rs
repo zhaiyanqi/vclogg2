@@ -771,9 +771,12 @@ impl GlobalSearchTableDelegate {
         active_row: Option<LogRowKey>,
         selection_anchor: Option<LogRowKey>,
     ) {
-        let selected_indices = selected_rows
+        let mut selected_indices = selected_rows
             .into_iter()
-            .filter_map(|key| self.row_ix_for_key(key));
+            .filter_map(|key| self.row_ix_for_key(key))
+            .collect::<Vec<_>>();
+        selected_indices.sort_unstable();
+        selected_indices.dedup();
         let anchor = selection_anchor.and_then(|key| self.row_ix_for_key(key));
         self.interaction
             .row_selection
@@ -1792,6 +1795,30 @@ mod tests {
                 source_row: 0,
             }),
             Some(3)
+        );
+    }
+
+    #[test]
+    fn reordered_groups_restore_selection_in_visual_order() {
+        let mut first = test_group(Arc::new(LogDocument::placeholder("first.log")));
+        first.source.document_id = 11;
+        let mut second = test_group(Arc::new(LogDocument::placeholder("second.log")));
+        second.source.document_id = 22;
+        let mut delegate = GlobalSearchTableDelegate::new();
+
+        delegate.set_groups(vec![first.clone(), second.clone()]);
+        delegate.select_all_rows();
+        delegate.set_groups(vec![second, first]);
+
+        assert_eq!(delegate.selected_matches(), vec![(22, 0), (11, 0)]);
+        assert_eq!(
+            delegate
+                .interaction
+                .row_selection
+                .borrow()
+                .selected_ranges()
+                .collect::<Vec<_>>(),
+            vec![(0, 3)]
         );
     }
 
