@@ -52,16 +52,9 @@ Windows Release 不附带 PowerShell 安装或更新脚本，不创建开始菜�
 
 输出位于 `dist/macos-aarch64/`：
 
-- `vclogg2-<version>-macos-aarch64/VCLogg2.app`：包含文档类型声明的原生应用包；
-- `vclogg2-<version>-macos-aarch64.zip`：用户分发包，包含当前用户安装脚本；
+- `vclogg2-<version>-macos-aarch64.dmg`：包含原生应用包及 `/Applications` 快捷方式的拖拽安装镜像。
 
-解压后执行：
-
-```bash
-./Install-VCLogg2-macos.sh --launch
-```
-
-默认目标为 `~/Applications/VCLogg2.app`，安装后通过 Launch Services 注册文件打开能力。Actions 产物只使用临时签名，没有 Apple Developer ID 签名和公证；正式对外分发应在打包后增加 Developer ID 签名、公证与 stapling。
+双击挂载 DMG，将 `VCLogg2.app` 拖动到镜像窗口中的 `Applications` 文件夹即可安装。应用包通过 `Info.plist` 声明支持的文档类型。Actions 产物只使用临时签名，没有 Apple Developer ID 签名和公证；正式对外分发应在打包后增加 Developer ID 签名、公证与 stapling。
 
 ### Linux x86_64
 

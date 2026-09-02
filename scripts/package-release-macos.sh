@@ -35,34 +35,35 @@ output_root="$(CDPATH= cd -- "$requested_output_directory" && pwd -P)"
 mkdir -p "$output_root/macos-$architecture"
 output_directory="$(CDPATH= cd -- "$output_root/macos-$architecture" && pwd -P)"
 stage_name="vclogg2-$version-macos-$architecture"
-stage_directory="$output_directory/$stage_name"
-app_directory="$stage_directory/VCLogg2.app"
+stage_directory="$output_directory/.$stage_name-stage"
+disk_image_root="$stage_directory/disk-image"
+app_directory="$disk_image_root/VCLogg2.app"
 contents_directory="$app_directory/Contents"
 resources_directory="$contents_directory/Resources"
-archive_path="$output_directory/$stage_name.zip"
+disk_image_path="$output_directory/$stage_name.dmg"
 iconset_directory="$output_directory/VCLogg2.iconset"
 source_icon="$repository_root/crates/vclogg-app/resources/windows/vclogg2.png"
 
 case "$stage_directory" in
-  "$output_directory"/vclogg2-*-macos-*) ;;
+  "$output_directory"/.vclogg2-*-macos-*-stage) ;;
   *)
     echo "Refusing to replace unexpected stage directory: $stage_directory" >&2
     exit 1
     ;;
 esac
 
-rm -rf -- "$stage_directory" "$iconset_directory"
-rm -f -- "$archive_path"
+cleanup() {
+  rm -rf -- "$stage_directory" "$iconset_directory"
+}
+trap cleanup EXIT
+
+cleanup
+rm -f -- "$disk_image_path"
 mkdir -p "$contents_directory/MacOS" "$resources_directory" "$iconset_directory"
 
 install -m 755 "$repository_root/target/release/vclogg2" "$contents_directory/MacOS/vclogg2"
 install -m 644 "$repository_root/README.md" "$resources_directory/README.md"
 install -m 644 "$repository_root/LICENSE" "$resources_directory/LICENSE"
-install -m 644 "$repository_root/README.md" "$stage_directory/README.md"
-install -m 644 "$repository_root/LICENSE" "$stage_directory/LICENSE"
-install -m 755 \
-  "$script_directory/Install-VCLogg2-macos.sh" \
-  "$stage_directory/Install-VCLogg2-macos.sh"
 
 sips -z 16 16 "$source_icon" --out "$iconset_directory/icon_16x16.png" >/dev/null
 sips -z 32 32 "$source_icon" --out "$iconset_directory/icon_16x16@2x.png" >/dev/null
@@ -156,6 +157,13 @@ EOF
 
 plutil -lint "$contents_directory/Info.plist"
 codesign --force --sign - "$app_directory"
-ditto -c -k --sequesterRsrc --keepParent "$stage_directory" "$archive_path"
-echo "macOS application bundle: $app_directory"
-echo "macOS release package: $archive_path"
+ln -s /Applications "$disk_image_root/Applications"
+hdiutil create \
+  -srcfolder "$disk_image_root" \
+  -volname VCLogg2 \
+  -fs HFS+ \
+  -format UDZO \
+  -imagekey zlib-level=9 \
+  "$disk_image_path"
+hdiutil verify "$disk_image_path"
+echo "macOS release disk image: $disk_image_path"

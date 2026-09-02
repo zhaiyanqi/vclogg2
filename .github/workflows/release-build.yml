@@ -195,7 +195,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: vclogg2-macos-aarch64
-          path: dist/macos-aarch64/vclogg2-*-macos-aarch64.zip
+          path: dist/macos-aarch64/vclogg2-*-macos-aarch64.dmg
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -294,7 +294,7 @@ jobs:
           fi
           packages=(
             "${windows_packages[0]}"
-            "release-assets/macos-aarch64/vclogg2-${version}-macos-aarch64.zip"
+            "release-assets/macos-aarch64/vclogg2-${version}-macos-aarch64.dmg"
             "release-assets/linux-x86_64/vclogg2-${version}-linux-x86_64.tar.gz"
           )
           for package in "${packages[@]}"; do
@@ -351,6 +351,6 @@ jobs:
           fi
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             release-assets/windows-x86_64/vclogg2-*-windows-x86_64.zip \
-            release-assets/macos-aarch64/vclogg2-*-macos-aarch64.zip \
+            release-assets/macos-aarch64/vclogg2-*-macos-aarch64.dmg \
             release-assets/linux-x86_64/vclogg2-*-linux-x86_64.tar.gz \
             "${release_options[@]}"
