@@ -681,6 +681,53 @@ struct PreparedTabFrame {
     result_lines: Option<StagedVisibleLineLoadResult<usize>>,
 }
 
+struct WordWrapDisableLocalPlan {
+    document_id: u64,
+    document: Arc<LogDocument>,
+    log_revision: u64,
+    result_revision: u64,
+    log_request: Option<StagedVisibleLineLoadRequest<usize>>,
+    result_request: Option<StagedVisibleLineLoadRequest<usize>>,
+    log_anchor: Option<RowViewportAnchor<LogRowKey>>,
+    result_anchor: Option<RowViewportAnchor<LogRowKey>>,
+}
+
+struct PreparedWordWrapDisableLocal {
+    document_id: u64,
+    document: Arc<LogDocument>,
+    log_revision: u64,
+    result_revision: u64,
+    log_lines: Option<StagedVisibleLineLoadResult<usize>>,
+    result_lines: Option<StagedVisibleLineLoadResult<usize>>,
+    log_anchor: Option<RowViewportAnchor<LogRowKey>>,
+    result_anchor: Option<RowViewportAnchor<LogRowKey>>,
+}
+
+struct WordWrapDisableGlobalPlan {
+    content_revision: u64,
+    layout_revision: u64,
+    visible_line_revision: u64,
+    request: Option<StagedVisibleLineLoadRequest<(u64, usize)>>,
+    documents: BTreeMap<u64, Arc<LogDocument>>,
+    anchor: Option<RowViewportAnchor<LogRowKey>>,
+}
+
+struct PreparedWordWrapDisableGlobal {
+    content_revision: u64,
+    layout_revision: u64,
+    visible_line_revision: u64,
+    lines: Option<StagedVisibleLineLoadResult<(u64, usize)>>,
+    anchor: Option<RowViewportAnchor<LogRowKey>>,
+}
+
+struct PreparedWordWrapDisable {
+    active_document_id: Option<u64>,
+    scope: SearchScope,
+    row_height: Pixels,
+    local: Option<PreparedWordWrapDisableLocal>,
+    global: Option<PreparedWordWrapDisableGlobal>,
+}
+
 #[derive(Clone, Copy)]
 struct PreparedLogJump {
     source_row: usize,
@@ -1734,6 +1781,26 @@ fn scrollbar_preload_range(
             .min(row_count)
 }
 
+fn fixed_mode_preload_range(
+    anchor_row: usize,
+    anchor_viewport_y: Pixels,
+    row_count: usize,
+    viewport_height: Pixels,
+    row_height: Pixels,
+) -> Range<usize> {
+    if row_count == 0 {
+        return 0..0;
+    }
+    let anchor_row = anchor_row.min(row_count - 1);
+    let fixed_top = (row_height.max(px(1.)) * anchor_row as f32 - anchor_viewport_y).max(px(0.));
+    scrollbar_preload_range(
+        point(px(0.), -fixed_top),
+        row_count,
+        viewport_height,
+        row_height,
+    )
+}
+
 fn take_pending_log_scroll_target<K: Clone + Ord>(
     pending: &mut PendingLogScrollFrames,
     key: (u64, WrappedRegion),
@@ -2639,6 +2706,9 @@ pub struct Workspace {
     row_drag_frame_scheduled: bool,
     visible_line_tasks: BTreeMap<(u64, WrappedRegion), Task<()>>,
     pending_log_scroll_frames: PendingLogScrollFrames,
+    word_wrap_transition_task: Option<Task<()>>,
+    word_wrap_transition_cancellation: Option<Arc<AtomicBool>>,
+    word_wrap_transition_revision: u64,
     global_group_toggle_task: Option<Task<()>>,
     global_group_toggle_revision: u64,
     global_result_replace_task: Option<Task<()>>,
@@ -3218,6 +3288,9 @@ impl Workspace {
             row_drag_frame_scheduled: false,
             visible_line_tasks: BTreeMap::new(),
             pending_log_scroll_frames: PendingLogScrollFrames::default(),
+            word_wrap_transition_task: None,
+            word_wrap_transition_cancellation: None,
+            word_wrap_transition_revision: 0,
             global_group_toggle_task: None,
             global_group_toggle_revision: 0,
             global_result_replace_task: None,

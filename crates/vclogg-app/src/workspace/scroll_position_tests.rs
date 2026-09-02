@@ -161,6 +161,26 @@ fn scrollbar_preload_range_clamps_to_the_target_viewport() {
 }
 
 #[test]
+fn fixed_mode_preload_range_uses_the_restored_anchor_and_fixed_capacity() {
+    assert_eq!(
+        fixed_mode_preload_range(50, px(-10.), 100, px(200.), px(20.)),
+        48..62
+    );
+    assert_eq!(
+        fixed_mode_preload_range(50, px(100.), 100, px(200.), px(20.)),
+        43..57
+    );
+    assert_eq!(
+        fixed_mode_preload_range(99, px(0.), 100, px(200.), px(20.)),
+        88..100
+    );
+    assert_eq!(
+        fixed_mode_preload_range(0, px(0.), 0, px(200.), px(20.)),
+        0..0
+    );
+}
+
+#[test]
 fn atomic_scrollbar_handle_keeps_the_committed_list_position_until_install() {
     let handle = UniformListScrollHandle::new();
     let pending_offset = Rc::new(Cell::new(None));
