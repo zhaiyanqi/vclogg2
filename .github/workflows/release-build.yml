@@ -260,6 +260,11 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout release history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
       - name: Download Windows release package
         uses: actions/download-artifact@v8
         with:
@@ -296,6 +301,34 @@ jobs:
             test -s "$package"
           done
 
+      - name: Generate release notes from commits
+        shell: bash
+        run: |
+          previous_tag="$(
+            git describe --tags --match 'v*' --abbrev=0 "$GITHUB_REF_NAME^" 2>/dev/null || true
+          )"
+
+          if [[ -n "$previous_tag" ]]; then
+            commit_range="$previous_tag..$GITHUB_REF_NAME"
+            notes_heading="Changes since $previous_tag"
+          else
+            commit_range="$GITHUB_REF_NAME"
+            notes_heading="Changes in $GITHUB_REF_NAME"
+          fi
+
+          {
+            echo "## $notes_heading"
+            echo
+            git log "$commit_range" \
+              --pretty=format:'- %s ([%h](https://github.com/'"$GITHUB_REPOSITORY"'/commit/%H))'
+            echo
+
+            if [[ -n "$previous_tag" ]]; then
+              echo
+              echo "**Full Changelog**: https://github.com/$GITHUB_REPOSITORY/compare/$previous_tag...$GITHUB_REF_NAME"
+            fi
+          } > release-notes.md
+
       - name: Create GitHub Release
         shell: bash
         env:
@@ -303,14 +336,14 @@ jobs:
         run: |
           release_options=(
             --verify-tag
-            --generate-notes
+            --notes-file release-notes.md
             --title "VCLogg2 $GITHUB_REF_NAME"
             --latest
           )
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then
             release_options=(
               --verify-tag
-              --generate-notes
+              --notes-file release-notes.md
               --title "VCLogg2 $GITHUB_REF_NAME"
               --prerelease
               --latest=false
