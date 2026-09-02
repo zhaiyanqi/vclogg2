@@ -424,7 +424,6 @@ impl Workspace {
             }
 
             _ = this.update_in(cx, |this, window, cx| {
-                let restored_document_ids = opening_ids.values().copied().collect::<Vec<_>>();
                 this.install_completed_documents(
                     opened,
                     active_path.as_deref(),
@@ -434,7 +433,6 @@ impl Workspace {
                     cx,
                 );
                 this.open_task = None;
-                this.start_restored_document_searches(&restored_document_ids, window, cx);
                 this.maybe_restore_persisted_search(window, cx);
                 for (path, completion) in move_completions {
                     let installed = this.documents.iter().any(|tab| {

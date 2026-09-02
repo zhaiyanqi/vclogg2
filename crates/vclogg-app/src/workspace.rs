@@ -127,11 +127,11 @@ use crate::{
     ui_theme,
     virtual_log_lines::{LogRowKey, StagedVisibleLineLoadRequest, StagedVisibleLineLoadResult},
     workspace_state::{
-        CloudController, DocumentTaskRegistry, GlobalSearchDocumentResult, GlobalSearchResults,
-        GlobalSearchState, PersistenceController, QuickFindBoundary, QuickFindDirection,
-        QuickFindMatch, QuickFindSource, QuickFindSourceVersion, QuickFindState, QuickFindTarget,
-        ResultMode, RowViewportAnchor, SearchController, SearchScope, SearchSessionState,
-        SearchTarget, ViewportAnchor,
+        CloudController, GlobalSearchDocumentResult, GlobalSearchResults, GlobalSearchState,
+        PersistenceController, QuickFindBoundary, QuickFindDirection, QuickFindMatch,
+        QuickFindSource, QuickFindSourceVersion, QuickFindState, QuickFindTarget, ResultMode,
+        RowViewportAnchor, SearchController, SearchScope, SearchSessionState, SearchTarget,
+        ViewportAnchor,
     },
 };
 
@@ -239,17 +239,6 @@ struct PreparedDocumentUpgradeFrame {
     row_height: Pixels,
     log_word_wrap: bool,
     result_word_wrap: bool,
-}
-
-struct RestoredDocumentSearchTask {
-    cancellation: SearchCancellation,
-    _task: Task<()>,
-}
-
-impl Drop for RestoredDocumentSearchTask {
-    fn drop(&mut self) {
-        self.cancellation.cancel();
-    }
 }
 
 struct DocumentFontViewportAnchors {
@@ -2741,7 +2730,6 @@ pub struct Workspace {
     open_task: Option<Task<()>>,
     pending_external_paths: Vec<PathBuf>,
     searches: SearchController,
-    restored_document_searches: DocumentTaskRegistry<RestoredDocumentSearchTask>,
     result_export_task: Option<Task<()>>,
     result_export_operation: Option<ResultExportOperation>,
     line_copy_task: Option<Task<()>>,
@@ -3325,7 +3313,6 @@ impl Workspace {
             open_task: None,
             pending_external_paths: Vec::new(),
             searches: SearchController::default(),
-            restored_document_searches: DocumentTaskRegistry::default(),
             result_export_task: None,
             result_export_operation: None,
             line_copy_task: None,

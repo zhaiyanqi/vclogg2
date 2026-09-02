@@ -2131,7 +2131,6 @@ impl Workspace {
         };
         let document_id = self.documents[active_ix].id;
         self.cancel_search();
-        self.cancel_restored_document_search(document_id);
         let cancellation = SearchCancellation::default();
         let tab = &mut self.documents[active_ix];
         tab.search_revision += 1;
@@ -2208,103 +2207,6 @@ impl Workspace {
             });
         });
         self.searches.set_task(task);
-    }
-
-    pub(super) fn start_restored_document_searches(
-        &mut self,
-        document_ids: &[u64],
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        for document_id in document_ids.iter().copied() {
-            let Some(tab_ix) = self.documents.iter().position(|tab| tab.id == document_id) else {
-                continue;
-            };
-            let tab = &mut self.documents[tab_ix];
-            if tab.load_state != DocumentLoadState::Ready || tab.search_query.text.is_empty() {
-                continue;
-            }
-
-            let generation = self.restored_document_searches.reserve(document_id);
-            tab.search_revision = tab.search_revision.saturating_add(1);
-            let revision = tab.search_revision;
-            let document = tab.document.clone();
-            let query = tab.search_query.clone();
-            let matcher = tab.search_matcher.clone();
-            let cancellation = SearchCancellation::default();
-            let cancellation_for_search = cancellation.clone();
-            let matcher_for_search = matcher.clone();
-            let document_for_search = document.clone();
-            let task = cx.spawn_in(window, async move |this, cx| {
-                let run = cx
-                    .background_spawn(async move {
-                        search_with_compiled_matcher(
-                            &document_for_search,
-                            matcher_for_search.as_ref(),
-                            query.max_results,
-                            &cancellation_for_search,
-                        )
-                    })
-                    .await;
-
-                _ = this.update_in(cx, |this, window, cx| {
-                    let Some(_task) = this
-                        .restored_document_searches
-                        .take_if_current(document_id, generation)
-                    else {
-                        return;
-                    };
-                    let highlight_matches = this.app_settings.highlight_matches;
-                    let Some(tab_ix) = this.documents.iter().position(|tab| tab.id == document_id)
-                    else {
-                        return;
-                    };
-                    let tab = &mut this.documents[tab_ix];
-                    if tab.search_revision != revision || !Arc::ptr_eq(&tab.document, &document) {
-                        return;
-                    }
-                    let results_changed = match run {
-                        SearchRun::Completed(result) => {
-                            tab.search_result = result;
-                            tab.search_matcher = matcher;
-                            tab.refresh_search_matcher(highlight_matches, cx);
-                            true
-                        }
-                        SearchRun::Cancelled => false,
-                        SearchRun::SourceChanged => {
-                            window.push_notification(
-                                crate::tr!(
-                                    "恢复已保存搜索时文件内容已改变，请重新加载后重试。",
-                                    "The file changed while restoring the saved search. Reload and try again."
-                                ),
-                                cx,
-                            );
-                            false
-                        }
-                    };
-                    if results_changed {
-                        this.refresh_document_result_rows_atomically(document_id, window, cx);
-                    }
-                    cx.notify();
-                });
-            });
-            self.restored_document_searches.install(
-                document_id,
-                generation,
-                RestoredDocumentSearchTask {
-                    cancellation,
-                    _task: task,
-                },
-            );
-        }
-    }
-
-    fn cancel_restored_document_search(&mut self, document_id: u64) {
-        self.restored_document_searches.remove(document_id);
-    }
-
-    fn cancel_all_restored_document_searches(&mut self) {
-        self.restored_document_searches.clear();
     }
 
     pub(super) fn install_completed_global_search(
@@ -2398,7 +2300,6 @@ impl Workspace {
         }
         let preserve_viewport = self.global_search.results_visible;
         self.cancel_search();
-        self.cancel_all_restored_document_searches();
         self.global_search.revision = self.global_search.revision.saturating_add(1);
         let revision = self.global_search.revision;
         let cancellation = SearchCancellation::default();
@@ -2558,7 +2459,6 @@ impl Workspace {
             .collect::<BTreeSet<_>>();
         let preserve_viewport = self.global_search.results_visible;
         self.cancel_search();
-        self.cancel_all_restored_document_searches();
         self.global_search.revision = self.global_search.revision.saturating_add(1);
         let revision = self.global_search.revision;
         let cancellation = SearchCancellation::default();
@@ -2967,7 +2867,6 @@ impl Workspace {
     }
 
     pub(super) fn cancel_search_for(&mut self, document_id: u64) {
-        self.cancel_restored_document_search(document_id);
         if self.searches.cancel_for_document(document_id)
             && matches!(self.activity, Activity::Searching)
         {

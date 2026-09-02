@@ -431,15 +431,24 @@ pub(super) fn prepare_document(
             max_results: search_result_limit,
         })
         .unwrap_or_default();
-    let search_matcher = match SearchMatcher::new(&query) {
-        Ok(matcher) => matcher,
+    let search = (|| {
+        let matcher = SearchMatcher::new(&query)?;
+        let result = if query.text.is_empty() {
+            SearchResult::default()
+        } else {
+            search_document_with_matcher(&document, &query, matcher.as_ref())
+        };
+        Ok::<_, anyhow::Error>((result, matcher))
+    })();
+    let (search_result, search_matcher) = match search {
+        Ok(search) => search,
         Err(error) => {
             warning = Some(crate::tr_args!(
                 "{} 的已保存查询未能恢复：{error}",
                 "The saved query for {} couldn’t be restored: {error}",
                 path.display()
             ));
-            None
+            (SearchResult::default(), None)
         }
     };
     let resolved_color_rules = session
@@ -453,7 +462,7 @@ pub(super) fn prepare_document(
         session,
         color_labels_snapshot: Some(color_labels.to_vec()),
         resolved_color_rules,
-        search_result: SearchResult::default(),
+        search_result,
         search_matcher,
         warning,
         load_state: DocumentLoadState::Ready,

@@ -107,8 +107,8 @@ fn cached_complete_document_handoff_does_not_reopen_the_source() {
 }
 
 #[test]
-fn saved_search_is_deferred_until_after_document_preparation() {
-    let temporary = TemporaryDirectory::new("deferred-saved-search");
+fn saved_search_is_prepared_with_the_ready_document() {
+    let temporary = TemporaryDirectory::new("prepared-saved-search");
     let path = temporary.0.join("source.log");
     fs::write(&path, b"alpha\nbeta\nalpha\n").expect("应能写入已保存搜索测试日志");
     let document =
@@ -119,10 +119,18 @@ fn saved_search_is_deferred_until_after_document_preparation() {
     };
 
     let prepared = prepare_document(&path, Some(document), None, Some(session), Some(100), &[])
-        .expect("文档准备不应等待已保存搜索");
+        .expect("文档准备应恢复已保存搜索");
 
     assert_eq!(prepared.load_state, super::DocumentLoadState::Ready);
-    assert!(prepared.search_result.line_indices.is_empty());
+    assert_eq!(
+        prepared
+            .search_result
+            .line_indices
+            .iter()
+            .collect::<Vec<_>>(),
+        vec![0, 2]
+    );
+    assert!(prepared.search_matcher.is_some());
     assert_eq!(prepared.session.as_ref().unwrap().query_text, "alpha");
 }
 
