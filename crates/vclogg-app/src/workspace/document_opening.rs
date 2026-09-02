@@ -341,6 +341,17 @@ impl Workspace {
                     })
                 })
                 .await;
+            let cached_complete_documents = previews
+                .iter()
+                .filter_map(|(path, prepared)| {
+                    prepared
+                        .as_ref()
+                        .ok()?
+                        .cached_complete_document
+                        .clone()
+                        .map(|document| (path.clone(), document))
+                })
+                .collect::<BTreeMap<_, _>>();
 
             let preview_upgrade_jobs = this
                 .update_in(cx, |this, window, cx| {
@@ -390,6 +401,7 @@ impl Workspace {
                     prepare_paths_bounded(full_paths, |path| {
                         prepare_document(
                             path,
+                            path_buf_map_get(&cached_complete_documents, path).cloned(),
                             full_store.as_deref(),
                             path_buf_map_get(&sessions, path).cloned(),
                             effective_search_result_limit,

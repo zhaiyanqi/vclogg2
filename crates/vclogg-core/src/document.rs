@@ -1332,11 +1332,30 @@ impl LogDocument {
         line_limit: usize,
         byte_limit: usize,
     ) -> Result<Option<Self>> {
+        Ok(Self::open_cached_preview_with_complete_document(
+            path,
+            cache_dir,
+            preferred_row,
+            line_limit,
+            byte_limit,
+        )?
+        .map(|(preview, _)| preview))
+    }
+
+    /// Open a sparse cached preview and retain the same parsed complete document for installation.
+    /// This lets staged application opening avoid decoding a large varint index cache twice.
+    pub fn open_cached_preview_with_complete_document(
+        path: impl AsRef<Path>,
+        cache_dir: impl AsRef<Path>,
+        preferred_row: usize,
+        line_limit: usize,
+        byte_limit: usize,
+    ) -> Result<Option<(Self, Self)>> {
         if line_limit == 0 || byte_limit == 0 {
             return Ok(None);
         }
         let path = path.as_ref().to_path_buf();
-        let mut file =
+        let file =
             File::open(&path).with_context(|| format!("无法打开日志文件：{}", path.display()))?;
         let file_metadata = file
             .metadata()
@@ -1358,7 +1377,7 @@ impl LogDocument {
         let CachedIndex {
             indexed_lines: cached,
             encoding,
-            ..
+            integrity_blocks,
         } = cached;
         let source_line_count = cached.starts.len();
         if source_line_count == 0 {
@@ -1397,12 +1416,10 @@ impl LogDocument {
         if byte_count > byte_limit {
             return Ok(None);
         }
-        file.seek(SeekFrom::Start(byte_start as u64))?;
-        let mut preview = vec![0_u8; byte_count];
-        file.read_exact(&mut preview)
+        let mut preview_bytes = vec![0_u8; byte_count];
+        read_file_exact_at(&file, &mut preview_bytes, byte_start as u64)
             .with_context(|| format!("无法读取缓存日志预览：{}", path.display()))?;
-
-        let starts = MutableLineStarts::from_native(
+        let preview_starts = MutableLineStarts::from_native(
             (start_row..end_row)
                 .map(|row_ix| {
                     cached
@@ -1413,23 +1430,39 @@ impl LogDocument {
                 .map(|offset| offset - byte_start)
                 .collect(),
         );
-        let indexed_lines = IndexedLines {
-            starts,
+        let preview_indexed_lines = IndexedLines {
+            starts: preview_starts,
             longest_line_bytes: cached.longest_line_bytes,
             longest_completed_line_bytes: cached.longest_completed_line_bytes,
             longest_line_columns: cached.longest_line_columns,
             longest_completed_line_columns: cached.longest_completed_line_columns,
         };
-        Ok(Some(Self::from_segment_parts(
+        let bytes = DocumentBytes::verified(
+            file,
+            path.clone(),
+            source_size_usize,
+            integrity_blocks.clone(),
+        );
+        let complete = Self::from_parts(
             path,
-            DocumentBytes::Owned(preview.into_boxed_slice()),
-            indexed_lines,
+            bytes,
+            cached,
+            modified,
+            source_size,
+            encoding,
+            Some(integrity_blocks),
+        );
+        let preview = Self::from_segment_parts(
+            complete.path().to_path_buf(),
+            DocumentBytes::Owned(preview_bytes.into_boxed_slice()),
+            preview_indexed_lines,
             modified,
             source_size,
             encoding,
             start_row..source_line_count,
             None,
-        )))
+        );
+        Ok(Some((preview, complete)))
     }
 
     /// Refresh this snapshot, extending its line index only when every block
@@ -3299,15 +3332,23 @@ mod source_snapshot_tests {
             .persist()
             .expect("应能写入测试索引缓存");
 
-        let preview = LogDocument::open_cached_preview(&path, &cache_directory, 2, 1, 1024)
-            .expect("应能读取缓存预览")
-            .expect("缓存预览应存在");
+        let (preview, complete) = LogDocument::open_cached_preview_with_complete_document(
+            &path,
+            &cache_directory,
+            2,
+            1,
+            1024,
+        )
+        .expect("应能读取缓存预览")
+        .expect("缓存预览应存在");
 
         assert_eq!(preview.segment_start_row(), 2);
         assert_eq!(preview.source_row(0), Some(2));
         assert_eq!(preview.local_row(2), Some(0));
         assert_eq!(preview.local_row(1), None);
         assert_eq!(preview.local_row(3), None);
+        assert!(complete.has_complete_line_index());
+        assert_eq!(complete.line_count(), 4);
         _ = fs::remove_dir_all(directory);
     }
 

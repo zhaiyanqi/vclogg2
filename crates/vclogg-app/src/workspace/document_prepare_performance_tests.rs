@@ -9,7 +9,8 @@ use std::{
 use vclogg_core::LogDocument;
 
 use super::{
-    directory_search_scan_paths, path_match_key, prepare_paths_bounded, prepare_paths_bounded_while,
+    directory_search_scan_paths, path_match_key, prepare_document, prepare_paths_bounded,
+    prepare_paths_bounded_while,
 };
 
 struct TemporaryDirectory(PathBuf);
@@ -86,6 +87,21 @@ fn nonempty_directory_query_prepares_every_enumerated_path() {
     let scan_paths = directory_search_scan_paths(paths.clone(), true, &Default::default());
 
     assert_eq!(scan_paths, paths);
+}
+
+#[test]
+fn cached_complete_document_handoff_does_not_reopen_the_source() {
+    let temporary = TemporaryDirectory::new("cached-document-handoff");
+    let path = temporary.0.join("source.log");
+    fs::write(&path, b"alpha\nbeta\n").expect("应能写入缓存交接测试日志");
+    let document = std::sync::Arc::new(LogDocument::open(&path).expect("应能打开缓存交接测试日志"));
+    fs::remove_file(&path).expect("应能移除缓存交接测试日志");
+
+    let prepared = prepare_document(&path, Some(document.clone()), None, None, None, &[])
+        .expect("缓存完整文档应在源路径暂时不可用时直接交接");
+
+    assert!(std::sync::Arc::ptr_eq(&prepared.document, &document));
+    assert!(prepared.pending_index_cache.is_none());
 }
 
 #[test]

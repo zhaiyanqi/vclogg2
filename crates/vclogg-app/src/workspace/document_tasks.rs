@@ -388,18 +388,24 @@ where
 
 pub(super) fn prepare_document(
     path: &std::path::Path,
+    cached_complete_document: Option<Arc<LogDocument>>,
     store: Option<&StateStore>,
     session_override: Option<FileSessionState>,
     search_result_limit: Option<usize>,
     color_labels: &[ColorLabel],
 ) -> Result<PreparedDocument> {
-    let (document, pending_index_cache) =
-        if let Some(cache_dir) = crate::app_paths::index_cache_dir() {
-            LogDocument::open_with_index_cache(path, cache_dir)?
-        } else {
-            (LogDocument::open(path)?, None)
-        };
-    let document = Arc::new(document);
+    let (document, pending_index_cache) = match cached_complete_document {
+        Some(document) => (document, None),
+        None => {
+            let (document, pending_index_cache) =
+                if let Some(cache_dir) = crate::app_paths::index_cache_dir() {
+                    LogDocument::open_with_index_cache(path, cache_dir)?
+                } else {
+                    (LogDocument::open(path)?, None)
+                };
+            (Arc::new(document), pending_index_cache)
+        }
+    };
     let mut warning = None;
     let session = if session_override.is_some() {
         session_override
@@ -452,6 +458,7 @@ pub(super) fn prepare_document(
 
     Ok(PreparedDocument {
         document,
+        cached_complete_document: None,
         session,
         color_labels_snapshot: Some(color_labels.to_vec()),
         resolved_color_rules,
@@ -514,6 +521,7 @@ pub(super) fn prepare_document_shell(
 ) -> PreparedDocument {
     PreparedDocument {
         document: Arc::new(LogDocument::placeholder(path)),
+        cached_complete_document: None,
         session,
         color_labels_snapshot: None,
         resolved_color_rules: Arc::default(),
@@ -572,7 +580,7 @@ pub(super) fn prepare_document_preview(
     });
     let cached_preview = match (preferred_row, crate::app_paths::index_cache_dir()) {
         (Some(preferred_row), Some(cache_dir)) if preferred_row > 0 => {
-            LogDocument::open_cached_preview(
+            LogDocument::open_cached_preview_with_complete_document(
                 path,
                 cache_dir,
                 preferred_row,
@@ -582,9 +590,12 @@ pub(super) fn prepare_document_preview(
         }
         _ => None,
     };
-    let document = match cached_preview {
-        Some(document) => document,
-        None => LogDocument::open_preview(path, PREVIEW_BYTE_LIMIT, PREVIEW_LINE_LIMIT)?.0,
+    let (document, cached_complete_document) = match cached_preview {
+        Some((preview, complete)) => (preview, Some(Arc::new(complete))),
+        None => (
+            LogDocument::open_preview(path, PREVIEW_BYTE_LIMIT, PREVIEW_LINE_LIMIT)?.0,
+            None,
+        ),
     };
     let document = Arc::new(document);
     let query = session
@@ -613,6 +624,7 @@ pub(super) fn prepare_document_preview(
         .unwrap_or_default();
     Ok(PreparedDocument {
         document,
+        cached_complete_document,
         session,
         color_labels_snapshot: Some(color_labels.to_vec()),
         resolved_color_rules,

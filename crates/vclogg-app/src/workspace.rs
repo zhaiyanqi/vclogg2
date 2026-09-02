@@ -197,6 +197,7 @@ fn persistent_log_scrollbar(scrollbar: Scrollbar, background: gpui::Hsla) -> Scr
 
 struct PreparedDocument {
     document: Arc<LogDocument>,
+    cached_complete_document: Option<Arc<LogDocument>>,
     session: Option<FileSessionState>,
     color_labels_snapshot: Option<Vec<ColorLabel>>,
     resolved_color_rules: Arc<ResolvedColorRules>,

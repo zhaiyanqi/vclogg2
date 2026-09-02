@@ -183,3 +183,68 @@ fn benchmark_uncached_full_open() {
         elapsed / RUNS as u32
     );
 }
+
+#[test]
+#[ignore = "手动性能基准：cargo test -p vclogg-core --release benchmark_cached_preview_handoff -- --ignored --nocapture"]
+fn benchmark_cached_preview_handoff() {
+    const SOURCE_BYTES: usize = 128 * 1024 * 1024;
+    const RUNS: usize = 5;
+    const PREVIEW_BYTES: usize = 1024 * 1024;
+    const PREVIEW_LINES: usize = 200;
+
+    let temporary = TemporaryDirectory::new("cached-preview-handoff-performance");
+    let path = temporary.0.join("large.log");
+    let cache = temporary.0.join("index");
+    let line = b"2026-08-27 INFO cached preview handoff performance line\n";
+    let mut writer = BufWriter::new(File::create(&path).expect("应能创建性能测试日志"));
+    for _ in 0..SOURCE_BYTES.div_ceil(line.len()) {
+        writer.write_all(line).expect("应能写入性能测试日志");
+    }
+    writer.flush().expect("应能刷新性能测试日志");
+    let (document, pending) =
+        LogDocument::open_with_index_cache(&path, &cache).expect("首次缓存交接性能测试打开应成功");
+    let preferred_row = document.line_count() / 2;
+    pending
+        .expect("首次打开应生成索引缓存")
+        .persist()
+        .expect("索引缓存应能持久化");
+    drop(document);
+
+    let separate_started = Instant::now();
+    for _ in 0..RUNS {
+        let preview = LogDocument::open_cached_preview(
+            black_box(&path),
+            black_box(&cache),
+            black_box(preferred_row),
+            PREVIEW_LINES,
+            PREVIEW_BYTES,
+        )
+        .expect("独立缓存预览应成功")
+        .expect("独立缓存预览应命中");
+        let (complete, pending) =
+            LogDocument::open_with_index_cache(black_box(&path), black_box(&cache))
+                .expect("独立完整缓存打开应成功");
+        assert!(pending.is_none());
+        black_box((preview, complete));
+    }
+    let separate_elapsed = separate_started.elapsed();
+
+    let handoff_started = Instant::now();
+    for _ in 0..RUNS {
+        let pair = LogDocument::open_cached_preview_with_complete_document(
+            black_box(&path),
+            black_box(&cache),
+            black_box(preferred_row),
+            PREVIEW_LINES,
+            PREVIEW_BYTES,
+        )
+        .expect("缓存预览交接应成功")
+        .expect("缓存预览交接应命中");
+        black_box(pair);
+    }
+    let handoff_elapsed = handoff_started.elapsed();
+
+    eprintln!(
+        "缓存预览后完整打开 {RUNS} 次：重复解析 {separate_elapsed:?}；单次解析交接 {handoff_elapsed:?}"
+    );
+}
