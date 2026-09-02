@@ -282,6 +282,15 @@ fn should_upgrade_loading_document(
     )
 }
 
+fn should_sync_active_document_controls(
+    final_phase: bool,
+    previous_active_id: Option<u64>,
+    active_id: Option<u64>,
+    active_session_was_restored: bool,
+) -> bool {
+    !final_phase || previous_active_id != active_id || active_session_was_restored
+}
+
 fn should_defer_directory_group_activation(
     pending_path: Option<&Path>,
     candidate_path: &Path,

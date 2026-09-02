@@ -713,3 +713,31 @@ fn restored_documents_wait_for_ready_before_replacing_the_loading_surface() {
         false,
     ));
 }
+
+#[test]
+fn restored_active_document_resynchronizes_shared_search_controls() {
+    assert!(should_sync_active_document_controls(
+        false,
+        Some(7),
+        Some(7),
+        false,
+    ));
+    assert!(should_sync_active_document_controls(
+        true,
+        Some(7),
+        Some(8),
+        false,
+    ));
+    assert!(should_sync_active_document_controls(
+        true,
+        Some(7),
+        Some(7),
+        true,
+    ));
+    assert!(!should_sync_active_document_controls(
+        true,
+        Some(7),
+        Some(7),
+        false,
+    ));
+}

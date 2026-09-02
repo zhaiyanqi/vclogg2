@@ -318,6 +318,7 @@ impl Workspace {
         let mut recorded_paths = Vec::new();
         let mut cache_writes = Vec::new();
         let mut installed_document_ids = BTreeSet::new();
+        let mut restored_session_document_ids = BTreeSet::new();
         let mut global_sources_changed = false;
 
         for (path, result) in opened {
@@ -364,9 +365,15 @@ impl Workspace {
                     prepared.session.is_some(),
                 );
                 let target_frame_is_prepared = if should_upgrade {
+                    let restores_session =
+                        current_state == DocumentLoadState::Opening && prepared.session.is_some();
+                    let document_id = self.documents[existing_ix].id;
                     let ready = prepared.load_state == DocumentLoadState::Ready;
                     let prepared_frame_installed =
                         self.upgrade_loading_document(existing_ix, prepared, window, cx);
+                    if restores_session {
+                        restored_session_document_ids.insert(document_id);
+                    }
                     global_sources_changed = true;
                     if ready && !path_match_set_contains(&self.transient_paths, &path) {
                         recorded_paths.push(path.clone());
@@ -785,7 +792,15 @@ impl Workspace {
             window.push_notification(message.clone(), cx);
             self.activity = Activity::Error;
         }
-        if !final_phase || previous_active_id != self.active_document().map(|tab| tab.id) {
+        let active_id = self.active_document().map(|tab| tab.id);
+        let active_session_was_restored = active_id
+            .is_some_and(|document_id| restored_session_document_ids.contains(&document_id));
+        if should_sync_active_document_controls(
+            final_phase,
+            previous_active_id,
+            active_id,
+            active_session_was_restored,
+        ) {
             self.sync_active_document(window, cx);
         } else {
             self.selected_source_row = self.active_document().and_then(|tab| {
