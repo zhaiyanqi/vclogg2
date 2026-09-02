@@ -21,7 +21,11 @@ thread_local! {
 
 pub(crate) fn install_panic_hook() {
     let report_directory = prepare_report_directory();
-    prune_old_reports(&report_directory);
+    if let Some(directory) = report_directory.as_deref() {
+        prune_old_reports(directory);
+    } else {
+        log::error!("VCLogg2 无法确定可写的崩溃报告目录");
+    }
 
     let previous_hook = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
@@ -30,7 +34,9 @@ pub(crate) fn install_panic_hook() {
             return;
         }
 
-        if let Err(error) = write_panic_report(&report_directory, info) {
+        if let Some(directory) = report_directory.as_deref()
+            && let Err(error) = write_panic_report(directory, info)
+        {
             log::error!("VCLogg2 panic 报告未能写入：{error}");
         }
         previous_hook(info);
@@ -38,18 +44,24 @@ pub(crate) fn install_panic_hook() {
     }));
 }
 
-fn prepare_report_directory() -> PathBuf {
-    let preferred = crate::app_paths::data_local_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("VCLogg2")
-        .join("crashes");
-    if fs::create_dir_all(&preferred).is_ok() {
-        return preferred;
+fn prepare_report_directory() -> Option<PathBuf> {
+    if let Some(preferred) =
+        crate::app_paths::application_data_dir().map(|root| root.join("crashes"))
+        && fs::create_dir_all(&preferred).is_ok()
+    {
+        return Some(preferred);
     }
 
-    let fallback = std::env::temp_dir().join("VCLogg2").join("crashes");
-    let _ = fs::create_dir_all(&fallback);
-    fallback
+    #[cfg(not(windows))]
+    {
+        let fallback = std::env::temp_dir().join("VCLogg2").join("crashes");
+        let _ = fs::create_dir_all(&fallback);
+        Some(fallback)
+    }
+    #[cfg(windows)]
+    {
+        None
+    }
 }
 
 fn write_panic_report(directory: &Path, info: &PanicHookInfo<'_>) -> io::Result<PathBuf> {

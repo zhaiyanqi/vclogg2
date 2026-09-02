@@ -1163,121 +1163,6 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(super) fn confirm_close_and_delete_file(
-        &mut self,
-        document_id: u64,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(tab) = self.documents.iter().find(|tab| tab.id == document_id) else {
-            return;
-        };
-        let name = tab.document.file_name();
-        let path = tab.document.path().to_path_buf();
-        let description = crate::tr_args!(
-            "文件将被移入系统回收站，对应标签页也会关闭。\n\n{name}\n{}\n\n如果需要，可以稍后从系统回收站恢复。",
-            "The file will be moved to the system trash and its tab will close.\n\n{name}\n{}\n\nYou can restore it later from the trash if needed.",
-            path.display(),
-        );
-        let workspace = cx.entity();
-        window.open_alert_dialog(cx, move |alert, _, cx| {
-            let workspace = workspace.clone();
-            let delete_path = path.clone();
-            let delete_name = name.clone();
-            alert
-                .icon(Icon::new(IconName::Info).text_color(cx.theme().danger))
-                .title(crate::tr!(
-                    "关闭并删除此文件？",
-                    "Close and delete this file?"
-                ))
-                .description(description.clone())
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_variant(ButtonVariant::Danger)
-                        .ok_text(crate::tr!("删除文件", "Delete file"))
-                        .cancel_text(crate::tr!("取消", "Cancel"))
-                        .show_cancel(true),
-                )
-                .on_ok(move |_, window, cx| {
-                    workspace.update(cx, |this, cx| {
-                        this.close_tab_by_id(document_id, window, cx);
-                        let workspace = cx.weak_entity();
-                        let path = delete_path.clone();
-                        let name = delete_name.clone();
-                        window.defer(cx, move |window, cx| {
-                            _ = workspace.update(cx, |this, cx| {
-                                this.start_move_file_to_trash(path, name, window, cx)
-                            });
-                        });
-                    });
-                    true
-                })
-        });
-    }
-
-    pub(super) fn start_move_file_to_trash(
-        &mut self,
-        path: PathBuf,
-        name: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let store = self.persistence.store.clone();
-        self.persistence
-            .state_tasks
-            .push(cx.spawn_in(window, async move |this, cx| {
-                let result = cx
-                    .background_spawn(async move {
-                        let moved = crate::trash::move_file_to_trash(&path)?;
-                        let collections = if let Some(store) = store {
-                            store.delete_session_for_path(&path)?;
-                            Some((
-                                store.recent_files(8)?,
-                                store.pinned_files()?,
-                                store.last_workspace()?,
-                            ))
-                        } else {
-                            None
-                        };
-                        Ok::<_, anyhow::Error>((moved, collections))
-                    })
-                    .await;
-                _ = this.update_in(cx, |this, window, cx| {
-                    match result {
-                    Ok((moved, collections)) => {
-                        if let Some((recent, pinned, last_workspace)) = collections {
-                            this.recent_files = recent;
-                            this.pinned_files = pinned;
-                            this.last_workspace_files = last_workspace;
-                        }
-                        window.push_notification(
-                            if moved {
-                                crate::tr_args!(
-                                    "已关闭并移入回收站：{name}",
-                                    "Closed and moved to the trash: {name}"
-                                )
-                            } else {
-                                crate::tr_args!(
-                                    "已关闭标签；文件原本已不存在：{name}",
-                                    "Tab closed; the file no longer existed: {name}"
-                                )
-                            },
-                            cx,
-                        );
-                    }
-                    Err(error) => window.push_notification(
-                        crate::tr_args!(
-                            "标签已关闭，但文件未能移入回收站：{error}",
-                            "The tab closed, but the file couldn’t be moved to the trash: {error}"
-                        ),
-                        cx,
-                    ),
-                }
-                    cx.notify();
-                });
-            }));
-    }
-
     pub(super) fn build_tab_menu(
         menu: PopupMenu,
         document_id: u64,
@@ -1340,12 +1225,6 @@ impl Workspace {
                 )
             })
         };
-        let close_and_delete = {
-            let workspace = workspace.clone();
-            window.listener_for(&workspace, move |this, _, window, cx| {
-                this.confirm_close_and_delete_file(document_id, window, cx)
-            })
-        };
         let copy_path = {
             let workspace = workspace.clone();
             window.listener_for(&workspace, move |this, _, window, cx| {
@@ -1390,10 +1269,6 @@ impl Workspace {
         });
 
         menu.item(PopupMenuItem::new(crate::tr!("关闭标签", "Close tab")).on_click(close))
-            .item(
-                PopupMenuItem::new(crate::tr!("关闭并删除文件…", "Close and delete file…"))
-                    .on_click(close_and_delete),
-            )
             .item(
                 PopupMenuItem::new(crate::tr!("关闭其他标签", "Close other tabs"))
                     .disabled(state.tab_count <= 1)

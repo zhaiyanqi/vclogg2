@@ -2488,10 +2488,10 @@ impl Workspace {
                             return Ok(None);
                         }
                         let opened =
-                            if let Some(cache_root) = crate::app_paths::cache_dir() {
+                            if let Some(cache_dir) = crate::app_paths::index_cache_dir() {
                                 LogDocument::open_with_index_cache_cancellable(
                                     path,
-                                    cache_root.join("VCLogg2").join("index"),
+                                    cache_dir,
                                     &cancellation_for_search,
                                 )?
                             } else {

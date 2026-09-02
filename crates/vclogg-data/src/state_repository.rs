@@ -814,17 +814,6 @@ impl StateRepository {
         })
     }
 
-    pub fn delete_session_for_path(&self, path: &Path) -> Result<bool> {
-        let connection = self.lock()?;
-        connection
-            .execute(
-                "DELETE FROM file_sessions WHERE path = ?1",
-                [encode_persisted_path(path)],
-            )
-            .with_context(|| format!("无法删除文件会话：{}", path.display()))
-            .map(|removed| removed > 0)
-    }
-
     fn lock(&self) -> Result<MutexGuard<'_, Connection>> {
         self.connection
             .lock()

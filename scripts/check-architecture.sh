@@ -102,4 +102,8 @@ if search_quiet '(^|::)rusqlite\b' crates/vclogg-app/src; then
   fail "app must access SQLite through vclogg-data"
 fi
 
+if search_quiet 'confirm_close_and_delete_file|start_move_file_to_trash|关闭并删除文件|Close and delete file' crates/vclogg-app/src; then
+  fail "the log viewer must not expose source-file deletion"
+fi
+
 echo "architecture boundaries are valid"

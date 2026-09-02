@@ -25,7 +25,9 @@ pub(crate) struct TemporaryResultFile {
 }
 
 pub(crate) fn temporary_result_files() -> Result<Vec<TemporaryResultFile>> {
-    let root = std::env::temp_dir();
+    let Some(root) = crate::app_paths::temporary_dir() else {
+        return Ok(Vec::new());
+    };
     let mut files = Vec::new();
     for entry in match fs::read_dir(&root) {
         Ok(entries) => entries,
@@ -57,7 +59,9 @@ pub(crate) fn remove_empty_temporary_result_parent(path: &Path) {
     let Some(parent) = path.parent() else {
         return;
     };
-    let root = std::env::temp_dir();
+    let Some(root) = crate::app_paths::temporary_dir() else {
+        return;
+    };
     let valid_parent = parent.parent().is_some_and(|candidate| candidate == root)
         && parent
             .file_name()
@@ -68,7 +72,53 @@ pub(crate) fn remove_empty_temporary_result_parent(path: &Path) {
 }
 
 pub(crate) fn is_temporary_result_path(path: &Path) -> bool {
-    let root = std::env::temp_dir();
+    let Some(root) = crate::app_paths::temporary_dir() else {
+        return false;
+    };
+    is_temporary_result_path_in(&root, path)
+}
+
+pub(crate) fn move_temporary_result_to_trash(path: &Path) -> Result<bool> {
+    if !is_temporary_result_path(path) {
+        bail!(crate::tr_args!(
+            "拒绝清理非临时搜索结果路径：{}",
+            "Refusing to clean a path outside the managed temporary-results directory: {}",
+            path.display()
+        ));
+    }
+
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                crate::tr_args!(
+                    "无法读取待清理的临时搜索结果：{}",
+                    "Couldn’t read the temporary search result to clean: {}",
+                    path.display()
+                )
+            });
+        }
+    };
+    if !metadata.is_file() {
+        bail!(crate::tr_args!(
+            "只能清理普通临时搜索结果文件：{}",
+            "Only regular temporary search result files can be cleaned: {}",
+            path.display()
+        ));
+    }
+
+    trash::delete(path).with_context(|| {
+        crate::tr_args!(
+            "无法把临时搜索结果移入系统回收站：{}",
+            "Couldn’t move the temporary search result to the system trash: {}",
+            path.display()
+        )
+    })?;
+    Ok(true)
+}
+
+fn is_temporary_result_path_in(root: &Path, path: &Path) -> bool {
     path.parent().is_some_and(|parent| {
         parent.parent().is_some_and(|candidate| candidate == root)
             && parent
@@ -164,8 +214,8 @@ fn prepare_timestamp_merge_export(export: &ResultExport) -> Result<ResultExport>
     };
     let groups = prepare_timestamp_merge_groups(groups, |path| {
         let (document, pending_cache_write) =
-            if let Some(cache_root) = crate::app_paths::cache_dir() {
-                LogDocument::open_with_index_cache(path, cache_root.join("VCLogg2").join("index"))?
+            if let Some(cache_dir) = crate::app_paths::index_cache_dir() {
+                LogDocument::open_with_index_cache(path, cache_dir)?
             } else {
                 (LogDocument::open(path)?, None)
             };
@@ -217,7 +267,17 @@ fn save_to_unique_temp_with(
     file_name: &str,
     write: fn(&ResultExport, File) -> Result<usize>,
 ) -> Result<PathBuf> {
-    let root = std::env::temp_dir();
+    let root = crate::app_paths::temporary_dir().context(crate::tr!(
+        "无法确定临时结果目录",
+        "Couldn’t determine the temporary-results directory"
+    ))?;
+    fs::create_dir_all(&root).with_context(|| {
+        crate::tr_args!(
+            "无法创建临时结果根目录 {}",
+            "Couldn’t create the temporary-results root {}",
+            root.display()
+        )
+    })?;
     for _ in 0..128 {
         let id = UNIQUE_PATH_ID.fetch_add(1, Ordering::Relaxed);
         let directory = root.join(format!("vclogg2-search-{}-{id}", process::id()));
@@ -535,14 +595,34 @@ fn commit_staging(staging: &Path, target: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, fs, path::PathBuf, sync::Arc, time::SystemTime};
+    use std::{
+        cell::RefCell,
+        fs,
+        path::{Path, PathBuf},
+        sync::Arc,
+        time::SystemTime,
+    };
 
     use vclogg_core::LogDocument;
 
     use super::{
-        ExportGroup, TimestampResolutionState, prepare_timestamp_merge_groups,
-        resolve_row_timestamp_with,
+        ExportGroup, TimestampResolutionState, is_temporary_result_path_in,
+        prepare_timestamp_merge_groups, resolve_row_timestamp_with,
     };
+
+    #[test]
+    fn portable_temporary_result_is_confined_to_its_managed_root() {
+        let root = PathBuf::from("/portable/VCLogg2/temp");
+
+        assert!(is_temporary_result_path_in(
+            &root,
+            Path::new("/portable/VCLogg2/temp/vclogg2-search-42-1/search-results.log")
+        ));
+        assert!(!is_temporary_result_path_in(
+            &root,
+            Path::new("/system-temp/vclogg2-search-42-1/search-results.log")
+        ));
+    }
 
     struct TemporaryFile(PathBuf);
 

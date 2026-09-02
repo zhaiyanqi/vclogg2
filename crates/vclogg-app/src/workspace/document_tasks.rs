@@ -393,11 +393,12 @@ pub(super) fn prepare_document(
     search_result_limit: Option<usize>,
     color_labels: &[ColorLabel],
 ) -> Result<PreparedDocument> {
-    let (document, pending_index_cache) = if let Some(cache_root) = crate::app_paths::cache_dir() {
-        LogDocument::open_with_index_cache(path, cache_root.join("VCLogg2").join("index"))?
-    } else {
-        (LogDocument::open(path)?, None)
-    };
+    let (document, pending_index_cache) =
+        if let Some(cache_dir) = crate::app_paths::index_cache_dir() {
+            LogDocument::open_with_index_cache(path, cache_dir)?
+        } else {
+            (LogDocument::open(path)?, None)
+        };
     let document = Arc::new(document);
     let mut warning = None;
     let session = if session_override.is_some() {
@@ -569,11 +570,11 @@ pub(super) fn prepare_document_preview(
             .map(|viewport| viewport.anchor_source_row)
             .or(session.selected_row)
     });
-    let cached_preview = match (preferred_row, crate::app_paths::cache_dir()) {
-        (Some(preferred_row), Some(cache_root)) if preferred_row > 0 => {
+    let cached_preview = match (preferred_row, crate::app_paths::index_cache_dir()) {
+        (Some(preferred_row), Some(cache_dir)) if preferred_row > 0 => {
             LogDocument::open_cached_preview(
                 path,
-                cache_root.join("VCLogg2").join("index"),
+                cache_dir,
                 preferred_row,
                 PREVIEW_LINE_LIMIT,
                 PREVIEW_BYTE_LIMIT,

@@ -300,13 +300,9 @@ pub struct StateStore {
 
 impl StateStore {
     pub fn open_default() -> Result<Self> {
-        let data_root = crate::app_paths::data_local_dir().context("无法确定本机应用数据目录")?;
-        Self::open(
-            data_root
-                .join("VCLogg2")
-                .join("sessions")
-                .join("vclogg2-state.db"),
-        )
+        let data_root =
+            crate::app_paths::application_data_dir().context("无法确定本机应用数据目录")?;
+        Self::open(data_root.join("sessions").join("vclogg2-state.db"))
     }
 
     fn open(database_path: PathBuf) -> Result<Self> {
@@ -547,10 +543,6 @@ impl StateStore {
 
     pub fn database_info(&self) -> Result<DatabaseInfo> {
         self.repository.database_info()
-    }
-
-    pub fn delete_session_for_path(&self, path: &Path) -> Result<bool> {
-        self.repository.delete_session_for_path(path)
     }
 
     pub fn save_sessions(&self, sessions: &[(PathBuf, FileSessionState)]) -> Result<()> {

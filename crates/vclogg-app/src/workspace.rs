@@ -2975,10 +2975,9 @@ impl Workspace {
         .then(|| {
             cx.spawn(async move |_, cx| {
                 cx.background_executor().timer(Duration::from_secs(2)).await;
-                let Some(cache_root) = crate::app_paths::cache_dir() else {
+                let Some(directory) = crate::app_paths::index_cache_dir() else {
                     return;
                 };
-                let directory = cache_root.join("VCLogg2").join("index");
                 if let Err(error) = cx
                     .background_spawn(async move { vclogg_data::cleanup_index_cache(directory) })
                     .await

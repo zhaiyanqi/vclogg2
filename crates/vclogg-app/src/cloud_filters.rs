@@ -178,14 +178,13 @@ pub struct CloudClient {
 
 impl CloudClient {
     pub fn open_default() -> anyhow::Result<Self> {
-        let data_root = crate::app_paths::data_local_dir()
+        let data_root = crate::app_paths::application_data_dir()
             .ok_or_else(|| {
                 anyhow::anyhow!(crate::tr!(
                     "无法确定本机应用数据目录",
                     "Couldn’t determine the local application-data directory"
                 ))
             })?
-            .join("VCLogg2")
             .join("cloud");
         let default_server_url = std::env::var("VCLOGG2_DEFAULT_CLOUD_API_URL")
             .ok()

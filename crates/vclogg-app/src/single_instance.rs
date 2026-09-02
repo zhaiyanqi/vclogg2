@@ -643,7 +643,9 @@ mod windows {
     }
 
     fn pipe_name() -> Vec<u16> {
-        let identity = crate::app_paths::data_local_dir()
+        // The user profile is hashed only to keep the named pipe user-specific;
+        // this path is never opened or written by the single-instance protocol.
+        let identity = dirs::data_local_dir()
             .or_else(dirs::home_dir)
             .unwrap_or_else(|| PathBuf::from("vclogg2-default-user"));
         let mut hasher = Sha256::new();

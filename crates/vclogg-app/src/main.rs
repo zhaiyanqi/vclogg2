@@ -32,7 +32,6 @@ mod single_instance;
 mod sparse_virtual_list;
 mod state_store;
 mod tab_resume;
-mod trash;
 mod ui_performance;
 mod ui_theme;
 mod virtual_log_lines;

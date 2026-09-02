@@ -19,8 +19,8 @@ use gpui_component::{
 
 use crate::{
     result_export::{
-        TemporaryResultFile, is_temporary_result_path, remove_empty_temporary_result_parent,
-        temporary_result_files,
+        TemporaryResultFile, is_temporary_result_path, move_temporary_result_to_trash,
+        remove_empty_temporary_result_parent, temporary_result_files,
     },
     state_store::{DatabaseInfo, HistorySession, LastWorkspaceFile, RecentFile, StateStore},
 };
@@ -267,11 +267,7 @@ impl HistoryDialog {
                     let mut moved = 0_usize;
                     let mut failures = Vec::new();
                     for path in paths {
-                        if !is_temporary_result_path(&path) {
-                            failures.push(format!("拒绝非临时结果路径：{}", path.display()));
-                            continue;
-                        }
-                        match crate::trash::move_file_to_trash(&path) {
+                        match move_temporary_result_to_trash(&path) {
                             Ok(true) => {
                                 moved += 1;
                                 remove_empty_temporary_result_parent(&path);

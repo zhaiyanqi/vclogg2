@@ -447,7 +447,7 @@ pub struct SettingsDialog {
     word_boundary_characters: Entity<InputState>,
     open_directory_command: Entity<InputState>,
     shortcut_inputs: BTreeMap<ShortcutAction, Entity<InputState>>,
-    cache_dir: PathBuf,
+    cache_dir: Option<PathBuf>,
     cache_info: Option<IndexCacheInfo>,
     cache_status: Option<SharedString>,
     cache_busy: bool,
@@ -793,10 +793,7 @@ impl SettingsDialog {
             shortcut_inputs.insert(action, input);
         }
 
-        let cache_dir = crate::app_paths::cache_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("VCLogg2")
-            .join("index");
+        let cache_dir = crate::app_paths::index_cache_dir();
         let mut dialog = Self {
             draft: settings,
             active_category: if active_category.is_available() {
@@ -1115,8 +1112,17 @@ impl SettingsDialog {
         if self.cache_busy {
             return;
         }
+        let Some(directory) = self.cache_dir.clone() else {
+            self.cache_status = Some(
+                crate::tr!(
+                    "无法确定索引缓存目录。",
+                    "Couldn’t determine the index-cache directory."
+                )
+                .into(),
+            );
+            return;
+        };
         self.cache_busy = true;
-        let directory = self.cache_dir.clone();
         self.cache_task = Some(cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move { vclogg_data::index_cache_info(directory) })
@@ -1150,9 +1156,11 @@ impl SettingsDialog {
         {
             return;
         }
+        let Some(directory) = self.cache_dir.clone() else {
+            return;
+        };
         self.cache_busy = true;
         self.cache_status = Some(crate::tr!("正在清理缓存…", "Cleaning cache…").into());
-        let directory = self.cache_dir.clone();
         self.cache_task = Some(cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move { vclogg_data::clear_index_cache(directory) })
@@ -1201,8 +1209,17 @@ impl SettingsDialog {
         if self.cache_busy {
             return;
         }
+        let Some(directory) = self.cache_dir.clone() else {
+            self.cache_status = Some(
+                crate::tr!(
+                    "无法确定索引缓存目录。",
+                    "Couldn’t determine the index-cache directory."
+                )
+                .into(),
+            );
+            return;
+        };
         self.cache_busy = true;
-        let directory = self.cache_dir.clone();
         self.cache_task = Some(cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn({
@@ -1795,8 +1812,15 @@ impl Render for SettingsDialog {
         let scroll_percent = self.scroll_percent.read(cx).value().start().round() as u16;
         let scroll_lines = self.scroll_lines.read(cx).value().start().round() as u16;
         let viewer_overscan = self.viewer_overscan.read(cx).value().start().round() as u16;
+        let cache_available = self.cache_dir.is_some();
         let cache_summary = self.cache_info.as_ref().map_or_else(
-            || crate::tr!("正在读取缓存大小…", "Reading cache size…").to_string(),
+            || {
+                if cache_available {
+                    crate::tr!("正在读取缓存大小…", "Reading cache size…").to_string()
+                } else {
+                    crate::tr!("缓存不可用", "Cache unavailable").to_string()
+                }
+            },
             |info| {
                 crate::tr_args!(
                     "{} · {} 个文件",
@@ -1810,6 +1834,10 @@ impl Render for SettingsDialog {
             .cache_info
             .as_ref()
             .is_none_or(|info| info.file_count == 0);
+        let cache_path = self.cache_dir.as_deref().map_or_else(
+            || crate::tr!("不可用", "Unavailable").to_string(),
+            |path| path.display().to_string(),
+        );
         let log_entries = app_log::entry_count();
         let network_busy = self.network_task.is_some();
         let network_status_color = match self.network_status_kind {
@@ -2908,7 +2936,7 @@ impl Render for SettingsDialog {
                                             .truncate()
                                             .text_xs()
                                             .text_color(cx.theme().muted_foreground)
-                                            .child(self.cache_dir.display().to_string()),
+                                            .child(cache_path),
                                     ),
                             )
                             .child(
@@ -2919,7 +2947,7 @@ impl Render for SettingsDialog {
                                             .small()
                                             .ghost()
                                             .label(crate::tr!("打开文件夹", "Open folder"))
-                                            .disabled(self.cache_busy)
+                                            .disabled(self.cache_busy || !cache_available)
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.open_cache_directory(cx)
                                             })),
@@ -2930,7 +2958,7 @@ impl Render for SettingsDialog {
                                             .ghost()
                                             .label(crate::tr!("清理缓存", "Clean cache"))
                                             .loading(self.cache_busy)
-                                            .disabled(self.cache_busy || cache_empty)
+                                            .disabled(self.cache_busy || cache_empty || !cache_available)
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.clear_cache(cx)
                                             })),
