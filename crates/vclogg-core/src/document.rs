@@ -423,6 +423,51 @@ impl VerifiedFileBytes {
         })
     }
 
+    fn read_source_block(&self, block_ix: usize) -> Result<Vec<u8>, VerifiedSourceUnavailable> {
+        let block_start = block_ix
+            .checked_mul(APPEND_INTEGRITY_BLOCK_BYTES)
+            .ok_or(VerifiedSourceUnavailable::InvalidSnapshot)?;
+        let block_end = block_start
+            .checked_add(APPEND_INTEGRITY_BLOCK_BYTES)
+            .ok_or(VerifiedSourceUnavailable::InvalidSnapshot)?
+            .min(self.len);
+        let mut block = vec![
+            0_u8;
+            block_end
+                .checked_sub(block_start)
+                .ok_or(VerifiedSourceUnavailable::InvalidSnapshot)?
+        ];
+        let file = self.source_file()?;
+        read_file_exact_at(&file, &mut block, block_start as u64).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::UnexpectedEof {
+                VerifiedSourceUnavailable::InvalidSnapshot
+            } else {
+                VerifiedSourceUnavailable::Transient
+            }
+        })?;
+        Ok(block)
+    }
+
+    fn load_source_block(&self, block_ix: usize) -> Option<Arc<[u8]>> {
+        self.read_source_block(block_ix)
+            .ok()
+            .map(|block| block.into())
+    }
+
+    fn source_identity_matches(&self) -> bool {
+        let Some(expected) = self.identity.as_ref() else {
+            return false;
+        };
+        let Ok(file) = self.source_file() else {
+            return false;
+        };
+        let Ok(metadata) = file.metadata() else {
+            return false;
+        };
+        metadata.len() == self.len as u64
+            && try_read_file_identity(&file).is_ok_and(|identity| &identity == expected)
+    }
+
     fn load_verified_block(&self, block_ix: usize, retain: bool) -> Option<Arc<[u8]>> {
         let retain = retain && !self.transient_source_handles.load(Ordering::Acquire);
         {
@@ -444,27 +489,7 @@ impl VerifiedFileBytes {
         }
 
         let block = (|| {
-            let block_start = block_ix
-                .checked_mul(APPEND_INTEGRITY_BLOCK_BYTES)
-                .ok_or(VerifiedSourceUnavailable::InvalidSnapshot)?;
-            let block_end = block_start
-                .checked_add(APPEND_INTEGRITY_BLOCK_BYTES)
-                .ok_or(VerifiedSourceUnavailable::InvalidSnapshot)?
-                .min(self.len);
-            let mut block = vec![
-                0_u8;
-                block_end
-                    .checked_sub(block_start)
-                    .ok_or(VerifiedSourceUnavailable::InvalidSnapshot)?
-            ];
-            let file = self.source_file()?;
-            read_file_exact_at(&file, &mut block, block_start as u64).map_err(|error| {
-                if error.kind() == std::io::ErrorKind::UnexpectedEof {
-                    VerifiedSourceUnavailable::InvalidSnapshot
-                } else {
-                    VerifiedSourceUnavailable::Transient
-                }
-            })?;
+            let block = self.read_source_block(block_ix)?;
             let expected = self
                 .integrity_blocks
                 .get(block_ix)
@@ -973,6 +998,7 @@ pub struct LogDocument {
 
 pub(crate) struct DocumentSearchLines<'a> {
     document: &'a LogDocument,
+    verify_integrity: bool,
     verified_block: Option<(usize, Option<Arc<[u8]>>)>,
 }
 
@@ -1002,7 +1028,11 @@ impl DocumentSearchLines<'_> {
                 if first_block != last_block {
                     let mut joined = Vec::with_capacity(range.len());
                     for block_ix in first_block..=last_block {
-                        let block = bytes.load_verified_block(block_ix, false)?;
+                        let block = if self.verify_integrity {
+                            bytes.load_verified_block(block_ix, false)?
+                        } else {
+                            bytes.load_source_block(block_ix)?
+                        };
                         let block_start = block_ix.saturating_mul(APPEND_INTEGRITY_BLOCK_BYTES);
                         let start = range.start.saturating_sub(block_start).min(block.len());
                         let end = range.end.saturating_sub(block_start).min(block.len());
@@ -1019,8 +1049,12 @@ impl DocumentSearchLines<'_> {
                     .as_ref()
                     .is_none_or(|(block_ix, _)| *block_ix != first_block)
                 {
-                    self.verified_block =
-                        Some((first_block, bytes.load_verified_block(first_block, false)));
+                    let block = if self.verify_integrity {
+                        bytes.load_verified_block(first_block, false)
+                    } else {
+                        bytes.load_source_block(first_block)
+                    };
+                    self.verified_block = Some((first_block, block));
                 }
                 let block = self.verified_block.as_ref()?.1.as_ref()?;
                 let block_start = first_block.saturating_mul(APPEND_INTEGRITY_BLOCK_BYTES);
@@ -1584,10 +1618,24 @@ impl LogDocument {
         Some(start..end)
     }
 
-    pub(crate) fn search_lines(&self) -> DocumentSearchLines<'_> {
+    pub(crate) fn search_lines(&self, verify_integrity: bool) -> DocumentSearchLines<'_> {
         DocumentSearchLines {
             document: self,
+            verify_integrity,
             verified_block: None,
+        }
+    }
+
+    pub(crate) fn has_strong_source_identity(&self) -> bool {
+        matches!(self.bytes.as_ref(), DocumentBytes::Verified(bytes) if bytes.identity.is_some())
+    }
+
+    /// Recheck the platform change token around a search that bypasses per-block hashing.
+    /// Callers without a strong identity must keep verifying every block instead.
+    pub(crate) fn source_identity_matches(&self) -> bool {
+        match self.bytes.as_ref() {
+            DocumentBytes::Verified(bytes) => bytes.source_identity_matches(),
+            DocumentBytes::Empty | DocumentBytes::Owned(_) => true,
         }
     }
 

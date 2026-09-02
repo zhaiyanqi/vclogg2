@@ -219,6 +219,10 @@ fn search_with_compiled_matcher_inner(
     if let Some(progress) = progress {
         progress.update(0, 0);
     }
+    let verify_integrity = !document.has_strong_source_identity();
+    if !verify_integrity && !document.source_identity_matches() {
+        return SearchRun::SourceChanged;
+    }
     let line_count = document.line_count();
     let chunk_count = search_chunk_count(document);
     let chunk_size = line_count.div_ceil(chunk_count);
@@ -230,6 +234,7 @@ fn search_with_compiled_matcher_inner(
             max_results,
             cancellation,
             progress,
+            verify_integrity,
         )]
     } else {
         (0..chunk_count)
@@ -244,6 +249,7 @@ fn search_with_compiled_matcher_inner(
                     max_results,
                     cancellation,
                     progress,
+                    verify_integrity,
                 )
             })
             .collect::<Vec<_>>()
@@ -259,6 +265,9 @@ fn search_with_compiled_matcher_inner(
         .iter()
         .any(|chunk| matches!(chunk, SearchChunkRun::SourceChanged))
     {
+        return SearchRun::SourceChanged;
+    }
+    if !verify_integrity && !document.source_identity_matches() {
         return SearchRun::SourceChanged;
     }
 
@@ -329,13 +338,14 @@ fn scan_search_chunk(
     max_results: Option<usize>,
     cancellation: &SearchCancellation,
     progress: Option<&SearchProgress>,
+    verify_integrity: bool,
 ) -> SearchChunkRun {
     let mut line_indices = RoaringTreemap::new();
     let mut truncated = false;
     let max_results_u64 = max_results.map(|limit| u64::try_from(limit).unwrap_or(u64::MAX));
     let mut pending_scanned_lines = 0;
     let mut pending_matched_lines = 0;
-    let mut search_lines = document.search_lines();
+    let mut search_lines = document.search_lines(verify_integrity);
 
     for row_ix in rows {
         if pending_scanned_lines == SEARCH_PROGRESS_BATCH_LINES {
