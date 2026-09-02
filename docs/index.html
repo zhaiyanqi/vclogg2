@@ -45,6 +45,15 @@
   <body>
     <a class="skip-link" href="#main">跳到主要内容</a>
 
+    <div class="ambient" aria-hidden="true">
+      <div class="ambient-grid"></div>
+      <div class="aurora aurora-one" data-parallax="0.08"></div>
+      <div class="aurora aurora-two" data-parallax="-0.05"></div>
+      <div class="aurora aurora-three" data-parallax="0.12"></div>
+      <div class="pointer-light"></div>
+    </div>
+    <div class="scroll-progress" aria-hidden="true"><span></span></div>
+
     <header class="site-header" aria-label="主导航">
       <div class="container header-inner">
         <a class="brand" href="#top" aria-label="VCLogg2 首页">
@@ -61,7 +70,7 @@
 
         <div class="header-actions">
           <button class="theme-toggle" type="button" aria-label="切换明暗主题">
-            <span aria-hidden="true">明 / 暗</span>
+            <span class="theme-icon" aria-hidden="true"></span>
           </button>
           <a
             class="github-link"
@@ -77,10 +86,11 @@
 
     <main id="main">
       <section class="hero" id="top">
+        <div class="hero-scanline" aria-hidden="true"></div>
         <div class="hero-grid container">
           <div class="hero-copy">
-            <p class="eyebrow"><span></span> Rust × GPUI 原生桌面体验</p>
-            <h1>大文件日志，<br /><em>清晰掌控。</em></h1>
+            <p class="eyebrow"><span></span> Rust × GPUI 原生桌面体验 <b>2026</b></p>
+            <h1>穿过海量日志，<br /><em>看见真正的信号。</em></h1>
             <p class="hero-lede">
               VCLogg2 为持续增长的日志和复杂排障场景而生。快速打开、灵活检索、稳定浏览，
               让你把注意力留给真正重要的线索。
@@ -104,13 +114,15 @@
               </a>
             </div>
             <ul class="hero-notes" aria-label="支持信息">
-              <li>Windows 10 / 11</li>
-              <li>macOS 15 ARM64</li>
-              <li>Ubuntu 22.04</li>
+              <li><span>01</span> Windows 10 / 11</li>
+              <li><span>02</span> macOS 15 ARM64</li>
+              <li><span>03</span> Ubuntu 22.04</li>
             </ul>
           </div>
 
-          <div class="product-stage" aria-label="VCLogg2 界面示意">
+          <div class="product-stage" data-tilt aria-label="VCLogg2 界面示意">
+            <div class="stage-orbit orbit-one"></div>
+            <div class="stage-orbit orbit-two"></div>
             <div class="stage-glow"></div>
             <div class="app-window">
               <div class="window-titlebar">
@@ -153,23 +165,30 @@
               </div>
             </div>
             <div class="floating-card result-card">
-              <span>搜索完成</span>
-              <strong>4 个匹配</strong>
+              <span><i></i> 搜索完成</span>
+              <strong><b data-count="4">4</b> 个匹配</strong>
             </div>
             <div class="floating-card file-card">
               <span>按需解码</span>
               <strong>低内存浏览</strong>
             </div>
+            <div class="floating-card speed-card">
+              <span>日志流</span>
+              <strong>LIVE <i></i></strong>
+            </div>
           </div>
         </div>
+        <a class="scroll-cue" href="#features" aria-label="向下浏览功能">
+          <span>向下探索</span><i aria-hidden="true"></i>
+        </a>
       </section>
 
       <section class="trust-strip" aria-label="核心特性摘要">
         <div class="container trust-grid">
-          <div><strong>三平台</strong><span>原生桌面支持</span></div>
-          <div><strong>多范围</strong><span>标签与目录检索</span></div>
-          <div><strong>可恢复</strong><span>工作区与会话</span></div>
-          <div><strong>开源</strong><span>代码托管于 GitHub</span></div>
+          <div><i>01</i><strong>三平台</strong><span>原生桌面支持</span></div>
+          <div><i>02</i><strong>多范围</strong><span>标签与目录检索</span></div>
+          <div><i>03</i><strong>可恢复</strong><span>工作区与会话</span></div>
+          <div><i>04</i><strong>开源</strong><span>代码托管于 GitHub</span></div>
         </div>
       </section>
 
@@ -184,7 +203,7 @@
           </div>
 
           <div class="feature-grid">
-            <article class="feature-card feature-wide">
+            <article class="feature-card feature-wide" data-tilt>
               <div class="feature-index">01</div>
               <div>
                 <h3>大文件也能从容浏览</h3>
@@ -196,21 +215,21 @@
               </div>
             </article>
 
-            <article class="feature-card">
+            <article class="feature-card" data-tilt>
               <div class="feature-index">02</div>
               <h3>搜索，不止一个范围</h3>
               <p>多关键词、大小写、字节正则，以及当前标签、多标签和目录三种范围自由组合。</p>
               <div class="query-pills" aria-hidden="true"><span>error</span><span>timeout</span><span>retry</span></div>
             </article>
 
-            <article class="feature-card">
+            <article class="feature-card" data-tilt>
               <div class="feature-index">03</div>
               <h3>持续追踪变化</h3>
               <p>支持末尾跟随。纯追加文件只索引新增内容，截断或替换时安全回退到完整重建。</p>
               <div class="tail-visual" aria-hidden="true"><span></span><span></span><span></span><i></i></div>
             </article>
 
-            <article class="feature-card">
+            <article class="feature-card" data-tilt>
               <div class="feature-index">04</div>
               <h3>把线索留在现场</h3>
               <p>行标记、十色标签、日志级别着色与匹配高亮，让复盘时仍能看见分析脉络。</p>
@@ -219,14 +238,14 @@
               </div>
             </article>
 
-            <article class="feature-card">
+            <article class="feature-card" data-tilt>
               <div class="feature-index">05</div>
               <h3>工作区可恢复</h3>
               <p>标签顺序、查询、标记、视口与呈现偏好都会保存，下一次打开即可接着分析。</p>
               <div class="resume-visual" aria-hidden="true"><span></span><span></span><span></span></div>
             </article>
 
-            <article class="feature-card feature-wide export-card">
+            <article class="feature-card feature-wide export-card" data-tilt>
               <div class="feature-index">06</div>
               <div>
                 <h3>结果随时带走</h3>
@@ -258,7 +277,8 @@
               查看界面规范 <span aria-hidden="true">↗</span>
             </a>
           </div>
-          <figure class="design-board">
+          <figure class="design-board" data-tilt>
+            <div class="board-glare" aria-hidden="true"></div>
             <img
               src="assets/ui-polish-acceptance.svg"
               alt="VCLogg2 晨雾浅色与深海夜色主题、搜索高亮和颜色标签规范预览"
@@ -277,19 +297,19 @@
             <p>原生窗口、文件拖放、系统废纸篓与文件打开集成，在不同平台上保持一致。</p>
           </div>
           <div class="platform-grid">
-            <article>
+            <article data-tilt>
               <span class="platform-symbol" aria-hidden="true">▦</span>
               <h3>Windows</h3>
               <p>Windows 10 / 11 · x64</p>
               <small>便携 ZIP，解压即可使用</small>
             </article>
-            <article>
+            <article data-tilt>
               <span class="platform-symbol" aria-hidden="true">⌘</span>
               <h3>macOS</h3>
               <p>macOS 15 · Apple Silicon</p>
               <small>原生 App 包与安装脚本</small>
             </article>
-            <article>
+            <article data-tilt>
               <span class="platform-symbol" aria-hidden="true">›_</span>
               <h3>Linux</h3>
               <p>Ubuntu 22.04 · x86_64</p>
@@ -301,6 +321,7 @@
 
       <section class="section start-section" id="start">
         <div class="container start-card">
+          <div class="cta-orbits" aria-hidden="true"><i></i><i></i><i></i></div>
           <div class="start-heading">
             <p class="eyebrow"><span></span> 三步开始</p>
             <h2>把日志交给 VCLogg2。</h2>
