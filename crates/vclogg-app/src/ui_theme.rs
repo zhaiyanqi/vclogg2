@@ -434,12 +434,7 @@ pub(crate) fn material_highlight_line(colors: &ProductColors) -> Div {
 }
 
 pub(crate) fn text_selection_highlight(cx: &App) -> Hsla {
-    let colors = palette(cx);
-    colors.primary.opacity(if Theme::global(cx).is_dark() {
-        0.34
-    } else {
-        0.26
-    })
+    Theme::global(cx).selection
 }
 
 pub(crate) fn suggestion_match_highlight(cx: &App) -> Hsla {

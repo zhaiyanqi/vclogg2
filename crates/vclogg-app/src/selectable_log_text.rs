@@ -346,12 +346,31 @@ impl TextSelectionActivity {
 struct LogTextSelectionState {
     text: LogText,
     projected_range: Option<Range<usize>>,
-    custom_range: Option<Range<usize>>,
+    local_selection: Option<LogTextLocalSelection>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum LogTextLocalSelection {
+    Word(Range<usize>),
+    Line(Range<usize>),
+}
+
+impl LogTextLocalSelection {
+    fn range(&self) -> &Range<usize> {
+        match self {
+            Self::Word(range) | Self::Line(range) => range,
+        }
+    }
 }
 
 impl LogTextSelectionState {
     fn copy_text(&self) -> String {
-        let range = self.custom_range.clone().or(self.projected_range.clone());
+        let range = self
+            .local_selection
+            .as_ref()
+            .map(LogTextLocalSelection::range)
+            .cloned()
+            .or(self.projected_range.clone());
         range
             .and_then(|range| self.text.source_text(range))
             .unwrap_or_default()
@@ -476,7 +495,7 @@ impl<K: Clone + Ord> TextSelectionCache<K> {
             handle.clear_with(
                 move |_| {
                     let mut state = clear_state.borrow_mut();
-                    state.custom_range = None;
+                    state.local_selection = None;
                     state.projected_range = None;
                 },
                 cx,
@@ -667,6 +686,24 @@ fn word_ranges_near_offset(
         })
 }
 
+fn local_selection_for_multi_click(
+    current: Option<&LogTextLocalSelection>,
+    word_range: Range<usize>,
+    line_len: usize,
+    click_count: usize,
+) -> LogTextLocalSelection {
+    if click_count >= 3
+        || matches!(
+            current,
+            Some(LogTextLocalSelection::Word(selected)) if selected == &word_range
+        )
+    {
+        LogTextLocalSelection::Line(0..line_len)
+    } else {
+        LogTextLocalSelection::Word(word_range)
+    }
+}
+
 fn word_range_at_offset(
     text: &str,
     offset: usize,
@@ -747,7 +784,7 @@ impl Element for SelectableLogText {
         let hitbox = window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal);
         // gpui-component 的 register 会向当前全部文本选择参与者发布快照。空闲帧若让
         // 每个可见日志行都注册，会形成 O(可见行数²) 的重复遍历；仅保留鼠标所在行
-        // 作为拖选起点，跨行选择激活后再恢复全部可见行。双击选词属于参与者本地选择，
+        // 作为拖选起点，跨行选择激活后再恢复全部可见行。多击选词/整行属于参与者本地选择，
         // 它没有几何快照，必须单独保持当前行注册，否则鼠标离开后帧清理会清掉词选区。
         if self.selection.activity.is_active()
             || self.selection.handle.has_local_selection(cx)
@@ -786,7 +823,7 @@ impl Element for SelectableLogText {
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
             if !phase.bubble()
                 || event.button != MouseButton::Left
-                || event.click_count != 2
+                || event.click_count < 2
                 || event.modifiers.control
                 || event.modifiers.shift
                 || !event_hitbox.is_hovered(window)
@@ -796,35 +833,46 @@ impl Element for SelectableLogText {
             let Ok(offset) = event_layout.index_for_position(event.position) else {
                 return;
             };
-            let range = word_ranges_near_offset(
-                selection_state.borrow().text.display(),
-                offset,
-                &boundary_characters,
-            )
-            .into_iter()
-            .find(|range| {
-                let (Some(start), Some(end)) = (
-                    event_layout.position_for_index(range.start),
-                    event_layout.position_for_index(range.end),
-                ) else {
-                    return false;
-                };
-                SelectableLogText::selection_bounds(
-                    start,
-                    end,
-                    event_layout.bounds(),
-                    event_layout.line_height(),
-                )
-                .into_iter()
-                .any(|bounds| bounds.contains(&event.position))
-            });
-            let Some(range) = range else {
+            let word_range = {
+                let state = selection_state.borrow();
+                word_ranges_near_offset(state.text.display(), offset, &boundary_characters)
+                    .into_iter()
+                    .find(|range| {
+                        let (Some(start), Some(end)) = (
+                            event_layout.position_for_index(range.start),
+                            event_layout.position_for_index(range.end),
+                        ) else {
+                            return false;
+                        };
+                        SelectableLogText::selection_bounds(
+                            start,
+                            end,
+                            event_layout.bounds(),
+                            event_layout.line_height(),
+                        )
+                        .into_iter()
+                        .any(|bounds| bounds.contains(&event.position))
+                    })
+            };
+            let Some(word_range) = word_range else {
                 return;
+            };
+            let local_selection = {
+                let state = selection_state.borrow();
+                local_selection_for_multi_click(
+                    state.local_selection.as_ref(),
+                    word_range,
+                    state.text.display().len(),
+                    event.click_count,
+                )
             };
             GlobalState::suppress_text_selection(cx);
             TextSelection::clear(window, cx);
-            selection.state.borrow_mut().custom_range = Some(range);
+            selection.state.borrow_mut().local_selection = Some(local_selection);
             selection.handle.set_local_selection(true, cx);
+            // The first click already focused and activated the row. Consume the completed
+            // multi-click gesture so outer row handlers cannot replace the text selection.
+            cx.stop_propagation();
             window.refresh();
         });
         // update_runs 会更新当前行的投影；选择快照变化已由 register 和订阅触发刷新。
@@ -850,8 +898,10 @@ impl Element for SelectableLogText {
             .selection
             .state
             .borrow()
-            .custom_range
-            .clone()
+            .local_selection
+            .as_ref()
+            .map(LogTextLocalSelection::range)
+            .cloned()
             .or_else(|| projection.ranges().first().and_then(Clone::clone));
         if !self.suppress_selection
             && let Some(range) = painted_range
@@ -865,8 +915,8 @@ impl Element for SelectableLogText {
 mod tests {
     use super::*;
     use gpui::{
-        Context, Hsla, Modifiers, MouseMoveEvent, MouseUpEvent, ParentElement as _, Render,
-        Styled as _, TestAppContext, div, hsla, point, px,
+        Context, Hsla, InteractiveElement as _, Modifiers, MouseMoveEvent, MouseUpEvent,
+        ParentElement as _, Render, Styled as _, TestAppContext, div, hsla, point, px,
     };
     use gpui_base::TextSelectionLayer;
 
@@ -960,6 +1010,12 @@ mod tests {
                     .left(px(10.))
                     .top(px(10.))
                     .text_size(px(14.))
+                    .on_mouse_down(MouseButton::Left, |event: &MouseDownEvent, window, cx| {
+                        if event.click_count >= 3 {
+                            GlobalState::suppress_text_selection(cx);
+                            TextSelection::clear(window, cx);
+                        }
+                    })
                     .child(SelectableLogText::new(
                         selection,
                         0,
@@ -1059,6 +1115,81 @@ mod tests {
                     .any(|quad| quad.background == TEST_SELECTION_COLOR.into())
             );
         });
+    }
+
+    #[gpui::test]
+    fn triple_click_selects_the_whole_line_before_the_row_handler(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, _| SelectableLogTextTestView {
+            text: LogText::new("alpha beta".into()),
+            selections: TextSelectionCache::default(),
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        let word_position = point(px(20.), px(18.));
+        cx.simulate_event(MouseDownEvent {
+            position: word_position,
+            modifiers: Modifiers::default(),
+            button: MouseButton::Left,
+            click_count: 2,
+            first_mouse: false,
+        });
+        cx.simulate_event(MouseDownEvent {
+            position: word_position,
+            modifiers: Modifiers::default(),
+            button: MouseButton::Left,
+            click_count: 3,
+            first_mouse: false,
+        });
+
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert_eq!(TextSelection::selected_text(window, cx), "alpha beta");
+            assert_eq!(
+                view.read(cx).selections.entries[&0]
+                    .selection
+                    .state
+                    .borrow()
+                    .local_selection,
+                Some(LogTextLocalSelection::Line(0.."alpha beta".len()))
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn second_double_click_on_the_selected_word_selects_the_whole_line(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| SelectableLogTextTestView {
+            text: LogText::new("alpha beta".into()),
+            selections: TextSelectionCache::default(),
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        let word_position = point(px(20.), px(18.));
+        for _ in 0..2 {
+            cx.simulate_event(MouseDownEvent {
+                position: word_position,
+                modifiers: Modifiers::default(),
+                button: MouseButton::Left,
+                click_count: 2,
+                first_mouse: false,
+            });
+        }
+
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert_eq!(TextSelection::selected_text(window, cx), "alpha beta");
+        });
+    }
+
+    #[test]
+    fn double_clicking_another_word_replaces_the_word_selection() {
+        assert_eq!(
+            local_selection_for_multi_click(Some(&LogTextLocalSelection::Word(0..5)), 6..10, 10, 2,),
+            LogTextLocalSelection::Word(6..10)
+        );
     }
 
     #[gpui::test]
