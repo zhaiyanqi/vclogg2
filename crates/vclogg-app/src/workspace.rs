@@ -293,6 +293,15 @@ fn should_upgrade_loading_document(
     )
 }
 
+fn should_defer_directory_group_activation(
+    pending_path: Option<&Path>,
+    candidate_path: &Path,
+    load_state: DocumentLoadState,
+) -> bool {
+    load_state != DocumentLoadState::Ready
+        && pending_path.is_some_and(|pending_path| paths_match(pending_path, candidate_path))
+}
+
 #[derive(Default)]
 struct OpenDocumentOverrides {
     sessions: BTreeMap<PathBuf, FileSessionState>,
@@ -2707,6 +2716,7 @@ pub struct Workspace {
     document_tab_scroll: ScrollHandle,
     pending_document_tab_reveal: Cell<Option<u64>>,
     pending_directory_result_jump: Option<PendingDirectoryResultJump>,
+    pending_directory_group_activation: Option<PathBuf>,
     next_document_id: u64,
     next_new_tab_id: u64,
     case_sensitive: bool,
@@ -3290,6 +3300,7 @@ impl Workspace {
             document_tab_scroll: ScrollHandle::new(),
             pending_document_tab_reveal: Cell::new(None),
             pending_directory_result_jump: None,
+            pending_directory_group_activation: None,
             next_document_id: 1,
             next_new_tab_id: 2,
             case_sensitive: false,

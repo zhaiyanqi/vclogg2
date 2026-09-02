@@ -464,6 +464,32 @@ fn pending_directory_jump_rejects_a_reopened_snapshot_at_the_same_path() {
 }
 
 #[test]
+fn directory_group_activation_waits_for_a_complete_target_frame() {
+    let pending = Path::new("logs/a.log");
+
+    assert!(should_defer_directory_group_activation(
+        Some(pending),
+        pending,
+        DocumentLoadState::Opening,
+    ));
+    assert!(should_defer_directory_group_activation(
+        Some(pending),
+        pending,
+        DocumentLoadState::Preview,
+    ));
+    assert!(!should_defer_directory_group_activation(
+        Some(pending),
+        pending,
+        DocumentLoadState::Ready,
+    ));
+    assert!(!should_defer_directory_group_activation(
+        Some(pending),
+        Path::new("logs/b.log"),
+        DocumentLoadState::Opening,
+    ));
+}
+
+#[test]
 fn result_row_target_resolution_is_atomic_and_groups_by_open_document() {
     let selected = BTreeMap::from([
         (101, [2, 7].into_iter().collect()),

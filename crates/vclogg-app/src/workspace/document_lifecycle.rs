@@ -333,6 +333,18 @@ impl Workspace {
             }
             let pending_index_cache = prepared.pending_index_cache.take();
             cache_writes.extend(pending_index_cache);
+            // A zero-result directory header is navigation, not an invitation to publish the
+            // empty opening shell. Keep the source surface until the target's first frame exists.
+            let is_pending_directory_group_target = self
+                .pending_directory_group_activation
+                .as_deref()
+                .is_some_and(|pending_path| paths_match(pending_path, &path));
+            let defer_directory_group_activation = should_defer_directory_group_activation(
+                self.pending_directory_group_activation.as_deref(),
+                &path,
+                prepared.load_state,
+            );
+            let prepared_load_state = prepared.load_state;
 
             if let Some(existing_ix) = self
                 .documents
@@ -351,16 +363,31 @@ impl Workspace {
                     prepared.load_state,
                     prepared.session.is_some(),
                 );
-                if should_upgrade {
+                let target_frame_is_prepared = if should_upgrade {
                     let ready = prepared.load_state == DocumentLoadState::Ready;
-                    self.upgrade_loading_document(existing_ix, prepared, window, cx);
+                    let prepared_frame_installed =
+                        self.upgrade_loading_document(existing_ix, prepared, window, cx);
                     global_sources_changed = true;
                     if ready && !path_match_set_contains(&self.transient_paths, &path) {
                         recorded_paths.push(path.clone());
                     }
-                }
-                if self.active_ix != Some(existing_ix) {
-                    self.activate_tab(existing_ix, window, cx);
+                    prepared_frame_installed
+                } else {
+                    false
+                };
+                if self.active_ix != Some(existing_ix) && !defer_directory_group_activation {
+                    if is_pending_directory_group_target
+                        && prepared_load_state == DocumentLoadState::Ready
+                    {
+                        let tab_id = WorkspaceTabId::Document(self.documents[existing_ix].id);
+                        if target_frame_is_prepared {
+                            self.commit_workspace_tab_activation(tab_id, true, window, cx);
+                        } else {
+                            self.activate_workspace_tab(tab_id, window, cx);
+                        }
+                    } else {
+                        self.activate_tab(existing_ix, window, cx);
+                    }
                 }
                 continue;
             }
@@ -701,7 +728,9 @@ impl Workspace {
             } else {
                 self.tabs.push(workspace_tab_id);
             }
-            self.active_tab_id = workspace_tab_id;
+            if !defer_directory_group_activation {
+                self.active_tab_id = workspace_tab_id;
+            }
         }
         self.reorder_documents_to_match_tabs();
         if global_sources_changed {
@@ -818,6 +847,7 @@ impl Workspace {
             cx,
         );
         self.complete_pending_directory_result_jump(window, cx);
+        self.pending_directory_group_activation = None;
         self.persist_workspace_order(window, cx);
     }
 
@@ -1084,7 +1114,7 @@ impl Workspace {
         mut prepared: PreparedDocument,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let upgrade_frame = prepared.upgrade_frame.take();
         let highlight_matches = self.app_settings.highlight_matches;
         let tab = &mut self.documents[document_ix];
@@ -1181,6 +1211,7 @@ impl Workspace {
                 && Arc::ptr_eq(&frame.document, &tab.document)
                 && frame.result_rows == result_rows
         });
+        let prepared_frame_installed = upgrade_frame.is_some();
 
         let marked_rows = tab.file.marked_rows.clone();
         tab.log_table.update(cx, |table, cx| {
@@ -1300,6 +1331,7 @@ impl Workspace {
                 self.refresh_active_document_surfaces_atomically(window, cx);
             }
         }
+        prepared_frame_installed
     }
 
     pub(super) fn auto_follow_candidate(

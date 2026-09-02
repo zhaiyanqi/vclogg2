@@ -2069,10 +2069,24 @@ impl Workspace {
                 );
                 return;
             }
+            if self.global_search.result_scope == Some(SearchScope::Directory) {
+                self.pending_directory_group_activation = Some(path.clone());
+            }
             self.begin_open_paths(vec![path], window, cx);
             return;
         };
-        self.activate_tab(document_ix, window, cx);
+        if self.global_search.result_scope == Some(SearchScope::Directory)
+            && self.documents[document_ix].load_state != DocumentLoadState::Ready
+            && result_path.is_some()
+        {
+            self.pending_directory_group_activation = result_path;
+            return;
+        }
+        self.activate_workspace_tab(
+            WorkspaceTabId::Document(self.documents[document_ix].id),
+            window,
+            cx,
+        );
     }
 
     pub(super) fn start_search_action(
