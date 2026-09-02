@@ -6,7 +6,7 @@ VCLogg2 面向大文件浏览、持续追加日志、多范围检索和分析型
 
 [项目主页](https://zhaiyanqi.github.io/vclogg2/) · [下载最新版本](https://github.com/zhaiyanqi/vclogg2/releases) · [问题反馈](https://github.com/zhaiyanqi/vclogg2/issues) · [项目文档](doc/README.md)
 
-![VCLogg2：大文件日志，清晰掌控](docs/assets/og.png)
+![VCLogg2：海量日志，信号清晰](docs/assets/readme-hero.jpg)
 
 ## 特性
 
