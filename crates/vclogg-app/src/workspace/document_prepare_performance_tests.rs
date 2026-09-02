@@ -8,6 +8,8 @@ use std::{
 
 use vclogg_core::LogDocument;
 
+use crate::state_store::FileSessionState;
+
 use super::{
     directory_search_scan_paths, path_match_key, prepare_document, prepare_paths_bounded,
     prepare_paths_bounded_while,
@@ -102,6 +104,26 @@ fn cached_complete_document_handoff_does_not_reopen_the_source() {
 
     assert!(std::sync::Arc::ptr_eq(&prepared.document, &document));
     assert!(prepared.pending_index_cache.is_none());
+}
+
+#[test]
+fn saved_search_is_deferred_until_after_document_preparation() {
+    let temporary = TemporaryDirectory::new("deferred-saved-search");
+    let path = temporary.0.join("source.log");
+    fs::write(&path, b"alpha\nbeta\nalpha\n").expect("应能写入已保存搜索测试日志");
+    let document =
+        std::sync::Arc::new(LogDocument::open(&path).expect("应能打开已保存搜索测试日志"));
+    let session = FileSessionState {
+        query_text: "alpha".to_owned(),
+        ..FileSessionState::default()
+    };
+
+    let prepared = prepare_document(&path, Some(document), None, Some(session), Some(100), &[])
+        .expect("文档准备不应等待已保存搜索");
+
+    assert_eq!(prepared.load_state, super::DocumentLoadState::Ready);
+    assert!(prepared.search_result.line_indices.is_empty());
+    assert_eq!(prepared.session.as_ref().unwrap().query_text, "alpha");
 }
 
 #[test]

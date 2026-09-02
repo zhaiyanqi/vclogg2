@@ -593,6 +593,7 @@ impl Workspace {
 
         for document_id in &document_ids {
             self.persistence.checkpoint_tasks.remove(*document_id);
+            self.restored_document_searches.remove(*document_id);
         }
 
         if self
