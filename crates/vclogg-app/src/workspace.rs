@@ -3821,22 +3821,20 @@ fn empty_file_button_content(
                 ),
         )
         .child(
-            div()
-                .w(rems(23.))
-                .min_w_0()
-                .flex_shrink_1()
-                .truncate()
-                .text_sm()
-                .child(name),
-        )
-        .child(
-            div()
+            v_flex()
                 .min_w_0()
                 .flex_1()
-                .truncate()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(parent),
+                .gap_1()
+                .child(div().w_full().min_w_0().truncate().text_sm().child(name))
+                .child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(parent),
+                ),
         )
         .child(
             div()
