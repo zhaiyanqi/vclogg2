@@ -219,7 +219,7 @@ fn search_with_compiled_matcher_inner(
     if let Some(progress) = progress {
         progress.update(0, 0);
     }
-    let verify_integrity = !document.has_strong_source_identity();
+    let verify_integrity = !document.has_strong_source_change_token();
     if !verify_integrity && !document.source_identity_matches() {
         return SearchRun::SourceChanged;
     }

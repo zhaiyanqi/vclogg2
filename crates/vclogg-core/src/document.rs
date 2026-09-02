@@ -1810,8 +1810,19 @@ impl LogDocument {
         }
     }
 
-    pub(crate) fn has_strong_source_identity(&self) -> bool {
-        matches!(self.bytes.as_ref(), DocumentBytes::Verified(bytes) if bytes.identity.is_some())
+    pub(crate) fn has_strong_source_change_token(&self) -> bool {
+        #[cfg(windows)]
+        {
+            matches!(self.bytes.as_ref(), DocumentBytes::Verified(bytes) if bytes.identity.is_some())
+        }
+        #[cfg(not(windows))]
+        {
+            // Unix dev/inode/ctime identifies a reopened file well enough to reject
+            // replacement, but timestamp granularity does not guarantee that every
+            // same-size in-place write changes the token. Searches must still verify
+            // the content blocks on these platforms.
+            false
+        }
     }
 
     /// Recheck the platform change token around a search that bypasses per-block hashing.
