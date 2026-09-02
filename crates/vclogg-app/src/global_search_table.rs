@@ -1372,6 +1372,19 @@ impl GlobalSearchTableDelegate {
         self.visible_lines.install_staged(loaded);
     }
 
+    pub(crate) fn install_scope_replacement(
+        &mut self,
+        groups: Vec<GlobalSearchGroup>,
+        matcher: Option<SearchMatcher>,
+        collapsed_document_ids: &BTreeSet<u64>,
+        loaded: StagedVisibleLineLoadResult<(u64, usize)>,
+    ) {
+        self.set_groups(groups);
+        self.restore_collapsed_document_ids(collapsed_document_ids);
+        self.set_search_matcher(matcher);
+        self.visible_lines.install_staged(loaded);
+    }
+
     pub(crate) fn reset_visible_line_owner(&mut self) {
         self.visible_line_task = None;
         self.visible_lines.invalidate_window();
@@ -2347,6 +2360,60 @@ mod tests {
                 .as_ref(),
             "new global result"
         );
+    }
+
+    #[test]
+    fn scope_replacement_installs_target_projection_and_visible_lines_together() {
+        let old_document = Arc::new(LogDocument::placeholder("all-open.log"));
+        let mut delegate = GlobalSearchTableDelegate::new();
+        delegate.set_groups(vec![test_group(old_document)]);
+        delegate.visible_lines.prepare_visible_rows(
+            0..2,
+            2,
+            |row_ix| (row_ix == 1).then_some((1, 0)),
+            |_, _| Some(LinePreview::new("all-open result", false)),
+        );
+
+        let mut directory_group = test_group(Arc::new(LogDocument::placeholder("directory.log")));
+        directory_group.source.document_id = 2;
+        directory_group.projection.rows = [9].into_iter().collect();
+        directory_group.presentation.matched_rows = [9].into_iter().collect();
+        let mut replacement = GlobalSearchTableDelegate::new();
+        replacement.set_groups(vec![directory_group.clone()]);
+        let staged = delegate
+            .stage_groups_replacement(&replacement, 0..2)
+            .load(|_, _| Some(LinePreview::new("directory result", false)));
+
+        assert_eq!(
+            delegate
+                .visible_lines
+                .line((1, 0))
+                .unwrap()
+                .source()
+                .as_ref(),
+            "all-open result"
+        );
+        assert!(delegate.visible_lines.line((2, 9)).is_none());
+
+        delegate.install_scope_replacement(vec![directory_group], None, &BTreeSet::new(), staged);
+
+        assert_eq!(
+            delegate.row_key(1),
+            Some(LogRowKey::Row {
+                document_id: 2,
+                source_row: 9,
+            })
+        );
+        assert_eq!(
+            delegate
+                .visible_lines
+                .line((2, 9))
+                .unwrap()
+                .source()
+                .as_ref(),
+            "directory result"
+        );
+        assert!(delegate.visible_lines.line((1, 0)).is_none());
     }
 
     #[test]

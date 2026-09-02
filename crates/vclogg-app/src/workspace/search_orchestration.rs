@@ -1800,6 +1800,76 @@ impl Workspace {
         self.refresh_global_result_surface_atomically(window, cx);
     }
 
+    fn install_prepared_global_search_scope(
+        &mut self,
+        scope: SearchScope,
+        context: SearchSessionState,
+        groups: Vec<GlobalSearchGroup>,
+        lines: StagedVisibleLineLoadResult<(u64, usize)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match scope {
+            SearchScope::AllOpenFiles => self.global_search.query = context.query.clone(),
+            SearchScope::Directory => self.global_search.directory_query = context.query.clone(),
+            SearchScope::CurrentFile => return,
+        }
+        self.global_search.results = context.results.clone();
+        self.global_search.matcher = context.matcher.clone();
+        self.global_search.result_mode = context.result_mode;
+        self.global_search.results_visible = context.results_visible;
+        self.global_search.result_scope = context.initialized.then_some(scope);
+        self.global_viewport.set_word_wrap(context.word_wrap);
+        self.global_search
+            .result_mode_select
+            .update(cx, |select, cx| {
+                select.set_selected_index(
+                    Some(IndexPath::new(context.result_mode.select_index())),
+                    window,
+                    cx,
+                );
+            });
+
+        let matcher = self.global_result_matcher();
+        self.global_search.restoring_selection = context.selected_row.is_some();
+        let active_restored = self.global_table.update(cx, |table, cx| {
+            table.delegate_mut().install_scope_replacement(
+                groups,
+                matcher,
+                &context.collapsed_document_ids,
+                lines,
+            );
+            table.delegate().restore_selection(&context.selection);
+            let selected_ix = context
+                .selected_row
+                .and_then(|row| table.delegate().row_ix(row));
+            if let Some(selected_ix) = selected_ix {
+                table.set_active_log_row(selected_ix, cx);
+            } else {
+                table.delegate().set_active_log_row(None);
+                table.clear_selection(cx);
+            }
+            let active_restored = table.sync_active_log_row(cx);
+            table.refresh(cx);
+            cx.notify();
+            active_restored
+        });
+        if !active_restored {
+            self.global_search.restoring_selection = false;
+        }
+        self.global_viewport.invalidate_wrapped();
+        self.restore_global_viewport_anchor(context.viewport, self.log_row_height(), cx);
+        if !context.word_wrap {
+            self.global_viewport
+                .set_horizontal_offset(px(context.horizontal_offset));
+        }
+        if context.active && context.results_visible {
+            self.active_log_region = LogRegion::GlobalResults;
+        } else if self.active_log_region == LogRegion::GlobalResults {
+            self.active_log_region = LogRegion::Body;
+        }
+    }
+
     pub(super) fn set_search_scope(
         &mut self,
         next_scope: SearchScope,
@@ -1837,14 +1907,107 @@ impl Workspace {
             self.remember_current_directory_session();
         }
 
-        if matches!(
-            next_scope,
-            SearchScope::AllOpenFiles | SearchScope::Directory
-        ) {
-            self.prepare_global_search_scope_switch(next_scope, window, cx);
+        match next_scope {
+            SearchScope::CurrentFile => {
+                self.prepare_current_search_scope_switch(window, cx);
+            }
+            SearchScope::AllOpenFiles | SearchScope::Directory => {
+                self.prepare_global_search_scope_switch(next_scope, window, cx);
+            }
+        }
+    }
+
+    fn prepare_current_search_scope_switch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab_ix) = self.active_ix else {
+            self.commit_search_scope(SearchScope::CurrentFile, None, window, cx);
+            return;
+        };
+        if !self.documents[tab_ix].results_visible {
+            self.commit_search_scope(SearchScope::CurrentFile, None, window, cx);
             return;
         }
-        self.commit_search_scope(next_scope, None, false, window, cx);
+        let row_height = self.log_row_height();
+        let tab = &self.documents[tab_ix];
+        let table = tab.result_table.clone();
+        let (visible_line_revision, request) = {
+            let table = table.read(cx);
+            let row_count = table.delegate().row_count();
+            let visible_row_count = table.visible_range().rows().len().max(
+                (window.viewport_size().height / row_height.max(px(1.)))
+                    .ceil()
+                    .max(1.) as usize,
+            );
+            let preload_range = search_scope_switch_preload_range(
+                tab.result_viewport.first_visible(row_count, row_height),
+                tab.result_viewport.is_at_end(),
+                row_count,
+                visible_row_count,
+            );
+            (
+                table.delegate().visible_line_revision(),
+                table.delegate().stage_visible_rows(preload_range),
+            )
+        };
+        let document_id = tab.id;
+        let document = tab.document.clone();
+        let revision = self.search_scope_switch_revision;
+        let previous_scope = self.global_search.scope;
+
+        let Some(request) = request else {
+            self.commit_search_scope(
+                SearchScope::CurrentFile,
+                Some(PreparedSearchScopeFrame::CurrentFile {
+                    document_id,
+                    document,
+                    visible_line_revision,
+                    lines: None,
+                }),
+                window,
+                cx,
+            );
+            return;
+        };
+        let cancellation = Arc::new(AtomicBool::new(false));
+        self.search_scope_switch_cancellation = Some(cancellation.clone());
+        self.search_scope_switch_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let loaded_document = document.clone();
+            let staged = cx
+                .background_spawn(async move {
+                    let mut reader = LinePreviewReader::default();
+                    request.load_cancellable(&cancellation, |source_row, max_bytes| {
+                        reader.line_preview(&loaded_document, *source_row, max_bytes)
+                    })
+                })
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                if this.search_scope_switch_revision != revision
+                    || this.global_search.scope != previous_scope
+                {
+                    return;
+                }
+                let target_is_current = this.active_document().is_some_and(|tab| {
+                    tab.id == document_id
+                        && Arc::ptr_eq(&tab.document, &document)
+                        && tab.result_table.read(cx).delegate().visible_line_revision()
+                            == visible_line_revision
+                });
+                if !target_is_current {
+                    this.prepare_current_search_scope_switch(window, cx);
+                    return;
+                }
+                this.commit_search_scope(
+                    SearchScope::CurrentFile,
+                    Some(PreparedSearchScopeFrame::CurrentFile {
+                        document_id,
+                        document,
+                        visible_line_revision,
+                        lines: Some(staged),
+                    }),
+                    window,
+                    cx,
+                );
+            });
+        }));
     }
 
     fn prepare_global_search_scope_switch(
@@ -1859,6 +2022,7 @@ impl Workspace {
             SearchScope::CurrentFile => return,
         };
         let groups = self.global_result_groups_for_context(next_scope, &context);
+        let prepared_groups = groups.clone();
         let mut delegate = GlobalSearchTableDelegate::new();
         delegate.set_groups(groups);
         delegate.restore_collapsed_document_ids(&context.collapsed_document_ids);
@@ -1877,18 +2041,14 @@ impl Workspace {
             row_count,
             visible_row_count,
         );
-        let request = delegate.stage_visible_rows(preload_range);
-        let documents = request
-            .as_ref()
-            .map(|request| delegate.staged_visible_documents(request))
-            .unwrap_or_default();
+        let request = self
+            .global_table
+            .read(cx)
+            .delegate()
+            .stage_groups_replacement(&delegate, preload_range);
+        let documents = delegate.staged_visible_documents(&request);
         let revision = self.search_scope_switch_revision;
         let previous_scope = self.global_search.scope;
-
-        let Some(request) = request else {
-            self.commit_search_scope(next_scope, None, true, window, cx);
-            return;
-        };
         let cancellation = Arc::new(AtomicBool::new(false));
         self.search_scope_switch_cancellation = Some(cancellation.clone());
         self.search_scope_switch_task = Some(cx.spawn_in(window, async move |this, cx| {
@@ -1914,7 +2074,16 @@ impl Workspace {
                 {
                     return;
                 }
-                this.commit_search_scope(next_scope, Some(staged), true, window, cx);
+                this.commit_search_scope(
+                    next_scope,
+                    Some(PreparedSearchScopeFrame::Global {
+                        context: Box::new(context),
+                        groups: prepared_groups,
+                        lines: staged,
+                    }),
+                    window,
+                    cx,
+                );
             });
         }));
     }
@@ -1922,12 +2091,15 @@ impl Workspace {
     fn commit_search_scope(
         &mut self,
         next_scope: SearchScope,
-        staged_global_lines: Option<StagedVisibleLineLoadResult<(u64, usize)>>,
-        target_was_prepared: bool,
+        prepared: Option<PreparedSearchScopeFrame>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.search_scope_switch_task = None;
+        self.search_scope_switch_cancellation = None;
         self.global_search.scope = next_scope;
+        let target_was_prepared = prepared.is_some();
+        let mut prepared_current = None;
         self.view_state.active_search = match next_scope {
             SearchScope::CurrentFile => self
                 .active_document()
@@ -1941,19 +2113,46 @@ impl Workspace {
                 .map(normalized_path_match_key)
                 .map(SearchSessionKey::Directory),
         };
-        if matches!(
-            next_scope,
-            SearchScope::AllOpenFiles | SearchScope::Directory
-        ) {
-            self.restore_retained_global_context(next_scope, window, cx);
-        } else if self.active_log_region == LogRegion::GlobalResults {
-            self.active_log_region = self
-                .active_document()
-                .filter(|tab| {
-                    tab.results_visible && tab.view.selection_table == SelectionTable::Results
-                })
-                .map(|_| LogRegion::CurrentResults)
-                .unwrap_or(LogRegion::Body);
+        match prepared {
+            Some(PreparedSearchScopeFrame::Global {
+                context,
+                groups,
+                lines,
+            }) => self.install_prepared_global_search_scope(
+                next_scope, *context, groups, lines, window, cx,
+            ),
+            Some(current @ PreparedSearchScopeFrame::CurrentFile { .. }) => {
+                prepared_current = Some(current);
+                if self.active_log_region == LogRegion::GlobalResults {
+                    self.active_log_region = self
+                        .active_document()
+                        .filter(|tab| {
+                            tab.results_visible
+                                && tab.view.selection_table == SelectionTable::Results
+                        })
+                        .map(|_| LogRegion::CurrentResults)
+                        .unwrap_or(LogRegion::Body);
+                }
+            }
+            None if matches!(
+                next_scope,
+                SearchScope::AllOpenFiles | SearchScope::Directory
+            ) =>
+            {
+                self.restore_retained_global_context(next_scope, window, cx)
+            }
+            None => {
+                if self.active_log_region == LogRegion::GlobalResults {
+                    self.active_log_region = self
+                        .active_document()
+                        .filter(|tab| {
+                            tab.results_visible
+                                && tab.view.selection_table == SelectionTable::Results
+                        })
+                        .map(|_| LogRegion::CurrentResults)
+                        .unwrap_or(LogRegion::Body);
+                }
+            }
         }
         let text = match next_scope {
             SearchScope::CurrentFile => self
@@ -1995,10 +2194,22 @@ impl Workspace {
         if !self.query.focus_handle(cx).is_focused(window) {
             self.query.focus_handle(cx).focus(window, cx);
         }
-        if target_was_prepared {
-            if let Some(staged) = staged_global_lines {
-                self.global_table.update(cx, |table, cx| {
-                    table.delegate().install_staged_visible_lines(staged);
+        if let Some(PreparedSearchScopeFrame::CurrentFile {
+            document_id,
+            document,
+            visible_line_revision,
+            lines,
+        }) = prepared_current
+        {
+            if let Some(tab) = self.active_document()
+                && tab.id == document_id
+                && Arc::ptr_eq(&tab.document, &document)
+                && tab.result_table.read(cx).delegate().visible_line_revision()
+                    == visible_line_revision
+                && let Some(lines) = lines
+            {
+                tab.result_table.update(cx, |table, cx| {
+                    table.delegate().install_staged_visible_lines(lines);
                     table.refresh(cx);
                     cx.notify();
                 });
@@ -2012,8 +2223,18 @@ impl Workspace {
                 window,
                 cx,
             );
-        } else {
+        } else if !target_was_prepared {
             self.refresh_active_search_surfaces_atomically(window, cx);
+        } else {
+            self.bind_active_display_tables(cx);
+            Self::refresh_log_surfaces_atomically(
+                [
+                    self.log_viewer.surface.clone(),
+                    self.search_results_viewer.surface.clone(),
+                ],
+                window,
+                cx,
+            );
         }
         cx.notify();
     }

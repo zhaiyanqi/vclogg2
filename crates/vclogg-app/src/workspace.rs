@@ -712,6 +712,20 @@ struct PreparedGlobalResultReplacement {
     restore_context: Option<SearchSessionState>,
 }
 
+enum PreparedSearchScopeFrame {
+    CurrentFile {
+        document_id: u64,
+        document: Arc<LogDocument>,
+        visible_line_revision: u64,
+        lines: Option<StagedVisibleLineLoadResult<usize>>,
+    },
+    Global {
+        context: Box<SearchSessionState>,
+        groups: Vec<GlobalSearchGroup>,
+        lines: StagedVisibleLineLoadResult<(u64, usize)>,
+    },
+}
+
 struct ReloadReplacementInput {
     document_id: u64,
     revision: u64,
