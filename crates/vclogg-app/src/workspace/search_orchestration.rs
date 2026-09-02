@@ -1896,7 +1896,11 @@ impl Workspace {
         if let Some(pending) = directory_jump {
             if self.documents[document_ix].load_state != DocumentLoadState::Ready {
                 self.pending_directory_result_jump = Some(pending);
-                self.activate_tab(document_ix, window, cx);
+                self.activate_workspace_tab(
+                    WorkspaceTabId::Document(self.documents[document_ix].id),
+                    window,
+                    cx,
+                );
                 return;
             }
             if !pending.matches(&self.documents[document_ix].document) {
@@ -1904,24 +1908,7 @@ impl Workspace {
                 return;
             }
         }
-        self.activate_tab(document_ix, window, cx);
-        let workspace_document_id = {
-            let Some(tab) = self.documents.get_mut(document_ix) else {
-                return;
-            };
-            tab.view.auto_follow = false;
-            tab.view.selection_table = SelectionTable::Log;
-            tab.id
-        };
-        let selected = self.select_and_center_log_source_row_atomically(
-            workspace_document_id,
-            source_row,
-            window,
-            cx,
-        );
-        if selected {
-            self.selected_source_row = Some(source_row);
-        } else {
+        if !self.activate_document_log_row_atomically(document_ix, source_row, window, cx) {
             window.push_notification(
                 crate::tr!(
                     "该结果行在当前文件中已不存在，请重新搜索",
@@ -1930,7 +1917,6 @@ impl Workspace {
                 cx,
             );
         }
-        cx.notify();
     }
 
     pub(super) fn notify_stale_directory_result(window: &mut Window, cx: &mut App) {

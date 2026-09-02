@@ -106,11 +106,38 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.activate_workspace_tab_with_log_jump(tab_id, None, window, cx);
+    }
+
+    fn activate_workspace_tab_with_log_jump(
+        &mut self,
+        tab_id: WorkspaceTabId,
+        log_jump: Option<PreparedLogJump>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.tabs.contains(&tab_id) {
             return;
         }
         self.cancel_pending_tab_activation();
-        if self.active_tab_id == tab_id || tab_id.document_id().is_none() {
+        if self.active_tab_id == tab_id {
+            if let Some(log_jump) = log_jump {
+                if let Some(document_ix) = tab_id.document_id().and_then(|document_id| {
+                    self.documents.iter().position(|tab| tab.id == document_id)
+                }) {
+                    let _ = self.activate_document_log_row_atomically(
+                        document_ix,
+                        log_jump.source_row,
+                        window,
+                        cx,
+                    );
+                }
+            } else {
+                self.commit_workspace_tab_activation(tab_id, false, window, cx);
+            }
+            return;
+        }
+        if tab_id.document_id().is_none() {
             self.commit_workspace_tab_activation(tab_id, false, window, cx);
             return;
         }
@@ -121,8 +148,35 @@ impl Workspace {
         else {
             return;
         };
-        let log_range = self.tab_frame_visible_range(tab_ix, WrappedRegion::Log, window, cx);
+        let log_range = if let Some(log_jump) = log_jump {
+            let table = self.documents[tab_ix].log_table.read(cx);
+            let row_count = table.delegate().row_count();
+            let table_visible_rows = table.visible_range().rows().len();
+            let measured_visible_rows = self
+                .row_drag_bounds
+                .get(&(self.documents[tab_ix].id, WrappedRegion::Log))
+                .map(|bounds| (bounds.size.height / self.log_row_height()).ceil().max(1.) as usize)
+                .unwrap_or_default();
+            let window_visible_rows = (window.viewport_size().height
+                / self.log_row_height().max(px(1.)))
+            .ceil()
+            .max(1.) as usize;
+            tab_switch_log_jump_preload_range(
+                log_jump.row_ix,
+                row_count,
+                table_visible_rows,
+                measured_visible_rows,
+                window_visible_rows,
+            )
+        } else {
+            self.tab_frame_visible_range(tab_ix, WrappedRegion::Log, window, cx)
+        };
         let result_range = self.tab_frame_visible_range(tab_ix, WrappedRegion::Results, window, cx);
+        if log_jump.is_some() {
+            let tab = &mut self.documents[tab_ix];
+            tab.log_jump_revision = tab.log_jump_revision.saturating_add(1);
+            tab.log_jump_task.take();
+        }
         let tab = &self.documents[tab_ix];
         let document_id = tab.id;
         let document = tab.document.clone();
@@ -143,7 +197,13 @@ impl Workspace {
             )
         };
         if log_request.is_none() && result_request.is_none() {
+            if let Some(log_jump) = log_jump {
+                self.commit_prepared_log_jump(tab_ix, log_jump, cx);
+            }
             self.commit_workspace_tab_activation(tab_id, false, window, cx);
+            if log_jump.is_some() {
+                self.schedule_checkpoint(document_id, window, cx);
+            }
             return;
         }
 
@@ -168,6 +228,7 @@ impl Workspace {
                         document,
                         log_revision,
                         result_revision,
+                        log_jump,
                         log_lines,
                         result_lines,
                     }
@@ -197,7 +258,12 @@ impl Workspace {
                             == prepared.result_revision
                 };
                 if !frame_is_current {
-                    this.activate_workspace_tab(tab_id, window, cx);
+                    this.activate_workspace_tab_with_log_jump(
+                        tab_id,
+                        prepared.log_jump,
+                        window,
+                        cx,
+                    );
                     return;
                 }
 
@@ -217,10 +283,74 @@ impl Workspace {
                         cx.notify();
                     });
                 }
+                if let Some(log_jump) = prepared.log_jump {
+                    this.commit_prepared_log_jump(tab_ix, log_jump, cx);
+                }
                 this.tab_activation_revision = this.tab_activation_revision.saturating_add(1);
                 this.commit_workspace_tab_activation(tab_id, true, window, cx);
+                if prepared.log_jump.is_some() {
+                    this.schedule_checkpoint(prepared.document_id, window, cx);
+                }
             });
         }));
+    }
+
+    fn commit_prepared_log_jump(
+        &mut self,
+        tab_ix: usize,
+        log_jump: PreparedLogJump,
+        cx: &mut Context<Self>,
+    ) {
+        let tab = &mut self.documents[tab_ix];
+        tab.view.auto_follow = false;
+        tab.view.selection_table = SelectionTable::Log;
+        tab.log_table.update(cx, |table, cx| {
+            table.delegate().set_active_log_row(Some(log_jump.row_ix));
+            table.delegate().settle_table_selection(log_jump.row_ix);
+            cx.notify();
+        });
+        tab.log_viewport.center_row(log_jump.row_ix);
+        self.selected_source_row = Some(log_jump.source_row);
+    }
+
+    pub(super) fn activate_document_log_row_atomically(
+        &mut self,
+        document_ix: usize,
+        source_row: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(tab) = self.documents.get(document_ix) else {
+            return false;
+        };
+        let Some(row_ix) = tab.document.local_row(source_row) else {
+            return false;
+        };
+        let document_id = tab.id;
+        if self.active_tab_id == WorkspaceTabId::Document(document_id) {
+            self.cancel_pending_tab_activation();
+            let tab = &mut self.documents[document_ix];
+            tab.view.auto_follow = false;
+            tab.view.selection_table = SelectionTable::Log;
+            let selected = self.select_and_center_log_source_row_atomically(
+                document_id,
+                source_row,
+                window,
+                cx,
+            );
+            if selected {
+                self.selected_source_row = Some(source_row);
+            }
+            return selected;
+        }
+
+        self.activate_workspace_tab_with_log_jump(
+            WorkspaceTabId::Document(document_id),
+            Some(PreparedLogJump { source_row, row_ix }),
+            window,
+            cx,
+        );
+        true
     }
 
     pub(super) fn activate_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {

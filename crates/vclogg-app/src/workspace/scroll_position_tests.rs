@@ -125,6 +125,15 @@ fn log_jump_preload_range_covers_the_target_and_viewport_edges() {
 }
 
 #[test]
+fn result_jump_tab_switch_preloads_the_target_before_activation() {
+    assert_eq!(tab_switch_log_jump_preload_range(50, 100, 0, 0, 10), 35..65);
+    assert_eq!(
+        tab_switch_log_jump_preload_range(98, 100, 4, 8, 10),
+        70..100
+    );
+}
+
+#[test]
 fn search_scope_switch_preloads_the_restored_viewport_before_commit() {
     assert_eq!(
         search_scope_switch_preload_range(50, false, 100, 10),

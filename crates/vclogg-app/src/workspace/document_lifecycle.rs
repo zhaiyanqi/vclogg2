@@ -908,13 +908,7 @@ impl Workspace {
             Self::notify_stale_directory_result(window, cx);
             return;
         }
-        self.activate_tab(document_ix, window, cx);
-        let Some(tab) = self.documents.get_mut(document_ix) else {
-            return;
-        };
-        tab.view.auto_follow = false;
-        tab.view.selection_table = SelectionTable::Log;
-        if !tab.select_and_center_log_source_row(pending.source_row, cx) {
+        if !self.activate_document_log_row_atomically(document_ix, pending.source_row, window, cx) {
             window.push_notification(
                 crate::tr!(
                     "该目录结果行在当前文件中已不存在，请重新搜索",
@@ -922,10 +916,7 @@ impl Workspace {
                 ),
                 cx,
             );
-            return;
         }
-        self.selected_source_row = Some(pending.source_row);
-        cx.notify();
     }
 
     pub(super) fn upgrade_loading_document(

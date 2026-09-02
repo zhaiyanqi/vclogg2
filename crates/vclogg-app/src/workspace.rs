@@ -629,8 +629,15 @@ struct PreparedTabFrame {
     document: Arc<LogDocument>,
     log_revision: u64,
     result_revision: u64,
+    log_jump: Option<PreparedLogJump>,
     log_lines: Option<StagedVisibleLineLoadResult<usize>>,
     result_lines: Option<StagedVisibleLineLoadResult<usize>>,
+}
+
+#[derive(Clone, Copy)]
+struct PreparedLogJump {
+    source_row: usize,
+    row_ix: usize,
 }
 
 struct PreparedGlobalGroupToggle {
@@ -1481,6 +1488,22 @@ fn centered_log_jump_preload_range(
         .saturating_sub(preload_count / 2)
         .min(row_count - preload_count);
     start..start + preload_count
+}
+
+fn tab_switch_log_jump_preload_range(
+    target_row: usize,
+    row_count: usize,
+    table_visible_rows: usize,
+    measured_visible_rows: usize,
+    window_visible_rows: usize,
+) -> Range<usize> {
+    centered_log_jump_preload_range(
+        target_row,
+        row_count,
+        table_visible_rows
+            .max(measured_visible_rows)
+            .max(window_visible_rows),
+    )
 }
 
 fn search_scope_switch_preload_range(
