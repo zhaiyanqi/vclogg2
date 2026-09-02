@@ -1200,6 +1200,41 @@ impl LogTableDelegate {
         self.source.stage_visible_rows(visible_range)
     }
 
+    pub(crate) fn stage_row_projection_replacement(
+        &self,
+        source_rows: &CompressedRows,
+        visible_range: Range<usize>,
+    ) -> StagedVisibleLineLoadRequest<usize> {
+        self.source.visible_lines.stage_replacement_visible_rows(
+            visible_range,
+            source_rows.len(),
+            |row_ix| source_rows.get(row_ix),
+            |_| true,
+        )
+    }
+
+    pub(crate) fn stage_document_replacement(
+        &self,
+        document: &LogDocument,
+        source_rows: Option<&CompressedRows>,
+        visible_range: Range<usize>,
+    ) -> StagedVisibleLineLoadRequest<usize> {
+        let row_count = source_rows.map_or_else(|| document.line_count(), CompressedRows::len);
+        self.source.visible_lines.stage_replacement_visible_rows(
+            visible_range,
+            row_count,
+            |row_ix| {
+                source_rows.and_then(|rows| rows.get(row_ix)).or_else(|| {
+                    source_rows
+                        .is_none()
+                        .then(|| document.source_row(row_ix))
+                        .flatten()
+                })
+            },
+            |_| false,
+        )
+    }
+
     pub(crate) fn visible_document(&self) -> Arc<LogDocument> {
         self.source.document.clone()
     }
@@ -1213,6 +1248,28 @@ impl LogTableDelegate {
     }
 
     pub(crate) fn install_staged_visible_lines(&self, loaded: StagedVisibleLineLoadResult<usize>) {
+        self.source.visible_lines.install_staged(loaded);
+    }
+
+    pub(crate) fn install_row_projection_replacement(
+        &mut self,
+        source_rows: CompressedRows,
+        loaded: StagedVisibleLineLoadResult<usize>,
+    ) {
+        self.set_row_projection(source_rows);
+        self.source.visible_lines.install_staged(loaded);
+    }
+
+    pub(crate) fn install_document_replacement(
+        &mut self,
+        document: Arc<LogDocument>,
+        source_rows: Option<CompressedRows>,
+        loaded: StagedVisibleLineLoadResult<usize>,
+    ) {
+        match source_rows {
+            Some(source_rows) => self.replace_with_rows(document, source_rows),
+            None => self.replace_with_all(document),
+        }
         self.source.visible_lines.install_staged(loaded);
     }
 
@@ -2122,6 +2179,47 @@ mod tests {
 
         assert!(!delegate.is_pointer_selecting());
         assert!(delegate.interaction.row_bounds.borrow().is_empty());
+    }
+
+    #[test]
+    fn projection_replacement_keeps_the_old_list_until_the_new_frame_is_installed() {
+        let document = Arc::new(LogDocument::placeholder("atomic-results.log"));
+        let mut delegate = LogTableDelegate::projected(7, document, [1].into_iter().collect());
+        delegate.source.visible_lines.prepare_visible_rows(
+            0..1,
+            1,
+            |_| Some(1),
+            |_, _| Some(LinePreview::new("old result", false)),
+        );
+        let replacement: CompressedRows = [9].into_iter().collect();
+        let staged = delegate
+            .stage_row_projection_replacement(&replacement, 0..1)
+            .load(|_, _| Some(LinePreview::new("new result", false)));
+
+        assert_eq!(delegate.source_row(0), Some(1));
+        assert_eq!(
+            delegate
+                .source
+                .visible_lines
+                .line(1)
+                .unwrap()
+                .source()
+                .as_ref(),
+            "old result"
+        );
+
+        delegate.install_row_projection_replacement(replacement, staged);
+        assert_eq!(delegate.source_row(0), Some(9));
+        assert_eq!(
+            delegate
+                .source
+                .visible_lines
+                .line(9)
+                .unwrap()
+                .source()
+                .as_ref(),
+            "new result"
+        );
     }
 
     #[test]

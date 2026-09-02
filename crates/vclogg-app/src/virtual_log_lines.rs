@@ -139,6 +139,7 @@ impl<K> StagedVisibleLineLoadRequest<K> {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct StagedVisibleLineLoadResult<K> {
     window: (usize, usize, usize, usize),
     priority_keys: Vec<K>,
@@ -420,6 +421,60 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
             source_limits,
             retained_limits,
         })
+    }
+
+    /// Stages a complete visible window for a projection or document that has not been
+    /// installed yet. Unlike ordinary staging, this always returns a frame, even when every
+    /// target key is already cached, so the caller can invalidate the old projection and install
+    /// the target window in one foreground update.
+    pub(crate) fn stage_replacement_visible_rows(
+        &self,
+        visible_range: Range<usize>,
+        row_count: usize,
+        key_for_row: impl FnMut(usize) -> Option<K>,
+        mut can_reuse: impl FnMut(&K) -> bool,
+    ) -> StagedVisibleLineLoadRequest<K> {
+        let (window, priority_keys) = self.visible_window(visible_range, row_count, key_for_row);
+        let byte_budget = self.max_cache_retained_bytes.get();
+        let mut reserved_bytes = 0usize;
+        let mut keys = Vec::new();
+        let mut source_limits = Vec::new();
+        let mut retained_limits = Vec::new();
+        let lines = self.lines.borrow();
+        for (key_ix, key) in priority_keys.iter().enumerate() {
+            if reserved_bytes >= byte_budget {
+                break;
+            }
+            let remaining = byte_budget - reserved_bytes;
+            let remaining_keys = priority_keys.len().saturating_sub(key_ix).max(1);
+            let fair_retained_limit = remaining / remaining_keys;
+            let retained_limit = if fair_retained_limit >= MIN_TRUNCATED_PREVIEW_RETAINED_BYTES {
+                fair_retained_limit
+            } else {
+                remaining
+            };
+            if retained_limit < MIN_TRUNCATED_PREVIEW_RETAINED_BYTES {
+                break;
+            }
+            if can_reuse(key)
+                && let Some(line) = lines.get(key)
+                && line.retained_bytes <= retained_limit
+            {
+                reserved_bytes = reserved_bytes.saturating_add(line.retained_bytes);
+                continue;
+            }
+            keys.push(key.clone());
+            source_limits.push(self.max_line_source_bytes.get().min(retained_limit));
+            retained_limits.push(retained_limit);
+            reserved_bytes = reserved_bytes.saturating_add(retained_limit);
+        }
+        StagedVisibleLineLoadRequest {
+            window,
+            priority_keys,
+            keys,
+            source_limits,
+            retained_limits,
+        }
     }
 
     pub(crate) fn install_staged(&self, staged: StagedVisibleLineLoadResult<K>) {
@@ -787,6 +842,23 @@ mod tests {
         assert!(cache.line(0).is_none());
         assert_eq!(cache.line(10).unwrap().source().as_ref(), "line 10");
         assert_eq!(cache.line(11).unwrap().source().as_ref(), "line 11");
+    }
+
+    #[test]
+    fn replacement_frame_keeps_old_rows_and_can_force_reload_the_same_keys() {
+        let cache = VisibleLineStore::<usize>::default();
+        cache.set_overscan(0);
+        cache.prepare_visible_rows(0..1, 1, Some, |_, _| {
+            Some(LinePreview::new("old snapshot", false))
+        });
+
+        let staged = cache
+            .stage_replacement_visible_rows(0..1, 1, Some, |_| false)
+            .load(|_, _| Some(LinePreview::new("new snapshot", false)));
+
+        assert_eq!(cache.line(0).unwrap().source().as_ref(), "old snapshot");
+        cache.install_staged(staged);
+        assert_eq!(cache.line(0).unwrap().source().as_ref(), "new snapshot");
     }
 
     #[test]

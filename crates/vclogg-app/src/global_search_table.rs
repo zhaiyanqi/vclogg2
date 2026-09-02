@@ -1280,6 +1280,43 @@ impl GlobalSearchTableDelegate {
             })
     }
 
+    pub(crate) fn stage_groups_replacement(
+        &self,
+        replacement: &Self,
+        visible_range: Range<usize>,
+    ) -> StagedVisibleLineLoadRequest<(u64, usize)> {
+        self.visible_lines.stage_replacement_visible_rows(
+            visible_range,
+            replacement.projection.rows_len,
+            |row_ix| match replacement.flat_row(row_ix) {
+                Some(FlatRow::Match {
+                    group_ix,
+                    source_row,
+                }) => replacement
+                    .projection
+                    .groups
+                    .get(group_ix)
+                    .map(|group| (group.source.document_id, source_row)),
+                _ => None,
+            },
+            |(document_id, _)| {
+                let current = self
+                    .projection
+                    .group_by_document
+                    .get(document_id)
+                    .and_then(|group_ix| self.projection.groups.get(*group_ix));
+                let next = replacement
+                    .projection
+                    .group_by_document
+                    .get(document_id)
+                    .and_then(|group_ix| replacement.projection.groups.get(*group_ix));
+                current.zip(next).is_some_and(|(current, next)| {
+                    Arc::ptr_eq(&current.source.document, &next.source.document)
+                })
+            },
+        )
+    }
+
     pub(crate) fn visible_documents(
         &self,
         request: &VisibleLineLoadRequest<(u64, usize)>,
@@ -1321,6 +1358,17 @@ impl GlobalSearchTableDelegate {
         &self,
         loaded: StagedVisibleLineLoadResult<(u64, usize)>,
     ) {
+        self.visible_lines.install_staged(loaded);
+    }
+
+    pub(crate) fn install_groups_replacement(
+        &mut self,
+        groups: Vec<GlobalSearchGroup>,
+        matcher: Option<SearchMatcher>,
+        loaded: StagedVisibleLineLoadResult<(u64, usize)>,
+    ) {
+        self.set_groups(groups);
+        self.set_search_matcher(matcher);
         self.visible_lines.install_staged(loaded);
     }
 
@@ -2248,6 +2296,57 @@ mod tests {
             .line((1, 0))
             .expect("the prepared replacement line should be available");
         assert_eq!(reloaded.source().as_ref(), "reloaded global line");
+    }
+
+    #[test]
+    fn group_replacement_keeps_the_old_list_until_the_new_frame_is_installed() {
+        let document = Arc::new(LogDocument::placeholder("atomic-global.log"));
+        let mut delegate = GlobalSearchTableDelegate::new();
+        let old_group = test_group(document.clone());
+        delegate.set_groups(vec![old_group]);
+        delegate.visible_lines.prepare_visible_rows(
+            0..2,
+            2,
+            |row_ix| (row_ix == 1).then_some((1, 0)),
+            |_, _| Some(LinePreview::new("old global result", false)),
+        );
+        let mut next_group = test_group(document);
+        next_group.projection.rows = [5].into_iter().collect();
+        next_group.presentation.matched_rows = [5].into_iter().collect();
+        let mut replacement = GlobalSearchTableDelegate::new();
+        replacement.set_groups(vec![next_group.clone()]);
+        let staged = delegate
+            .stage_groups_replacement(&replacement, 0..2)
+            .load(|_, _| Some(LinePreview::new("new global result", false)));
+
+        assert_eq!(
+            delegate
+                .visible_lines
+                .line((1, 0))
+                .unwrap()
+                .source()
+                .as_ref(),
+            "old global result"
+        );
+        assert_eq!(
+            delegate.projected_result_groups().next().unwrap().2.first(),
+            Some(0)
+        );
+
+        delegate.install_groups_replacement(vec![next_group], None, staged);
+        assert_eq!(
+            delegate.projected_result_groups().next().unwrap().2.first(),
+            Some(5)
+        );
+        assert_eq!(
+            delegate
+                .visible_lines
+                .line((1, 5))
+                .unwrap()
+                .source()
+                .as_ref(),
+            "new global result"
+        );
     }
 
     #[test]

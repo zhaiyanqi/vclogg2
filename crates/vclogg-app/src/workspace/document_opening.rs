@@ -328,7 +328,7 @@ impl Workspace {
             let preview_sessions = sessions.clone();
             let preview_store = fallback_store.clone();
             let preview_color_labels = color_labels.clone();
-            let previews = cx
+            let mut previews = cx
                 .background_spawn(async move {
                     prepare_paths_bounded(preview_paths, |path| {
                         prepare_document_preview(
@@ -341,6 +341,20 @@ impl Workspace {
                     })
                 })
                 .await;
+
+            let preview_upgrade_jobs = this
+                .update_in(cx, |this, window, cx| {
+                    this.prepare_document_upgrade_jobs(&previews, window, cx)
+                })
+                .unwrap_or_default();
+            if !preview_upgrade_jobs.is_empty() {
+                let frames = cx
+                    .background_spawn(
+                        async move { load_document_upgrade_frames(preview_upgrade_jobs) },
+                    )
+                    .await;
+                Workspace::attach_document_upgrade_frames(&mut previews, frames);
+            }
 
             _ = this.update_in(cx, |this, window, cx| {
                 let previews = previews
@@ -371,7 +385,7 @@ impl Workspace {
 
             let full_paths = paths.clone();
             let full_store = fallback_store;
-            let opened = cx
+            let mut opened = cx
                 .background_spawn(async move {
                     prepare_paths_bounded(full_paths, |path| {
                         prepare_document(
@@ -384,6 +398,18 @@ impl Workspace {
                     })
                 })
                 .await;
+
+            let upgrade_jobs = this
+                .update_in(cx, |this, window, cx| {
+                    this.prepare_document_upgrade_jobs(&opened, window, cx)
+                })
+                .unwrap_or_default();
+            if !upgrade_jobs.is_empty() {
+                let frames = cx
+                    .background_spawn(async move { load_document_upgrade_frames(upgrade_jobs) })
+                    .await;
+                Workspace::attach_document_upgrade_frames(&mut opened, frames);
+            }
 
             _ = this.update_in(cx, |this, window, cx| {
                 this.install_completed_documents(

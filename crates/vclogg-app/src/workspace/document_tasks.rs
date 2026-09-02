@@ -459,7 +459,39 @@ pub(super) fn prepare_document(
         warning,
         load_state: DocumentLoadState::Ready,
         pending_index_cache,
+        upgrade_frame: None,
     })
+}
+
+pub(super) fn load_document_upgrade_frames(
+    jobs: Vec<DocumentUpgradeLoadJob>,
+) -> Vec<PreparedDocumentUpgradeFrame> {
+    jobs.into_iter()
+        .map(|job| {
+            let mut reader = LinePreviewReader::default();
+            let log_lines = job.log_request.load(|source_row, max_bytes| {
+                reader.line_preview(&job.document, *source_row, max_bytes)
+            });
+            let result_lines = job.result_request.load(|source_row, max_bytes| {
+                reader.line_preview(&job.document, *source_row, max_bytes)
+            });
+            PreparedDocumentUpgradeFrame {
+                path: job.path,
+                previous_document: job.previous_document,
+                document: job.document,
+                result_rows: job.result_rows,
+                log_lines,
+                result_lines,
+                log_anchor: job.log_anchor,
+                result_anchor: job.result_anchor,
+                log_measured_heights: job.log_measured_heights,
+                result_measured_heights: job.result_measured_heights,
+                row_height: job.row_height,
+                log_word_wrap: job.log_word_wrap,
+                result_word_wrap: job.result_word_wrap,
+            }
+        })
+        .collect()
 }
 
 pub(super) fn installable_color_rules(
@@ -489,6 +521,7 @@ pub(super) fn prepare_document_shell(
         warning: None,
         load_state: DocumentLoadState::Opening,
         pending_index_cache: None,
+        upgrade_frame: None,
     }
 }
 
@@ -587,6 +620,7 @@ pub(super) fn prepare_document_preview(
         warning,
         load_state: DocumentLoadState::Preview,
         pending_index_cache: None,
+        upgrade_frame: None,
     })
 }
 

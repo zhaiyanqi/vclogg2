@@ -483,6 +483,16 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.refresh_global_result_rows_with_viewport(true, None, window, cx);
+    }
+
+    fn refresh_global_result_rows_with_viewport(
+        &mut self,
+        preserve_viewport: bool,
+        restore_context: Option<SearchSessionState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let context = self.active_global_result_context();
         let groups = self.global_result_groups_for_context(self.global_search.scope, &context);
 
@@ -497,9 +507,29 @@ impl Workspace {
             return;
         }
 
+        if let Some(cancellation) = self.global_result_replace_cancellation.take() {
+            cancellation.store(true, Ordering::Release);
+        }
+        self.global_result_replace_task.take();
+        self.global_result_replace_revision = self.global_result_replace_revision.saturating_add(1);
+
+        if groups.is_empty() && restore_context.is_none() {
+            self.install_global_result_groups(groups, matcher, cx);
+            self.global_viewport.invalidate_wrapped();
+            self.refresh_global_result_surface_atomically(window, cx);
+            return;
+        }
+
         let word_wrap = self.global_viewport.is_wrapped();
         let row_height = self.log_row_height();
-        let viewport_anchor = self.capture_global_viewport_anchor(row_height, cx);
+        let viewport_anchor = restore_context
+            .as_ref()
+            .and_then(|context| context.viewport)
+            .or_else(|| {
+                preserve_viewport
+                    .then(|| self.capture_global_viewport_anchor(row_height, cx))
+                    .flatten()
+            });
         let measured_heights = {
             let table = self.global_table.read(cx);
             if word_wrap {
@@ -509,21 +539,184 @@ impl Workspace {
                 BTreeMap::new()
             }
         };
+        let collapsed_document_ids = restore_context.as_ref().map_or_else(
+            || {
+                self.global_table
+                    .read(cx)
+                    .delegate()
+                    .collapsed_document_ids()
+            },
+            |context| context.collapsed_document_ids.clone(),
+        );
+        let mut replacement = GlobalSearchTableDelegate::new();
+        replacement.set_groups(groups.clone());
+        replacement.restore_collapsed_document_ids(&collapsed_document_ids);
+        let anchor_ix = viewport_anchor
+            .as_ref()
+            .and_then(|anchor| replacement.nearest_row_ix_for_key(anchor.key))
+            .or_else(|| viewport_anchor.as_ref().map(|anchor| anchor.fallback_ix))
+            .unwrap_or_default();
+        let table_visible_rows = self.global_table.read(cx).visible_range().rows().len();
+        let window_visible_rows = (window.viewport_size().height / row_height.max(px(1.)))
+            .ceil()
+            .max(1.) as usize;
+        let preload_range = search_scope_switch_preload_range(
+            anchor_ix,
+            viewport_anchor.as_ref().is_some_and(|anchor| anchor.at_end),
+            replacement.rows_len(),
+            table_visible_rows.max(window_visible_rows),
+        );
+        let table = self.global_table.clone();
+        let (expected_content_revision, expected_layout_revision, request) = {
+            let table = table.read(cx);
+            let delegate = table.delegate();
+            (
+                delegate.content_revision(),
+                delegate.layout_revision(),
+                delegate.stage_groups_replacement(&replacement, preload_range),
+            )
+        };
+        let documents = replacement.staged_visible_documents(&request);
+        let cancellation = Arc::new(AtomicBool::new(false));
+        self.global_result_replace_cancellation = Some(cancellation.clone());
+        let revision = self.global_result_replace_revision;
+        self.global_result_replace_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let staged = cx
+                .background_spawn(async move {
+                    let mut readers = BTreeMap::<u64, LinePreviewReader>::new();
+                    request.load_cancellable(
+                        &cancellation,
+                        |(document_id, source_row), max_bytes| {
+                            let document = documents.get(document_id)?;
+                            readers.entry(*document_id).or_default().line_preview(
+                                document,
+                                *source_row,
+                                max_bytes,
+                            )
+                        },
+                    )
+                })
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                if this.global_result_replace_revision != revision {
+                    return;
+                }
+                let current_is_valid = {
+                    let current = this.global_table.read(cx);
+                    current.delegate().content_revision() == expected_content_revision
+                        && current.delegate().layout_revision() == expected_layout_revision
+                };
+                if !current_is_valid {
+                    this.refresh_global_result_rows(window, cx);
+                    return;
+                }
+                this.commit_global_result_replacement(
+                    PreparedGlobalResultReplacement {
+                        expected_content_revision,
+                        expected_layout_revision,
+                        groups,
+                        matcher,
+                        staged,
+                        viewport_anchor,
+                        measured_heights,
+                        row_height,
+                        word_wrap,
+                        restore_context,
+                    },
+                    window,
+                    cx,
+                );
+            });
+        }));
+    }
 
-        self.install_global_result_groups(groups, matcher, cx);
-        if word_wrap {
+    fn commit_global_result_replacement(
+        &mut self,
+        prepared: PreparedGlobalResultReplacement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let valid = {
+            let table = self.global_table.read(cx);
+            table.delegate().content_revision() == prepared.expected_content_revision
+                && table.delegate().layout_revision() == prepared.expected_layout_revision
+        };
+        if !valid {
+            self.refresh_global_result_rows(window, cx);
+            return;
+        }
+        self.global_search.restoring_selection = prepared
+            .restore_context
+            .as_ref()
+            .is_none_or(|context| context.selected_row.is_some());
+        let restore_context = prepared.restore_context.clone();
+        let active_restored = self.global_table.update(cx, |table, cx| {
+            if let Some(context) = restore_context.as_ref() {
+                table
+                    .delegate_mut()
+                    .restore_collapsed_document_ids(&context.collapsed_document_ids);
+            }
+            table.delegate_mut().install_groups_replacement(
+                prepared.groups,
+                prepared.matcher,
+                prepared.staged,
+            );
+            if let Some(context) = restore_context.as_ref() {
+                table.delegate().restore_selection(&context.selection);
+                let selected_ix = context
+                    .selected_row
+                    .and_then(|row| table.delegate().row_ix(row));
+                if let Some(selected_ix) = selected_ix {
+                    table.set_active_log_row(selected_ix, cx);
+                } else {
+                    table.delegate().set_active_log_row(None);
+                    table.clear_selection(cx);
+                }
+            }
+            let active_restored = table.sync_active_log_row(cx);
+            table.refresh(cx);
+            cx.notify();
+            active_restored
+        });
+        if !active_restored {
+            self.global_search.restoring_selection = false;
+        }
+        if prepared.word_wrap {
             let table = self.global_table.read(cx);
             self.global_viewport.reset_wrapped_with_remapped_heights(
                 table.delegate().rows_len(),
-                row_height,
-                measured_heights,
+                prepared.row_height,
+                prepared.measured_heights,
                 |key| table.delegate().row_ix_for_key(*key),
             );
         } else {
             self.global_viewport.invalidate_wrapped();
         }
-        self.restore_global_viewport_anchor(viewport_anchor, row_height, cx);
-        self.refresh_global_result_surface_atomically(window, cx);
+        self.restore_global_viewport_anchor(prepared.viewport_anchor, prepared.row_height, cx);
+        if prepared.viewport_anchor.is_none() {
+            self.global_viewport.place_at_top(0, prepared.row_height);
+        }
+        if let Some(context) = restore_context {
+            if !context.word_wrap {
+                let table = self.global_table.read(cx);
+                let base = table.vertical_scroll_handle.0.borrow().base_handle.clone();
+                let offset = base.offset();
+                base.set_offset(point(-px(context.horizontal_offset), offset.y));
+            }
+            if context.active && context.results_visible {
+                self.active_log_region = LogRegion::GlobalResults;
+            } else if self.active_log_region == LogRegion::GlobalResults {
+                self.active_log_region = LogRegion::Body;
+            }
+        }
+        self.global_result_replace_task = None;
+        self.global_result_replace_cancellation = None;
+        self.bind_active_display_tables(cx);
+        Self::refresh_log_surfaces_atomically(
+            [self.search_results_viewer.surface.clone()],
+            window,
+            cx,
+        );
     }
 
     pub(super) fn global_result_matcher(&self) -> Option<SearchMatcher> {
@@ -1556,6 +1749,16 @@ impl Workspace {
                     cx,
                 );
             });
+        let groups = self.global_result_groups_for_context(scope, &context);
+        let replacement_required = !self
+            .global_table
+            .read(cx)
+            .delegate()
+            .has_same_virtual_content(&groups);
+        if replacement_required {
+            self.refresh_global_result_rows_with_viewport(false, Some(context), window, cx);
+            return;
+        }
         self.refresh_global_result_rows(window, cx);
 
         self.global_search.restoring_selection = context.selected_row.is_some();
@@ -2036,7 +2239,6 @@ impl Workspace {
                     this.record_search_history(&query.text, window, cx);
                 }
                 let highlight_matches = this.app_settings.highlight_matches;
-                let row_height = this.log_row_height();
                 let Some(tab_ix) = this.documents.iter().position(|tab| tab.id == document_id)
                 else {
                     return;
@@ -2045,31 +2247,11 @@ impl Workspace {
                 if tab.search_revision != revision {
                     return;
                 }
-                let viewport_anchor = tab
-                    .results_visible
-                    .then(|| {
-                        Self::capture_local_row_viewport_anchor(
-                            tab,
-                            WrappedRegion::Results,
-                            row_height,
-                            cx,
-                        )
-                    })
-                    .flatten();
-
                 let results_changed = match result {
                     Ok((SearchRun::Completed(result), search_matcher)) => {
                         tab.search_query = query;
                         tab.search_result = result;
                         tab.search_matcher = search_matcher;
-                        tab.refresh_result_rows(row_height, cx);
-                        Self::position_local_row_viewport_anchor(
-                            tab,
-                            WrappedRegion::Results,
-                            viewport_anchor,
-                            row_height,
-                            cx,
-                        );
                         tab.refresh_search_matcher(highlight_matches, cx);
                         tab.results_visible = true;
                         this.activity = Activity::Ready;
@@ -2092,19 +2274,8 @@ impl Workspace {
                         false
                     }
                 };
-                if results_changed
-                    && this
-                        .active_document()
-                        .is_some_and(|tab| tab.id == document_id)
-                {
-                    this.refresh_active_document_surfaces_atomically(window, cx);
-                    Self::position_local_row_viewport_anchor(
-                        &this.documents[tab_ix],
-                        WrappedRegion::Results,
-                        viewport_anchor,
-                        row_height,
-                        cx,
-                    );
+                if results_changed {
+                    this.refresh_document_result_rows_atomically(document_id, window, cx);
                 }
                 this.searches.finish(target, revision);
                 cx.notify();
@@ -2119,12 +2290,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let word_wrap = self.global_viewport.is_wrapped();
-        let row_height = self.log_row_height();
-        let viewport_anchor = completed
-            .preserve_viewport
-            .then(|| self.capture_global_row_viewport_anchor(row_height, cx))
-            .flatten();
+        let preserve_viewport = completed.preserve_viewport;
         self.record_search_history(&completed.query.text, window, cx);
         match completed.scope {
             SearchScope::AllOpenFiles => self.global_search.query = completed.query,
@@ -2149,15 +2315,6 @@ impl Workspace {
         self.global_search.matcher = completed.matcher;
         self.global_search.result_scope = Some(completed.scope);
 
-        self.refresh_global_result_rows(window, cx);
-        self.refresh_active_log_search_presentation(cx);
-        self.position_global_row_viewport_anchor(viewport_anchor, row_height, cx);
-        if word_wrap {
-            self.prime_global_wrapped_frame(row_height, false, window, cx);
-            self.position_global_row_viewport_anchor(viewport_anchor, row_height, cx);
-        }
-        self.activity = Activity::Ready;
-
         let pending_restore = match completed.scope {
             SearchScope::AllOpenFiles => self.global_search.pending_all_open_restore.clone(),
             SearchScope::Directory => self.global_search.pending_directory_restore.clone(),
@@ -2165,7 +2322,11 @@ impl Workspace {
         };
         if let Some(persisted) = pending_restore {
             self.restore_persisted_global_presentation(completed.scope, persisted, window, cx);
+        } else {
+            self.refresh_global_result_rows_with_viewport(preserve_viewport, None, window, cx);
         }
+        self.refresh_active_log_search_presentation(cx);
+        self.activity = Activity::Ready;
         self.schedule_workspace_search_state_save(window, cx);
     }
 
@@ -2622,21 +2783,22 @@ impl Workspace {
         let case_sensitive = self.app_settings.default_case_sensitive;
         let regex = self.app_settings.default_use_regex;
         let max_results = self.app_settings.search_result_limit();
-        let row_height = self.log_row_height();
-        let tab = &mut self.documents[active_ix];
-        tab.search_revision += 1;
-        tab.search_query = SearchQuery {
-            text: String::new(),
-            case_sensitive,
-            regex,
-            max_results,
-        };
-        tab.search_result = SearchResult::default();
-        tab.search_matcher = None;
-        tab.results_visible = false;
-        tab.view.selection_table = SelectionTable::Log;
-        tab.refresh_result_rows(row_height, cx);
-        tab.refresh_search_matcher(highlight_matches, cx);
+        {
+            let tab = &mut self.documents[active_ix];
+            tab.search_revision += 1;
+            tab.search_query = SearchQuery {
+                text: String::new(),
+                case_sensitive,
+                regex,
+                max_results,
+            };
+            tab.search_result = SearchResult::default();
+            tab.search_matcher = None;
+            tab.results_visible = false;
+            tab.view.selection_table = SelectionTable::Log;
+            tab.refresh_search_matcher(highlight_matches, cx);
+        }
+        self.refresh_document_result_rows_atomically(document_id, window, cx);
         self.case_sensitive = case_sensitive;
         self.regex = regex;
         if self.active_log_region == LogRegion::CurrentResults {

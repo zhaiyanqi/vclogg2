@@ -574,7 +574,6 @@ impl Workspace {
                     let SelectEvent::Confirm(Some(mode)) = event else {
                         return;
                     };
-                    let row_height = this.log_row_height();
                     {
                         let Some(tab) = this.documents.iter_mut().find(|tab| tab.id == document_id)
                         else {
@@ -584,11 +583,11 @@ impl Workspace {
                             return;
                         }
                         tab.result_mode = *mode;
-                        tab.refresh_result_rows(row_height, cx);
                         if mode.includes_marks() && !tab.file.marked_rows.is_empty() {
                             tab.results_visible = true;
                         }
                     }
+                    this.refresh_document_result_rows_atomically(document_id, window, cx);
                     if this
                         .active_document()
                         .is_some_and(|tab| tab.id == document_id)
@@ -675,6 +674,9 @@ impl Workspace {
                 search_revision: 0,
                 log_jump_revision: 0,
                 log_jump_task: None,
+                result_replace_revision: 0,
+                result_replace_task: None,
+                result_replace_cancellation: None,
                 results_visible,
                 restoring_result_selection: false,
                 load_state: prepared.load_state,
@@ -919,15 +921,174 @@ impl Workspace {
         }
     }
 
+    pub(super) fn prepare_document_upgrade_jobs(
+        &self,
+        opened: &[(PathBuf, Result<PreparedDocument>)],
+        window: &Window,
+        cx: &App,
+    ) -> Vec<DocumentUpgradeLoadJob> {
+        let row_height = self.log_row_height();
+        let window_visible_rows = (window.viewport_size().height / row_height.max(px(1.)))
+            .ceil()
+            .max(1.) as usize;
+        opened
+            .iter()
+            .filter_map(|(path, prepared)| {
+                let prepared = prepared.as_ref().ok()?;
+                let tab = self.documents.iter().find(|tab| {
+                    paths_match(tab.document.path(), path)
+                        && tab.load_state != DocumentLoadState::Ready
+                })?;
+                if !should_upgrade_loading_document(
+                    tab.load_state,
+                    prepared.load_state,
+                    prepared.session.is_some(),
+                ) {
+                    return None;
+                }
+                let mut marked_rows = tab.file.marked_rows.clone();
+                marked_rows.extend(tab.file.pending_restore_marked_rows.iter());
+                marked_rows.retain_below(prepared.document.source_line_count());
+                let result_rows = compute_result_rows(
+                    tab.result_mode,
+                    Some(&prepared.search_result),
+                    &marked_rows,
+                );
+                let log_anchor =
+                    Self::capture_local_viewport_anchor(tab, WrappedRegion::Log, row_height, cx);
+                let result_anchor = Self::capture_local_viewport_anchor(
+                    tab,
+                    WrappedRegion::Results,
+                    row_height,
+                    cx,
+                );
+                let selected_source_row = tab
+                    .log_table
+                    .read(cx)
+                    .active_log_row()
+                    .and_then(|row_ix| tab.log_table.read(cx).delegate().source_row(row_ix))
+                    .or(tab.view.pending_restore_row);
+                let log_anchor_ix = log_anchor
+                    .as_ref()
+                    .and_then(|anchor| match anchor.key {
+                        LogRowKey::Row { source_row, .. } => {
+                            prepared.document.local_row(source_row)
+                        }
+                        LogRowKey::FileGroup { .. } => None,
+                    })
+                    .or_else(|| {
+                        selected_source_row.and_then(|row| prepared.document.local_row(row))
+                    })
+                    .or_else(|| log_anchor.as_ref().map(|anchor| anchor.fallback_ix))
+                    .unwrap_or_default();
+                let result_anchor_ix = result_anchor
+                    .as_ref()
+                    .and_then(|anchor| match anchor.key {
+                        LogRowKey::Row { source_row, .. } => result_rows.position(source_row),
+                        LogRowKey::FileGroup { .. } => None,
+                    })
+                    .or_else(|| selected_source_row.and_then(|row| result_rows.position(row)))
+                    .or_else(|| result_anchor.as_ref().map(|anchor| anchor.fallback_ix))
+                    .unwrap_or_default();
+                let log_range = search_scope_switch_preload_range(
+                    log_anchor_ix,
+                    log_anchor.as_ref().is_some_and(|anchor| anchor.at_end),
+                    prepared.document.line_count(),
+                    tab.log_table
+                        .read(cx)
+                        .visible_range()
+                        .rows()
+                        .len()
+                        .max(window_visible_rows),
+                );
+                let result_range = search_scope_switch_preload_range(
+                    result_anchor_ix,
+                    result_anchor.as_ref().is_some_and(|anchor| anchor.at_end),
+                    result_rows.len(),
+                    tab.result_table
+                        .read(cx)
+                        .visible_range()
+                        .rows()
+                        .len()
+                        .max(window_visible_rows),
+                );
+                let log_word_wrap = tab.log_viewport.is_wrapped();
+                let result_word_wrap = tab.result_viewport.is_wrapped();
+                let log_measured_heights = if log_word_wrap {
+                    let table = tab.log_table.read(cx);
+                    tab.log_viewport
+                        .wrapped_measured_heights_by_key(|row_ix| table.delegate().row_key(row_ix))
+                } else {
+                    BTreeMap::new()
+                };
+                let result_measured_heights = if result_word_wrap {
+                    let table = tab.result_table.read(cx);
+                    tab.result_viewport
+                        .wrapped_measured_heights_by_key(|row_ix| table.delegate().row_key(row_ix))
+                } else {
+                    BTreeMap::new()
+                };
+                Some(DocumentUpgradeLoadJob {
+                    path: path.clone(),
+                    previous_document: tab.document.clone(),
+                    document: prepared.document.clone(),
+                    result_rows: result_rows.clone(),
+                    log_request: tab
+                        .log_table
+                        .read(cx)
+                        .delegate()
+                        .stage_document_replacement(&prepared.document, None, log_range),
+                    result_request: tab
+                        .result_table
+                        .read(cx)
+                        .delegate()
+                        .stage_document_replacement(
+                            &prepared.document,
+                            Some(&result_rows),
+                            result_range,
+                        ),
+                    log_anchor,
+                    result_anchor,
+                    log_measured_heights,
+                    result_measured_heights,
+                    row_height,
+                    log_word_wrap,
+                    result_word_wrap,
+                })
+            })
+            .collect()
+    }
+
+    pub(super) fn attach_document_upgrade_frames(
+        opened: &mut [(PathBuf, Result<PreparedDocument>)],
+        frames: Vec<PreparedDocumentUpgradeFrame>,
+    ) {
+        for frame in frames {
+            let Some((_, prepared)) = opened.iter_mut().find(|(path, prepared)| {
+                paths_match(path, &frame.path)
+                    && prepared
+                        .as_ref()
+                        .is_ok_and(|prepared| Arc::ptr_eq(&prepared.document, &frame.document))
+            }) else {
+                continue;
+            };
+            if let Ok(prepared) = prepared {
+                prepared.upgrade_frame = Some(frame);
+            }
+        }
+    }
+
     pub(super) fn upgrade_loading_document(
         &mut self,
         document_ix: usize,
-        prepared: PreparedDocument,
+        mut prepared: PreparedDocument,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let upgrade_frame = prepared.upgrade_frame.take();
         let highlight_matches = self.app_settings.highlight_matches;
         let tab = &mut self.documents[document_ix];
+        let previous_document = tab.document.clone();
         let previous_state = tab.load_state;
         let selected_source_row = {
             let table = tab.log_table.read(cx);
@@ -1015,12 +1176,23 @@ impl Workspace {
                 .collect();
         }
         let result_rows = tab.compute_result_rows();
-        tab.log_viewport.invalidate_wrapped();
-        tab.result_viewport.invalidate_wrapped();
+        let upgrade_frame = upgrade_frame.filter(|frame| {
+            Arc::ptr_eq(&frame.previous_document, &previous_document)
+                && Arc::ptr_eq(&frame.document, &tab.document)
+                && frame.result_rows == result_rows
+        });
 
         let marked_rows = tab.file.marked_rows.clone();
         tab.log_table.update(cx, |table, cx| {
-            table.delegate_mut().replace_with_all(tab.document.clone());
+            if let Some(frame) = upgrade_frame.as_ref() {
+                table.delegate_mut().install_document_replacement(
+                    tab.document.clone(),
+                    None,
+                    frame.log_lines.clone(),
+                );
+            } else {
+                table.delegate_mut().replace_with_all(tab.document.clone());
+            }
             table.delegate_mut().set_marked_rows(marked_rows.clone());
             table
                 .delegate_mut()
@@ -1030,12 +1202,25 @@ impl Workspace {
                     .then(|| tab.search_matcher.clone())
                     .flatten(),
             );
-            table.refresh_log_rows(cx);
+            if upgrade_frame.is_none() {
+                table.refresh_log_rows(cx);
+            } else {
+                table.refresh(cx);
+                cx.notify();
+            }
         });
         tab.result_table.update(cx, |table, cx| {
-            table
-                .delegate_mut()
-                .replace_with_rows(tab.document.clone(), result_rows);
+            if let Some(frame) = upgrade_frame.as_ref() {
+                table.delegate_mut().install_document_replacement(
+                    tab.document.clone(),
+                    Some(result_rows.clone()),
+                    frame.result_lines.clone(),
+                );
+            } else {
+                table
+                    .delegate_mut()
+                    .replace_with_rows(tab.document.clone(), result_rows.clone());
+            }
             table.delegate_mut().set_marked_rows(marked_rows);
             table
                 .delegate_mut()
@@ -1045,8 +1230,55 @@ impl Workspace {
                     .then(|| tab.search_matcher.clone())
                     .flatten(),
             );
-            table.refresh_log_rows(cx);
+            if upgrade_frame.is_none() {
+                table.refresh_log_rows(cx);
+            } else {
+                table.refresh(cx);
+                cx.notify();
+            }
         });
+
+        if let Some(frame) = upgrade_frame.as_ref() {
+            if frame.log_word_wrap {
+                let table = tab.log_table.read(cx);
+                tab.log_viewport.reset_wrapped_with_remapped_heights(
+                    table.delegate().row_count(),
+                    frame.row_height,
+                    frame.log_measured_heights.clone(),
+                    |key| table.delegate().row_ix_for_key(*key),
+                );
+            } else {
+                tab.log_viewport.invalidate_wrapped();
+            }
+            if frame.result_word_wrap {
+                let table = tab.result_table.read(cx);
+                tab.result_viewport.reset_wrapped_with_remapped_heights(
+                    table.delegate().row_count(),
+                    frame.row_height,
+                    frame.result_measured_heights.clone(),
+                    |key| table.delegate().row_ix_for_key(*key),
+                );
+            } else {
+                tab.result_viewport.invalidate_wrapped();
+            }
+            Self::restore_local_viewport_anchor(
+                tab,
+                WrappedRegion::Log,
+                frame.log_anchor,
+                frame.row_height,
+                cx,
+            );
+            Self::restore_local_viewport_anchor(
+                tab,
+                WrappedRegion::Results,
+                frame.result_anchor,
+                frame.row_height,
+                cx,
+            );
+        } else {
+            tab.log_viewport.invalidate_wrapped();
+            tab.result_viewport.invalidate_wrapped();
+        }
 
         let restore_row = if prepared.load_state == DocumentLoadState::Ready {
             tab.view.pending_restore_row.take().or(selected_source_row)
@@ -1062,7 +1294,11 @@ impl Workspace {
             self.apply_tab_resume(document_ix, cx);
         }
         if self.active_ix == Some(document_ix) {
-            self.refresh_active_document_surfaces_atomically(window, cx);
+            if upgrade_frame.is_some() {
+                self.refresh_prepared_active_document_surfaces_atomically(window, cx);
+            } else {
+                self.refresh_active_document_surfaces_atomically(window, cx);
+            }
         }
     }
 
@@ -1106,6 +1342,302 @@ impl Workspace {
         self.reload_document(document_id, false, ReloadStrategy::Full, window, cx);
     }
 
+    fn prepare_reload_replacement(
+        &mut self,
+        input: ReloadReplacementInput,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<ReloadReplacementPlan> {
+        let ReloadReplacementInput {
+            document_id,
+            revision,
+            previous_document,
+            document,
+            search_result,
+            query,
+            search_matcher,
+            results_visible,
+            follow_end,
+            selected_source_row,
+        } = input;
+        let tab_ix = self
+            .documents
+            .iter()
+            .position(|tab| tab.id == document_id)?;
+        let tab = &self.documents[tab_ix];
+        if tab.search_revision != revision || !Arc::ptr_eq(&tab.document, &previous_document) {
+            return None;
+        }
+        let mut marked_rows = tab.file.marked_rows.clone();
+        marked_rows.extend(tab.file.pending_restore_marked_rows.iter());
+        marked_rows.retain_below(document.source_line_count());
+        let result_rows = compute_result_rows(tab.result_mode, Some(&search_result), &marked_rows);
+        let row_height = self.log_row_height();
+        let log_word_wrap = tab.log_viewport.is_wrapped();
+        let result_word_wrap = tab.result_viewport.is_wrapped();
+        let log_anchor =
+            Self::capture_local_viewport_anchor(tab, WrappedRegion::Log, row_height, cx);
+        let result_anchor =
+            Self::capture_local_viewport_anchor(tab, WrappedRegion::Results, row_height, cx);
+        let log_measured_heights = if log_word_wrap {
+            let table = tab.log_table.read(cx);
+            tab.log_viewport
+                .wrapped_measured_heights_by_key(|row_ix| table.delegate().row_key(row_ix))
+        } else {
+            BTreeMap::new()
+        };
+        let result_measured_heights = if result_word_wrap {
+            let table = tab.result_table.read(cx);
+            tab.result_viewport
+                .wrapped_measured_heights_by_key(|row_ix| table.delegate().row_key(row_ix))
+        } else {
+            BTreeMap::new()
+        };
+        let window_visible_rows = (window.viewport_size().height / row_height.max(px(1.)))
+            .ceil()
+            .max(1.) as usize;
+        let log_anchor_ix = if follow_end {
+            document.line_count().saturating_sub(1)
+        } else {
+            log_anchor
+                .as_ref()
+                .and_then(|anchor| match anchor.key {
+                    LogRowKey::Row { source_row, .. } => document.local_row(source_row),
+                    LogRowKey::FileGroup { .. } => None,
+                })
+                .or_else(|| selected_source_row.and_then(|row| document.local_row(row)))
+                .or_else(|| log_anchor.as_ref().map(|anchor| anchor.fallback_ix))
+                .unwrap_or_default()
+        };
+        let log_visible_rows = tab.log_table.read(cx).visible_range().rows().len();
+        let log_range = search_scope_switch_preload_range(
+            log_anchor_ix,
+            follow_end || log_anchor.as_ref().is_some_and(|anchor| anchor.at_end),
+            document.line_count(),
+            log_visible_rows.max(window_visible_rows),
+        );
+        let result_anchor_ix = result_anchor
+            .as_ref()
+            .and_then(|anchor| match anchor.key {
+                LogRowKey::Row { source_row, .. } => result_rows.position(source_row),
+                LogRowKey::FileGroup { .. } => None,
+            })
+            .or_else(|| selected_source_row.and_then(|source_row| result_rows.position(source_row)))
+            .or_else(|| result_anchor.as_ref().map(|anchor| anchor.fallback_ix))
+            .unwrap_or_default();
+        let result_visible_rows = tab.result_table.read(cx).visible_range().rows().len();
+        let result_range = search_scope_switch_preload_range(
+            result_anchor_ix,
+            result_anchor.as_ref().is_some_and(|anchor| anchor.at_end),
+            result_rows.len(),
+            result_visible_rows.max(window_visible_rows),
+        );
+        let log_request = tab
+            .log_table
+            .read(cx)
+            .delegate()
+            .stage_document_replacement(&document, None, log_range);
+        let result_request = tab
+            .result_table
+            .read(cx)
+            .delegate()
+            .stage_document_replacement(&document, Some(&result_rows), result_range);
+        let selected_result_row = (!follow_end)
+            .then(|| selected_source_row.and_then(|row| result_rows.position(row)))
+            .flatten();
+
+        Some(ReloadReplacementPlan {
+            document_id,
+            revision,
+            previous_document,
+            document,
+            search_result,
+            query,
+            search_matcher,
+            marked_rows,
+            result_rows,
+            results_visible,
+            follow_end,
+            selected_source_row,
+            selected_result_row,
+            log_request: Some(log_request),
+            result_request: Some(result_request),
+            log_anchor,
+            result_anchor,
+            log_measured_heights,
+            result_measured_heights,
+            row_height,
+            log_word_wrap,
+            result_word_wrap,
+        })
+    }
+
+    fn commit_reload_replacement(
+        &mut self,
+        prepared: PreparedReloadReplacement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let plan = prepared.plan;
+        let Some(tab_ix) = self
+            .documents
+            .iter()
+            .position(|tab| tab.id == plan.document_id)
+        else {
+            self.open_task = None;
+            self.open_queued_external_paths_if_idle(window, cx);
+            return;
+        };
+        if self.documents[tab_ix].search_revision != plan.revision
+            || !Arc::ptr_eq(&self.documents[tab_ix].document, &plan.previous_document)
+        {
+            self.open_task = None;
+            self.open_queued_external_paths_if_idle(window, cx);
+            return;
+        }
+        let highlight_matches = self.app_settings.highlight_matches;
+        let search_result_limit = self.app_settings.search_result_limit();
+        let tab = &mut self.documents[tab_ix];
+        if let Some(cancellation) = tab.result_replace_cancellation.take() {
+            cancellation.store(true, Ordering::Release);
+        }
+        tab.result_replace_task.take();
+        tab.result_replace_revision = tab.result_replace_revision.saturating_add(1);
+        tab.log_jump_revision = tab.log_jump_revision.saturating_add(1);
+        tab.log_jump_task.take();
+        tab.document = plan.document;
+        tab.search_query.text = plan.query.text;
+        tab.search_query.max_results = search_result_limit;
+        tab.search_result = plan.search_result;
+        tab.search_matcher = plan.search_matcher;
+        tab.file.pending_restore_marked_rows = CompressedRows::default();
+        tab.file.marked_rows = plan.marked_rows;
+        tab.log_table.update(cx, |table, cx| {
+            table.delegate_mut().install_document_replacement(
+                tab.document.clone(),
+                None,
+                prepared.log_lines,
+            );
+            table
+                .delegate_mut()
+                .set_marked_rows(tab.file.marked_rows.clone());
+            table
+                .delegate_mut()
+                .set_matched_rows(tab.search_result.line_indices.clone());
+            table.delegate_mut().set_search_matcher(
+                highlight_matches
+                    .then(|| tab.search_matcher.clone())
+                    .flatten(),
+            );
+            if tab.document.line_count() > 0 {
+                let row = if plan.follow_end {
+                    tab.document.line_count() - 1
+                } else {
+                    plan.selected_source_row
+                        .unwrap_or_default()
+                        .min(tab.document.line_count() - 1)
+                };
+                table.set_active_log_row(row, cx);
+            } else {
+                table.clear_selection(cx);
+            }
+            table.refresh(cx);
+            cx.notify();
+        });
+        tab.result_table.update(cx, |table, cx| {
+            table.delegate_mut().install_document_replacement(
+                tab.document.clone(),
+                Some(plan.result_rows),
+                prepared.result_lines,
+            );
+            table
+                .delegate_mut()
+                .set_marked_rows(tab.file.marked_rows.clone());
+            table
+                .delegate_mut()
+                .set_matched_rows(tab.search_result.line_indices.clone());
+            table.delegate_mut().set_search_matcher(
+                highlight_matches
+                    .then(|| tab.search_matcher.clone())
+                    .flatten(),
+            );
+            if let Some(row_ix) = plan.selected_result_row {
+                table.set_active_log_row(row_ix, cx);
+            } else {
+                table.clear_selection(cx);
+            }
+            table.refresh(cx);
+            cx.notify();
+        });
+        if plan.log_word_wrap {
+            let table = tab.log_table.read(cx);
+            tab.log_viewport.reset_wrapped_with_remapped_heights(
+                table.delegate().row_count(),
+                plan.row_height,
+                plan.log_measured_heights,
+                |key| table.delegate().row_ix_for_key(*key),
+            );
+        } else {
+            tab.log_viewport.invalidate_wrapped();
+        }
+        if plan.result_word_wrap {
+            let table = tab.result_table.read(cx);
+            tab.result_viewport.reset_wrapped_with_remapped_heights(
+                table.delegate().row_count(),
+                plan.row_height,
+                plan.result_measured_heights,
+                |key| table.delegate().row_ix_for_key(*key),
+            );
+        } else {
+            tab.result_viewport.invalidate_wrapped();
+        }
+        if plan.follow_end {
+            tab.log_viewport.scroll_to_end();
+        } else {
+            Self::restore_local_viewport_anchor(
+                tab,
+                WrappedRegion::Log,
+                plan.log_anchor,
+                plan.row_height,
+                cx,
+            );
+        }
+        Self::restore_local_viewport_anchor(
+            tab,
+            WrappedRegion::Results,
+            plan.result_anchor,
+            plan.row_height,
+            cx,
+        );
+        tab.results_visible = plan.results_visible;
+        tab.load_state = DocumentLoadState::Ready;
+        tab.view.pending_restore_row = None;
+        self.activity = Activity::Ready;
+        if self
+            .active_document()
+            .is_some_and(|tab| tab.id == plan.document_id)
+        {
+            self.refresh_prepared_active_document_surfaces_atomically(window, cx);
+        }
+        let invalidated = self.invalidate_all_open_results_for_reload(plan.document_id);
+        self.refresh_global_result_rows(window, cx);
+        if let Some(visible_results_invalidated) = invalidated {
+            if visible_results_invalidated {
+                window.push_notification(
+                    crate::tr!(
+                        "文件已更新，请重新执行全部打开文件搜索",
+                        "The file changed. Run the all-open-files search again."
+                    ),
+                    cx,
+                );
+            }
+            self.schedule_workspace_search_state_save(window, cx);
+        }
+        self.open_task = None;
+        self.open_queued_external_paths_if_idle(window, cx);
+        cx.notify();
+    }
+
     pub(super) fn reload_document(
         &mut self,
         document_id: u64,
@@ -1138,11 +1670,12 @@ impl Workspace {
         cx.notify();
 
         self.open_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let reload_source = previous_document.clone();
             let result = cx
                 .background_spawn(async move {
                     let document = Arc::new(match strategy {
-                        ReloadStrategy::Full => LogDocument::open(previous_document.path())?,
-                        ReloadStrategy::ExtendAppend => previous_document.refresh()?.0,
+                        ReloadStrategy::Full => LogDocument::open(reload_source.path())?,
+                        ReloadStrategy::ExtendAppend => reload_source.refresh()?.0,
                     });
                     let search_matcher = SearchMatcher::new(&query)?;
                     let search_result = if query.text.is_empty() {
@@ -1153,128 +1686,86 @@ impl Workspace {
                     Ok::<_, anyhow::Error>((document, search_result, query, search_matcher))
                 })
                 .await;
-
-            _ = this.update_in(cx, |this, window, cx| {
-                let highlight_matches = this.app_settings.highlight_matches;
-                let search_result_limit = this.app_settings.search_result_limit();
-                let Some(tab) = this.documents.iter_mut().find(|tab| tab.id == document_id) else {
-                    this.open_task = None;
-                    this.open_queued_external_paths_if_idle(window, cx);
-                    return;
-                };
-                if tab.search_revision != revision {
-                    this.open_task = None;
-                    this.open_queued_external_paths_if_idle(window, cx);
-                    return;
-                }
-
-                let reloaded = match result {
-                    Ok((document, search_result, query, search_matcher)) => {
-                        tab.document = document;
-                        tab.search_query.text = query.text;
-                        tab.search_query.max_results = search_result_limit;
-                        tab.search_result = search_result;
-                        tab.search_matcher = search_matcher;
-                        let pending_marks =
-                            std::mem::take(&mut tab.file.pending_restore_marked_rows);
-                        tab.file.marked_rows.extend(pending_marks.iter());
-                        tab.file.marked_rows.retain_below(tab.document.line_count());
-                        let result_rows = tab.compute_result_rows();
-                        tab.log_viewport.invalidate_wrapped();
-                        tab.result_viewport.invalidate_wrapped();
-                        let marked_rows = tab.file.marked_rows.clone();
-                        let selected_result_row = (!follow_end)
-                            .then(|| {
-                                selected_source_row
-                                    .and_then(|source_row| result_rows.position(source_row))
-                            })
-                            .flatten();
-                        tab.log_table.update(cx, |table, cx| {
-                            table.delegate_mut().replace_with_all(tab.document.clone());
-                            table.delegate_mut().set_marked_rows(marked_rows.clone());
-                            table
-                                .delegate_mut()
-                                .set_matched_rows(tab.search_result.line_indices.clone());
-                            table.delegate_mut().set_search_matcher(
-                                highlight_matches
-                                    .then(|| tab.search_matcher.clone())
-                                    .flatten(),
-                            );
-                            table.refresh_log_rows(cx);
-                        });
-                        tab.result_table.update(cx, |table, cx| {
-                            table
-                                .delegate_mut()
-                                .replace_with_rows(tab.document.clone(), result_rows);
-                            table.delegate_mut().set_marked_rows(marked_rows);
-                            table
-                                .delegate_mut()
-                                .set_matched_rows(tab.search_result.line_indices.clone());
-                            table.delegate_mut().set_search_matcher(
-                                highlight_matches
-                                    .then(|| tab.search_matcher.clone())
-                                    .flatten(),
-                            );
-                            if let Some(row_ix) = selected_result_row {
-                                table.set_active_log_row(row_ix, cx);
-                            } else {
-                                table.clear_selection(cx);
-                            }
-                            table.refresh_log_rows(cx);
-                        });
-                        tab.results_visible = results_visible;
-                        tab.load_state = DocumentLoadState::Ready;
-                        tab.view.pending_restore_row = None;
-
-                        if tab.document.line_count() > 0 {
-                            let row = if follow_end {
-                                tab.document.line_count() - 1
-                            } else {
-                                selected_source_row
-                                    .unwrap_or_default()
-                                    .min(tab.document.line_count() - 1)
-                            };
-                            tab.log_table
-                                .update(cx, |table, cx| table.set_active_log_row(row, cx));
-                        }
-                        this.activity = Activity::Ready;
-                        true
-                    }
-                    Err(error) => {
-                        if follow_end {
+            let (document, search_result, query, search_matcher) = match result {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    _ = this.update_in(cx, |this, window, cx| {
+                        if let Some(tab) =
+                            this.documents.iter_mut().find(|tab| tab.id == document_id)
+                            && follow_end
+                        {
                             tab.view.auto_follow = false;
                         }
                         let message: SharedString = error.to_string().into();
-                        window.push_notification(message.clone(), cx);
+                        window.push_notification(message, cx);
                         this.activity = Activity::Error;
-                        false
-                    }
-                };
-                if reloaded {
-                    if this
-                        .active_document()
-                        .is_some_and(|tab| tab.id == document_id)
-                    {
-                        this.refresh_active_document_surfaces_atomically(window, cx);
-                    }
-                    let invalidated = this.invalidate_all_open_results_for_reload(document_id);
-                    this.refresh_global_result_rows(window, cx);
-                    if let Some(visible_results_invalidated) = invalidated {
-                        if visible_results_invalidated {
-                            window.push_notification(
-                                crate::tr!(
-                                    "文件已更新，请重新执行全部打开文件搜索",
-                                    "The file changed. Run the all-open-files search again."
-                                ),
-                                cx,
-                            );
-                        }
-                        this.schedule_workspace_search_state_save(window, cx);
-                    }
+                        this.open_task = None;
+                        this.open_queued_external_paths_if_idle(window, cx);
+                        cx.notify();
+                    });
+                    return;
                 }
-                this.open_task = None;
-                this.open_queued_external_paths_if_idle(window, cx);
-                cx.notify();
+            };
+
+            let plan = this
+                .update_in(cx, |this, window, cx| {
+                    this.prepare_reload_replacement(
+                        ReloadReplacementInput {
+                            document_id,
+                            revision,
+                            previous_document,
+                            document,
+                            search_result,
+                            query,
+                            search_matcher,
+                            results_visible,
+                            follow_end,
+                            selected_source_row,
+                        },
+                        window,
+                        cx,
+                    )
+                })
+                .ok()
+                .flatten();
+            let Some(mut plan) = plan else {
+                _ = this.update_in(cx, |this, window, cx| {
+                    this.open_task = None;
+                    this.open_queued_external_paths_if_idle(window, cx);
+                });
+                return;
+            };
+            let document = plan.document.clone();
+            let log_request = plan
+                .log_request
+                .take()
+                .expect("a reload plan has a log frame request");
+            let result_request = plan
+                .result_request
+                .take()
+                .expect("a reload plan has a result frame request");
+            let (log_lines, result_lines) = cx
+                .background_spawn(async move {
+                    let mut reader = LinePreviewReader::default();
+                    let log_lines = log_request.load(|source_row, max_bytes| {
+                        reader.line_preview(&document, *source_row, max_bytes)
+                    });
+                    let result_lines = result_request.load(|source_row, max_bytes| {
+                        reader.line_preview(&document, *source_row, max_bytes)
+                    });
+                    (log_lines, result_lines)
+                })
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                this.commit_reload_replacement(
+                    PreparedReloadReplacement {
+                        plan,
+                        log_lines,
+                        result_lines,
+                    },
+                    window,
+                    cx,
+                );
             });
         }));
     }

@@ -430,7 +430,6 @@ impl Workspace {
             });
             let mut changed_documents = Vec::new();
             let mut changed_rows = 0_usize;
-            let row_height = self.log_row_height();
             for (document_id, rows) in selected_by_document {
                 let Some(tab_ix) = self.documents.iter().position(|tab| tab.id == document_id)
                 else {
@@ -453,10 +452,10 @@ impl Workspace {
                     table.delegate_mut().set_marked_rows(marked_rows);
                     table.refresh(cx);
                 });
-                tab.refresh_result_rows(row_height, cx);
                 if is_marking && tab.result_mode.includes_marks() {
                     tab.results_visible = true;
                 }
+                self.refresh_document_result_rows_atomically(document_id, window, cx);
                 changed_documents.push(document_id);
             }
             self.refresh_global_result_rows(window, cx);
@@ -496,7 +495,6 @@ impl Workspace {
             );
             return;
         }
-        let row_height = self.log_row_height();
         let (document_id, is_marking) = {
             let tab = &mut self.documents[active_ix];
             let selection_is_valid = selected_rows.first().is_some_and(|row| {
@@ -533,12 +531,12 @@ impl Workspace {
                 table.delegate_mut().set_marked_rows(marked_rows);
                 table.refresh(cx);
             });
-            tab.refresh_result_rows(row_height, cx);
             if is_marking && tab.result_mode.includes_marks() {
                 tab.results_visible = true;
             }
             (tab.id, is_marking)
         };
+        self.refresh_document_result_rows_atomically(document_id, window, cx);
         if is_marking
             && self.global_search.result_mode.includes_marks()
             && self.global_search.selected_documents.contains(&document_id)

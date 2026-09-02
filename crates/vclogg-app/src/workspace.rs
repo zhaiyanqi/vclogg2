@@ -125,7 +125,7 @@ use crate::{
     },
     tab_resume::{PersistedLogRegion, TabResumeState, ViewportBookmark},
     ui_theme,
-    virtual_log_lines::{LogRowKey, StagedVisibleLineLoadResult},
+    virtual_log_lines::{LogRowKey, StagedVisibleLineLoadRequest, StagedVisibleLineLoadResult},
     workspace_state::{
         CloudController, GlobalSearchDocumentResult, GlobalSearchResults, GlobalSearchState,
         PersistenceController, QuickFindBoundary, QuickFindDirection, QuickFindMatch,
@@ -205,6 +205,39 @@ struct PreparedDocument {
     warning: Option<String>,
     load_state: DocumentLoadState,
     pending_index_cache: Option<PendingIndexCacheWrite>,
+    upgrade_frame: Option<PreparedDocumentUpgradeFrame>,
+}
+
+struct DocumentUpgradeLoadJob {
+    path: PathBuf,
+    previous_document: Arc<LogDocument>,
+    document: Arc<LogDocument>,
+    result_rows: CompressedRows,
+    log_request: StagedVisibleLineLoadRequest<usize>,
+    result_request: StagedVisibleLineLoadRequest<usize>,
+    log_anchor: Option<ViewportAnchor<LogRowKey>>,
+    result_anchor: Option<ViewportAnchor<LogRowKey>>,
+    log_measured_heights: BTreeMap<LogRowKey, Pixels>,
+    result_measured_heights: BTreeMap<LogRowKey, Pixels>,
+    row_height: Pixels,
+    log_word_wrap: bool,
+    result_word_wrap: bool,
+}
+
+struct PreparedDocumentUpgradeFrame {
+    path: PathBuf,
+    previous_document: Arc<LogDocument>,
+    document: Arc<LogDocument>,
+    result_rows: CompressedRows,
+    log_lines: StagedVisibleLineLoadResult<usize>,
+    result_lines: StagedVisibleLineLoadResult<usize>,
+    log_anchor: Option<ViewportAnchor<LogRowKey>>,
+    result_anchor: Option<ViewportAnchor<LogRowKey>>,
+    log_measured_heights: BTreeMap<LogRowKey, Pixels>,
+    result_measured_heights: BTreeMap<LogRowKey, Pixels>,
+    row_height: Pixels,
+    log_word_wrap: bool,
+    result_word_wrap: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -619,6 +652,9 @@ struct DocumentTab {
     search_revision: u64,
     log_jump_revision: u64,
     log_jump_task: Option<Task<()>>,
+    result_replace_revision: u64,
+    result_replace_task: Option<Task<()>>,
+    result_replace_cancellation: Option<Arc<AtomicBool>>,
     results_visible: bool,
     restoring_result_selection: bool,
     load_state: DocumentLoadState,
@@ -646,6 +682,78 @@ struct PreparedGlobalGroupToggle {
     anchor: Option<RowViewportAnchor<LogRowKey>>,
     measured_heights: BTreeMap<LogRowKey, Pixels>,
     row_height: Pixels,
+}
+
+struct PreparedLocalResultReplacement {
+    document_id: u64,
+    document: Arc<LogDocument>,
+    previous_rows: CompressedRows,
+    rows: CompressedRows,
+    matched_rows: CompressedRows,
+    marked_rows: CompressedRows,
+    matcher: Option<SearchMatcher>,
+    staged: StagedVisibleLineLoadResult<usize>,
+    viewport_anchor: Option<ViewportAnchor<LogRowKey>>,
+    measured_heights: BTreeMap<LogRowKey, Pixels>,
+    row_height: Pixels,
+    word_wrap: bool,
+}
+
+struct PreparedGlobalResultReplacement {
+    expected_content_revision: u64,
+    expected_layout_revision: u64,
+    groups: Vec<GlobalSearchGroup>,
+    matcher: Option<SearchMatcher>,
+    staged: StagedVisibleLineLoadResult<(u64, usize)>,
+    viewport_anchor: Option<ViewportAnchor<LogRowKey>>,
+    measured_heights: BTreeMap<LogRowKey, Pixels>,
+    row_height: Pixels,
+    word_wrap: bool,
+    restore_context: Option<SearchSessionState>,
+}
+
+struct ReloadReplacementInput {
+    document_id: u64,
+    revision: u64,
+    previous_document: Arc<LogDocument>,
+    document: Arc<LogDocument>,
+    search_result: SearchResult,
+    query: SearchQuery,
+    search_matcher: Option<SearchMatcher>,
+    results_visible: bool,
+    follow_end: bool,
+    selected_source_row: Option<usize>,
+}
+
+struct ReloadReplacementPlan {
+    document_id: u64,
+    revision: u64,
+    previous_document: Arc<LogDocument>,
+    document: Arc<LogDocument>,
+    search_result: SearchResult,
+    query: SearchQuery,
+    search_matcher: Option<SearchMatcher>,
+    marked_rows: CompressedRows,
+    result_rows: CompressedRows,
+    results_visible: bool,
+    follow_end: bool,
+    selected_source_row: Option<usize>,
+    selected_result_row: Option<usize>,
+    log_request: Option<StagedVisibleLineLoadRequest<usize>>,
+    result_request: Option<StagedVisibleLineLoadRequest<usize>>,
+    log_anchor: Option<ViewportAnchor<LogRowKey>>,
+    result_anchor: Option<ViewportAnchor<LogRowKey>>,
+    log_measured_heights: BTreeMap<LogRowKey, Pixels>,
+    result_measured_heights: BTreeMap<LogRowKey, Pixels>,
+    row_height: Pixels,
+    log_word_wrap: bool,
+    result_word_wrap: bool,
+}
+
+struct PreparedReloadReplacement {
+    plan: ReloadReplacementPlan,
+    log_lines: StagedVisibleLineLoadResult<usize>,
+    result_lines: StagedVisibleLineLoadResult<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -2105,50 +2213,6 @@ impl DocumentTab {
         }
     }
 
-    fn refresh_result_rows(&mut self, row_height: Pixels, cx: &mut App) {
-        let result_rows = self.compute_result_rows();
-        let projection_changed =
-            self.result_table.read(cx).delegate().projected_rows() != Some(&result_rows);
-        if !projection_changed {
-            self.install_result_rows(result_rows, cx);
-            return;
-        }
-        let word_wrap = self.result_viewport.is_wrapped();
-        let row_height = if word_wrap && self.result_viewport.wrapped_base_height() > px(0.) {
-            self.result_viewport.wrapped_base_height()
-        } else {
-            row_height
-        };
-        let viewport_anchor =
-            Workspace::capture_local_viewport_anchor(self, WrappedRegion::Results, row_height, cx);
-        let measured_heights = if word_wrap {
-            let table = self.result_table.read(cx);
-            self.result_viewport
-                .wrapped_measured_heights_by_key(|row_ix| table.delegate().row_key(row_ix))
-        } else {
-            BTreeMap::new()
-        };
-        self.install_result_rows(result_rows, cx);
-        if word_wrap {
-            let table = self.result_table.read(cx);
-            self.result_viewport.reset_wrapped_with_remapped_heights(
-                table.delegate().row_count(),
-                row_height,
-                measured_heights,
-                |key| table.delegate().row_ix_for_key(*key),
-            );
-        } else {
-            self.result_viewport.invalidate_wrapped();
-        }
-        Workspace::restore_local_viewport_anchor(
-            self,
-            WrappedRegion::Results,
-            viewport_anchor,
-            row_height,
-            cx,
-        );
-    }
-
     fn refresh_view_options(&self, cx: &mut App) {
         let show_line_numbers = self.view.show_line_numbers;
         let show_row_separators = self.view.show_row_separators;
@@ -2560,6 +2624,9 @@ pub struct Workspace {
     pending_log_scroll_frames: PendingLogScrollFrames,
     global_group_toggle_task: Option<Task<()>>,
     global_group_toggle_revision: u64,
+    global_result_replace_task: Option<Task<()>>,
+    global_result_replace_cancellation: Option<Arc<AtomicBool>>,
+    global_result_replace_revision: u64,
     search_scope_switch_task: Option<Task<()>>,
     search_scope_switch_cancellation: Option<Arc<AtomicBool>>,
     search_scope_switch_revision: u64,
@@ -3140,6 +3207,9 @@ impl Workspace {
             pending_log_scroll_frames: PendingLogScrollFrames::default(),
             global_group_toggle_task: None,
             global_group_toggle_revision: 0,
+            global_result_replace_task: None,
+            global_result_replace_cancellation: None,
+            global_result_replace_revision: 0,
             search_scope_switch_task: None,
             search_scope_switch_cancellation: None,
             search_scope_switch_revision: 0,

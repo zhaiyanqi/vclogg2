@@ -1,6 +1,248 @@
 use super::*;
 
 impl Workspace {
+    pub(super) fn refresh_document_result_rows_atomically(
+        &mut self,
+        document_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab_ix) = self.documents.iter().position(|tab| tab.id == document_id) else {
+            return;
+        };
+        let rows = self.documents[tab_ix].compute_result_rows();
+        let previous_rows = self.documents[tab_ix]
+            .result_table
+            .read(cx)
+            .delegate()
+            .projected_rows()
+            .cloned()
+            .unwrap_or_default();
+        if previous_rows == rows {
+            self.documents[tab_ix].install_result_rows(rows, cx);
+            return;
+        }
+
+        let row_height = self.log_row_height();
+        let word_wrap = self.documents[tab_ix].result_viewport.is_wrapped();
+        let row_height =
+            if word_wrap && self.documents[tab_ix].result_viewport.wrapped_base_height() > px(0.) {
+                self.documents[tab_ix].result_viewport.wrapped_base_height()
+            } else {
+                row_height
+            };
+        let viewport_anchor = Self::capture_local_viewport_anchor(
+            &self.documents[tab_ix],
+            WrappedRegion::Results,
+            row_height,
+            cx,
+        );
+        let measured_heights = if word_wrap {
+            let table = self.documents[tab_ix].result_table.read(cx);
+            self.documents[tab_ix]
+                .result_viewport
+                .wrapped_measured_heights_by_key(|row_ix| table.delegate().row_key(row_ix))
+        } else {
+            BTreeMap::new()
+        };
+        let anchor_ix = viewport_anchor
+            .as_ref()
+            .and_then(|anchor| match anchor.key {
+                LogRowKey::Row { source_row, .. } => rows.position(source_row),
+                LogRowKey::FileGroup { .. } => None,
+            })
+            .or_else(|| viewport_anchor.as_ref().map(|anchor| anchor.fallback_ix))
+            .unwrap_or_default();
+        let table_visible_rows = self.documents[tab_ix]
+            .result_table
+            .read(cx)
+            .visible_range()
+            .rows()
+            .len();
+        let measured_visible_rows = self
+            .row_drag_bounds
+            .get(&(document_id, WrappedRegion::Results))
+            .map(|bounds| (bounds.size.height / row_height.max(px(1.))).ceil().max(1.) as usize)
+            .unwrap_or_default();
+        let window_visible_rows = (window.viewport_size().height / row_height.max(px(1.)))
+            .ceil()
+            .max(1.) as usize;
+        let preload_range = search_scope_switch_preload_range(
+            anchor_ix,
+            viewport_anchor.as_ref().is_some_and(|anchor| anchor.at_end),
+            rows.len(),
+            table_visible_rows
+                .max(measured_visible_rows)
+                .max(window_visible_rows),
+        );
+        let table = self.documents[tab_ix].result_table.clone();
+        let request = table
+            .read(cx)
+            .delegate()
+            .stage_row_projection_replacement(&rows, preload_range);
+        let document = self.documents[tab_ix].document.clone();
+        let matched_rows = self.documents[tab_ix].search_result.line_indices.clone();
+        let marked_rows = self.documents[tab_ix].file.marked_rows.clone();
+        let matcher = self
+            .app_settings
+            .highlight_matches
+            .then(|| self.documents[tab_ix].search_matcher.clone())
+            .flatten();
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let revision = {
+            let tab = &mut self.documents[tab_ix];
+            if let Some(previous) = tab
+                .result_replace_cancellation
+                .replace(cancellation.clone())
+            {
+                previous.store(true, Ordering::Release);
+            }
+            tab.result_replace_task.take();
+            tab.result_replace_revision = tab.result_replace_revision.saturating_add(1);
+            tab.result_replace_revision
+        };
+        let expected_document = document.clone();
+        let task = cx.spawn_in(window, async move |this, cx| {
+            let staged = cx
+                .background_spawn(async move {
+                    let mut reader = LinePreviewReader::default();
+                    request.load_cancellable(&cancellation, |source_row, max_bytes| {
+                        reader.line_preview(&document, *source_row, max_bytes)
+                    })
+                })
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                let Some(tab_ix) = this.documents.iter().position(|tab| tab.id == document_id)
+                else {
+                    return;
+                };
+                let tab = &this.documents[tab_ix];
+                if tab.result_replace_revision != revision
+                    || !Arc::ptr_eq(&tab.document, &expected_document)
+                    || tab.result_table.read(cx).delegate().projected_rows() != Some(&previous_rows)
+                {
+                    return;
+                }
+                this.commit_local_result_replacement(
+                    PreparedLocalResultReplacement {
+                        document_id,
+                        document: expected_document,
+                        previous_rows,
+                        rows,
+                        matched_rows,
+                        marked_rows,
+                        matcher,
+                        staged,
+                        viewport_anchor,
+                        measured_heights,
+                        row_height,
+                        word_wrap,
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+        self.documents[tab_ix].result_replace_task = Some(task);
+    }
+
+    fn commit_local_result_replacement(
+        &mut self,
+        prepared: PreparedLocalResultReplacement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab_ix) = self
+            .documents
+            .iter()
+            .position(|tab| tab.id == prepared.document_id)
+        else {
+            return;
+        };
+        let tab = &mut self.documents[tab_ix];
+        if !Arc::ptr_eq(&tab.document, &prepared.document)
+            || tab.result_table.read(cx).delegate().projected_rows()
+                != Some(&prepared.previous_rows)
+        {
+            return;
+        }
+        tab.restoring_result_selection = true;
+        let active_restored = tab.result_table.update(cx, |table, cx| {
+            if tab.view.auto_follow {
+                table.delegate().set_active_log_row(None);
+            }
+            table.delegate_mut().set_matched_rows(prepared.matched_rows);
+            table.delegate_mut().set_marked_rows(prepared.marked_rows);
+            table.delegate_mut().set_search_matcher(prepared.matcher);
+            table
+                .delegate_mut()
+                .install_row_projection_replacement(prepared.rows, prepared.staged);
+            let active_restored = table.sync_active_log_row(cx);
+            table.refresh(cx);
+            cx.notify();
+            active_restored
+        });
+        if !active_restored {
+            tab.restoring_result_selection = false;
+        }
+        if prepared.word_wrap {
+            let table = tab.result_table.read(cx);
+            tab.result_viewport.reset_wrapped_with_remapped_heights(
+                table.delegate().row_count(),
+                prepared.row_height,
+                prepared.measured_heights,
+                |key| table.delegate().row_ix_for_key(*key),
+            );
+        } else {
+            tab.result_viewport.invalidate_wrapped();
+        }
+        Self::restore_local_viewport_anchor(
+            tab,
+            WrappedRegion::Results,
+            prepared.viewport_anchor,
+            prepared.row_height,
+            cx,
+        );
+        tab.result_replace_task = None;
+        tab.result_replace_cancellation = None;
+        self.refresh_prepared_local_result_surface_atomically(prepared.document_id, window, cx);
+    }
+
+    fn refresh_prepared_local_result_surface_atomically(
+        &mut self,
+        document_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.global_search.scope != SearchScope::CurrentFile
+            || self
+                .active_document()
+                .is_none_or(|tab| tab.id != document_id)
+        {
+            return;
+        }
+        self.bind_active_display_tables(cx);
+        let tab_ix = self.active_ix.expect("an active document has an index");
+        if self.documents[tab_ix].result_viewport.is_wrapped() {
+            self.prime_local_wrapped_frame_with_minimum_height(
+                tab_ix,
+                WrappedRegion::Results,
+                self.log_row_height(),
+                WrappedFramePrimeOptions {
+                    minimum_viewport_height: window.viewport_size().height,
+                    reset_for_mode_switch: false,
+                },
+                window,
+                cx,
+            );
+        }
+        Self::refresh_log_surfaces_atomically(
+            [self.search_results_viewer.surface.clone()],
+            window,
+            cx,
+        );
+    }
+
     /// Rebinds the stable display hosts to the table entities backing the active projections.
     /// This keeps ordinary table notifications repainting the shared surface after a tab or
     /// search-session switch.
