@@ -240,6 +240,17 @@ struct PreparedDocumentUpgradeFrame {
     result_word_wrap: bool,
 }
 
+struct DocumentFontViewportAnchors {
+    document_id: u64,
+    log: Option<RowViewportAnchor<LogRowKey>>,
+    results: Option<RowViewportAnchor<LogRowKey>>,
+}
+
+struct FontViewportAnchors {
+    documents: Vec<DocumentFontViewportAnchors>,
+    global_results: Option<RowViewportAnchor<LogRowKey>>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DocumentLoadState {
     Opening,
@@ -1642,6 +1653,12 @@ fn viewport_anchor_row(
         .filter(|row_ix| selected_is_visible(*row_ix))
         .unwrap_or(first_visible)
         .min(count.saturating_sub(1))
+}
+
+fn log_font_layout_changed(current: &AppSettings, next: &AppSettings) -> bool {
+    current.log_font_size != next.log_font_size
+        || current.log_line_spacing != next.log_line_spacing
+        || current.log_font_family != next.log_font_family
 }
 
 fn row_intersects_viewport(

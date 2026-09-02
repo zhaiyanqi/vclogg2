@@ -1,6 +1,60 @@
 use super::*;
 
 impl Workspace {
+    fn capture_font_viewport_anchors(&self, cx: &App) -> FontViewportAnchors {
+        let row_height = self.log_row_height();
+        FontViewportAnchors {
+            documents: self
+                .documents
+                .iter()
+                .map(|tab| DocumentFontViewportAnchors {
+                    document_id: tab.id,
+                    log: Self::capture_local_row_viewport_anchor(
+                        tab,
+                        WrappedRegion::Log,
+                        row_height,
+                        cx,
+                    ),
+                    results: Self::capture_local_row_viewport_anchor(
+                        tab,
+                        WrappedRegion::Results,
+                        row_height,
+                        cx,
+                    ),
+                })
+                .collect(),
+            global_results: self.capture_global_row_viewport_anchor(row_height, cx),
+        }
+    }
+
+    fn restore_font_viewport_anchors(&self, anchors: FontViewportAnchors, cx: &mut App) {
+        let row_height = self.log_row_height();
+        for anchors in anchors.documents {
+            let Some(tab) = self
+                .documents
+                .iter()
+                .find(|tab| tab.id == anchors.document_id)
+            else {
+                continue;
+            };
+            Self::position_local_row_viewport_anchor(
+                tab,
+                WrappedRegion::Log,
+                anchors.log,
+                row_height,
+                cx,
+            );
+            Self::position_local_row_viewport_anchor(
+                tab,
+                WrappedRegion::Results,
+                anchors.results,
+                row_height,
+                cx,
+            );
+        }
+        self.position_global_row_viewport_anchor(anchors.global_results, row_height, cx);
+    }
+
     pub(super) fn active_file_is_pinned(&self) -> bool {
         self.active_document().is_some_and(|tab| {
             self.pinned_files
@@ -1190,6 +1244,8 @@ impl Workspace {
         if self.app_settings.search_result_limit() != settings.search_result_limit() {
             self.cancel_search();
         }
+        let font_viewport_anchors = log_font_layout_changed(&self.app_settings, &settings)
+            .then(|| self.capture_font_viewport_anchors(cx));
         crate::actions::apply_shortcuts(&self.app_settings.shortcuts, &settings.shortcuts, cx);
         cx.set_reduce_motion(settings.reduce_motion);
         crate::i18n::set_language(settings.language);
@@ -1235,6 +1291,9 @@ impl Workspace {
             table.refresh(cx);
             cx.notify();
         });
+        if let Some(anchors) = font_viewport_anchors {
+            self.restore_font_viewport_anchors(anchors, cx);
+        }
         let source_window = window.window_handle();
         let other_workspaces = cx
             .global::<WorkspaceWindowRegistry>()
@@ -1246,6 +1305,9 @@ impl Workspace {
         for workspace in other_workspaces {
             let shared_settings = settings.clone();
             workspace.update(cx, |workspace, cx| {
+                let font_viewport_anchors =
+                    log_font_layout_changed(&workspace.app_settings, &shared_settings)
+                        .then(|| workspace.capture_font_viewport_anchors(cx));
                 if workspace.app_settings.search_result_limit()
                     != shared_settings.search_result_limit()
                 {
@@ -1286,6 +1348,9 @@ impl Workspace {
                     table.refresh(cx);
                     cx.notify();
                 });
+                if let Some(anchors) = font_viewport_anchors {
+                    workspace.restore_font_viewport_anchors(anchors, cx);
+                }
                 cx.notify();
             });
         }
@@ -1373,6 +1438,7 @@ impl Workspace {
             return;
         }
 
+        let font_viewport_anchors = self.capture_font_viewport_anchors(cx);
         self.app_settings.log_font_size = next;
         for tab in &self.documents {
             tab.refresh_appearance(&self.app_settings, cx);
@@ -1381,6 +1447,7 @@ impl Workspace {
             table.delegate_mut().set_appearance(&self.app_settings);
             table.refresh(cx);
         });
+        self.restore_font_viewport_anchors(font_viewport_anchors, cx);
 
         let source_window = window.window_handle();
         let shared_settings = self.app_settings.clone();
@@ -1394,6 +1461,7 @@ impl Workspace {
         for workspace in other_workspaces {
             let shared_settings = shared_settings.clone();
             workspace.update(cx, |workspace, cx| {
+                let font_viewport_anchors = workspace.capture_font_viewport_anchors(cx);
                 workspace.app_settings = shared_settings.clone();
                 for tab in &workspace.documents {
                     tab.refresh_appearance(&shared_settings, cx);
@@ -1402,6 +1470,7 @@ impl Workspace {
                     table.delegate_mut().set_appearance(&shared_settings);
                     table.refresh(cx);
                 });
+                workspace.restore_font_viewport_anchors(font_viewport_anchors, cx);
                 cx.notify();
             });
         }

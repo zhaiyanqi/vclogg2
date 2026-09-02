@@ -282,6 +282,27 @@ fn viewport_anchor_falls_back_to_the_first_visible_row() {
 }
 
 #[test]
+fn font_layout_changes_include_every_vertical_text_metric() {
+    let current = AppSettings::default();
+
+    let mut font_size = current.clone();
+    font_size.log_font_size += 1;
+    assert!(log_font_layout_changed(&current, &font_size));
+
+    let mut line_spacing = current.clone();
+    line_spacing.log_line_spacing += 1;
+    assert!(log_font_layout_changed(&current, &line_spacing));
+
+    let mut font_family = current.clone();
+    font_family.log_font_family = crate::state_store::LogFontFamily::SystemMonospace;
+    assert!(log_font_layout_changed(&current, &font_family));
+
+    let mut unrelated = current.clone();
+    unrelated.mouse_wheel_scroll_percent += 1;
+    assert!(!log_font_layout_changed(&current, &unrelated));
+}
+
+#[test]
 fn row_visibility_uses_the_row_and_viewport_edges() {
     assert!(row_intersects_viewport(px(-5.), px(20.), px(200.)));
     assert!(row_intersects_viewport(px(199.), px(20.), px(200.)));
