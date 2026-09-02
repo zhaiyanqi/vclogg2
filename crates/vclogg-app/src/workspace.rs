@@ -3836,6 +3836,7 @@ fn empty_file_button_content(
                 .flex_1()
                 .truncate()
                 .text_xs()
+                .line_height(relative(1.25))
                 .text_color(cx.theme().muted_foreground)
                 .child(parent),
         )
@@ -3845,6 +3846,7 @@ fn empty_file_button_content(
                 .flex_none()
                 .text_right()
                 .text_xs()
+                .line_height(relative(1.25))
                 .text_color(cx.theme().muted_foreground)
                 .child(opened_at),
         )
