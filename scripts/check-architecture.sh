@@ -9,6 +9,17 @@ fail() {
   exit 1
 }
 
+search_quiet() {
+  local pattern="$1"
+  shift
+
+  if command -v rg >/dev/null 2>&1; then
+    rg --quiet -- "$pattern" "$@"
+  else
+    grep -ERq -- "$pattern" "$@"
+  fi
+}
+
 require_file() {
   [[ -f "$1" ]] || fail "missing required boundary file: $1"
 }
@@ -16,7 +27,7 @@ require_file() {
 forbid_manifest_dependency() {
   local manifest="$1"
   local dependency="$2"
-  if rg --quiet "^[[:space:]]*${dependency}[[:space:]]*=" "$manifest"; then
+  if search_quiet "^[[:space:]]*${dependency}[[:space:]]*=" "$manifest"; then
     fail "$manifest must not depend on $dependency"
   fi
 }
@@ -58,9 +69,9 @@ fi
 
 for layer in core data app; do
   skill=".agents/skills/vclogg-${layer}/SKILL.md"
-  rg --quiet "^name: vclogg-${layer}$" "$skill" \
+  search_quiet "^name: vclogg-${layer}$" "$skill" \
     || fail "$skill has an invalid or missing skill name"
-  if rg --quiet '\[TODO:' "$skill"; then
+  if search_quiet '\[TODO:' "$skill"; then
     fail "$skill contains an unfinished TODO"
   fi
 done
@@ -75,19 +86,19 @@ done
 
 forbid_manifest_dependency crates/vclogg-app/Cargo.toml rusqlite
 
-if rg --quiet '(^|::)gpui(_base|_component)?\b' crates/vclogg-core/src crates/vclogg-data/src; then
+if search_quiet '(^|::)gpui(_base|_component)?\b' crates/vclogg-core/src crates/vclogg-data/src; then
   fail "core and data source must not import GPUI"
 fi
 
-if rg --quiet 'vclogg_(app|data)' crates/vclogg-core/src crates/vclogg-core/Cargo.toml; then
+if search_quiet 'vclogg_(app|data)' crates/vclogg-core/src crates/vclogg-core/Cargo.toml; then
   fail "core must not depend on app or data"
 fi
 
-if rg --quiet 'vclogg_app' crates/vclogg-data/src crates/vclogg-data/Cargo.toml; then
+if search_quiet 'vclogg_app' crates/vclogg-data/src crates/vclogg-data/Cargo.toml; then
   fail "data must not depend on app"
 fi
 
-if rg --quiet '(^|::)rusqlite\b' crates/vclogg-app/src; then
+if search_quiet '(^|::)rusqlite\b' crates/vclogg-app/src; then
   fail "app must access SQLite through vclogg-data"
 fi
 
