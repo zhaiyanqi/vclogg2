@@ -24,7 +24,8 @@ use std::os::unix::{ffi::OsStrExt as _, fs::FileExt as _, fs::MetadataExt as _};
 use anyhow::{Context as _, Result};
 use chardetng::EncodingDetector;
 use encoding_rs::{CoderResult, Decoder, Encoding, UTF_8, UTF_16BE, UTF_16LE};
-use memchr::memchr2;
+use memchr::{memchr2, memchr3_iter};
+use rayon::prelude::{IntoParallelIterator as _, ParallelIterator as _};
 use sha2::{Digest as _, Sha256};
 
 use crate::{CancellationToken, CompressedRows};
@@ -58,6 +59,7 @@ const ENCODING_DETECTION_BYTES: usize = 1024 * 1024;
 const BINARY_BYTES_PER_LINE: usize = 16;
 const INDEX_CANCELLATION_BATCH_LINES: usize = 4 * 1024;
 const CACHE_CANCELLATION_BATCH_LINES: usize = 4 * 1024;
+const PARALLEL_INDEX_MIN_BYTES: usize = 8 * 1024 * 1024;
 
 /// Stable metadata captured from the source file when its index is built.
 #[derive(Clone, Debug)]
@@ -541,6 +543,16 @@ struct IndexedLines {
 }
 
 type IndexedFileSnapshot = (IndexedLines, Arc<[[u8; 32]]>);
+
+struct ParallelIndexedBlock {
+    control_bytes: Vec<u32>,
+    digest: [u8; 32],
+}
+
+const CONTROL_KIND_BITS: u32 = 2;
+const CONTROL_CR: u32 = 0;
+const CONTROL_LF: u32 = 1;
+const CONTROL_TAB: u32 = 2;
 
 /// Immutable line offsets compacted to four bytes whenever the snapshot fits in `u32`.
 ///
@@ -2059,6 +2071,28 @@ fn build_file_index_with_integrity_while(
     }
     let file_size_usize = usize::try_from(file_size)
         .with_context(|| format!("日志文件过大，无法建立索引：{}", path.display()))?;
+    if file_size_usize >= PARALLEL_INDEX_MIN_BYTES
+        && matches!(encoding, FileEncoding::Utf8 | FileEncoding::Utf8Bom)
+    {
+        let Some(snapshot) = build_parallel_utf8_file_index_with_integrity(
+            file,
+            file_size_usize,
+            encoding,
+            path,
+            is_cancelled,
+        )?
+        else {
+            return Ok(None);
+        };
+        validate_indexed_file_snapshot(
+            file,
+            file_size,
+            expected_modified,
+            expected_identity.as_ref(),
+            path,
+        )?;
+        return Ok(Some(snapshot));
+    }
     let mut indexer = (!matches!(encoding, FileEncoding::Binary))
         .then(|| StreamingLineIndexer::new(file_size_usize, encoding));
     let mut integrity_blocks =
@@ -2088,17 +2122,13 @@ fn build_file_index_with_integrity_while(
     if is_cancelled() {
         return Ok(None);
     }
-    let current_metadata = file
-        .metadata()
-        .with_context(|| format!("建立索引后无法读取文件信息：{}", path.display()))?;
-    if current_metadata.len() != file_size
-        || current_metadata.modified().ok() != expected_modified
-        || expected_identity
-            .as_ref()
-            .is_some_and(|expected| read_file_identity(file).as_ref() != Some(expected))
-    {
-        anyhow::bail!("日志文件在建立索引时发生了变化：{}", path.display());
-    }
+    validate_indexed_file_snapshot(
+        file,
+        file_size,
+        expected_modified,
+        expected_identity.as_ref(),
+        path,
+    )?;
 
     let indexed_lines = match indexer {
         Some(indexer) => indexer.finish(file_size_usize),
@@ -2110,6 +2140,160 @@ fn build_file_index_with_integrity_while(
         }
     };
     Ok(Some((indexed_lines, integrity_blocks.into())))
+}
+
+fn build_parallel_utf8_file_index_with_integrity(
+    file: &File,
+    file_size: usize,
+    encoding: FileEncoding,
+    path: &Path,
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<Option<IndexedFileSnapshot>> {
+    debug_assert!(matches!(
+        encoding,
+        FileEncoding::Utf8 | FileEncoding::Utf8Bom
+    ));
+    let block_count = file_size.div_ceil(APPEND_INTEGRITY_BLOCK_BYTES);
+    let blocks = (0..block_count)
+        .into_par_iter()
+        .map(|block_ix| -> Result<Option<ParallelIndexedBlock>> {
+            if is_cancelled() {
+                return Ok(None);
+            }
+            let block_start = block_ix.saturating_mul(APPEND_INTEGRITY_BLOCK_BYTES);
+            let block_len = (file_size - block_start).min(APPEND_INTEGRITY_BLOCK_BYTES);
+            let mut bytes = vec![0_u8; block_len];
+            read_file_exact_at(file, &mut bytes, block_start as u64)
+                .with_context(|| format!("建立索引时无法读取日志文件：{}", path.display()))?;
+            if is_cancelled() {
+                return Ok(None);
+            }
+
+            let digest = Sha256::digest(&bytes).into();
+            let mut control_bytes = Vec::new();
+            for offset in memchr3_iter(b'\r', b'\n', b'\t', &bytes) {
+                let kind = match bytes[offset] {
+                    b'\r' => CONTROL_CR,
+                    b'\n' => CONTROL_LF,
+                    b'\t' => CONTROL_TAB,
+                    _ => unreachable!("memchr3 only returns requested control bytes"),
+                };
+                let offset =
+                    u32::try_from(offset).expect("an integrity block offset always fits in u32");
+                control_bytes.push((offset << CONTROL_KIND_BITS) | kind);
+            }
+            Ok((!is_cancelled()).then_some(ParallelIndexedBlock {
+                control_bytes,
+                digest,
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if blocks.iter().any(Option::is_none) || is_cancelled() {
+        return Ok(None);
+    }
+    let blocks = blocks
+        .into_iter()
+        .map(|block| block.expect("cancelled blocks were handled before merging"))
+        .collect::<Vec<_>>();
+
+    let mut starts = MutableLineStarts::with_capacity(file_size as u64, 0);
+    if file_size > 0 {
+        starts.push(0);
+    }
+    let mut current_start = 0_usize;
+    let mut content_cursor = encoding.bom_len().min(file_size);
+    let mut current_columns = 0_usize;
+    let mut longest_completed_line_bytes = 0_usize;
+    let mut longest_completed_line_columns = 0_usize;
+    let mut completed_lines = 0_usize;
+    let mut controls = blocks
+        .iter()
+        .enumerate()
+        .flat_map(|(block_ix, block)| {
+            block.control_bytes.iter().map(move |encoded| {
+                let offset = (encoded >> CONTROL_KIND_BITS) as usize;
+                let kind = encoded & ((1 << CONTROL_KIND_BITS) - 1);
+                (
+                    block_ix
+                        .saturating_mul(APPEND_INTEGRITY_BLOCK_BYTES)
+                        .saturating_add(offset),
+                    kind,
+                )
+            })
+        })
+        .peekable();
+
+    while let Some((position, kind)) = controls.next() {
+        if position < content_cursor {
+            continue;
+        }
+        if kind == CONTROL_TAB {
+            current_columns = current_columns.saturating_add(position - content_cursor);
+            current_columns = current_columns.saturating_add(8 - current_columns % 8);
+            content_cursor = position.saturating_add(1);
+            continue;
+        }
+
+        current_columns = current_columns.saturating_add(position - content_cursor);
+        let delimiter_width = if kind == CONTROL_CR
+            && controls.peek().is_some_and(|(next_position, next_kind)| {
+                *next_position == position.saturating_add(1) && *next_kind == CONTROL_LF
+            }) {
+            _ = controls.next();
+            2
+        } else {
+            1
+        };
+        completed_lines = completed_lines.saturating_add(1);
+        if completed_lines.is_multiple_of(INDEX_CANCELLATION_BATCH_LINES) && is_cancelled() {
+            return Ok(None);
+        }
+        longest_completed_line_bytes =
+            longest_completed_line_bytes.max(position.saturating_sub(current_start));
+        longest_completed_line_columns = longest_completed_line_columns.max(current_columns);
+        current_start = position.saturating_add(delimiter_width);
+        if starts.last() != Some(current_start) {
+            starts.push(current_start);
+        }
+        content_cursor = current_start;
+        current_columns = 0;
+    }
+
+    current_columns = current_columns.saturating_add(file_size.saturating_sub(content_cursor));
+    let trailing_line_bytes = file_size.saturating_sub(current_start);
+    let indexed_lines = IndexedLines {
+        starts,
+        longest_line_bytes: longest_completed_line_bytes.max(trailing_line_bytes),
+        longest_completed_line_bytes,
+        longest_line_columns: longest_completed_line_columns.max(current_columns),
+        longest_completed_line_columns,
+    };
+    let integrity_blocks = blocks
+        .into_iter()
+        .map(|block| block.digest)
+        .collect::<Vec<_>>()
+        .into();
+    Ok((!is_cancelled()).then_some((indexed_lines, integrity_blocks)))
+}
+
+fn validate_indexed_file_snapshot(
+    file: &File,
+    file_size: u64,
+    expected_modified: Option<SystemTime>,
+    expected_identity: Option<&FileIdentity>,
+    path: &Path,
+) -> Result<()> {
+    let current_metadata = file
+        .metadata()
+        .with_context(|| format!("建立索引后无法读取文件信息：{}", path.display()))?;
+    if current_metadata.len() != file_size
+        || current_metadata.modified().ok() != expected_modified
+        || expected_identity
+            .is_some_and(|expected| read_file_identity(file).as_ref() != Some(expected))
+    {
+        anyhow::bail!("日志文件在建立索引时发生了变化：{}", path.display());
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2657,8 +2841,9 @@ mod source_snapshot_tests {
 
     use super::{
         APPEND_INTEGRITY_BLOCK_BYTES, DocumentBytes, DocumentRefreshKind, FileEncoding,
-        LinePreviewReader, LineReader, LogDocument, build_file_index_with_integrity_while,
-        build_line_index, build_line_index_while, calculate_integrity_blocks, read_file_identity,
+        LinePreviewReader, LineReader, LogDocument, PARALLEL_INDEX_MIN_BYTES,
+        build_file_index_with_integrity_while, build_line_index, build_line_index_while,
+        calculate_integrity_blocks, read_file_identity,
     };
 
     fn test_directory(label: &str) -> PathBuf {
@@ -2719,8 +2904,8 @@ mod source_snapshot_tests {
     fn streaming_index_matches_slice_across_integrity_block_boundaries() {
         let directory = test_directory("streaming-index-boundaries");
 
-        let mut utf8 = vec![b'a'; APPEND_INTEGRITY_BLOCK_BYTES - 1];
-        utf8.extend_from_slice(b"\r\ntail\rstandalone\n");
+        let mut utf8 = vec![b'a'; PARALLEL_INDEX_MIN_BYTES - 1];
+        utf8.extend_from_slice(b"\r\ntail\tcolumn\rstandalone\n");
         assert_streaming_index_matches_slice(&directory, "utf8.log", &utf8, FileEncoding::Utf8);
 
         let mut utf16 = Vec::with_capacity(APPEND_INTEGRITY_BLOCK_BYTES + 16);
