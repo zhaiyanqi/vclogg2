@@ -34,7 +34,7 @@ use crate::state_store::{AppSettings, DEFAULT_WORD_BOUNDARY_CHARACTERS, LogFontF
 use crate::ui_theme;
 use crate::virtual_log_lines::{
     LogRowKey, StagedVisibleLineLoadRequest, StagedVisibleLineLoadResult, VisibleLineLoadRequest,
-    VisibleLineLoadResult, VisibleLineStore,
+    VisibleLineLoadResult, VisibleLineSnapshot, VisibleLineStore,
 };
 
 #[derive(Clone)]
@@ -1372,17 +1372,21 @@ impl GlobalSearchTableDelegate {
         self.visible_lines.install_staged(loaded);
     }
 
-    pub(crate) fn install_scope_replacement(
+    pub(crate) fn visible_line_snapshot(&self) -> VisibleLineSnapshot<(u64, usize)> {
+        self.visible_lines.snapshot()
+    }
+
+    pub(crate) fn install_scope_snapshot(
         &mut self,
         groups: Vec<GlobalSearchGroup>,
         matcher: Option<SearchMatcher>,
         collapsed_document_ids: &BTreeSet<u64>,
-        loaded: StagedVisibleLineLoadResult<(u64, usize)>,
+        snapshot: VisibleLineSnapshot<(u64, usize)>,
     ) {
         self.set_groups(groups);
         self.restore_collapsed_document_ids(collapsed_document_ids);
         self.set_search_matcher(matcher);
-        self.visible_lines.install_staged(loaded);
+        self.visible_lines.install_snapshot(snapshot);
     }
 
     pub(crate) fn reset_visible_line_owner(&mut self) {
@@ -2363,16 +2367,24 @@ mod tests {
     }
 
     #[test]
-    fn scope_replacement_installs_target_projection_and_visible_lines_together() {
+    fn scope_snapshot_restores_projection_visible_lines_and_domain_selection() {
         let old_document = Arc::new(LogDocument::placeholder("all-open.log"));
         let mut delegate = GlobalSearchTableDelegate::new();
-        delegate.set_groups(vec![test_group(old_document)]);
+        let all_open_group = test_group(old_document);
+        delegate.set_groups(vec![all_open_group.clone()]);
         delegate.visible_lines.prepare_visible_rows(
             0..2,
             2,
             |row_ix| (row_ix == 1).then_some((1, 0)),
             |_, _| Some(LinePreview::new("all-open result", false)),
         );
+        delegate.settle_table_selection(1);
+        delegate.set_active_log_row(Some(1));
+        let selection = delegate.selection_snapshot();
+        let selected_row = delegate
+            .active_log_row()
+            .and_then(|row_ix| delegate.row(row_ix));
+        let snapshot = delegate.visible_line_snapshot();
 
         let mut directory_group = test_group(Arc::new(LogDocument::placeholder("directory.log")));
         directory_group.source.document_id = 2;
@@ -2395,7 +2407,7 @@ mod tests {
         );
         assert!(delegate.visible_lines.line((2, 9)).is_none());
 
-        delegate.install_scope_replacement(vec![directory_group], None, &BTreeSet::new(), staged);
+        delegate.install_groups_replacement(vec![directory_group], None, staged);
 
         assert_eq!(
             delegate.row_key(1),
@@ -2414,6 +2426,24 @@ mod tests {
             "directory result"
         );
         assert!(delegate.visible_lines.line((1, 0)).is_none());
+
+        delegate.install_scope_snapshot(vec![all_open_group], None, &BTreeSet::new(), snapshot);
+        delegate.restore_selection(&selection);
+        let selected_ix = selected_row.and_then(|row| delegate.row_ix(row));
+        delegate.set_active_log_row(selected_ix);
+
+        assert_eq!(delegate.active_log_row(), Some(1));
+        assert_eq!(delegate.selection_snapshot(), selection);
+        assert_eq!(
+            delegate
+                .visible_lines
+                .line((1, 0))
+                .unwrap()
+                .source()
+                .as_ref(),
+            "all-open result"
+        );
+        assert!(delegate.visible_lines.line((2, 9)).is_none());
     }
 
     #[test]

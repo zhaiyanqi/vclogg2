@@ -32,6 +32,7 @@ const MIN_TRUNCATED_PREVIEW_RETAINED_BYTES: usize = '…'.len_utf8();
 /// A source byte can expand to at most one full eight-column tab stop in [`LogText`].
 pub(crate) const MAX_VISIBLE_LINE_COLUMNS: usize = DEFAULT_MAX_LINE_SOURCE_BYTES * 8;
 
+#[derive(Clone)]
 struct CachedLogLine {
     text: LogText,
     retained_bytes: usize,
@@ -78,6 +79,17 @@ impl<K> VisibleLineLoadRequest<K> {
 pub(crate) struct VisibleLineLoadResult<K> {
     revision: u64,
     lines: Vec<(K, Option<LinePreview>, usize)>,
+}
+
+/// A bounded, decoded visible-window snapshot retained by a presentation session.
+///
+/// Search-scope switches restore this snapshot without reading source files. The snapshot owns
+/// only the currently prepared rows and their overscan, never the complete result set.
+#[derive(Clone)]
+pub(crate) struct VisibleLineSnapshot<K> {
+    window: Option<(usize, usize, usize, usize)>,
+    priority_keys: Vec<K>,
+    lines: BTreeMap<K, CachedLogLine>,
 }
 
 /// A visible window loaded without replacing the window that is currently painted.
@@ -219,6 +231,25 @@ impl<K> Drop for VisibleLineStore<K> {
 impl<K: Clone + Ord> VisibleLineStore<K> {
     pub(crate) fn revision(&self) -> u64 {
         self.revision.get()
+    }
+
+    pub(crate) fn snapshot(&self) -> VisibleLineSnapshot<K> {
+        VisibleLineSnapshot {
+            window: self.window.get(),
+            priority_keys: self.prepared_priority.borrow().clone(),
+            lines: self.lines.borrow().clone(),
+        }
+    }
+
+    pub(crate) fn install_snapshot(&self, snapshot: VisibleLineSnapshot<K>) {
+        if let Some(cancellation) = self.load_cancellation.borrow_mut().take() {
+            cancellation.store(true, Ordering::Release);
+        }
+        self.revision.set(self.revision.get().saturating_add(1));
+        self.window.set(snapshot.window);
+        *self.prepared_keys.borrow_mut() = snapshot.priority_keys.iter().cloned().collect();
+        *self.prepared_priority.borrow_mut() = snapshot.priority_keys;
+        *self.lines.borrow_mut() = snapshot.lines;
     }
 
     fn visible_window(

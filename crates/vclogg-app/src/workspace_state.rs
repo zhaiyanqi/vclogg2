@@ -21,7 +21,7 @@ use crate::{
     path_identity::{PathMatchKey, path_match_key},
     search_context::{PersistedGlobalSearchContext, WorkspaceSearchState},
     state_store::{CloudSettings, FileSessionState, StateStore},
-    virtual_log_lines::LogRowKey,
+    virtual_log_lines::{LogRowKey, VisibleLineSnapshot},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -205,6 +205,7 @@ pub(crate) struct SearchSessionState {
     pub(crate) horizontal_offset: f32,
     pub(crate) word_wrap: bool,
     pub(crate) active: bool,
+    pub(crate) visible_lines: Option<VisibleLineSnapshot<(u64, usize)>>,
 }
 
 impl Default for SearchSessionState {
@@ -225,6 +226,7 @@ impl Default for SearchSessionState {
             horizontal_offset: 0.,
             word_wrap: false,
             active: false,
+            visible_lines: None,
         }
     }
 }
@@ -241,9 +243,15 @@ impl SearchSessionState {
         self.viewport = None;
         self.horizontal_offset = 0.;
         self.active = false;
+        self.visible_lines = None;
     }
 
     pub(crate) fn remove_documents(&mut self, document_ids: &BTreeSet<u64>) {
+        if !document_ids.is_empty() {
+            // The virtual coordinates may shift even when the removed document was outside the
+            // captured window, so discard the bounded display snapshot and keep domain state.
+            self.visible_lines = None;
+        }
         self.results.remove_documents(document_ids);
         self.collapsed_document_ids
             .retain(|document_id| !document_ids.contains(document_id));
@@ -970,6 +978,7 @@ mod state_controller_tests {
             horizontal_offset: 12.,
             word_wrap: true,
             active: true,
+            visible_lines: None,
         };
 
         context.invalidate_results();
@@ -993,6 +1002,7 @@ mod state_controller_tests {
         assert_eq!(context.result_mode, ResultMode::MarksOnly);
         assert!(context.word_wrap);
         assert!(!context.active);
+        assert!(context.visible_lines.is_none());
     }
 
     #[test]

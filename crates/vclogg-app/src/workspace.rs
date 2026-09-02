@@ -712,20 +712,6 @@ struct PreparedGlobalResultReplacement {
     restore_context: Option<SearchSessionState>,
 }
 
-enum PreparedSearchScopeFrame {
-    CurrentFile {
-        document_id: u64,
-        document: Arc<LogDocument>,
-        visible_line_revision: u64,
-        lines: Option<StagedVisibleLineLoadResult<usize>>,
-    },
-    Global {
-        context: Box<SearchSessionState>,
-        groups: Vec<GlobalSearchGroup>,
-        lines: StagedVisibleLineLoadResult<(u64, usize)>,
-    },
-}
-
 struct ReloadReplacementInput {
     document_id: u64,
     revision: u64,
@@ -2641,9 +2627,6 @@ pub struct Workspace {
     global_result_replace_task: Option<Task<()>>,
     global_result_replace_cancellation: Option<Arc<AtomicBool>>,
     global_result_replace_revision: u64,
-    search_scope_switch_task: Option<Task<()>>,
-    search_scope_switch_cancellation: Option<Arc<AtomicBool>>,
-    search_scope_switch_revision: u64,
     tab_activation_task: Option<Task<()>>,
     tab_activation_revision: u64,
     open_task: Option<Task<()>>,
@@ -3224,9 +3207,6 @@ impl Workspace {
             global_result_replace_task: None,
             global_result_replace_cancellation: None,
             global_result_replace_revision: 0,
-            search_scope_switch_task: None,
-            search_scope_switch_cancellation: None,
-            search_scope_switch_revision: 0,
             tab_activation_task: None,
             tab_activation_revision: 0,
             open_task: None,
