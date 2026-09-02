@@ -499,7 +499,7 @@ impl SearchMatcher {
         }))
     }
 
-    fn is_match(&self, line: &[u8]) -> bool {
+    pub(crate) fn is_match(&self, line: &[u8]) -> bool {
         if self.whole_word {
             return std::str::from_utf8(line)
                 .is_ok_and(|text| !self.matching_ranges(text).is_empty());

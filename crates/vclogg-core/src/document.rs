@@ -26,9 +26,10 @@ use chardetng::EncodingDetector;
 use encoding_rs::{CoderResult, Decoder, Encoding, UTF_8, UTF_16BE, UTF_16LE};
 use memchr::{memchr2, memchr3_iter};
 use rayon::prelude::{IntoParallelIterator as _, ParallelIterator as _};
+use roaring::RoaringTreemap;
 use sha2::{Digest as _, Sha256};
 
-use crate::{CancellationToken, CompressedRows};
+use crate::{CancellationToken, CompressedRows, SearchMatcher, SearchResult, SearchRun};
 
 mod index_cache;
 
@@ -571,6 +572,7 @@ type IndexedFileSnapshot = (IndexedLines, Arc<[[u8; 32]]>);
 
 struct ParallelIndexedBlock {
     control_bytes: Vec<u32>,
+    matched_line_starts: Vec<usize>,
     digest: [u8; 32],
 }
 
@@ -676,6 +678,13 @@ impl MutableLineStarts {
 
     fn last(&self) -> Option<usize> {
         self.len().checked_sub(1).and_then(|index| self.get(index))
+    }
+
+    fn iter(&self) -> LineStartsIter<'_> {
+        match self {
+            Self::Compact(starts) => LineStartsIter::Compact(starts.iter()),
+            Self::Wide(starts) => LineStartsIter::Wide(starts.iter()),
+        }
     }
 
     fn push(&mut self, offset: usize) {
@@ -1264,6 +1273,148 @@ impl LogDocument {
             Ok(None)
         } else {
             Ok(Some((document, pending_cache_write)))
+        }
+    }
+
+    /// Open a complete document and search common UTF-8 cache misses while their
+    /// index blocks are already resident, avoiding a second full source scan.
+    /// Cache hits and uncommon encodings retain the normal verified search path.
+    pub fn open_with_index_cache_and_search_cancellable(
+        path: impl AsRef<Path>,
+        cache_dir: impl AsRef<Path>,
+        matcher: &SearchMatcher,
+        max_results: Option<usize>,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<(Self, Option<PendingIndexCacheWrite>, SearchRun)>> {
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
+        let path = path.as_ref().to_path_buf();
+        let mut file =
+            File::open(&path).with_context(|| format!("无法打开日志文件：{}", path.display()))?;
+        let file_metadata = file
+            .metadata()
+            .with_context(|| format!("无法读取文件信息：{}", path.display()))?;
+        let file_size = file_metadata.len();
+        let file_size_usize = usize::try_from(file_size)
+            .with_context(|| format!("日志文件过大，无法读取：{}", path.display()))?;
+        let modified = file_metadata.modified().ok();
+        let modified_millis = system_time_millis(modified);
+        let identity = read_file_identity(&file);
+        let cache_path = index_cache_path(cache_dir.as_ref(), &path);
+        let cached = read_index_cache_while(
+            &cache_path,
+            &path,
+            file_size,
+            modified_millis,
+            identity.as_ref(),
+            &|| cancellation.is_cancelled(),
+        );
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
+
+        let cache_missed = cached.is_none();
+        let encoding = match cached.as_ref() {
+            Some(cached) => cached.encoding,
+            None => detect_file_encoding(&mut file, file_size)
+                .with_context(|| format!("无法检测日志编码：{}", path.display()))?,
+        };
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
+
+        let (indexed_lines, integrity_blocks, prefetched_search) = match cached {
+            Some(cached) => (cached.indexed_lines, cached.integrity_blocks, None),
+            None if file_size_usize >= PARALLEL_INDEX_MIN_BYTES
+                && matches!(encoding, FileEncoding::Utf8 | FileEncoding::Utf8Bom) =>
+            {
+                let Some(((indexed_lines, integrity_blocks), search_result)) =
+                    build_parallel_utf8_file_index_with_integrity(
+                        &file,
+                        file_size_usize,
+                        encoding,
+                        &path,
+                        Some((matcher, max_results)),
+                        &|| cancellation.is_cancelled(),
+                    )?
+                else {
+                    return Ok(None);
+                };
+                validate_indexed_file_snapshot(
+                    &file,
+                    file_size,
+                    modified,
+                    identity.as_ref(),
+                    &path,
+                )?;
+                (indexed_lines, integrity_blocks, search_result)
+            }
+            None => {
+                let Some((indexed_lines, integrity_blocks)) =
+                    build_file_index_with_integrity_while(
+                        &file,
+                        file_size,
+                        modified,
+                        identity.clone(),
+                        encoding,
+                        &path,
+                        &|| cancellation.is_cancelled(),
+                    )?
+                else {
+                    return Ok(None);
+                };
+                (indexed_lines, integrity_blocks, None)
+            }
+        };
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
+
+        let bytes = DocumentBytes::verified(
+            file,
+            path.clone(),
+            file_size_usize,
+            integrity_blocks.clone(),
+        );
+        let document = Self::from_parts(
+            path.clone(),
+            bytes,
+            indexed_lines,
+            modified,
+            file_size,
+            encoding,
+            Some(integrity_blocks),
+        );
+        let pending_cache_write = cache_missed.then(|| PendingIndexCacheWrite {
+            cache_path,
+            source_path: path,
+            file_size,
+            modified_millis,
+            identity,
+            encoding,
+            line_starts: document.line_starts.clone(),
+            integrity_blocks: document.append_fingerprint.integrity_blocks.clone(),
+            longest_line_bytes: document.metadata.longest_line_bytes,
+            longest_completed_line_bytes: document.longest_completed_line_bytes,
+            longest_line_columns: document.metadata.longest_line_columns,
+            longest_completed_line_columns: document.longest_completed_line_columns,
+        });
+        let search_run = prefetched_search.map_or_else(
+            || {
+                crate::search::search_with_compiled_matcher(
+                    &document,
+                    Some(matcher),
+                    max_results,
+                    cancellation,
+                )
+            },
+            SearchRun::Completed,
+        );
+        if cancellation.is_cancelled() {
+            Ok(None)
+        } else {
+            Ok(Some((document, pending_cache_write, search_run)))
         }
     }
 
@@ -2155,11 +2306,12 @@ fn build_file_index_with_integrity_while(
     if file_size_usize >= PARALLEL_INDEX_MIN_BYTES
         && matches!(encoding, FileEncoding::Utf8 | FileEncoding::Utf8Bom)
     {
-        let Some(snapshot) = build_parallel_utf8_file_index_with_integrity(
+        let Some((snapshot, _)) = build_parallel_utf8_file_index_with_integrity(
             file,
             file_size_usize,
             encoding,
             path,
+            None,
             is_cancelled,
         )?
         else {
@@ -2228,8 +2380,9 @@ fn build_parallel_utf8_file_index_with_integrity(
     file_size: usize,
     encoding: FileEncoding,
     path: &Path,
+    search: Option<(&SearchMatcher, Option<usize>)>,
     is_cancelled: &(dyn Fn() -> bool + Sync),
-) -> Result<Option<IndexedFileSnapshot>> {
+) -> Result<Option<(IndexedFileSnapshot, Option<SearchResult>)>> {
     debug_assert!(matches!(
         encoding,
         FileEncoding::Utf8 | FileEncoding::Utf8Bom
@@ -2252,7 +2405,7 @@ fn build_parallel_utf8_file_index_with_integrity(
 
             let digest = Sha256::digest(&bytes).into();
             let mut control_bytes = Vec::new();
-            for offset in memchr3_iter(b'\r', b'\n', b'\t', &bytes) {
+            for offset in memchr3_iter(b'\r', b'\n', b'\t', &bytes[..block_len]) {
                 let kind = match bytes[offset] {
                     b'\r' => CONTROL_CR,
                     b'\n' => CONTROL_LF,
@@ -2263,8 +2416,26 @@ fn build_parallel_utf8_file_index_with_integrity(
                     u32::try_from(offset).expect("an integrity block offset always fits in u32");
                 control_bytes.push((offset << CONTROL_KIND_BITS) | kind);
             }
+            let matched_line_starts = match search {
+                Some((matcher, _)) => match_parallel_utf8_block_lines(
+                    file,
+                    file_size,
+                    block_start,
+                    block_len,
+                    &mut bytes,
+                    encoding,
+                    matcher,
+                    path,
+                    is_cancelled,
+                )?,
+                None => Some(Vec::new()),
+            };
+            let Some(matched_line_starts) = matched_line_starts else {
+                return Ok(None);
+            };
             Ok((!is_cancelled()).then_some(ParallelIndexedBlock {
                 control_bytes,
+                matched_line_starts,
                 digest,
             }))
         })
@@ -2342,6 +2513,37 @@ fn build_parallel_utf8_file_index_with_integrity(
 
     current_columns = current_columns.saturating_add(file_size.saturating_sub(content_cursor));
     let trailing_line_bytes = file_size.saturating_sub(current_start);
+    let search_result = search.map(|(_, max_results)| {
+        let mut matched_starts = blocks
+            .iter()
+            .flat_map(|block| block.matched_line_starts.iter().copied())
+            .peekable();
+        let mut rows = RoaringTreemap::new();
+        let mut truncated = false;
+        for (row_ix, line_start) in starts.iter().enumerate() {
+            while matched_starts
+                .next_if(|matched| *matched < line_start)
+                .is_some()
+            {}
+            if matched_starts
+                .next_if(|matched| *matched == line_start)
+                .is_none()
+            {
+                continue;
+            }
+            if max_results.is_some_and(|limit| rows.len() >= limit as u64) {
+                truncated = true;
+                break;
+            }
+            rows.insert(row_ix as u64);
+        }
+        SearchResult {
+            line_indices: CompressedRows {
+                rows: Arc::new(rows),
+            },
+            truncated,
+        }
+    });
     let indexed_lines = IndexedLines {
         starts,
         longest_line_bytes: longest_completed_line_bytes.max(trailing_line_bytes),
@@ -2354,7 +2556,125 @@ fn build_parallel_utf8_file_index_with_integrity(
         .map(|block| block.digest)
         .collect::<Vec<_>>()
         .into();
-    Ok((!is_cancelled()).then_some((indexed_lines, integrity_blocks)))
+    Ok((!is_cancelled()).then_some(((indexed_lines, integrity_blocks), search_result)))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn match_parallel_utf8_block_lines(
+    file: &File,
+    file_size: usize,
+    block_start: usize,
+    block_len: usize,
+    bytes: &mut Vec<u8>,
+    encoding: FileEncoding,
+    matcher: &SearchMatcher,
+    path: &Path,
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<Option<Vec<usize>>> {
+    let block_end = block_start.saturating_add(block_len);
+    if block_end < file_size {
+        extend_bytes_through_next_line_break(
+            file,
+            file_size,
+            block_end,
+            bytes,
+            path,
+            is_cancelled,
+        )?;
+    }
+    if is_cancelled() {
+        return Ok(None);
+    }
+
+    let mut line_start = if block_start == 0 {
+        encoding.bom_len().min(block_len)
+    } else {
+        let mut previous = [0_u8; 1];
+        read_file_exact_at(file, &mut previous, block_start.saturating_sub(1) as u64)
+            .with_context(|| format!("搜索时无法读取日志文件：{}", path.display()))?;
+        if previous[0] == b'\n' || (previous[0] == b'\r' && bytes.first() != Some(&b'\n')) {
+            0
+        } else if previous[0] == b'\r' && bytes.first() == Some(&b'\n') {
+            1
+        } else {
+            next_single_byte_line_start(bytes, 0).unwrap_or(bytes.len())
+        }
+    };
+    let mut matched_line_starts = Vec::new();
+    let mut scanned_lines = 0_usize;
+    while block_start.saturating_add(line_start) < block_end && line_start <= bytes.len() {
+        if scanned_lines.is_multiple_of(INDEX_CANCELLATION_BATCH_LINES) && is_cancelled() {
+            return Ok(None);
+        }
+        let delimiter = memchr2(b'\r', b'\n', &bytes[line_start..])
+            .map(|relative| line_start.saturating_add(relative));
+        let line_end = delimiter.unwrap_or(bytes.len());
+        if matcher.is_match(&bytes[line_start..line_end]) {
+            matched_line_starts.push(if block_start == 0 && line_start == encoding.bom_len() {
+                0
+            } else {
+                block_start.saturating_add(line_start)
+            });
+        }
+        scanned_lines = scanned_lines.saturating_add(1);
+        let Some(delimiter) = delimiter else {
+            break;
+        };
+        let delimiter_width =
+            usize::from(bytes[delimiter] == b'\r' && bytes.get(delimiter + 1) == Some(&b'\n')) + 1;
+        line_start = delimiter.saturating_add(delimiter_width);
+    }
+    Ok(Some(matched_line_starts))
+}
+
+fn next_single_byte_line_start(bytes: &[u8], from: usize) -> Option<usize> {
+    let delimiter = memchr2(b'\r', b'\n', bytes.get(from..)?)?.saturating_add(from);
+    Some(delimiter.saturating_add(1).saturating_add(usize::from(
+        bytes[delimiter] == b'\r' && bytes.get(delimiter + 1) == Some(&b'\n'),
+    )))
+}
+
+fn extend_bytes_through_next_line_break(
+    file: &File,
+    file_size: usize,
+    mut offset: usize,
+    bytes: &mut Vec<u8>,
+    path: &Path,
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<()> {
+    const TAIL_CHUNK_BYTES: usize = 64 * 1024;
+    while offset < file_size {
+        if is_cancelled() {
+            return Ok(());
+        }
+        let len = (file_size - offset).min(TAIL_CHUNK_BYTES);
+        let mut chunk = vec![0_u8; len];
+        read_file_exact_at(file, &mut chunk, offset as u64)
+            .with_context(|| format!("搜索时无法读取日志文件：{}", path.display()))?;
+        let Some(delimiter) = memchr2(b'\r', b'\n', &chunk) else {
+            bytes.extend_from_slice(&chunk);
+            offset = offset.saturating_add(len);
+            continue;
+        };
+        let mut end = delimiter.saturating_add(1);
+        if chunk[delimiter] == b'\r' {
+            if chunk.get(end) == Some(&b'\n') {
+                end = end.saturating_add(1);
+            } else if end == chunk.len() && offset.saturating_add(end) < file_size {
+                let mut next = [0_u8; 1];
+                read_file_exact_at(file, &mut next, offset.saturating_add(end) as u64)
+                    .with_context(|| format!("搜索时无法读取日志文件：{}", path.display()))?;
+                bytes.extend_from_slice(&chunk[..end]);
+                if next[0] == b'\n' {
+                    bytes.push(next[0]);
+                }
+                return Ok(());
+            }
+        }
+        bytes.extend_from_slice(&chunk[..end]);
+        return Ok(());
+    }
+    Ok(())
 }
 
 fn validate_indexed_file_snapshot(

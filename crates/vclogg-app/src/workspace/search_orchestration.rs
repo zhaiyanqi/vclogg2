@@ -2587,27 +2587,33 @@ impl Workspace {
                         if cancellation_for_search.is_cancelled() {
                             return Ok(None);
                         }
-                        let opened =
-                            if let Some(cache_dir) = crate::app_paths::index_cache_dir() {
-                                LogDocument::open_with_index_cache_cancellable(
-                                    path,
-                                    cache_dir,
-                                    &cancellation_for_search,
-                                )?
-                            } else {
-                                LogDocument::open_cancellable(path, &cancellation_for_search)?
-                                    .map(|document| (document, None))
-                            };
-                        let Some((document, pending_index_cache)) = opened else {
+                        let opened = if let Some(cache_dir) = crate::app_paths::index_cache_dir() {
+                            LogDocument::open_with_index_cache_and_search_cancellable(
+                                path,
+                                cache_dir,
+                                matcher
+                                    .as_ref()
+                                    .expect("directory scan paths require a compiled matcher"),
+                                max_results,
+                                &cancellation_for_search,
+                            )?
+                        } else {
+                            LogDocument::open_cancellable(path, &cancellation_for_search)?.map(
+                                |document| {
+                                    let run = search_with_compiled_matcher(
+                                        &document,
+                                        matcher.as_ref(),
+                                        max_results,
+                                        &cancellation_for_search,
+                                    );
+                                    (document, None, run)
+                                },
+                            )
+                        };
+                        let Some((document, pending_index_cache, run)) = opened else {
                             return Ok(None);
                         };
                         let document = Arc::new(document);
-                        let run = search_with_compiled_matcher(
-                            &document,
-                            matcher.as_ref(),
-                            max_results,
-                            &cancellation_for_search,
-                        );
                         match run {
                             SearchRun::Completed(search_result)
                                 if !search_result.line_indices.is_empty()

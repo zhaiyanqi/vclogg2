@@ -6,7 +6,10 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use vclogg_core::{DocumentRefreshKind, LogDocument};
+use vclogg_core::{
+    DocumentRefreshKind, LogDocument, SearchCancellation, SearchMatcher, SearchQuery, SearchRun,
+    search_with_compiled_matcher,
+};
 
 struct TemporaryDirectory(PathBuf);
 
@@ -72,6 +75,77 @@ fn parallel_full_open_preserves_append_verification() {
 
     assert_eq!(kind, DocumentRefreshKind::Appended);
     assert!(refreshed.line_count() > previous_lines);
+}
+
+#[test]
+fn combined_uncached_open_and_search_matches_verified_second_pass_across_blocks() {
+    const BLOCK_BYTES: usize = 4 * 1024 * 1024;
+    let temporary = TemporaryDirectory::new("combined-open-search-correctness");
+    let path = temporary.0.join("large.log");
+    let cache = temporary.0.join("index");
+    let mut bytes = vec![0xEF, 0xBB, 0xBF];
+    bytes.resize(BLOCK_BYTES - 3, b'a');
+    bytes.extend_from_slice(b"needle\n");
+    bytes.resize(BLOCK_BYTES * 2 - 1, b'b');
+    bytes.extend_from_slice(b"\r\nneedle\n");
+    bytes.resize(BLOCK_BYTES * 2 + 1024, b'c');
+    fs::write(&path, bytes).expect("应能写入跨块搜索测试日志");
+
+    let query = SearchQuery {
+        text: "needle".to_owned(),
+        ..SearchQuery::default()
+    };
+    let matcher = SearchMatcher::new(&query)
+        .expect("搜索器应能编译")
+        .expect("非空查询应有搜索器");
+    let cancellation = SearchCancellation::default();
+    let (combined_document, pending, combined_run) =
+        LogDocument::open_with_index_cache_and_search_cancellable(
+            &path,
+            &cache,
+            &matcher,
+            None,
+            &cancellation,
+        )
+        .expect("合并打开与搜索应成功")
+        .expect("搜索不应被取消");
+    pending
+        .expect("首次合并打开应产生索引缓存")
+        .persist()
+        .expect("合并打开的索引缓存应能持久化");
+    let SearchRun::Completed(combined) = combined_run else {
+        panic!("合并搜索应完成");
+    };
+    let verified =
+        search_with_compiled_matcher(&combined_document, Some(&matcher), None, &cancellation);
+    let SearchRun::Completed(verified) = verified else {
+        panic!("验证搜索应完成");
+    };
+
+    assert_eq!(
+        combined.line_indices.iter().collect::<Vec<_>>(),
+        verified.line_indices.iter().collect::<Vec<_>>()
+    );
+    assert_eq!(combined.line_indices.iter().collect::<Vec<_>>(), [0, 2]);
+    assert_eq!(combined.truncated, verified.truncated);
+
+    let (_, pending, cached_run) = LogDocument::open_with_index_cache_and_search_cancellable(
+        &path,
+        &cache,
+        &matcher,
+        None,
+        &cancellation,
+    )
+    .expect("缓存命中打开与搜索应成功")
+    .expect("缓存命中搜索不应被取消");
+    assert!(pending.is_none());
+    let SearchRun::Completed(cached) = cached_run else {
+        panic!("缓存命中搜索应完成");
+    };
+    assert_eq!(
+        cached.line_indices.iter().collect::<Vec<_>>(),
+        combined.line_indices.iter().collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -181,6 +255,64 @@ fn benchmark_uncached_full_open() {
     eprintln!(
         "无缓存打开 128 MiB 文件 {RUNS} 次：{elapsed:?}，平均：{:?}",
         elapsed / RUNS as u32
+    );
+}
+
+#[test]
+#[ignore = "手动性能基准：cargo test -p vclogg-core --release benchmark_combined_uncached_open_search -- --ignored --nocapture"]
+fn benchmark_combined_uncached_open_search() {
+    const SOURCE_BYTES: usize = 128 * 1024 * 1024;
+    const RUNS: usize = 5;
+    let temporary = TemporaryDirectory::new("combined-open-search-performance");
+    let path = temporary.0.join("large.log");
+    let cache = temporary.0.join("index");
+    let line = b"2026-08-27 INFO combined uncached open search needle line\n";
+    let mut writer = BufWriter::new(File::create(&path).expect("应能创建性能测试日志"));
+    for _ in 0..SOURCE_BYTES.div_ceil(line.len()) {
+        writer.write_all(line).expect("应能写入性能测试日志");
+    }
+    writer.flush().expect("应能刷新性能测试日志");
+    let query = SearchQuery {
+        text: "needle".to_owned(),
+        ..SearchQuery::default()
+    };
+    let matcher = SearchMatcher::new(&query)
+        .expect("搜索器应能编译")
+        .expect("非空查询应有搜索器");
+    let cancellation = SearchCancellation::default();
+
+    let separate_started = Instant::now();
+    for _ in 0..RUNS {
+        let (document, pending) =
+            LogDocument::open_with_index_cache(&path, &cache).expect("分离打开应成功");
+        assert!(pending.is_some());
+        let run = search_with_compiled_matcher(&document, Some(&matcher), None, &cancellation);
+        assert!(matches!(run, SearchRun::Completed(_)));
+        black_box((document, run));
+    }
+    let separate_elapsed = separate_started.elapsed();
+
+    let combined_started = Instant::now();
+    for _ in 0..RUNS {
+        let opened = LogDocument::open_with_index_cache_and_search_cancellable(
+            &path,
+            &cache,
+            &matcher,
+            None,
+            &cancellation,
+        )
+        .expect("合并打开应成功")
+        .expect("合并打开不应取消");
+        assert!(opened.1.is_some());
+        assert!(matches!(opened.2, SearchRun::Completed(_)));
+        black_box(opened);
+    }
+    let combined_elapsed = combined_started.elapsed();
+
+    eprintln!(
+        "128 MiB 无缓存打开+搜索 {RUNS} 次：分离 {separate_elapsed:?}，平均 {:?}；合并 {combined_elapsed:?}，平均 {:?}",
+        separate_elapsed / RUNS as u32,
+        combined_elapsed / RUNS as u32,
     );
 }
 
