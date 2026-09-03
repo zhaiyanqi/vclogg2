@@ -638,7 +638,14 @@ impl Workspace {
                 result_mode,
                 !marked_rows.is_empty(),
             );
-            let pending_restore_row = session.selected_row;
+            let pending_log_jump = resolved_prepared_search_jump(
+                None,
+                self.pending_search_result_jump.as_ref(),
+                &path,
+                &document,
+            );
+            let pending_restore_row =
+                opening_restore_source_row(pending_log_jump, session.selected_row);
             if let Some(selected_row) = pending_restore_row.and_then(|row| document.local_row(row))
             {
                 log_table.update(cx, |table, cx| table.set_active_log_row(selected_row, cx));
@@ -861,7 +868,7 @@ impl Workspace {
             window,
             cx,
         );
-        self.complete_pending_directory_result_jump(window, cx);
+        self.complete_pending_search_result_jump(window, cx);
         self.pending_directory_group_activation = None;
         self.persist_workspace_order(window, cx);
     }
@@ -935,31 +942,41 @@ impl Workspace {
         }
     }
 
-    pub(super) fn complete_pending_directory_result_jump(
+    pub(super) fn complete_pending_search_result_jump(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(pending) = self.pending_directory_result_jump.clone() else {
+        let Some(pending) = self.pending_search_result_jump.clone() else {
             return;
         };
-        let Some(document_ix) = self.documents.iter().position(|tab| {
-            paths_match(tab.document.path(), &pending.path)
-                && tab.load_state == DocumentLoadState::Ready
-        }) else {
-            self.pending_directory_result_jump = None;
+        let Some(document_ix) = self
+            .documents
+            .iter()
+            .position(|tab| paths_match(tab.document.path(), &pending.path))
+        else {
+            self.pending_search_result_jump = None;
             return;
         };
-        self.pending_directory_result_jump = None;
-        if !pending.matches(&self.documents[document_ix].document) {
-            Self::notify_stale_directory_result(window, cx);
+        // Preview is only an intermediate opening state. Keep the foreground result jump alive
+        // until the same tab reaches Ready; otherwise its persisted row wins during the upgrade.
+        if should_defer_search_result_jump(Some(self.documents[document_ix].load_state)) {
             return;
         }
+        self.pending_search_result_jump = None;
+        if !pending.matches(&self.documents[document_ix].document) {
+            Self::notify_stale_search_result(window, cx);
+            return;
+        }
+        // The newly opened tab was built from its file-owned search session. Install the active
+        // workspace search's matcher and hit rows before selecting the target so the first
+        // committed frame is already centered and highlighted like the result row that opened it.
+        self.refresh_active_log_search_presentation(cx);
         if !self.activate_document_log_row_atomically(document_ix, pending.source_row, window, cx) {
             window.push_notification(
                 crate::tr!(
-                    "该目录结果行在当前文件中已不存在，请重新搜索",
-                    "That directory result line no longer exists in the current file. Search again."
+                    "该搜索结果行在当前文件中已不存在，请重新搜索",
+                    "That search result line no longer exists in the current file. Search again."
                 ),
                 cx,
             );
@@ -1007,19 +1024,27 @@ impl Workspace {
                     row_height,
                     cx,
                 );
-                let selected_source_row = tab
-                    .log_table
-                    .read(cx)
-                    .active_log_row()
-                    .and_then(|row_ix| tab.log_table.read(cx).delegate().source_row(row_ix))
-                    .or(tab.view.pending_restore_row);
-                let log_anchor_ix = log_anchor
-                    .as_ref()
-                    .and_then(|anchor| match anchor.key {
-                        LogRowKey::Row { source_row, .. } => {
-                            prepared.document.local_row(source_row)
-                        }
-                        LogRowKey::FileGroup { .. } => None,
+                let log_jump = prepared_pending_search_jump(
+                    self.pending_search_result_jump.as_ref(),
+                    path,
+                    &prepared.document,
+                );
+                let selected_source_row = log_jump.map(|jump| jump.source_row).or_else(|| {
+                    tab.log_table
+                        .read(cx)
+                        .active_log_row()
+                        .and_then(|row_ix| tab.log_table.read(cx).delegate().source_row(row_ix))
+                        .or(tab.view.pending_restore_row)
+                });
+                let log_anchor_ix = log_jump
+                    .map(|jump| jump.row_ix)
+                    .or_else(|| {
+                        log_anchor.as_ref().and_then(|anchor| match anchor.key {
+                            LogRowKey::Row { source_row, .. } => {
+                                prepared.document.local_row(source_row)
+                            }
+                            LogRowKey::FileGroup { .. } => None,
+                        })
                     })
                     .or_else(|| {
                         selected_source_row.and_then(|row| prepared.document.local_row(row))
@@ -1035,17 +1060,27 @@ impl Workspace {
                     .or_else(|| selected_source_row.and_then(|row| result_rows.position(row)))
                     .or_else(|| result_anchor.as_ref().map(|anchor| anchor.fallback_ix))
                     .unwrap_or_default();
-                let log_range = search_scope_switch_preload_range(
-                    log_anchor_ix,
-                    log_anchor.as_ref().is_some_and(|anchor| anchor.at_end),
-                    prepared.document.line_count(),
-                    tab.log_table
-                        .read(cx)
-                        .visible_range()
-                        .rows()
-                        .len()
-                        .max(window_visible_rows),
-                );
+                let log_visible_rows = tab
+                    .log_table
+                    .read(cx)
+                    .visible_range()
+                    .rows()
+                    .len()
+                    .max(window_visible_rows);
+                let log_range = if log_jump.is_some() {
+                    centered_log_jump_preload_range(
+                        log_anchor_ix,
+                        prepared.document.line_count(),
+                        log_visible_rows,
+                    )
+                } else {
+                    search_scope_switch_preload_range(
+                        log_anchor_ix,
+                        log_anchor.as_ref().is_some_and(|anchor| anchor.at_end),
+                        prepared.document.line_count(),
+                        log_visible_rows,
+                    )
+                };
                 let result_range = search_scope_switch_preload_range(
                     result_anchor_ix,
                     result_anchor.as_ref().is_some_and(|anchor| anchor.at_end),
@@ -1099,6 +1134,7 @@ impl Workspace {
                     row_height,
                     log_word_wrap,
                     result_word_wrap,
+                    log_jump,
                 })
             })
             .collect()
@@ -1131,6 +1167,12 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> bool {
         let upgrade_frame = prepared.upgrade_frame.take();
+        let pending_log_jump = resolved_prepared_search_jump(
+            upgrade_frame.as_ref().and_then(|frame| frame.log_jump),
+            self.pending_search_result_jump.as_ref(),
+            prepared.document.path(),
+            &prepared.document,
+        );
         let highlight_matches = self.app_settings.highlight_matches;
         let tab = &mut self.documents[document_ix];
         let previous_document = tab.document.clone();
@@ -1171,7 +1213,11 @@ impl Workspace {
                 );
             });
             tab.file.pending_restore_marked_rows = session.marked_rows.clone();
-            tab.view.pending_restore_row = session.selected_row;
+            // Opening from a workspace-search result is an explicit foreground navigation.
+            // Its selected result row outranks the file session's last closed row from the first
+            // restored frame onward; ordinary opens still fall back to the persisted row.
+            tab.view.pending_restore_row =
+                opening_restore_source_row(pending_log_jump, session.selected_row);
             tab.view.pending_resume = Some(session.resume.clone());
             tab.file.keyword_color_rules = session.keyword_color_rules.clone();
             tab.file.resolved_color_rules = installable_color_rules(
@@ -1338,6 +1384,12 @@ impl Workspace {
         tab.load_state = prepared.load_state;
         if prepared.load_state == DocumentLoadState::Ready {
             self.apply_tab_resume(document_ix, cx);
+        }
+        if let Some(log_jump) = pending_log_jump {
+            // A result click owns the opening target. Commit it after the file session resume even
+            // when visible-line staging was skipped or discarded, so a small/cached file cannot
+            // fall back to its previously persisted selection.
+            self.commit_prepared_log_jump(document_ix, log_jump, cx);
         }
         if self.active_ix == Some(document_ix) {
             if upgrade_frame.is_some() {

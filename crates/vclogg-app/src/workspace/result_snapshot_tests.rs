@@ -440,7 +440,7 @@ fn result_presentation_state_requires_both_path_and_snapshot_identity() {
 }
 
 #[test]
-fn pending_directory_jump_rejects_a_reopened_snapshot_at_the_same_path() {
+fn pending_search_jump_rejects_a_reopened_snapshot_at_the_same_path() {
     let nonce = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .expect("测试时间应晚于 Unix epoch")
@@ -451,7 +451,7 @@ fn pending_directory_jump_rejects_a_reopened_snapshot_at_the_same_path() {
     )));
     fs::write(&temporary.0, b"before\n").expect("应能创建测试日志");
     let expected_document = Arc::new(LogDocument::open(&temporary.0).expect("应能打开原始快照"));
-    let pending = PendingDirectoryResultJump {
+    let pending = PendingSearchResultJump {
         path: temporary.0.clone(),
         source_row: 7,
         expected_document: expected_document.clone(),
@@ -461,6 +461,143 @@ fn pending_directory_jump_rejects_a_reopened_snapshot_at_the_same_path() {
     fs::write(&temporary.0, b"after!\n").expect("应能替换测试日志内容");
     let reopened = LogDocument::open(&temporary.0).expect("应能打开替换后的快照");
     assert!(!pending.matches(&reopened));
+}
+
+#[test]
+fn unopened_match_rows_create_pending_jumps_for_global_and_directory_results() {
+    let result = GlobalSearchDocumentResult {
+        title: "unopened.log".into(),
+        path: PathBuf::from("logs/unopened.log"),
+        document: Arc::new(LogDocument::placeholder("logs/unopened.log")),
+        search_result: SearchResult::default(),
+        failure: None,
+    };
+
+    for scope in [SearchScope::AllOpenFiles, SearchScope::Directory] {
+        let pending = pending_search_result_jump(Some(scope), Some(&result), 17)
+            .expect("工作区搜索结果应在打开文件后继续定位");
+
+        assert_eq!(pending.path, PathBuf::from("logs/unopened.log"));
+        assert_eq!(pending.source_row, 17);
+        assert!(Arc::ptr_eq(&pending.expected_document, &result.document));
+    }
+
+    assert!(
+        pending_search_result_jump(Some(SearchScope::CurrentFile), Some(&result), 17).is_none()
+    );
+    assert!(pending_search_result_jump(None, Some(&result), 17).is_none());
+}
+
+#[test]
+fn search_result_jump_waits_for_a_selection_frame_until_the_target_is_ready() {
+    assert!(should_defer_search_result_jump(None));
+    assert!(should_defer_search_result_jump(Some(
+        DocumentLoadState::Opening
+    )));
+    assert!(should_defer_search_result_jump(Some(
+        DocumentLoadState::Preview
+    )));
+    assert!(!should_defer_search_result_jump(Some(
+        DocumentLoadState::Ready
+    )));
+}
+
+#[test]
+fn unopened_global_result_prepares_its_target_in_the_first_ready_frame() {
+    let nonce = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("测试时间应晚于 Unix epoch")
+        .as_nanos();
+    let temporary = TemporaryFile(std::env::temp_dir().join(format!(
+        "vclogg2-global-result-jump-{}-{nonce}.log",
+        std::process::id()
+    )));
+    fs::write(&temporary.0, b"before\nneedle\nafter\n").expect("应能创建跳转测试日志");
+    let full = Arc::new(LogDocument::open(&temporary.0).expect("应能打开完整测试日志"));
+    let sparse = Arc::new(full.project_source_rows(&[1].into_iter().collect()));
+    let pending = PendingSearchResultJump {
+        path: temporary.0.clone(),
+        source_row: 1,
+        expected_document: sparse,
+    };
+
+    let prepared = resolved_prepared_search_jump(None, Some(&pending), &temporary.0, &full)
+        .expect("即使未生成可见行预加载帧，全局结果目标也应进入文件首帧准备");
+
+    assert_eq!(prepared.source_row, 1);
+    assert_eq!(prepared.row_ix, 1);
+}
+
+#[test]
+fn selected_search_result_row_overrides_the_files_persisted_row_while_opening() {
+    let selected_result_jump = PreparedLogJump {
+        source_row: 17,
+        row_ix: 17,
+    };
+
+    assert_eq!(
+        opening_restore_source_row(Some(selected_result_jump), Some(4)),
+        Some(17)
+    );
+    assert_eq!(opening_restore_source_row(None, Some(4)), Some(4));
+}
+
+#[test]
+fn persisted_all_open_search_restores_an_unopened_source() {
+    let nonce = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("测试时间应晚于 Unix epoch")
+        .as_nanos();
+    let temporary = TemporaryFile(std::env::temp_dir().join(format!(
+        "vclogg2-all-open-restore-{}-{nonce}.log",
+        std::process::id()
+    )));
+    fs::write(&temporary.0, b"before\nneedle\nafter\n").expect("应能创建恢复测试日志");
+
+    let (cancelled, results, matcher) = run_persisted_all_open_search(
+        vec![temporary.0.clone()],
+        SearchQuery {
+            text: "needle".into(),
+            case_sensitive: true,
+            regex: false,
+            max_results: Some(100),
+        },
+        SearchCancellation::default(),
+    )
+    .expect("未打开的搜索源应能恢复");
+
+    assert!(!cancelled);
+    assert!(matcher.is_some());
+    assert_eq!(results.len(), 1);
+    assert!(paths_match(&results[0].path, &temporary.0));
+    assert_eq!(
+        results[0]
+            .search_result
+            .line_indices
+            .iter()
+            .collect::<Vec<_>>(),
+        [1]
+    );
+}
+
+#[test]
+fn persisted_search_restore_prioritizes_active_scope_then_restores_the_other_scope() {
+    assert_eq!(
+        next_persisted_search_restore_scope(SearchScope::Directory, true, true),
+        Some(SearchScope::Directory)
+    );
+    assert_eq!(
+        next_persisted_search_restore_scope(SearchScope::Directory, true, false),
+        Some(SearchScope::AllOpenFiles)
+    );
+    assert_eq!(
+        next_persisted_search_restore_scope(SearchScope::CurrentFile, true, true),
+        Some(SearchScope::AllOpenFiles)
+    );
+    assert_eq!(
+        next_persisted_search_restore_scope(SearchScope::AllOpenFiles, false, true),
+        Some(SearchScope::Directory)
+    );
 }
 
 #[test]

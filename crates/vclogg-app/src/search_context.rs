@@ -8,8 +8,9 @@ use crate::{
     path_identity::{decode_persisted_path, normalized_path_match_key},
 };
 
-pub(crate) const SEARCH_CONTEXT_VERSION: u32 = 2;
+pub(crate) const SEARCH_CONTEXT_VERSION: u32 = 3;
 const LEGACY_SEARCH_CONTEXT_VERSION: u32 = 1;
+const PREVIOUS_SEARCH_CONTEXT_VERSION: u32 = 2;
 pub(crate) const MAX_DIRECTORY_SEARCH_SESSIONS: usize = 20;
 const PIXEL_SCALE: f32 = 1_000.;
 const COMPRESSED_ROWS_PREFIX: &str = "rb1:";
@@ -124,6 +125,9 @@ pub(crate) struct PersistedGlobalSearchContext {
     pub results_visible: bool,
     pub word_wrap: bool,
     pub keyword_color_rules: Vec<KeywordColorRule>,
+    /// Sources captured by the last completed search. All-open-files restoration uses these
+    /// paths even when the corresponding documents are not currently open as tabs.
+    pub source_paths: Vec<String>,
     pub collapsed_paths: Vec<String>,
     pub selection: Vec<PersistedPathSelection>,
     pub selected_row: Option<PersistedSearchRowKey>,
@@ -140,6 +144,7 @@ impl Default for PersistedGlobalSearchContext {
             results_visible: false,
             word_wrap: false,
             keyword_color_rules: Vec::new(),
+            source_paths: Vec::new(),
             collapsed_paths: Vec::new(),
             selection: Vec::new(),
             selected_row: None,
@@ -228,6 +233,11 @@ impl WorkspaceSearchState {
                     });
                 }
             }
+            PREVIOUS_SEARCH_CONTEXT_VERSION => {
+                self.version = SEARCH_CONTEXT_VERSION;
+                self.all_open.version = SEARCH_CONTEXT_VERSION;
+                self.directory.version = SEARCH_CONTEXT_VERSION;
+            }
             SEARCH_CONTEXT_VERSION => {}
             _ => return None,
         }
@@ -238,7 +248,9 @@ impl WorkspaceSearchState {
         for session in &mut self.directories {
             if !matches!(
                 session.context.version,
-                LEGACY_SEARCH_CONTEXT_VERSION | SEARCH_CONTEXT_VERSION
+                LEGACY_SEARCH_CONTEXT_VERSION
+                    | PREVIOUS_SEARCH_CONTEXT_VERSION
+                    | SEARCH_CONTEXT_VERSION
             ) {
                 return None;
             }
@@ -377,6 +389,29 @@ mod tests {
     }
 
     #[test]
+    fn version_two_state_migrates_with_an_empty_source_list() {
+        let previous = WorkspaceSearchState {
+            version: PREVIOUS_SEARCH_CONTEXT_VERSION,
+            all_open: PersistedGlobalSearchContext {
+                version: PREVIOUS_SEARCH_CONTEXT_VERSION,
+                results_visible: true,
+                ..PersistedGlobalSearchContext::default()
+            },
+            directory: PersistedGlobalSearchContext {
+                version: PREVIOUS_SEARCH_CONTEXT_VERSION,
+                ..PersistedGlobalSearchContext::default()
+            },
+            ..WorkspaceSearchState::default()
+        };
+
+        let migrated = previous.migrated().expect("version two should migrate");
+
+        assert_eq!(migrated.version, SEARCH_CONTEXT_VERSION);
+        assert_eq!(migrated.all_open.version, SEARCH_CONTEXT_VERSION);
+        assert!(migrated.all_open.source_paths.is_empty());
+    }
+
+    #[test]
     fn directory_sessions_are_deduplicated_and_lru_bounded() {
         let mut state = WorkspaceSearchState {
             directories: (0..=MAX_DIRECTORY_SEARCH_SESSIONS)
@@ -428,6 +463,7 @@ mod tests {
                 },
                 result_mode: 2,
                 word_wrap: true,
+                source_paths: vec!["logs/a.log".into(), "logs/b.log".into()],
                 keyword_color_rules: vec![KeywordColorRule {
                     label_id: Some("warning".into()),
                     keyword: "needle".into(),
@@ -472,6 +508,7 @@ mod tests {
         assert_eq!(restored.all_open.query.text, "all open");
         assert!(restored.all_open.query.case_sensitive);
         assert!(restored.all_open.word_wrap);
+        assert_eq!(restored.all_open.source_paths, ["logs/a.log", "logs/b.log"]);
         assert_eq!(restored.directories[0].context.query.text, "directory");
         assert!(restored.directories[0].context.query.regex);
         assert!(restored.directories[0].context.results_visible);

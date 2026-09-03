@@ -148,19 +148,6 @@ impl GlobalSearchResults {
         self.iter().map(|(_, result)| result)
     }
 
-    pub(crate) fn remove_documents(&mut self, document_ids: &BTreeSet<u64>) {
-        if !document_ids
-            .iter()
-            .any(|document_id| self.by_document.contains_key(document_id))
-        {
-            return;
-        }
-        Arc::make_mut(&mut self.by_document)
-            .retain(|document_id, _| !document_ids.contains(document_id));
-        let by_document = &self.by_document;
-        Arc::make_mut(&mut self.order).retain(|document_id| by_document.contains_key(document_id));
-    }
-
     pub(crate) fn clear(&mut self) {
         self.order = Arc::default();
         self.by_document = Arc::default();
@@ -244,38 +231,6 @@ impl SearchSessionState {
         self.horizontal_offset = 0.;
         self.active = false;
         self.visible_lines = None;
-    }
-
-    pub(crate) fn remove_documents(&mut self, document_ids: &BTreeSet<u64>) {
-        if !document_ids.is_empty() {
-            // The virtual coordinates may shift even when the removed document was outside the
-            // captured window, so discard the bounded display snapshot and keep domain state.
-            self.visible_lines = None;
-        }
-        self.results.remove_documents(document_ids);
-        self.collapsed_document_ids
-            .retain(|document_id| !document_ids.contains(document_id));
-        self.selection
-            .retain(|document_id, _| !document_ids.contains(document_id));
-        if self.selected_row.is_some_and(|row| {
-            let document_id = match row {
-                GlobalSearchRow::Group { document_id }
-                | GlobalSearchRow::Match { document_id, .. } => document_id,
-            };
-            document_ids.contains(&document_id)
-        }) {
-            self.selected_row = None;
-        }
-        if self.viewport.as_ref().is_some_and(|viewport| {
-            let document_id = match viewport.key {
-                LogRowKey::Row { document_id, .. } | LogRowKey::FileGroup { document_id } => {
-                    document_id
-                }
-            };
-            document_ids.contains(&document_id)
-        }) {
-            self.viewport = None;
-        }
     }
 }
 
@@ -462,7 +417,6 @@ pub(crate) struct GlobalSearchState {
     pub(crate) directory_context: SearchSessionState,
     pub(crate) pending_all_open_restore: Option<PersistedGlobalSearchContext>,
     pub(crate) pending_directory_restore: Option<PersistedGlobalSearchContext>,
-    pub(crate) restoring_selection: bool,
     pub(crate) revision: u64,
     pub(crate) results_visible: bool,
     directory_document_ids: DirectoryDocumentIds,
@@ -491,6 +445,14 @@ impl PathPreferences {
 
     fn insert(&mut self, path: PathBuf, selected: bool) {
         self.by_path.insert(path_match_key(&path), (path, selected));
+    }
+
+    fn selected_paths(&self) -> Vec<PathBuf> {
+        self.by_path
+            .values()
+            .filter(|(_, selected)| *selected)
+            .map(|(path, _)| path.clone())
+            .collect()
     }
 }
 
@@ -554,7 +516,6 @@ impl GlobalSearchState {
             directory_context: SearchSessionState::default(),
             pending_all_open_restore: None,
             pending_directory_restore: None,
-            restoring_selection: false,
             revision: 0,
             results_visible: false,
             directory_document_ids: DirectoryDocumentIds::default(),
@@ -575,6 +536,10 @@ impl GlobalSearchState {
 
     pub(crate) fn set_preference(&mut self, path: PathBuf, selected: bool) {
         self.preferences.insert(path, selected);
+    }
+
+    pub(crate) fn selected_preference_paths(&self) -> Vec<PathBuf> {
+        self.preferences.selected_paths()
     }
 
     pub(crate) fn retain_directory_document_paths(&mut self, paths: &BTreeSet<PathBuf>) {
@@ -834,7 +799,7 @@ mod state_controller_tests {
 
     #[test]
     fn global_results_keep_search_order_separate_from_identity_lookup() {
-        let mut results = [
+        let results = [
             (9, global_result("nine.log")),
             (3, global_result("three.log")),
         ]
@@ -849,10 +814,6 @@ mod state_controller_tests {
             results.get(&3).map(|result| result.path.as_path()),
             Some(Path::new("three.log"))
         );
-
-        results.remove_documents(&BTreeSet::from([9]));
-        assert_eq!(results.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [3]);
-        assert!(results.get(&9).is_none());
     }
 
     #[test]
@@ -865,72 +826,12 @@ mod state_controller_tests {
         assert!(Arc::ptr_eq(&results.order, &snapshot.order));
         assert!(Arc::ptr_eq(&results.by_document, &snapshot.by_document));
 
-        results.remove_documents(&BTreeSet::from([99]));
-
-        assert!(Arc::ptr_eq(&results.order, &snapshot.order));
-        assert!(Arc::ptr_eq(&results.by_document, &snapshot.by_document));
-
-        results.remove_documents(&BTreeSet::from([3]));
+        results.clear();
 
         assert!(!Arc::ptr_eq(&results.order, &snapshot.order));
         assert!(!Arc::ptr_eq(&results.by_document, &snapshot.by_document));
         assert!(results.is_empty());
         assert!(snapshot.get(&3).is_some());
-    }
-
-    #[test]
-    fn retained_global_context_drops_closed_documents_and_interactions() {
-        let mut context = SearchSessionState {
-            query: SearchQuery {
-                text: "needle".into(),
-                case_sensitive: true,
-                regex: false,
-                max_results: None,
-            },
-            keyword_color_rules: Vec::new(),
-            resolved_color_rules: Arc::default(),
-            initialized: true,
-            results: [
-                (9, global_result("nine.log")),
-                (3, global_result("three.log")),
-            ]
-            .into_iter()
-            .collect(),
-            collapsed_document_ids: BTreeSet::from([3, 9]),
-            selection: BTreeMap::from([
-                (3, [1].into_iter().collect()),
-                (9, [2].into_iter().collect()),
-            ]),
-            selected_row: Some(GlobalSearchRow::Match {
-                document_id: 9,
-                source_row: 2,
-            }),
-            viewport: Some(ViewportAnchor {
-                key: LogRowKey::Row {
-                    document_id: 9,
-                    source_row: 2,
-                },
-                viewport_y: gpui::px(0.),
-                at_end: false,
-                fallback_ix: 0,
-            }),
-            ..Default::default()
-        };
-
-        context.remove_documents(&BTreeSet::from([9]));
-
-        assert_eq!(
-            context
-                .results
-                .iter()
-                .map(|(id, _)| *id)
-                .collect::<Vec<_>>(),
-            [3]
-        );
-        assert_eq!(context.collapsed_document_ids, BTreeSet::from([3]));
-        assert_eq!(context.selection.keys().copied().collect::<Vec<_>>(), [3]);
-        assert_eq!(context.selected_row, None);
-        assert!(context.viewport.is_none());
     }
 
     #[test]
@@ -1029,13 +930,17 @@ mod state_controller_tests {
     #[test]
     fn global_search_preferences_use_platform_path_identity() {
         let mut preferences = PathPreferences::default();
-        preferences.replace(BTreeMap::from([(PathBuf::from("logs/a.log"), false)]));
+        preferences.replace(BTreeMap::from([
+            (PathBuf::from("logs/a.log"), false),
+            (PathBuf::from("logs/b.log"), true),
+        ]));
 
         assert_eq!(preferences.get(Path::new("logs/a.log")), Some(false));
         assert_eq!(
             preferences.get(Path::new("LOGS/A.LOG")),
             cfg!(windows).then_some(false)
         );
+        assert_eq!(preferences.selected_paths(), [PathBuf::from("logs/b.log")]);
     }
 
     #[test]

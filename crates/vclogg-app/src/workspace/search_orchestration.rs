@@ -19,7 +19,17 @@ impl Workspace {
                 if self.global_search.result_scope == Some(scope) =>
             {
                 let result = match scope {
-                    SearchScope::AllOpenFiles => self.global_search.results.get(&tab.id),
+                    SearchScope::AllOpenFiles => {
+                        self.global_search.results.get(&tab.id).or_else(|| {
+                            self.global_search.results.values().find(|result| {
+                                result_snapshot_matches_document(
+                                    &result.path,
+                                    &result.document,
+                                    &tab.document,
+                                )
+                            })
+                        })
+                    }
                     SearchScope::Directory => self.global_search.results.values().find(|result| {
                         result_snapshot_matches_document(
                             &result.path,
@@ -348,6 +358,64 @@ impl Workspace {
         context: &SearchSessionState,
     ) -> Vec<GlobalSearchGroup> {
         match scope {
+            SearchScope::AllOpenFiles if context.initialized => {
+                let open_documents_by_path = self
+                    .documents
+                    .iter()
+                    .map(|tab| (path_match_key(tab.document.path()), tab))
+                    .collect::<BTreeMap<_, _>>();
+                context
+                    .results
+                    .iter()
+                    .map(|(document_id, result)| {
+                        let open_tab = path_match_map_get(&open_documents_by_path, &result.path)
+                            .copied()
+                            .filter(|tab| {
+                                result_snapshot_matches_document(
+                                    &result.path,
+                                    &result.document,
+                                    &tab.document,
+                                )
+                            });
+                        let marked_rows = open_tab
+                            .map(|tab| tab.file.marked_rows.clone())
+                            .unwrap_or_default();
+                        GlobalSearchGroup {
+                            source: crate::global_search_table::GlobalSearchGroupSource {
+                                document_id: *document_id,
+                                title: open_tab
+                                    .map(|tab| tab.file.title.clone())
+                                    .unwrap_or_else(|| result.title.clone()),
+                                path: result.path.clone(),
+                                document: open_tab
+                                    .map(|tab| tab.document.clone())
+                                    .unwrap_or_else(|| result.document.clone()),
+                            },
+                            projection: crate::global_search_table::GlobalSearchGroupProjection {
+                                rows: compute_result_rows(
+                                    context.result_mode,
+                                    Some(&result.search_result),
+                                    &marked_rows,
+                                ),
+                            },
+                            presentation:
+                                crate::global_search_table::GlobalSearchGroupPresentation {
+                                    matched_rows: result.search_result.line_indices.clone(),
+                                    marked_rows,
+                                    truncated: result.search_result.truncated
+                                        && context.result_mode.includes_matches(),
+                                    failure: result.failure.clone(),
+                                    color_rules: ResolvedColorRules::layered(
+                                        open_tab
+                                            .map(|tab| tab.file.resolved_color_rules.clone())
+                                            .unwrap_or_else(Arc::default),
+                                        context.resolved_color_rules.clone(),
+                                    ),
+                                },
+                        }
+                    })
+                    .collect()
+            }
             SearchScope::AllOpenFiles => self
                 .documents
                 .iter()
@@ -645,12 +713,8 @@ impl Workspace {
             self.refresh_global_result_rows(window, cx);
             return;
         }
-        self.global_search.restoring_selection = prepared
-            .restore_context
-            .as_ref()
-            .is_none_or(|context| context.selected_row.is_some());
         let restore_context = prepared.restore_context.clone();
-        let active_restored = self.global_table.update(cx, |table, cx| {
+        self.global_table.update(cx, |table, cx| {
             if let Some(context) = restore_context.as_ref() {
                 table
                     .delegate_mut()
@@ -666,21 +730,14 @@ impl Workspace {
                 let selected_ix = context
                     .selected_row
                     .and_then(|row| table.delegate().row_ix(row));
-                if let Some(selected_ix) = selected_ix {
-                    table.set_active_log_row(selected_ix, cx);
-                } else {
-                    table.delegate().set_active_log_row(None);
-                    table.clear_selection(cx);
-                }
+                // Projection restoration is presentation state, not a click. Keep it entirely
+                // inside the delegate so it cannot emit SelectRow and replace a newer pending
+                // result jump while the clicked file is opening.
+                table.delegate().set_active_log_row(selected_ix);
             }
-            let active_restored = table.sync_active_log_row(cx);
             table.refresh(cx);
             cx.notify();
-            active_restored
         });
-        if !active_restored {
-            self.global_search.restoring_selection = false;
-        }
         if prepared.word_wrap {
             let table = self.global_table.read(cx);
             self.global_viewport.reset_wrapped_with_remapped_heights(
@@ -731,18 +788,14 @@ impl Workspace {
         matcher: Option<SearchMatcher>,
         cx: &mut Context<Self>,
     ) {
-        self.global_search.restoring_selection = true;
-        let active_restored = self.global_table.update(cx, |table, cx| {
+        self.global_table.update(cx, |table, cx| {
             table.delegate_mut().set_groups(groups);
             table.delegate_mut().set_search_matcher(matcher);
-            let active_restored = table.sync_active_log_row(cx);
+            // set_groups remaps the delegate-owned active row and row selection by stable keys.
+            // Do not mirror that maintenance through TableState because SelectRow is navigation.
             table.refresh(cx);
             cx.notify();
-            active_restored
         });
-        if !active_restored {
-            self.global_search.restoring_selection = false;
-        }
     }
 
     pub(super) fn reset_search_history_navigation(&mut self) {
@@ -1219,6 +1272,25 @@ impl Workspace {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
+        let source_paths = if context.initialized {
+            context
+                .results
+                .values()
+                .map(|result| encode_persisted_path(&result.path))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        } else if scope == SearchScope::AllOpenFiles {
+            self.documents
+                .iter()
+                .filter(|tab| self.global_search.selected_documents.contains(&tab.id))
+                .map(|tab| encode_persisted_path(tab.document.path()))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        } else {
+            Vec::new()
+        };
         let selection = context
             .selection
             .iter()
@@ -1268,6 +1340,7 @@ impl Workspace {
             results_visible: context.results_visible,
             word_wrap: context.word_wrap,
             keyword_color_rules: context.keyword_color_rules.clone(),
+            source_paths,
             collapsed_paths,
             selection,
             selected_row,
@@ -1486,9 +1559,12 @@ impl Workspace {
             .update(cx, |query, cx| query.set_value(text, window, cx));
     }
 
-    pub(super) fn global_document_id_for_path(&self, path: &str) -> Option<u64> {
-        self.global_search
-            .results
+    pub(super) fn global_document_id_for_path(
+        &self,
+        results: &GlobalSearchResults,
+        path: &str,
+    ) -> Option<u64> {
+        results
             .iter()
             .find_map(|(document_id, result)| {
                 Self::persisted_path_matches(&result.path, path).then_some(*document_id)
@@ -1509,24 +1585,26 @@ impl Workspace {
         &mut self,
         scope: SearchScope,
         persisted: PersistedGlobalSearchContext,
+        results: GlobalSearchResults,
+        matcher: Option<SearchMatcher>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let collapsed_document_ids = persisted
             .collapsed_paths
             .iter()
-            .filter_map(|path| self.global_document_id_for_path(path))
+            .filter_map(|path| self.global_document_id_for_path(&results, path))
             .collect();
         let selection = persisted
             .selection
             .iter()
             .filter_map(|selection| {
-                let document_id = self.global_document_id_for_path(&selection.path)?;
+                let document_id = self.global_document_id_for_path(&results, &selection.path)?;
                 Some((document_id, selection.decoded_rows()))
             })
             .collect();
         let restore_key = |key: &PersistedSearchRowKey| {
-            let document_id = self.global_document_id_for_path(&key.path)?;
+            let document_id = self.global_document_id_for_path(&results, &key.path)?;
             Some(match key.source_row {
                 Some(source_row) => LogRowKey::Row {
                     document_id,
@@ -1583,8 +1661,8 @@ impl Workspace {
                 &self.color_labels,
             ),
             initialized: true,
-            results: self.global_search.results.clone(),
-            matcher: self.global_search.matcher.clone(),
+            results,
+            matcher,
             result_mode: ResultMode::from_database(persisted.result_mode),
             results_visible: persisted.results_visible,
             collapsed_document_ids,
@@ -1610,7 +1688,10 @@ impl Workspace {
             }
             SearchScope::CurrentFile => return,
         }
-        self.restore_retained_global_context(scope, window, cx);
+        if self.global_search.scope == scope {
+            self.restore_retained_global_context(scope, window, cx);
+            self.refresh_active_log_search_presentation(cx);
+        }
     }
 
     pub(super) fn maybe_restore_persisted_search(
@@ -1621,35 +1702,186 @@ impl Workspace {
         if self.searches.is_active() || self.open_task.is_some() {
             return;
         }
-        match self.global_search.scope {
-            SearchScope::AllOpenFiles => {
-                if self.global_search.pending_all_open_restore.is_none()
-                    || self.documents.is_empty()
-                    || self.documents.iter().any(|tab| {
-                        self.global_search.selected_documents.contains(&tab.id)
-                            && tab.load_state != DocumentLoadState::Ready
-                    })
-                {
-                    return;
-                }
-                let query_text = self.global_search.query.text.clone();
-                self.query
-                    .update(cx, |query, cx| query.set_value(query_text, window, cx));
-                self.start_global_search(window, cx);
+        let scope = next_persisted_search_restore_scope(
+            self.global_search.scope,
+            self.global_search.pending_all_open_restore.is_some(),
+            self.global_search.pending_directory_restore.is_some(),
+        );
+        let Some(scope) = scope else {
+            return;
+        };
+        self.start_persisted_search_restore(scope, window, cx);
+    }
+
+    fn start_persisted_search_restore(
+        &mut self,
+        scope: SearchScope,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(persisted) = (match scope {
+            SearchScope::AllOpenFiles => self.global_search.pending_all_open_restore.clone(),
+            SearchScope::Directory => self.global_search.pending_directory_restore.clone(),
+            SearchScope::CurrentFile => None,
+        }) else {
+            return;
+        };
+        let query =
+            Self::restored_search_query(&persisted.query, self.app_settings.search_result_limit());
+        let all_open_paths = if scope == SearchScope::AllOpenFiles {
+            let mut paths = persisted
+                .source_paths
+                .iter()
+                .map(|path| decode_persisted_path(path))
+                .collect::<Vec<_>>();
+            if paths.is_empty() {
+                paths = self.global_search.selected_preference_paths();
             }
-            SearchScope::Directory => {
-                if self.global_search.pending_directory_restore.is_none()
-                    || self.global_search.directory_options.directory.is_none()
-                {
-                    return;
-                }
-                let query_text = self.global_search.directory_query.text.clone();
-                self.query
-                    .update(cx, |query, cx| query.set_value(query_text, window, cx));
-                self.start_directory_search(window, cx);
+            if paths.is_empty() {
+                paths = self
+                    .documents
+                    .iter()
+                    .filter(|tab| self.global_search.selected_documents.contains(&tab.id))
+                    .map(|tab| tab.document.path().to_path_buf())
+                    .collect();
             }
-            SearchScope::CurrentFile => {}
+            paths
+        } else {
+            Vec::new()
+        };
+        if scope == SearchScope::AllOpenFiles && all_open_paths.is_empty() {
+            self.global_search.pending_all_open_restore = None;
+            self.maybe_restore_persisted_search(window, cx);
+            return;
         }
+        let directory_options = self.global_search.directory_options.clone();
+        if scope == SearchScope::Directory && directory_options.directory.is_none() {
+            self.global_search.pending_directory_restore = None;
+            self.maybe_restore_persisted_search(window, cx);
+            return;
+        }
+        let open_document_paths = self
+            .documents
+            .iter()
+            .map(|tab| path_match_key(tab.document.path()))
+            .collect::<BTreeSet<_>>();
+        self.global_search.revision = self.global_search.revision.saturating_add(1);
+        let revision = self.global_search.revision;
+        let target = match scope {
+            SearchScope::AllOpenFiles => SearchTarget::AllOpenFiles,
+            SearchScope::Directory => SearchTarget::Directory,
+            SearchScope::CurrentFile => return,
+        };
+        let cancellation = SearchCancellation::default();
+        self.searches.begin(target, revision, cancellation.clone());
+        if self.global_search.scope == scope {
+            self.activity = Activity::Searching;
+            cx.notify();
+        }
+        let query_for_search = query.clone();
+        let task = cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let (cancelled, results, matcher) = match scope {
+                        SearchScope::AllOpenFiles => run_persisted_all_open_search(
+                            all_open_paths,
+                            query_for_search,
+                            cancellation,
+                        )?,
+                        SearchScope::Directory => {
+                            let run = run_directory_search(
+                                directory_options,
+                                query_for_search,
+                                open_document_paths,
+                                cancellation,
+                            )?;
+                            (run.cancelled, run.results, run.matcher)
+                        }
+                        SearchScope::CurrentFile => unreachable!(),
+                    };
+                    Ok::<_, anyhow::Error>((cancelled, results, matcher))
+                })
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                if !this.searches.is_current(target, revision)
+                    || this.global_search.revision != revision
+                {
+                    return;
+                }
+                match result {
+                    Ok((false, results, matcher)) => {
+                        let results = results
+                            .into_iter()
+                            .map(|result| {
+                                let open_document_id = this
+                                    .documents
+                                    .iter()
+                                    .find(|tab| {
+                                        result_snapshot_matches_document(
+                                            &result.path,
+                                            &result.document,
+                                            &tab.document,
+                                        )
+                                    })
+                                    .map(|tab| tab.id);
+                                let document_id = open_document_id.unwrap_or_else(|| {
+                                    this.global_search.directory_document_id(&result.path)
+                                });
+                                (
+                                    document_id,
+                                    GlobalSearchDocumentResult {
+                                        title: result.title,
+                                        path: result.path,
+                                        document: result.document,
+                                        search_result: result.search_result,
+                                        failure: None,
+                                    },
+                                )
+                            })
+                            .collect::<GlobalSearchResults>();
+                        this.restore_persisted_global_presentation(
+                            scope, persisted, results, matcher, window, cx,
+                        );
+                        if this.global_search.scope == scope {
+                            this.activity = Activity::Ready;
+                        }
+                        this.schedule_workspace_search_state_save(window, cx);
+                    }
+                    Ok((true, _, _)) => {
+                        if this.global_search.scope == scope {
+                            this.activity = Activity::Ready;
+                        }
+                    }
+                    Err(error) => {
+                        match scope {
+                            SearchScope::AllOpenFiles => {
+                                this.global_search.pending_all_open_restore = None
+                            }
+                            SearchScope::Directory => {
+                                this.global_search.pending_directory_restore = None
+                            }
+                            SearchScope::CurrentFile => {}
+                        }
+                        if this.global_search.scope == scope {
+                            window.push_notification(
+                                crate::tr_args!(
+                                    "上次搜索结果未能恢复：{error}",
+                                    "Couldn’t restore the previous search results: {error}",
+                                ),
+                                cx,
+                            );
+                            this.activity = Activity::Error;
+                        } else {
+                            log::warn!("后台搜索状态恢复失败：{error:#}");
+                        }
+                    }
+                }
+                this.searches.finish(target, revision);
+                this.maybe_restore_persisted_search(window, cx);
+                cx.notify();
+            });
+        });
+        self.searches.set_task(task);
     }
 
     pub(super) fn capture_retained_global_context(&mut self, scope: SearchScope, cx: &App) {
@@ -1926,6 +2158,7 @@ impl Workspace {
             window,
             cx,
         );
+        self.maybe_restore_persisted_search(window, cx);
         cx.notify();
     }
 
@@ -1978,49 +2211,34 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let result = self.global_search.results.get(&document_id);
-        let directory_jump = (self.global_search.result_scope == Some(SearchScope::Directory))
-            .then(|| {
-                result.map(|result| PendingDirectoryResultJump {
-                    path: result.path.clone(),
-                    source_row,
-                    expected_document: result.document.clone(),
-                })
-            })
-            .flatten();
+        let pending_jump =
+            pending_search_result_jump(self.global_search.result_scope, result, source_row);
         let document_ix = self.open_document_ix_for_global_result(document_id);
-        let Some(document_ix) = document_ix else {
-            let Some(pending) = directory_jump else {
+        let load_state = document_ix.map(|document_ix| self.documents[document_ix].load_state);
+        if should_defer_search_result_jump(load_state) {
+            let Some(pending) = pending_jump else {
                 return;
             };
-            if self.open_task.is_some() {
-                window.push_notification(
-                    crate::tr!(
-                        "当前正在打开其他文件，请稍后重试",
-                        "Another file is being opened. Try again shortly."
-                    ),
-                    cx,
-                );
-                return;
-            }
-            let path = pending.path.clone();
-            self.pending_directory_result_jump = Some(pending);
-            self.begin_open_paths(vec![path], window, cx);
+            self.pending_search_result_jump = Some(pending);
+            self.search_result_jump_revision = self.search_result_jump_revision.saturating_add(1);
+            let revision = self.search_result_jump_revision;
+            // Table selection and opening are deliberately separate commits. The callback runs
+            // after the selected result row has rendered once, then replaces the visible file.
+            cx.on_next_frame(window, move |this, window, cx| {
+                this.open_pending_search_result_jump(revision, window, cx)
+            });
+            return;
+        }
+        let Some(document_ix) = document_ix else {
             return;
         };
-        if let Some(pending) = directory_jump {
-            if self.documents[document_ix].load_state != DocumentLoadState::Ready {
-                self.pending_directory_result_jump = Some(pending);
-                self.activate_workspace_tab(
-                    WorkspaceTabId::Document(self.documents[document_ix].id),
-                    window,
-                    cx,
-                );
-                return;
-            }
-            if !pending.matches(&self.documents[document_ix].document) {
-                Self::notify_stale_directory_result(window, cx);
-                return;
-            }
+        self.search_result_jump_revision = self.search_result_jump_revision.saturating_add(1);
+        self.pending_search_result_jump = None;
+        if let Some(pending) = pending_jump
+            && !pending.matches(&self.documents[document_ix].document)
+        {
+            Self::notify_stale_search_result(window, cx);
+            return;
         }
         if !self.activate_document_log_row_atomically(document_ix, source_row, window, cx) {
             window.push_notification(
@@ -2033,11 +2251,53 @@ impl Workspace {
         }
     }
 
-    pub(super) fn notify_stale_directory_result(window: &mut Window, cx: &mut App) {
+    fn open_pending_search_result_jump(
+        &mut self,
+        revision: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.search_result_jump_revision != revision {
+            return;
+        }
+        let Some(pending) = self.pending_search_result_jump.clone() else {
+            return;
+        };
+        if let Some(document_ix) = self
+            .documents
+            .iter()
+            .position(|tab| paths_match(tab.document.path(), &pending.path))
+        {
+            if self.documents[document_ix].load_state == DocumentLoadState::Ready {
+                self.complete_pending_search_result_jump(window, cx);
+            } else {
+                self.activate_workspace_tab(
+                    WorkspaceTabId::Document(self.documents[document_ix].id),
+                    window,
+                    cx,
+                );
+            }
+            return;
+        }
+        if self.open_task.is_some() {
+            self.pending_search_result_jump = None;
+            window.push_notification(
+                crate::tr!(
+                    "当前正在打开其他文件，请稍后重试",
+                    "Another file is being opened. Try again shortly."
+                ),
+                cx,
+            );
+            return;
+        }
+        self.begin_open_paths(vec![pending.path], window, cx);
+    }
+
+    pub(super) fn notify_stale_search_result(window: &mut Window, cx: &mut App) {
         window.push_notification(
             crate::tr!(
-                "该目录结果对应的文件内容已改变，请重新搜索",
-                "The file for that directory result has changed. Search again."
+                "该搜索结果对应的文件内容已改变，请重新搜索",
+                "The file for that search result has changed. Search again."
             ),
             cx,
         );
@@ -2246,7 +2506,14 @@ impl Workspace {
             SearchScope::CurrentFile => None,
         };
         if let Some(persisted) = pending_restore {
-            self.restore_persisted_global_presentation(completed.scope, persisted, window, cx);
+            self.restore_persisted_global_presentation(
+                completed.scope,
+                persisted,
+                self.global_search.results.clone(),
+                self.global_search.matcher.clone(),
+                window,
+                cx,
+            );
         } else {
             self.refresh_global_result_rows_with_viewport(preserve_viewport, None, window, cx);
         }
@@ -2385,12 +2652,16 @@ impl Workspace {
                                             Some(error.to_string().into()),
                                         ),
                                     };
+                                    let result_document = Arc::new(
+                                        document.project_source_rows(&search_result.line_indices),
+                                    );
+                                    result_document.release_source_handle();
                                     Some((
                                         document_id,
                                         GlobalSearchDocumentResult {
                                             title,
                                             path,
-                                            document,
+                                            document: result_document,
                                             search_result,
                                             failure,
                                         },
@@ -2468,137 +2739,10 @@ impl Workspace {
         self.activity = Activity::Searching;
         cx.notify();
         let query_for_search = query.clone();
-        let cancellation_for_search = cancellation.clone();
         let task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
-                    let matcher = SearchMatcher::new(&query_for_search)?;
-                    let Some(enumeration) = enumerate_directory_search_paths(
-                        &options,
-                        &cancellation_for_search,
-                    )? else {
-                        return Ok::<_, anyhow::Error>((
-                            true,
-                            Vec::new(),
-                            matcher,
-                            0,
-                            0,
-                            0,
-                        ));
-                    };
-                    let file_count = enumeration.paths.len();
-                    let unreadable_directory_count = enumeration.unreadable_directory_count;
-                    let max_results = query_for_search.max_results;
-                    let scan_paths = directory_search_scan_paths(
-                        enumeration.paths,
-                        matcher.is_some(),
-                        &open_document_paths,
-                    );
-                    let outcomes = prepare_paths_bounded_while(
-                        scan_paths,
-                        || !cancellation_for_search.is_cancelled(),
-                        |path| -> Result<Option<(Arc<LogDocument>, SearchResult)>> {
-                        if cancellation_for_search.is_cancelled() {
-                            return Ok(None);
-                        }
-                        let opened = if let Some(cache_dir) = crate::app_paths::index_cache_dir() {
-                            LogDocument::open_with_index_cache_and_search_cancellable(
-                                path,
-                                cache_dir,
-                                matcher
-                                    .as_ref()
-                                    .expect("directory scan paths require a compiled matcher"),
-                                max_results,
-                                &cancellation_for_search,
-                            )?
-                        } else {
-                            LogDocument::open_cancellable(path, &cancellation_for_search)?.map(
-                                |document| {
-                                    let run = search_with_compiled_matcher(
-                                        &document,
-                                        matcher.as_ref(),
-                                        max_results,
-                                        &cancellation_for_search,
-                                    );
-                                    (document, None, run)
-                                },
-                            )
-                        };
-                        let Some((document, pending_index_cache, run)) = opened else {
-                            return Ok(None);
-                        };
-                        let document = Arc::new(document);
-                        match run {
-                            SearchRun::Completed(search_result)
-                                if !search_result.line_indices.is_empty()
-                                    || path_match_set_contains(&open_document_paths, path) =>
-                            {
-                                let document = Arc::new(
-                                    document.project_source_rows(&search_result.line_indices),
-                                );
-                                document.release_source_handle();
-                                if !cancellation_for_search.is_cancelled()
-                                    && let Some(cache_write) = pending_index_cache
-                                {
-                                    _ = cache_write.persist();
-                                }
-                                Ok(Some((document, search_result)))
-                            }
-                            SearchRun::Completed(_) => {
-                                if !cancellation_for_search.is_cancelled()
-                                    && let Some(cache_write) = pending_index_cache
-                                {
-                                    _ = cache_write.persist();
-                                }
-                                Ok(None)
-                            }
-                            SearchRun::SourceChanged => Err(anyhow::anyhow!(
-                                "搜索期间文件内容已改变，请重新加载后重试：{}",
-                                path.display()
-                            )),
-                            SearchRun::Cancelled => Ok(None),
-                        }
-                        },
-                    );
-                    if cancellation_for_search.is_cancelled() {
-                        return Ok::<_, anyhow::Error>((
-                            true,
-                            Vec::new(),
-                            matcher,
-                            file_count,
-                            0,
-                            unreadable_directory_count,
-                        ));
-                    }
-                    let mut open_error_count = 0;
-                    let mut results = Vec::new();
-                    for (path, outcome) in outcomes {
-                        match outcome {
-                            Ok(Some((document, search_result))) => {
-                                let title: SharedString = path
-                                    .file_name()
-                                    .map(|name| name.to_string_lossy().into_owned())
-                                    .unwrap_or_else(|| path.display().to_string())
-                                    .into();
-                                results.push(DirectorySearchResult {
-                                    title,
-                                    path,
-                                    document,
-                                    search_result,
-                                });
-                            }
-                            Ok(None) => {}
-                            Err(_) => open_error_count += 1,
-                        }
-                    }
-                    Ok::<_, anyhow::Error>((
-                        false,
-                        results,
-                        matcher,
-                        file_count,
-                        open_error_count,
-                        unreadable_directory_count,
-                    ))
+                    run_directory_search(options, query_for_search, open_document_paths, cancellation)
                 })
                 .await;
 
@@ -2610,16 +2754,10 @@ impl Workspace {
                 }
 
                 match result {
-                    Ok((true, _, _, _, _, _)) => this.activity = Activity::Ready,
-                    Ok((
-                        false,
-                        results,
-                        matcher,
-                        file_count,
-                        open_error_count,
-                        unreadable_directory_count,
-                    )) => {
-                        let results = results
+                    Ok(run) if run.cancelled => this.activity = Activity::Ready,
+                    Ok(run) => {
+                        let results = run
+                            .results
                             .into_iter()
                             .map(|result| {
                                 let document_id = this
@@ -2642,22 +2780,24 @@ impl Workspace {
                                 scope: SearchScope::Directory,
                                 query,
                                 results,
-                                matcher,
+                                matcher: run.matcher,
                                 preserve_viewport,
                             },
                             window,
                             cx,
                         );
-                        if file_count == 0 {
+                        if run.file_count == 0 {
                             window.push_notification(
                                 crate::tr_args!("目录中没有符合文件类型的文件：{}", "No matching file types were found in the directory: {}", directory.display()),
                                 cx,
                             );
-                        } else if open_error_count > 0 || unreadable_directory_count > 0 {
+                        } else if run.open_error_count > 0 || run.unreadable_directory_count > 0 {
                             window.push_notification(
                                 crate::tr_args!(
-                                    "目录搜索已完成；{open_error_count} 个文件和 {unreadable_directory_count} 个子目录无法读取",
-                                    "Directory search completed; {open_error_count} files and {unreadable_directory_count} subdirectories couldn’t be read",
+                                    "目录搜索已完成；{} 个文件和 {} 个子目录无法读取",
+                                    "Directory search completed; {} files and {} subdirectories couldn’t be read",
+                                    run.open_error_count,
+                                    run.unreadable_directory_count,
                                 ),
                                 cx,
                             );

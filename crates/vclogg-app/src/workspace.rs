@@ -223,6 +223,7 @@ struct DocumentUpgradeLoadJob {
     row_height: Pixels,
     log_word_wrap: bool,
     result_word_wrap: bool,
+    log_jump: Option<PreparedLogJump>,
 }
 
 struct PreparedDocumentUpgradeFrame {
@@ -239,6 +240,7 @@ struct PreparedDocumentUpgradeFrame {
     row_height: Pixels,
     log_word_wrap: bool,
     result_word_wrap: bool,
+    log_jump: Option<PreparedLogJump>,
 }
 
 struct DocumentFontViewportAnchors {
@@ -298,6 +300,24 @@ fn should_defer_directory_group_activation(
 ) -> bool {
     load_state != DocumentLoadState::Ready
         && pending_path.is_some_and(|pending_path| paths_match(pending_path, candidate_path))
+}
+
+fn next_persisted_search_restore_scope(
+    active_scope: SearchScope,
+    has_all_open: bool,
+    has_directory: bool,
+) -> Option<SearchScope> {
+    [
+        active_scope,
+        SearchScope::AllOpenFiles,
+        SearchScope::Directory,
+    ]
+    .into_iter()
+    .find(|scope| match scope {
+        SearchScope::AllOpenFiles => has_all_open,
+        SearchScope::Directory => has_directory,
+        SearchScope::CurrentFile => false,
+    })
 }
 
 #[derive(Default)]
@@ -2662,17 +2682,80 @@ struct DirectorySearchResult {
     search_result: SearchResult,
 }
 
+struct DirectorySearchRun {
+    cancelled: bool,
+    results: Vec<DirectorySearchResult>,
+    matcher: Option<SearchMatcher>,
+    file_count: usize,
+    open_error_count: usize,
+    unreadable_directory_count: usize,
+}
+
 #[derive(Clone)]
-struct PendingDirectoryResultJump {
+struct PendingSearchResultJump {
     path: PathBuf,
     source_row: usize,
     expected_document: Arc<LogDocument>,
 }
 
-impl PendingDirectoryResultJump {
+impl PendingSearchResultJump {
     fn matches(&self, document: &LogDocument) -> bool {
         result_snapshot_matches_document(&self.path, &self.expected_document, document)
     }
+}
+
+fn pending_search_result_jump(
+    scope: Option<SearchScope>,
+    result: Option<&GlobalSearchDocumentResult>,
+    source_row: usize,
+) -> Option<PendingSearchResultJump> {
+    matches!(
+        scope,
+        Some(SearchScope::AllOpenFiles | SearchScope::Directory)
+    )
+    .then(|| {
+        result.map(|result| PendingSearchResultJump {
+            path: result.path.clone(),
+            source_row,
+            expected_document: result.document.clone(),
+        })
+    })
+    .flatten()
+}
+
+fn prepared_pending_search_jump(
+    pending: Option<&PendingSearchResultJump>,
+    path: &Path,
+    document: &LogDocument,
+) -> Option<PreparedLogJump> {
+    let pending =
+        pending.filter(|pending| paths_match(&pending.path, path) && pending.matches(document))?;
+    Some(PreparedLogJump {
+        source_row: pending.source_row,
+        row_ix: document.local_row(pending.source_row)?,
+    })
+}
+
+fn resolved_prepared_search_jump(
+    staged: Option<PreparedLogJump>,
+    pending: Option<&PendingSearchResultJump>,
+    path: &Path,
+    document: &LogDocument,
+) -> Option<PreparedLogJump> {
+    staged.or_else(|| prepared_pending_search_jump(pending, path, document))
+}
+
+fn opening_restore_source_row(
+    selected_result_jump: Option<PreparedLogJump>,
+    persisted_source_row: Option<usize>,
+) -> Option<usize> {
+    selected_result_jump
+        .map(|jump| jump.source_row)
+        .or(persisted_source_row)
+}
+
+fn should_defer_search_result_jump(load_state: Option<DocumentLoadState>) -> bool {
+    load_state != Some(DocumentLoadState::Ready)
 }
 
 struct CompletedGlobalSearch {
@@ -2713,7 +2796,8 @@ pub struct Workspace {
     active_ix: Option<usize>,
     document_tab_scroll: ScrollHandle,
     pending_document_tab_reveal: Cell<Option<u64>>,
-    pending_directory_result_jump: Option<PendingDirectoryResultJump>,
+    pending_search_result_jump: Option<PendingSearchResultJump>,
+    search_result_jump_revision: u64,
     pending_directory_group_activation: Option<PathBuf>,
     next_document_id: u64,
     next_new_tab_id: u64,
@@ -2974,10 +3058,6 @@ impl Workspace {
                         table.read(cx).delegate().settle_table_selection(*row_ix);
                         this.active_log_region = LogRegion::GlobalResults;
                     }
-                }
-                if this.global_search.restoring_selection {
-                    this.global_search.restoring_selection = false;
-                    return;
                 }
                 let mut save_search_state_immediately = true;
                 match row {
@@ -3296,7 +3376,8 @@ impl Workspace {
             active_ix: None,
             document_tab_scroll: ScrollHandle::new(),
             pending_document_tab_reveal: Cell::new(None),
-            pending_directory_result_jump: None,
+            pending_search_result_jump: None,
+            search_result_jump_revision: 0,
             pending_directory_group_activation: None,
             next_document_id: 1,
             next_new_tab_id: 2,

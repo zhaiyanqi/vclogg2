@@ -90,6 +90,7 @@ impl Workspace {
         self.sync_active_document_ix();
         self.pending_document_tab_reveal.set(None);
         self.sync_active_document(window, cx);
+        self.refresh_active_log_search_presentation(cx);
         if active_tab_changed {
             if prepared_frame {
                 self.refresh_prepared_active_document_surfaces_atomically(window, cx);
@@ -295,7 +296,7 @@ impl Workspace {
         }));
     }
 
-    fn commit_prepared_log_jump(
+    pub(super) fn commit_prepared_log_jump(
         &mut self,
         tab_ix: usize,
         log_jump: PreparedLogJump,
@@ -626,10 +627,8 @@ impl Workspace {
         self.global_search
             .selected_documents
             .retain(|document_id| !document_ids.contains(document_id));
-        self.global_search.results.remove_documents(&document_ids);
-        self.global_search
-            .all_open_context
-            .remove_documents(&document_ids);
+        // Completed workspace-wide results own immutable sparse source snapshots and therefore
+        // remain usable after their tabs close. A later explicit search rebuilds the source set.
         self.reorder_documents_to_match_tabs();
         if !document_ids.is_empty() {
             self.global_search.revision = self.global_search.revision.saturating_add(1);
@@ -641,6 +640,7 @@ impl Workspace {
         }
         self.persist_workspace_order(window, cx);
         self.schedule_workspace_search_state_save(window, cx);
+        self.maybe_restore_persisted_search(window, cx);
         cx.notify();
     }
 

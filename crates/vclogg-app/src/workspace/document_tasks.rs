@@ -1,5 +1,170 @@
 use super::*;
 
+fn search_path_snapshot(
+    path: &Path,
+    matcher: Option<&SearchMatcher>,
+    max_results: Option<usize>,
+    cancellation: &SearchCancellation,
+) -> Result<Option<(Arc<LogDocument>, SearchResult)>> {
+    if cancellation.is_cancelled() {
+        return Ok(None);
+    }
+    let opened = if let Some(matcher) = matcher {
+        if let Some(cache_dir) = crate::app_paths::index_cache_dir() {
+            LogDocument::open_with_index_cache_and_search_cancellable(
+                path,
+                cache_dir,
+                matcher,
+                max_results,
+                cancellation,
+            )?
+        } else {
+            LogDocument::open_cancellable(path, cancellation)?.map(|document| {
+                let run = search_with_compiled_matcher(
+                    &document,
+                    Some(matcher),
+                    max_results,
+                    cancellation,
+                );
+                (document, None, run)
+            })
+        }
+    } else {
+        LogDocument::open_cancellable(path, cancellation)?.map(|document| {
+            let run = search_with_compiled_matcher(&document, None, max_results, cancellation);
+            (document, None, run)
+        })
+    };
+    let Some((document, pending_index_cache, run)) = opened else {
+        return Ok(None);
+    };
+    let document = Arc::new(document);
+    match run {
+        SearchRun::Completed(search_result) => {
+            let document = Arc::new(document.project_source_rows(&search_result.line_indices));
+            document.release_source_handle();
+            if !cancellation.is_cancelled()
+                && let Some(cache_write) = pending_index_cache
+            {
+                _ = cache_write.persist();
+            }
+            Ok(Some((document, search_result)))
+        }
+        SearchRun::SourceChanged => Err(anyhow::anyhow!(
+            "搜索期间文件内容已改变，请重新加载后重试：{}",
+            path.display()
+        )),
+        SearchRun::Cancelled => Ok(None),
+    }
+}
+
+pub(super) fn run_directory_search(
+    options: DirectorySearchOptions,
+    query: SearchQuery,
+    open_document_paths: BTreeSet<PathMatchKey>,
+    cancellation: SearchCancellation,
+) -> Result<DirectorySearchRun> {
+    let matcher = SearchMatcher::new(&query)?;
+    let Some(enumeration) = enumerate_directory_search_paths(&options, &cancellation)? else {
+        return Ok(DirectorySearchRun {
+            cancelled: true,
+            results: Vec::new(),
+            matcher,
+            file_count: 0,
+            open_error_count: 0,
+            unreadable_directory_count: 0,
+        });
+    };
+    let file_count = enumeration.paths.len();
+    let unreadable_directory_count = enumeration.unreadable_directory_count;
+    let scan_paths =
+        directory_search_scan_paths(enumeration.paths, matcher.is_some(), &open_document_paths);
+    let outcomes = prepare_paths_bounded_while(
+        scan_paths,
+        || !cancellation.is_cancelled(),
+        |path| search_path_snapshot(path, matcher.as_ref(), query.max_results, &cancellation),
+    );
+    if cancellation.is_cancelled() {
+        return Ok(DirectorySearchRun {
+            cancelled: true,
+            results: Vec::new(),
+            matcher,
+            file_count,
+            open_error_count: 0,
+            unreadable_directory_count,
+        });
+    }
+    let mut open_error_count = 0;
+    let results = outcomes
+        .into_iter()
+        .filter_map(|(path, outcome)| match outcome {
+            Ok(Some((document, search_result)))
+                if !search_result.line_indices.is_empty()
+                    || path_match_set_contains(&open_document_paths, &path) =>
+            {
+                let title: SharedString = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.display().to_string())
+                    .into();
+                Some(DirectorySearchResult {
+                    title,
+                    path,
+                    document,
+                    search_result,
+                })
+            }
+            Ok(Some(_)) | Ok(None) => None,
+            Err(_) => {
+                open_error_count += 1;
+                None
+            }
+        })
+        .collect();
+    Ok(DirectorySearchRun {
+        cancelled: false,
+        results,
+        matcher,
+        file_count,
+        open_error_count,
+        unreadable_directory_count,
+    })
+}
+
+pub(super) fn run_persisted_all_open_search(
+    paths: Vec<PathBuf>,
+    query: SearchQuery,
+    cancellation: SearchCancellation,
+) -> Result<(bool, Vec<DirectorySearchResult>, Option<SearchMatcher>)> {
+    let matcher = SearchMatcher::new(&query)?;
+    let outcomes = prepare_paths_bounded_while(
+        deduplicate_paths(paths),
+        || !cancellation.is_cancelled(),
+        |path| search_path_snapshot(path, matcher.as_ref(), query.max_results, &cancellation),
+    );
+    if cancellation.is_cancelled() {
+        return Ok((true, Vec::new(), matcher));
+    }
+    let results = outcomes
+        .into_iter()
+        .filter_map(|(path, outcome)| {
+            let (document, search_result) = outcome.ok().flatten()?;
+            let title: SharedString = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string())
+                .into();
+            Some(DirectorySearchResult {
+                title,
+                path,
+                document,
+                search_result,
+            })
+        })
+        .collect();
+    Ok((false, results, matcher))
+}
+
 pub(super) fn directory_search_scan_paths(
     paths: Vec<PathBuf>,
     query_has_matcher: bool,
@@ -497,6 +662,7 @@ pub(super) fn load_document_upgrade_frames(
                 row_height: job.row_height,
                 log_word_wrap: job.log_word_wrap,
                 result_word_wrap: job.result_word_wrap,
+                log_jump: job.log_jump,
             }
         })
         .collect()
