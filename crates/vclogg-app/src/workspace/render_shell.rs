@@ -1210,7 +1210,7 @@ impl Workspace {
             .with_animation(
                 "search-suggestions-enter",
                 Animation::new(TRANSIENT_SURFACE_ENTER_DURATION).with_easing(ease_out_cubic),
-                |popup, delta| popup.mt(rems(-0.25 + 0.5 * delta)).opacity(delta),
+                |popup, delta| popup.opacity(delta),
             );
         deferred(suggestions)
             .with_priority(POPUP_PRIORITY)

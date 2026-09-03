@@ -942,8 +942,11 @@ impl Workspace {
             },
         ));
         let workspace = cx.entity();
-        let (predefined_filters_dialog_size, predefined_filters_dialog_margin_top) =
-            management_dialog_geometry(window);
+        let predefined_filters_dialog_size = predefined_filters_dialog_size(window);
+        let predefined_filters_dialog_margin_top = centered_dialog_margin_top(
+            window.viewport_size().height,
+            predefined_filters_dialog_size.height,
+        );
         window.open_dialog(cx, move |dialog, _, _| {
             let filters = filters.clone();
             let content_filters = filters.clone();

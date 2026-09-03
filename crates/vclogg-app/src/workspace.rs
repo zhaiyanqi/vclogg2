@@ -99,7 +99,9 @@ use crate::{
         path_match_key, path_match_map_get, path_match_set_contains, paths_match,
     },
     predefined_filters::{PredefinedFilter, query_includes_filter, toggle_filter_in_query},
-    predefined_filters_dialog::{PredefinedFiltersDialog, PredefinedFiltersDialogEvent},
+    predefined_filters_dialog::{
+        PredefinedFiltersDialog, PredefinedFiltersDialogEvent, predefined_filters_dialog_size,
+    },
     rename_tab_dialog::RenameTabDialog,
     result_export::{self, ExportGroup, ResultExport},
     search_autocomplete::{

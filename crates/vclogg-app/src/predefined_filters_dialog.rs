@@ -54,16 +54,17 @@ const CLOUD_NAME_WIDTH_REMS: f32 = 14.5;
 const FILTER_TYPE_WIDTH_REMS: f32 = 5.2;
 const LOCAL_ACTIONS_WIDTH_REMS: f32 = 5.5;
 const CLOUD_ACTIONS_WIDTH_REMS: f32 = 11.;
+const FILTER_DIALOG_MAX_WIDTH_REMS: f32 = 72.;
+const FILTER_DIALOG_MAX_HEIGHT_REMS: f32 = 46.;
 
-fn filter_secondary_dialog_size(window: &Window) -> Size<Pixels> {
+pub(crate) fn predefined_filters_dialog_size(window: &Window) -> Size<Pixels> {
     let viewport = window.viewport_size();
-    let margin = window.rem_size() * 4.;
     size(
-        (viewport.width - margin)
-            .min(window.rem_size() * 68.)
+        (viewport.width - window.rem_size() * 2.)
+            .min(window.rem_size() * FILTER_DIALOG_MAX_WIDTH_REMS)
             .max(px(0.)),
-        (viewport.height - margin)
-            .min(window.rem_size() * 46.)
+        (viewport.height - window.rem_size() * 4.)
+            .min(window.rem_size() * FILTER_DIALOG_MAX_HEIGHT_REMS)
             .max(px(0.)),
     )
 }
@@ -596,7 +597,7 @@ impl PredefinedFiltersDialog {
     ) {
         let owner = cx.entity();
         let detail_surface = cx.new(|cx| PredefinedFilterSecondarySurface::new(owner.clone(), cx));
-        let dialog_size = filter_secondary_dialog_size(window);
+        let dialog_size = predefined_filters_dialog_size(window);
         let margin_top = window.rem_size() * 2.;
         window.open_dialog(cx, move |dialog, _, _| {
             let content = detail_surface.clone();
