@@ -969,6 +969,7 @@ impl Workspace {
             dialog
                 .w(predefined_filters_dialog_size.width)
                 .h(predefined_filters_dialog_size.height)
+                .pb_0()
                 .margin_top(predefined_filters_dialog_margin_top)
                 .title(crate::tr!("预定义过滤器", "Predefined filters"))
                 .content(move |content, _, _| {

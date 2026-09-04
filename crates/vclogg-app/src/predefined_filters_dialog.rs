@@ -5235,7 +5235,7 @@ impl PredefinedFiltersDialog {
                 DialogFooter::new()
                     .w_full()
                     .px_4()
-                    .py_4()
+                    .py_2()
                     .when(self.active_tab == DialogTab::Local, |footer| {
                         footer
                             .child(
