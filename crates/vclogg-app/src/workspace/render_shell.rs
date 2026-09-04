@@ -2167,6 +2167,17 @@ impl Workspace {
                             .min_w(px(180.))
                             .h(px(34.))
                             .relative()
+                            // Keep the text viewport independent from focus-state frame styles.
+                            // On Windows, resolving the Input's focused border can briefly change
+                            // the content box used to vertically center its text.
+                            .rounded(cx.theme().radius)
+                            .border_1()
+                            .border_color(if query_focused {
+                                cx.theme().ring
+                            } else {
+                                cx.theme().input
+                            })
+                            .bg(cx.theme().input_background())
                             .capture_key_down(cx.listener(
                                 |this, event: &KeyDownEvent, window, cx| {
                                     if !this.query.focus_handle(cx).is_focused(window)
@@ -2206,14 +2217,7 @@ impl Workspace {
                                 Input::new(&self.query)
                                     .small()
                                     .size_full()
-                                    // Keep the frame geometry stable across focus changes so the
-                                    // text and placeholder retain the same vertical baseline.
-                                    .focus_ring(false)
-                                    .border_color(if query_focused {
-                                        cx.theme().ring
-                                    } else {
-                                        cx.theme().input
-                                    })
+                                    .appearance(false)
                                     .prefix(
                                         Icon::new(IconName::Search)
                                             .text_color(cx.theme().muted_foreground),
