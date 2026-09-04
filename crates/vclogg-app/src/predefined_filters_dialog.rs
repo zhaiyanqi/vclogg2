@@ -5230,6 +5230,7 @@ impl PredefinedFiltersDialog {
             .flex_none()
             .border_t_1()
             .border_color(cx.theme().border)
+            .rounded_b(cx.theme().radius_lg)
             .bg(cx.theme().background)
             .child(
                 DialogFooter::new()
