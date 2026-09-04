@@ -1,6 +1,16 @@
 use super::*;
 
 impl Workspace {
+    pub(super) fn viewport_anchor_retains_end(
+        viewport_is_at_end: bool,
+        preferred_row: Option<usize>,
+        anchor_row: usize,
+    ) -> bool {
+        // A visible active row is an explicit navigation anchor. Restoring the bottom instead
+        // would discard that row's screen-relative position when the projection changes.
+        viewport_is_at_end && preferred_row != Some(anchor_row)
+    }
+
     pub(super) fn highlight_styles(
         highlights: &[(Range<usize>, TextHighlight)],
         cx: &App,
@@ -1903,15 +1913,20 @@ impl Workspace {
         cx: &App,
     ) -> Option<ViewportAnchor<LogRowKey>> {
         let anchor = Self::capture_local_row_viewport_anchor(tab, region, row_height, cx)?;
-        let viewport = if region == WrappedRegion::Results {
-            &tab.result_viewport
+        let (table, viewport) = if region == WrappedRegion::Results {
+            (&tab.result_table, &tab.result_viewport)
         } else {
-            &tab.log_viewport
+            (&tab.log_table, &tab.log_viewport)
         };
+        let preferred_row = table.read(cx).active_log_row();
         Some(ViewportAnchor {
             key: anchor.key,
             viewport_y: anchor.viewport_y,
-            at_end: viewport.is_at_end(),
+            at_end: Self::viewport_anchor_retains_end(
+                viewport.is_at_end(),
+                preferred_row,
+                anchor.fallback_ix,
+            ),
             fallback_ix: anchor.fallback_ix,
         })
     }
@@ -2038,10 +2053,15 @@ impl Workspace {
         cx: &App,
     ) -> Option<ViewportAnchor<LogRowKey>> {
         let anchor = self.capture_global_row_viewport_anchor(row_height, cx)?;
+        let preferred_row = self.global_table.read(cx).active_log_row();
         Some(ViewportAnchor {
             key: anchor.key,
             viewport_y: anchor.viewport_y,
-            at_end: self.global_viewport.is_at_end(),
+            at_end: Self::viewport_anchor_retains_end(
+                self.global_viewport.is_at_end(),
+                preferred_row,
+                anchor.fallback_ix,
+            ),
             fallback_ix: anchor.fallback_ix,
         })
     }

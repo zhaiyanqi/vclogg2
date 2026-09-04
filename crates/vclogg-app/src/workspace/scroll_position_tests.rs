@@ -145,6 +145,14 @@ fn search_scope_switch_preloads_the_restored_viewport_before_commit() {
 }
 
 #[test]
+fn selected_viewport_anchor_takes_priority_over_retaining_the_end() {
+    assert!(!Workspace::viewport_anchor_retains_end(true, Some(98), 98));
+    assert!(Workspace::viewport_anchor_retains_end(true, Some(40), 90));
+    assert!(Workspace::viewport_anchor_retains_end(true, None, 90));
+    assert!(!Workspace::viewport_anchor_retains_end(false, Some(98), 98));
+}
+
+#[test]
 fn scrollbar_preload_range_clamps_to_the_target_viewport() {
     assert_eq!(
         scrollbar_preload_range(point(px(0.), px(-400.)), 100, px(200.), px(20.)),
