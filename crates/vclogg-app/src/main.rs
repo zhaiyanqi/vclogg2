@@ -11,6 +11,7 @@ mod cloud_filters;
 mod color_labels;
 mod color_labels_dialog;
 mod crash_report;
+mod dialog_focus;
 mod directory_search_dialog;
 mod global_search_files_dialog;
 mod global_search_table;

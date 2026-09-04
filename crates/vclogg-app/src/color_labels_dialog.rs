@@ -180,8 +180,8 @@ impl ColorLabelsDialog {
         let background_color =
             color_picker(rule.background_color, rule.background_alpha, window, cx);
         self.subscribe_input(&keyword, cx);
-        self.subscribe_color(&text_color, cx);
-        self.subscribe_color(&background_color, cx);
+        self.subscribe_color(&text_color, window, cx);
+        self.subscribe_color(&background_color, window, cx);
         self.log_level_rows.push(LogLevelDraft {
             id: rule.id,
             keyword,
@@ -200,8 +200,8 @@ impl ColorLabelsDialog {
         let background_color =
             color_picker(label.background_color, label.background_alpha, window, cx);
         self.subscribe_input(&name, cx);
-        self.subscribe_color(&text_color, cx);
-        self.subscribe_color(&background_color, cx);
+        self.subscribe_color(&text_color, window, cx);
+        self.subscribe_color(&background_color, window, cx);
         self.label_rows.push(ColorLabelDraft {
             id: label.id,
             name,
@@ -215,9 +215,20 @@ impl ColorLabelsDialog {
             .push(cx.subscribe(input, |_, _, _: &InputEvent, cx| cx.notify()));
     }
 
-    fn subscribe_color(&mut self, color: &Entity<ColorPickerState>, cx: &mut Context<Self>) {
-        self._subscriptions
-            .push(cx.subscribe(color, |_, _, _: &ColorPickerEvent, cx| cx.notify()));
+    fn subscribe_color(
+        &mut self,
+        color: &Entity<ColorPickerState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self._subscriptions.push(cx.subscribe_in(
+            color,
+            window,
+            |_, picker, _: &ColorPickerEvent, window, cx| {
+                crate::dialog_focus::restore_color_picker_trigger(picker, window, cx);
+                cx.notify();
+            },
+        ));
     }
 
     fn add_log_level_rule(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -720,5 +731,45 @@ impl Render for ColorLabelsDialog {
                 LogColoringSection::LogLevels => self.render_log_levels(cx).into_any_element(),
                 LogColoringSection::ColorLabels => self.render_color_labels(cx).into_any_element(),
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn committed_color_restores_focus_to_the_picker_trigger(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (dialog, cx) = cx.add_window_view(|window, cx| {
+            ColorLabelsDialog::new(
+                false,
+                default_log_level_rules(),
+                default_color_labels(),
+                window,
+                cx,
+            )
+        });
+
+        let picker = dialog.read_with(cx, |dialog, _| dialog.log_level_rows[0].text_color.clone());
+        let popup_input = picker.read_with(cx, |picker, _| picker.hex_input().clone());
+
+        cx.update(|window, cx| {
+            picker.update(cx, |picker, cx| picker.set_open(true, cx));
+            popup_input.focus_handle(cx).focus(window, cx);
+            assert!(popup_input.focus_handle(cx).is_focused(window));
+
+            picker.update(cx, |picker, cx| {
+                picker.select_color(rgb(0x12_34_56).into(), window, cx)
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(
+                picker.focus_handle(cx).is_focused(window),
+                "closing the nested color popup must return focus to its trigger"
+            );
+        });
     }
 }

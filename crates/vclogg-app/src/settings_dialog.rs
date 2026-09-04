@@ -813,43 +813,57 @@ impl SettingsDialog {
                 SettingsDialog::draft_changed(cx)
             }),
         );
-        subscriptions.push(cx.subscribe(
+        subscriptions.push(cx.subscribe_in(
             &line_number_text_color,
-            |this, _, _: &ColorPickerEvent, cx| {
+            window,
+            |this, picker, _: &ColorPickerEvent, window, cx| {
                 this.line_number_text_color_custom = true;
+                crate::dialog_focus::restore_color_picker_trigger(picker, window, cx);
                 SettingsDialog::draft_changed(cx);
             },
         ));
-        subscriptions.push(cx.subscribe(
+        subscriptions.push(cx.subscribe_in(
             &line_number_background_color,
-            |this, _, _: &ColorPickerEvent, cx| {
+            window,
+            |this, picker, _: &ColorPickerEvent, window, cx| {
                 this.line_number_background_color_custom = true;
+                crate::dialog_focus::restore_color_picker_trigger(picker, window, cx);
                 SettingsDialog::draft_changed(cx);
             },
         ));
-        subscriptions.push(
-            cx.subscribe(&light_log_text, |this, _, _: &ColorPickerEvent, cx| {
+        subscriptions.push(cx.subscribe_in(
+            &light_log_text,
+            window,
+            |this, picker, _: &ColorPickerEvent, window, cx| {
                 this.light_log_colors.text_custom = true;
-                SettingsDialog::draft_changed(cx);
-            }),
-        );
-        subscriptions.push(cx.subscribe(
-            &light_log_background,
-            |this, _, _: &ColorPickerEvent, cx| {
-                this.light_log_colors.background_custom = true;
+                crate::dialog_focus::restore_color_picker_trigger(picker, window, cx);
                 SettingsDialog::draft_changed(cx);
             },
         ));
-        subscriptions.push(
-            cx.subscribe(&dark_log_text, |this, _, _: &ColorPickerEvent, cx| {
-                this.dark_log_colors.text_custom = true;
+        subscriptions.push(cx.subscribe_in(
+            &light_log_background,
+            window,
+            |this, picker, _: &ColorPickerEvent, window, cx| {
+                this.light_log_colors.background_custom = true;
+                crate::dialog_focus::restore_color_picker_trigger(picker, window, cx);
                 SettingsDialog::draft_changed(cx);
-            }),
-        );
-        subscriptions.push(cx.subscribe(
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
+            &dark_log_text,
+            window,
+            |this, picker, _: &ColorPickerEvent, window, cx| {
+                this.dark_log_colors.text_custom = true;
+                crate::dialog_focus::restore_color_picker_trigger(picker, window, cx);
+                SettingsDialog::draft_changed(cx);
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
             &dark_log_background,
-            |this, _, _: &ColorPickerEvent, cx| {
+            window,
+            |this, picker, _: &ColorPickerEvent, window, cx| {
                 this.dark_log_colors.background_custom = true;
+                crate::dialog_focus::restore_color_picker_trigger(picker, window, cx);
                 SettingsDialog::draft_changed(cx);
             },
         ));
