@@ -1276,7 +1276,7 @@ impl Workspace {
         crate::i18n::set_language(settings.language);
         self.refresh_localized_input_copy(window, cx);
         crate::app_log::set_level(settings.app_log_level);
-        Self::apply_theme_preference(settings.theme_preference, window, cx);
+        Self::apply_theme_preference(&settings, window, cx);
         self.app_settings = settings.clone();
         if commit_defaults {
             cx.update_global::<WorkspaceWindowRegistry, _>(|registry, _| {

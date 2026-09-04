@@ -3257,7 +3257,7 @@ impl Workspace {
                         crate::i18n::set_language(app_settings.language);
                         this.refresh_localized_input_copy(window, cx);
                         crate::app_log::set_level(app_settings.app_log_level);
-                        Self::apply_theme_preference(app_settings.theme_preference, window, cx);
+                        Self::apply_theme_preference(&app_settings, window, cx);
                         this.app_settings = app_settings.clone();
                         this.restore_search_panel_height(search_panel_height, window, cx);
                         this.apply_global_search_options(

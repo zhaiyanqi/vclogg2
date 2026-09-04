@@ -1,7 +1,7 @@
 use gpui::{
     App, Background, Div, Hsla, Styled as _, div, hsla, linear_color_stop, linear_gradient, px, rgb,
 };
-use gpui_component::theme::{Theme, ThemeMode, ThemeTokens};
+use gpui_component::theme::{Theme, ThemeMode, ThemeTokens, try_parse_color};
 
 /// 界面表面使用叠在环境背景上的半透明材质。GPUI 没有元素级背景模糊，
 /// 因此这里同时保存按
@@ -68,6 +68,8 @@ pub(crate) struct ProductColors {
     pub(crate) search_match_foreground: Hsla,
     pub(crate) quick_find: Hsla,
     pub(crate) quick_find_foreground: Hsla,
+    pub(crate) log_text: Hsla,
+    pub(crate) log_background: Hsla,
     pub(crate) line_number: Hsla,
     pub(crate) line_number_background: Hsla,
     /// 未命中、未标记时的标记圆点描边。
@@ -149,6 +151,8 @@ fn product_colors(mode: ThemeMode) -> ProductColors {
             search_match_foreground: color(0xeff9e8),
             quick_find: color(0xf4c542),
             quick_find_foreground: color(0x201a06),
+            log_text: color(0xf0f4fb),
+            log_background: color(0x171d2a),
             line_number: color(0x8290a6),
             line_number_background: color(0x192231),
             marker_border: color(0x8794aa),
@@ -216,6 +220,8 @@ fn product_colors(mode: ThemeMode) -> ProductColors {
             search_match_foreground: color(0x10200d),
             quick_find: color(0xf4c542),
             quick_find_foreground: color(0x201a06),
+            log_text: color(0x20242d),
+            log_background: color(0xfbfaf8),
             line_number: color(0x747c88),
             line_number_background: color(0xf1f0ed),
             marker_border: color(0x858c98),
@@ -238,11 +244,34 @@ fn product_colors(mode: ThemeMode) -> ProductColors {
 /// 当前生效主题的完整产品配色。呈现代码读这里而不是自己拼语义色，
 /// 保证正文、当前结果与全局结果三处对同一语义使用同一个值。
 pub(crate) fn palette(cx: &App) -> ProductColors {
-    product_colors(if Theme::global(cx).is_dark() {
+    palette_for_mode(if Theme::global(cx).is_dark() {
         ThemeMode::Dark
     } else {
         ThemeMode::Light
     })
+}
+
+pub(crate) fn palette_for_mode(mode: ThemeMode) -> ProductColors {
+    product_colors(mode)
+}
+
+pub(crate) fn is_dark(cx: &App) -> bool {
+    Theme::global(cx).is_dark()
+}
+
+/// The table token is reserved for the three log/result surfaces in VCLogg2.
+/// Keep the legacy and semantic projections aligned because DataTable and the
+/// wrapped virtual list consume different sides of the theme seam.
+pub(crate) fn apply_log_background(custom: Option<&str>, mode: ThemeMode, cx: &mut App) {
+    let background = custom
+        .and_then(|value| try_parse_color(value).ok())
+        .unwrap_or_else(|| palette_for_mode(mode).log_background);
+    let theme = Theme::global_mut(cx);
+    theme.table = background;
+    theme.table_even = background;
+    theme.tokens.table = background.into();
+    theme.tokens.table_even = background.into();
+    Theme::sync_base(cx);
 }
 
 fn apply_product_colors(mode: ThemeMode, cx: &mut App) {

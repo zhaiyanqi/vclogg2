@@ -807,6 +807,7 @@ impl Workspace {
             line_number_width,
             line_number_text_color,
             line_number_background_color,
+            log_text_color,
             font_size,
             font_family,
         ) = {
@@ -819,6 +820,7 @@ impl Workspace {
                 delegate.line_number_width(),
                 delegate.line_number_text_color(cx),
                 delegate.line_number_background_color(cx),
+                delegate.log_text_color(cx),
                 delegate.log_font_size(),
                 delegate.resolved_font_family(cx),
             )
@@ -968,6 +970,7 @@ impl Workspace {
                                 .overflow_hidden()
                                 .whitespace_normal()
                                 .px(log_cell_horizontal_padding(cx))
+                                .text_color(log_text_color)
                                 .text_size(px(font_size as f32))
                                 .line_height(base_height)
                                 .font_family(font_family.clone())
@@ -2356,6 +2359,7 @@ impl Workspace {
             line_number_width,
             line_number_text_color,
             line_number_background_color,
+            log_text_color,
             show_line_number_row_separators,
             show_row_separators,
         ) = {
@@ -2366,6 +2370,7 @@ impl Workspace {
                 table.delegate().line_number_width(),
                 table.delegate().line_number_text_color(cx),
                 table.delegate().line_number_background_color(cx),
+                table.delegate().log_text_color(cx),
                 table.delegate().show_line_number_row_separators(),
                 table.delegate().show_row_separators(),
             )
@@ -2551,6 +2556,7 @@ impl Workspace {
                                         .overflow_hidden()
                                         .whitespace_normal()
                                         .px(log_cell_horizontal_padding(cx))
+                                        .text_color(log_text_color)
                                         .text_size(px(font_size as f32))
                                         .line_height(base_height)
                                         .font_family(font_family.clone())

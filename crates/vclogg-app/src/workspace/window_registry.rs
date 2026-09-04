@@ -64,7 +64,8 @@ impl Workspace {
                     if workspace.persistence.store.is_some()
                         && workspace.app_settings.theme_preference == ThemePreference::System
                     {
-                        Self::apply_theme_preference(ThemePreference::System, window, cx);
+                        let settings = workspace.app_settings.clone();
+                        Self::apply_theme_preference(&settings, window, cx);
                     }
                 });
             workspace.subscriptions.push(activation_subscription);
@@ -142,16 +143,17 @@ impl Workspace {
     }
 
     pub(super) fn apply_theme_preference(
-        preference: ThemePreference,
+        settings: &AppSettings,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let mode = match preference {
+        let mode = match settings.theme_preference {
             ThemePreference::Light => ThemeMode::Light,
             ThemePreference::Dark => ThemeMode::Dark,
             ThemePreference::System => window.appearance().into(),
         };
         ui_theme::apply_product_theme(mode, cx);
+        ui_theme::apply_log_background(settings.log_background_color(mode.is_dark()), mode, cx);
 
         cx.refresh_windows();
     }

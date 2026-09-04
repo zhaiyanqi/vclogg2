@@ -20,7 +20,7 @@ use crate::{
 };
 
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
-pub const STATE_SCHEMA_VERSION: u32 = 4;
+pub const STATE_SCHEMA_VERSION: u32 = 5;
 
 /// Owns SQLite access for durable file-history and workspace records.
 pub struct StateRepository {
@@ -425,7 +425,8 @@ impl StateRepository {
                         show_line_number_row_separators, line_number_width,
                         line_number_text_color, line_number_background_color,
                         theme_preference, open_directory_command, viewer_overscan, language,
-                        app_log_level
+                        app_log_level, light_log_text_color, light_log_background_color,
+                        dark_log_text_color, dark_log_background_color
                  FROM app_settings WHERE id = 1",
                 [],
                 |row| {
@@ -466,6 +467,10 @@ impl StateRepository {
                         viewer_overscan: row.get(33)?,
                         language: row.get(34)?,
                         app_log_level: row.get(35)?,
+                        light_log_text_color: row.get(36)?,
+                        light_log_background_color: row.get(37)?,
+                        dark_log_text_color: row.get(38)?,
+                        dark_log_background_color: row.get(39)?,
                     })
                 },
             )
@@ -492,8 +497,9 @@ impl StateRepository {
                      show_line_number_row_separators, line_number_width,
                      line_number_text_color, line_number_background_color,
                      theme_preference, open_directory_command, viewer_overscan, language,
-                     app_log_level
-                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36)
+                     app_log_level, light_log_text_color, light_log_background_color,
+                     dark_log_text_color, dark_log_background_color
+                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40)
                  ON CONFLICT(id) DO UPDATE SET
                      default_show_line_numbers = excluded.default_show_line_numbers,
                      default_show_row_separators = excluded.default_show_row_separators,
@@ -530,7 +536,11 @@ impl StateRepository {
                      open_directory_command = excluded.open_directory_command,
                      viewer_overscan = excluded.viewer_overscan,
                      language = excluded.language,
-                     app_log_level = excluded.app_log_level",
+                     app_log_level = excluded.app_log_level,
+                     light_log_text_color = excluded.light_log_text_color,
+                     light_log_background_color = excluded.light_log_background_color,
+                     dark_log_text_color = excluded.dark_log_text_color,
+                     dark_log_background_color = excluded.dark_log_background_color",
                 params![
                     settings.default_show_line_numbers,
                     settings.default_show_row_separators,
@@ -568,6 +578,10 @@ impl StateRepository {
                     settings.viewer_overscan,
                     settings.language,
                     settings.app_log_level,
+                    settings.light_log_text_color,
+                    settings.light_log_background_color,
+                    settings.dark_log_text_color,
+                    settings.dark_log_background_color,
                 ],
             )
             .context("无法保存应用设置")?;
@@ -1064,7 +1078,11 @@ fn initialize_schema(connection: &Connection, defaults: &StateMigrationDefaults)
                  open_directory_command TEXT NOT NULL DEFAULT '',
                  viewer_overscan INTEGER NOT NULL DEFAULT 12,
                  language TEXT NOT NULL DEFAULT 'zh-CN',
-                 app_log_level TEXT NOT NULL DEFAULT 'error'
+                 app_log_level TEXT NOT NULL DEFAULT 'error',
+                 light_log_text_color TEXT,
+                 light_log_background_color TEXT,
+                 dark_log_text_color TEXT,
+                 dark_log_background_color TEXT
              );
              CREATE TABLE IF NOT EXISTS ui_state (
                  key TEXT PRIMARY KEY,
@@ -1163,7 +1181,7 @@ fn ensure_color_label_columns(
 }
 
 fn ensure_app_settings_columns(connection: &Connection, default_log_level: &str) -> Result<()> {
-    const COLUMNS: [(&str, &str); 33] = [
+    const COLUMNS: [(&str, &str); 37] = [
         ("highlight_log_levels", "INTEGER NOT NULL DEFAULT 0"),
         ("log_font_size", "INTEGER NOT NULL DEFAULT 13"),
         ("log_line_spacing", "INTEGER NOT NULL DEFAULT 6"),
@@ -1218,6 +1236,10 @@ fn ensure_app_settings_columns(connection: &Connection, default_log_level: &str)
         ("open_directory_command", "TEXT NOT NULL DEFAULT ''"),
         ("viewer_overscan", "INTEGER NOT NULL DEFAULT 12"),
         ("language", "TEXT NOT NULL DEFAULT 'zh-CN'"),
+        ("light_log_text_color", "TEXT"),
+        ("light_log_background_color", "TEXT"),
+        ("dark_log_text_color", "TEXT"),
+        ("dark_log_background_color", "TEXT"),
     ];
     ensure_columns(connection, "app_settings", &COLUMNS)?;
     let existing = table_columns(connection, "app_settings")?;
@@ -1267,7 +1289,12 @@ fn table_columns(connection: &Connection, table: &str) -> Result<HashSet<String>
 
 #[cfg(test)]
 mod tests {
-    use super::{FileSessionRecord, count_marked_rows, merge_session_changes};
+    use rusqlite::Connection;
+
+    use super::{
+        FileSessionRecord, StateMigrationDefaults, count_marked_rows, initialize_schema,
+        merge_session_changes, table_columns,
+    };
 
     #[test]
     fn legacy_marked_rows_count_only_valid_rows() {
@@ -1299,5 +1326,35 @@ mod tests {
 
         assert_eq!(merged.query_text, "local");
         assert!(merged.word_wrap);
+    }
+
+    #[test]
+    fn version_four_database_adds_theme_scoped_log_colors() {
+        let connection = Connection::open_in_memory().expect("应能创建内存数据库");
+        connection
+            .execute_batch(
+                "CREATE TABLE app_settings (id INTEGER PRIMARY KEY CHECK(id = 1));
+                 PRAGMA user_version = 4;",
+            )
+            .expect("应能创建旧版应用设置表");
+
+        initialize_schema(
+            &connection,
+            &StateMigrationDefaults {
+                app_log_level: "error".into(),
+                color_labels: Vec::new(),
+            },
+        )
+        .expect("应能迁移旧版数据库");
+
+        let columns = table_columns(&connection, "app_settings").expect("应能读取迁移后的字段");
+        for column in [
+            "light_log_text_color",
+            "light_log_background_color",
+            "dark_log_text_color",
+            "dark_log_background_color",
+        ] {
+            assert!(columns.contains(column), "缺少迁移字段 {column}");
+        }
     }
 }

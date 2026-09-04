@@ -723,6 +723,8 @@ struct LogRowPresenter {
     line_number_width: u16,
     line_number_text_color: Option<Hsla>,
     line_number_background_color: Option<Hsla>,
+    light_log_text_color: Option<Hsla>,
+    dark_log_text_color: Option<Hsla>,
     show_line_number_row_separators: bool,
     search_matcher: Option<SearchMatcher>,
     matched_rows: CompressedRows,
@@ -891,6 +893,8 @@ impl LogRowPresenter {
             line_number_width: 60,
             line_number_text_color: None,
             line_number_background_color: None,
+            light_log_text_color: None,
+            dark_log_text_color: None,
             show_line_number_row_separators: false,
             search_matcher: None,
             matched_rows: CompressedRows::default(),
@@ -1027,6 +1031,12 @@ impl LogTableDelegate {
         self.presenter.line_number_background_color = settings
             .line_number_background_color
             .as_deref()
+            .and_then(|value| try_parse_color(value).ok());
+        self.presenter.light_log_text_color = settings
+            .log_text_color(false)
+            .and_then(|value| try_parse_color(value).ok());
+        self.presenter.dark_log_text_color = settings
+            .log_text_color(true)
             .and_then(|value| try_parse_color(value).ok());
         self.presenter.show_line_number_row_separators = settings.show_line_number_row_separators;
         self.source
@@ -1427,6 +1437,15 @@ impl LogTableDelegate {
             .unwrap_or_else(|| ui_theme::palette(cx).line_number_background)
     }
 
+    pub(crate) fn log_text_color(&self, cx: &App) -> Hsla {
+        let custom = if ui_theme::is_dark(cx) {
+            self.presenter.dark_log_text_color
+        } else {
+            self.presenter.light_log_text_color
+        };
+        custom.unwrap_or_else(|| ui_theme::palette(cx).log_text)
+    }
+
     pub(crate) fn show_line_number_row_separators(&self) -> bool {
         self.presenter.show_line_number_row_separators
     }
@@ -1712,6 +1731,7 @@ impl TableDelegate for LogTableDelegate {
                 .size_full()
                 .overflow_hidden()
                 .px(log_cell_horizontal_padding(cx))
+                .text_color(self.log_text_color(cx))
                 .when(selected, |cell| {
                     cell.bg(log_row_selection_color(cx))
                         .child(log_row_selection_overlay(

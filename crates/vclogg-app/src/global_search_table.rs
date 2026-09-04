@@ -125,6 +125,8 @@ struct GlobalRowPresenter {
     line_number_width: u16,
     line_number_text_color: Option<Hsla>,
     line_number_background_color: Option<Hsla>,
+    light_log_text_color: Option<Hsla>,
+    dark_log_text_color: Option<Hsla>,
     show_line_number_row_separators: bool,
     show_row_separators: bool,
     highlight_log_levels: bool,
@@ -170,6 +172,8 @@ impl Default for GlobalRowPresenter {
             line_number_width: 60,
             line_number_text_color: None,
             line_number_background_color: None,
+            light_log_text_color: None,
+            dark_log_text_color: None,
             show_line_number_row_separators: false,
             show_row_separators: false,
             highlight_log_levels: false,
@@ -673,6 +677,12 @@ impl GlobalSearchTableDelegate {
             .line_number_background_color
             .as_deref()
             .and_then(|value| try_parse_color(value).ok());
+        self.presenter.light_log_text_color = settings
+            .log_text_color(false)
+            .and_then(|value| try_parse_color(value).ok());
+        self.presenter.dark_log_text_color = settings
+            .log_text_color(true)
+            .and_then(|value| try_parse_color(value).ok());
         self.presenter.show_line_number_row_separators = settings.show_line_number_row_separators;
         self.presenter.show_row_separators = settings.default_show_row_separators;
         self.visible_lines
@@ -718,6 +728,15 @@ impl GlobalSearchTableDelegate {
         self.presenter
             .line_number_background_color
             .unwrap_or_else(|| cx.theme().muted.opacity(0.45))
+    }
+
+    pub(crate) fn log_text_color(&self, cx: &App) -> Hsla {
+        let custom = if crate::ui_theme::is_dark(cx) {
+            self.presenter.dark_log_text_color
+        } else {
+            self.presenter.light_log_text_color
+        };
+        custom.unwrap_or_else(|| crate::ui_theme::palette(cx).log_text)
     }
 
     pub(crate) fn show_line_number_row_separators(&self) -> bool {
@@ -2124,6 +2143,7 @@ impl TableDelegate for GlobalSearchTableDelegate {
                         .size_full()
                         .overflow_hidden()
                         .px(log_cell_horizontal_padding(cx))
+                        .text_color(self.log_text_color(cx))
                         .when(selected, |cell| {
                             cell.bg(log_row_selection_color(cx))
                                 .child(log_row_selection_overlay(

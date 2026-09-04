@@ -125,6 +125,22 @@ mod log_font_family_tests {
             LogFontFamily::Consolas
         );
     }
+
+    #[test]
+    fn log_colors_are_scoped_to_the_resolved_theme() {
+        let settings = AppSettings {
+            light_log_text_color: Some("#112233".into()),
+            light_log_background_color: Some("#f8f7f4".into()),
+            dark_log_text_color: Some("#ddeeff".into()),
+            dark_log_background_color: Some("#101722".into()),
+            ..AppSettings::default()
+        };
+
+        assert_eq!(settings.log_text_color(false), Some("#112233"));
+        assert_eq!(settings.log_background_color(false), Some("#f8f7f4"));
+        assert_eq!(settings.log_text_color(true), Some("#ddeeff"));
+        assert_eq!(settings.log_background_color(true), Some("#101722"));
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -208,6 +224,10 @@ pub struct AppSettings {
     pub line_number_width: u16,
     pub line_number_text_color: Option<String>,
     pub line_number_background_color: Option<String>,
+    pub light_log_text_color: Option<String>,
+    pub light_log_background_color: Option<String>,
+    pub dark_log_text_color: Option<String>,
+    pub dark_log_background_color: Option<String>,
     pub highlight_log_levels: bool,
     pub log_font_size: u16,
     pub log_line_spacing: u16,
@@ -243,6 +263,10 @@ impl Default for AppSettings {
             line_number_width: 60,
             line_number_text_color: None,
             line_number_background_color: None,
+            light_log_text_color: None,
+            light_log_background_color: None,
+            dark_log_text_color: None,
+            dark_log_background_color: None,
             highlight_log_levels: false,
             log_font_size: 13,
             log_line_spacing: 6,
@@ -271,6 +295,22 @@ impl AppSettings {
         usize::try_from(self.max_search_results)
             .ok()
             .filter(|limit| *limit > 0)
+    }
+
+    pub(crate) fn log_text_color(&self, dark: bool) -> Option<&str> {
+        if dark {
+            self.dark_log_text_color.as_deref()
+        } else {
+            self.light_log_text_color.as_deref()
+        }
+    }
+
+    pub(crate) fn log_background_color(&self, dark: bool) -> Option<&str> {
+        if dark {
+            self.dark_log_background_color.as_deref()
+        } else {
+            self.light_log_background_color.as_deref()
+        }
     }
 }
 
@@ -571,6 +611,10 @@ fn app_settings_from_record(record: AppSettingsRecord) -> AppSettings {
         line_number_background_color: normalize_optional_hex_color(
             record.line_number_background_color,
         ),
+        light_log_text_color: normalize_optional_hex_color(record.light_log_text_color),
+        light_log_background_color: normalize_optional_hex_color(record.light_log_background_color),
+        dark_log_text_color: normalize_optional_hex_color(record.dark_log_text_color),
+        dark_log_background_color: normalize_optional_hex_color(record.dark_log_background_color),
         highlight_log_levels: record.highlight_log_levels,
         log_font_size: bounded_u16(record.log_font_size, 8, 32),
         log_line_spacing: bounded_u16(record.log_line_spacing, 1, 40),
@@ -643,6 +687,12 @@ fn app_settings_to_record(settings: AppSettings) -> AppSettingsRecord {
         line_number_background_color: normalize_optional_hex_color(
             settings.line_number_background_color,
         ),
+        light_log_text_color: normalize_optional_hex_color(settings.light_log_text_color),
+        light_log_background_color: normalize_optional_hex_color(
+            settings.light_log_background_color,
+        ),
+        dark_log_text_color: normalize_optional_hex_color(settings.dark_log_text_color),
+        dark_log_background_color: normalize_optional_hex_color(settings.dark_log_background_color),
         theme_preference: settings.theme_preference.database_value().into(),
         open_directory_command: settings.open_directory_command.chars().take(2048).collect(),
         viewer_overscan: i64::from(settings.viewer_overscan.clamp(4, 40)),
@@ -968,6 +1018,10 @@ mod session_load_tests {
             word_boundary_characters: "._-".into(),
             open_directory_command: "tool --path {directory}".into(),
             line_number_text_color: Some("#AABBCC".into()),
+            light_log_text_color: Some("#112233".into()),
+            light_log_background_color: Some("#F8F7F4".into()),
+            dark_log_text_color: Some("#DDEEFF".into()),
+            dark_log_background_color: Some("#101722".into()),
             default_case_sensitive: true,
             default_use_regex: true,
             ..AppSettings::default()
@@ -983,6 +1037,10 @@ mod session_load_tests {
             .expect("应能读取应用设置记录");
 
         expected.line_number_text_color = Some("#aabbcc".into());
+        expected.light_log_text_color = Some("#112233".into());
+        expected.light_log_background_color = Some("#f8f7f4".into());
+        expected.dark_log_text_color = Some("#ddeeff".into());
+        expected.dark_log_background_color = Some("#101722".into());
         assert_eq!(actual, expected);
     }
 

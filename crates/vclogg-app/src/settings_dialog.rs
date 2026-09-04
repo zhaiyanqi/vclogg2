@@ -27,7 +27,7 @@ use gpui_component::{
     sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
     slider::{Slider, SliderEvent, SliderState},
     switch::Switch,
-    theme::try_parse_color,
+    theme::{ThemeMode, try_parse_color},
     v_flex,
 };
 
@@ -261,7 +261,7 @@ impl SettingsCategory {
                 "网络 远程服务 云端服务器 服务器地址 用户名 工号 昵称 保存 测试 连接 Cookie HTTP HTTPS network remote server user connect"
             }
             Self::Appearance => {
-                "外观 界面主题 深色 浅色 显示行号 显示行号行间分隔线 行号栏宽度 行号文字颜色 行号背景色 日志级别着色 日志分隔线 日志字体 日志字号 日志行距 theme font color"
+                "外观 界面主题 深色 浅色 日志文字颜色 日志背景色 显示行号 显示行号行间分隔线 行号栏宽度 行号文字颜色 行号背景色 日志级别着色 日志分隔线 日志字体 日志字号 日志行距 theme log text background font color"
             }
             Self::Search => {
                 "搜索 区分大小写 使用正则表达式 最大搜索结果数 高亮已提交搜索的匹配文字 搜索历史 历史记录 管理 删除 清空 大小写 正则 结果 高亮 search regex case highlight history"
@@ -416,6 +416,19 @@ impl ShortcutAction {
     }
 }
 
+#[derive(Clone, Copy)]
+enum LogColorTheme {
+    Light,
+    Dark,
+}
+
+struct LogColorDraft {
+    text: Entity<ColorPickerState>,
+    background: Entity<ColorPickerState>,
+    text_custom: bool,
+    background_custom: bool,
+}
+
 pub struct SettingsDialog {
     draft: AppSettings,
     active_category: SettingsCategory,
@@ -440,6 +453,8 @@ pub struct SettingsDialog {
     line_number_background_color: Entity<ColorPickerState>,
     line_number_text_color_custom: bool,
     line_number_background_color_custom: bool,
+    light_log_colors: LogColorDraft,
+    dark_log_colors: LogColorDraft,
     scroll_percent: Entity<SliderState>,
     scroll_lines: Entity<SliderState>,
     viewer_overscan: Entity<SliderState>,
@@ -478,6 +493,28 @@ impl SettingsDialog {
     fn draft_changed(cx: &mut Context<Self>) {
         cx.emit(SettingsDialogEvent::DraftChanged);
         cx.notify();
+    }
+
+    fn current_log_color_theme(cx: &gpui::App) -> LogColorTheme {
+        if crate::ui_theme::is_dark(cx) {
+            LogColorTheme::Dark
+        } else {
+            LogColorTheme::Light
+        }
+    }
+
+    fn log_colors(&self, theme: LogColorTheme) -> &LogColorDraft {
+        match theme {
+            LogColorTheme::Light => &self.light_log_colors,
+            LogColorTheme::Dark => &self.dark_log_colors,
+        }
+    }
+
+    fn log_colors_mut(&mut self, theme: LogColorTheme) -> &mut LogColorDraft {
+        match theme {
+            LogColorTheme::Light => &mut self.light_log_colors,
+            LogColorTheme::Dark => &mut self.dark_log_colors,
+        }
     }
 
     pub fn new(
@@ -638,6 +675,40 @@ impl SettingsDialog {
         let line_number_background_color = cx.new(|cx| {
             ColorPickerState::new(window, cx).default_value(line_number_background_color_value)
         });
+        let light_palette = crate::ui_theme::palette_for_mode(ThemeMode::Light);
+        let light_log_text_custom = settings.light_log_text_color.is_some();
+        let light_log_text_value = settings
+            .light_log_text_color
+            .as_deref()
+            .and_then(|value| try_parse_color(value).ok())
+            .unwrap_or(light_palette.log_text);
+        let light_log_background_custom = settings.light_log_background_color.is_some();
+        let light_log_background_value = settings
+            .light_log_background_color
+            .as_deref()
+            .and_then(|value| try_parse_color(value).ok())
+            .unwrap_or(light_palette.log_background);
+        let light_log_text =
+            cx.new(|cx| ColorPickerState::new(window, cx).default_value(light_log_text_value));
+        let light_log_background = cx
+            .new(|cx| ColorPickerState::new(window, cx).default_value(light_log_background_value));
+        let dark_palette = crate::ui_theme::palette_for_mode(ThemeMode::Dark);
+        let dark_log_text_custom = settings.dark_log_text_color.is_some();
+        let dark_log_text_value = settings
+            .dark_log_text_color
+            .as_deref()
+            .and_then(|value| try_parse_color(value).ok())
+            .unwrap_or(dark_palette.log_text);
+        let dark_log_background_custom = settings.dark_log_background_color.is_some();
+        let dark_log_background_value = settings
+            .dark_log_background_color
+            .as_deref()
+            .and_then(|value| try_parse_color(value).ok())
+            .unwrap_or(dark_palette.log_background);
+        let dark_log_text =
+            cx.new(|cx| ColorPickerState::new(window, cx).default_value(dark_log_text_value));
+        let dark_log_background =
+            cx.new(|cx| ColorPickerState::new(window, cx).default_value(dark_log_background_value));
         let scroll_percent = cx.new(|_| {
             SliderState::new()
                 .min(1.)
@@ -756,6 +827,32 @@ impl SettingsDialog {
                 SettingsDialog::draft_changed(cx);
             },
         ));
+        subscriptions.push(
+            cx.subscribe(&light_log_text, |this, _, _: &ColorPickerEvent, cx| {
+                this.light_log_colors.text_custom = true;
+                SettingsDialog::draft_changed(cx);
+            }),
+        );
+        subscriptions.push(cx.subscribe(
+            &light_log_background,
+            |this, _, _: &ColorPickerEvent, cx| {
+                this.light_log_colors.background_custom = true;
+                SettingsDialog::draft_changed(cx);
+            },
+        ));
+        subscriptions.push(
+            cx.subscribe(&dark_log_text, |this, _, _: &ColorPickerEvent, cx| {
+                this.dark_log_colors.text_custom = true;
+                SettingsDialog::draft_changed(cx);
+            }),
+        );
+        subscriptions.push(cx.subscribe(
+            &dark_log_background,
+            |this, _, _: &ColorPickerEvent, cx| {
+                this.dark_log_colors.background_custom = true;
+                SettingsDialog::draft_changed(cx);
+            },
+        ));
         subscriptions.push(cx.subscribe(&scroll_percent, |_, _, _: &SliderEvent, cx| {
             SettingsDialog::draft_changed(cx)
         }));
@@ -822,6 +919,18 @@ impl SettingsDialog {
             line_number_background_color,
             line_number_text_color_custom,
             line_number_background_color_custom,
+            light_log_colors: LogColorDraft {
+                text: light_log_text,
+                background: light_log_background,
+                text_custom: light_log_text_custom,
+                background_custom: light_log_background_custom,
+            },
+            dark_log_colors: LogColorDraft {
+                text: dark_log_text,
+                background: dark_log_background,
+                text_custom: dark_log_text_custom,
+                background_custom: dark_log_background_custom,
+            },
             scroll_percent,
             scroll_lines,
             viewer_overscan,
@@ -872,6 +981,50 @@ impl SettingsDialog {
             .line_number_background_color_custom
             .then(|| {
                 self.line_number_background_color
+                    .read(cx)
+                    .value()
+                    .map(|color| color.alpha(1.).to_hex())
+            })
+            .flatten();
+        settings.light_log_text_color = self
+            .light_log_colors
+            .text_custom
+            .then(|| {
+                self.light_log_colors
+                    .text
+                    .read(cx)
+                    .value()
+                    .map(|color| color.alpha(1.).to_hex())
+            })
+            .flatten();
+        settings.light_log_background_color = self
+            .light_log_colors
+            .background_custom
+            .then(|| {
+                self.light_log_colors
+                    .background
+                    .read(cx)
+                    .value()
+                    .map(|color| color.alpha(1.).to_hex())
+            })
+            .flatten();
+        settings.dark_log_text_color = self
+            .dark_log_colors
+            .text_custom
+            .then(|| {
+                self.dark_log_colors
+                    .text
+                    .read(cx)
+                    .value()
+                    .map(|color| color.alpha(1.).to_hex())
+            })
+            .flatten();
+        settings.dark_log_background_color = self
+            .dark_log_colors
+            .background_custom
+            .then(|| {
+                self.dark_log_colors
+                    .background
                     .read(cx)
                     .value()
                     .map(|color| color.alpha(1.).to_hex())
@@ -1065,6 +1218,42 @@ impl SettingsDialog {
         self.line_number_background_color_custom = false;
         let fallback = cx.theme().muted.opacity(0.45);
         self.line_number_background_color.update(cx, |state, cx| {
+            state.set_value(fallback, window, cx);
+        });
+        Self::draft_changed(cx);
+    }
+
+    fn reset_log_text_color(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let theme = Self::current_log_color_theme(cx);
+        let mode = match theme {
+            LogColorTheme::Light => ThemeMode::Light,
+            LogColorTheme::Dark => ThemeMode::Dark,
+        };
+        let fallback = crate::ui_theme::palette_for_mode(mode).log_text;
+        let picker = {
+            let colors = self.log_colors_mut(theme);
+            colors.text_custom = false;
+            colors.text.clone()
+        };
+        picker.update(cx, |state, cx| {
+            state.set_value(fallback, window, cx);
+        });
+        Self::draft_changed(cx);
+    }
+
+    fn reset_log_background_color(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let theme = Self::current_log_color_theme(cx);
+        let mode = match theme {
+            LogColorTheme::Light => ThemeMode::Light,
+            LogColorTheme::Dark => ThemeMode::Dark,
+        };
+        let fallback = crate::ui_theme::palette_for_mode(mode).log_background;
+        let picker = {
+            let colors = self.log_colors_mut(theme);
+            colors.background_custom = false;
+            colors.background.clone()
+        };
+        picker.update(cx, |state, cx| {
             state.set_value(fallback, window, cx);
         });
         Self::draft_changed(cx);
@@ -1809,6 +1998,28 @@ impl Render for SettingsDialog {
             .read(cx)
             .value()
             .map(|color| color.alpha(1.).to_hex());
+        let log_color_theme = Self::current_log_color_theme(cx);
+        let (log_text_picker, log_background_picker, log_text_custom, log_background_custom) = {
+            let colors = self.log_colors(log_color_theme);
+            (
+                colors.text.clone(),
+                colors.background.clone(),
+                colors.text_custom,
+                colors.background_custom,
+            )
+        };
+        let log_text_color = log_text_picker
+            .read(cx)
+            .value()
+            .map(|color| color.alpha(1.).to_hex());
+        let log_background_color = log_background_picker
+            .read(cx)
+            .value()
+            .map(|color| color.alpha(1.).to_hex());
+        let log_color_theme_label = match log_color_theme {
+            LogColorTheme::Light => crate::tr!("晨雾浅色", "Morning mist"),
+            LogColorTheme::Dark => crate::tr!("深海夜色", "Deep sea"),
+        };
         let scroll_percent = self.scroll_percent.read(cx).value().start().round() as u16;
         let scroll_lines = self.scroll_lines.read(cx).value().start().round() as u16;
         let viewer_overscan = self.viewer_overscan.read(cx).value().start().round() as u16;
@@ -1982,6 +2193,156 @@ impl Render for SettingsDialog {
                             })),
                     ),
                                             )
+            .child(
+                v_flex()
+                    .id("settings-log-colors-section")
+                    .gap_3()
+                    .p_3()
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(crate::tr!("日志配色", "Log colors")),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(crate::tr_args!(
+                                        "正在编辑“{}”；浅色与深色主题分别保存。",
+                                        "Editing “{}”; light and dark colors are saved separately.",
+                                        log_color_theme_label,
+                                    )),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .gap_4()
+                            .child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child(crate::tr!("日志文字颜色", "Log text color")),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(crate::tr!(
+                                                "应用于日志正文及所有搜索结果日志行",
+                                                "Applies to log text and log rows in all search results",
+                                            )),
+                                    ),
+                            )
+                            .child(
+                                h_flex()
+                                    .w_72()
+                                    .justify_end()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .min_w_20()
+                                            .text_right()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(if log_text_custom {
+                                                log_text_color.clone().unwrap_or_else(|| {
+                                                    crate::tr!("未选择", "Not selected").to_string()
+                                                })
+                                            } else {
+                                                crate::tr!("主题默认", "Theme default").to_string()
+                                            }),
+                                    )
+                                    .child(
+                                        ColorPicker::new(&log_text_picker)
+                                            .small()
+                                            .label(crate::tr!(
+                                                "日志文字颜色",
+                                                "Log text color",
+                                            )),
+                                    )
+                                    .child(
+                                        Button::new("settings-reset-log-text-color")
+                                            .small()
+                                            .ghost()
+                                            .label(crate::tr!("恢复默认", "Restore default"))
+                                            .disabled(!log_text_custom)
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.reset_log_text_color(window, cx)
+                                            })),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .gap_4()
+                            .child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child(crate::tr!("日志背景色", "Log background")),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(crate::tr!(
+                                                "应用于日志列表、单文件结果和全局搜索结果",
+                                                "Applies to the log, file results, and global results",
+                                            )),
+                                    ),
+                            )
+                            .child(
+                                h_flex()
+                                    .w_72()
+                                    .justify_end()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .min_w_20()
+                                            .text_right()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(if log_background_custom {
+                                                log_background_color.clone().unwrap_or_else(|| {
+                                                    crate::tr!("未选择", "Not selected").to_string()
+                                                })
+                                            } else {
+                                                crate::tr!("主题默认", "Theme default").to_string()
+                                            }),
+                                    )
+                                    .child(
+                                        ColorPicker::new(&log_background_picker)
+                                            .small()
+                                            .label(crate::tr!(
+                                                "日志背景色",
+                                                "Log background",
+                                            )),
+                                    )
+                                    .child(
+                                        Button::new("settings-reset-log-background-color")
+                                            .small()
+                                            .ghost()
+                                            .label(crate::tr!("恢复默认", "Restore default"))
+                                            .disabled(!log_background_custom)
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.reset_log_background_color(window, cx)
+                                            })),
+                                    ),
+                            ),
+                    ),
+            )
             .child(
                 h_flex()
                     .justify_between()
