@@ -2152,17 +2152,6 @@ impl Workspace {
                             .min_w(px(180.))
                             .h(px(34.))
                             .relative()
-                            // Keep the text viewport independent from focus-state frame styles.
-                            // On Windows, resolving the Input's focused border can briefly change
-                            // the content box used to vertically center its text.
-                            .rounded(cx.theme().radius)
-                            .border_1()
-                            .border_color(if query_focused {
-                                cx.theme().ring
-                            } else {
-                                cx.theme().input
-                            })
-                            .bg(cx.theme().input_background())
                             .capture_key_down(cx.listener(
                                 |this, event: &KeyDownEvent, window, cx| {
                                     if !this.query.focus_handle(cx).is_focused(window)
@@ -2200,38 +2189,26 @@ impl Workspace {
                             ))
                             .child(
                                 Input::new(&self.query)
-                                    .small()
                                     .size_full()
-                                    .appearance(false)
-                                    .prefix(
-                                        Icon::new(IconName::Search)
-                                            .text_color(cx.theme().muted_foreground),
-                                    )
+                                    .cleanable(true)
+                                    .prefix(div().child(Icon::new(IconName::Search).small()))
                                     .suffix(
-                                        h_flex().flex_none().pl_1().child(
-                                            Button::new("search-history")
-                                                .xsmall()
-                                                .ghost()
-                                                .icon(IconName::ChevronDown)
-                                                .selected(search_history_open)
-                                                .disabled(search_history_empty)
-                                                .tooltip(if search_history_empty {
-                                                    crate::tr!("暂无搜索历史", "No search history")
-                                                } else if search_history_open {
-                                                    crate::tr!(
-                                                        "收起搜索历史",
-                                                        "Hide search history"
-                                                    )
-                                                } else {
-                                                    crate::tr!(
-                                                        "显示搜索历史",
-                                                        "Show search history"
-                                                    )
-                                                })
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.toggle_search_history_popup(window, cx);
-                                                })),
-                                        ),
+                                        Button::new("search-history")
+                                            .text()
+                                            .icon(IconName::ChevronDown)
+                                            .xsmall()
+                                            .selected(search_history_open)
+                                            .disabled(search_history_empty)
+                                            .tooltip(if search_history_empty {
+                                                crate::tr!("暂无搜索历史", "No search history")
+                                            } else if search_history_open {
+                                                crate::tr!("收起搜索历史", "Hide search history")
+                                            } else {
+                                                crate::tr!("显示搜索历史", "Show search history")
+                                            })
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.toggle_search_history_popup(window, cx);
+                                            })),
                                     ),
                             )
                             .when(show_search_suggestions, |input| {
