@@ -110,6 +110,10 @@ impl<K> StagedVisibleLineLoadRequest<K> {
         &self.keys
     }
 
+    pub(crate) fn requires_source_load(&self) -> bool {
+        !self.keys.is_empty()
+    }
+
     pub(crate) fn load(
         self,
         mut load: impl FnMut(&K, usize) -> Option<LinePreview>,
@@ -281,6 +285,29 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
         (window, priority_keys)
     }
 
+    fn visible_range_is_ready(
+        &self,
+        visible_range: Range<usize>,
+        row_count: usize,
+        key_for_row: &mut impl FnMut(usize) -> Option<K>,
+    ) -> bool {
+        let visible_start = visible_range.start.min(row_count);
+        let visible_end = visible_range.end.min(row_count).max(visible_start);
+        let Some((_, _, prepared_start, prepared_end)) = self.window.get() else {
+            return false;
+        };
+        if visible_start < prepared_start || visible_end > prepared_end {
+            return false;
+        }
+
+        let prepared_keys = self.prepared_keys.borrow();
+        let lines = self.lines.borrow();
+        (visible_start..visible_end).all(|row_ix| {
+            key_for_row(row_ix)
+                .is_none_or(|key| prepared_keys.contains(&key) && lines.contains_key(&key))
+        })
+    }
+
     pub(crate) fn set_overscan(&self, overscan: usize) {
         if self.overscan.replace(overscan) != overscan {
             self.invalidate_window();
@@ -332,8 +359,11 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
         &self,
         visible_range: Range<usize>,
         row_count: usize,
-        key_for_row: impl FnMut(usize) -> Option<K>,
+        mut key_for_row: impl FnMut(usize) -> Option<K>,
     ) -> Option<VisibleLineLoadRequest<K>> {
+        if self.visible_range_is_ready(visible_range.clone(), row_count, &mut key_for_row) {
+            return None;
+        }
         let (window, priority_keys) = self.visible_window(visible_range, row_count, key_for_row);
         if self.window.get() == Some(window) && *self.prepared_priority.borrow() == priority_keys {
             return None;
@@ -401,8 +431,11 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
         &self,
         visible_range: Range<usize>,
         row_count: usize,
-        key_for_row: impl FnMut(usize) -> Option<K>,
+        mut key_for_row: impl FnMut(usize) -> Option<K>,
     ) -> Option<StagedVisibleLineLoadRequest<K>> {
+        if self.visible_range_is_ready(visible_range.clone(), row_count, &mut key_for_row) {
+            return None;
+        }
         let (window, priority_keys) = self.visible_window(visible_range, row_count, key_for_row);
         let current_window_is_ready = self.window.get() == Some(window)
             && *self.prepared_priority.borrow() == priority_keys
@@ -620,10 +653,15 @@ mod tests {
             panic!("an unchanged virtual window must not be read twice")
         });
         cache.prepare_visible_rows(12..14, 100, Some, |source_row, _| {
+            panic!("rows already covered by prepared overscan must not be read: {source_row}")
+        });
+        assert_eq!(*loaded.borrow(), vec![10, 11, 12, 9, 13]);
+
+        cache.prepare_visible_rows(13..15, 100, Some, |source_row, _| {
             loaded.borrow_mut().push(*source_row);
             Some(LinePreview::new(format!("line {source_row}"), false))
         });
-        assert_eq!(*loaded.borrow(), vec![10, 11, 12, 9, 13, 14]);
+        assert_eq!(*loaded.borrow(), vec![10, 11, 12, 9, 13, 14, 15]);
     }
 
     #[test]
@@ -631,8 +669,9 @@ mod tests {
         let cache = VisibleLineStore::<usize>::default();
         let staged = cache
             .stage_visible_rows(0..2, 2, |_| None)
-            .expect("a group-only window still needs a staged ownership handoff")
-            .load(|_, _| panic!("group rows do not read source lines"));
+            .expect("a group-only window still needs a staged ownership handoff");
+        assert!(!staged.requires_source_load());
+        let staged = staged.load(|_, _| panic!("group rows do not read source lines"));
 
         cache.install_staged(staged);
 

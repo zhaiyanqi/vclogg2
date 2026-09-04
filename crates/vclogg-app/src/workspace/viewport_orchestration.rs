@@ -351,15 +351,13 @@ impl Workspace {
         key: (u64, WrappedRegion),
         target: LogScrollFrameTarget,
     ) -> Option<(u64, Arc<AtomicBool>)> {
-        if self
-            .active_scroll_frames
-            .get(&key)
-            .is_some_and(|(_, active_target)| *active_target == target)
-        {
+        if self.active_scroll_frames.contains_key(&key) {
+            // Keep one source read alive per region. Wheel and trackpad samples can arrive much
+            // faster than a visible window can be decoded; cancelling here would continually
+            // restart that work and prevent any frame from reaching the screen. Preserve only
+            // the newest target and let the completed frame trigger the next preparation.
+            self.pending_log_scroll_frames.request(key, target);
             return None;
-        }
-        if let Some(cancellation) = self.scroll_frame_cancellations.remove(&key) {
-            cancellation.store(true, Ordering::Release);
         }
         self.scroll_frame_tasks.remove(&key);
         self.next_scroll_frame_revision = self.next_scroll_frame_revision.saturating_add(1);
@@ -493,6 +491,26 @@ impl Workspace {
             return;
         };
 
+        if !request.requires_source_load() {
+            let staged = request.load(|_, _| unreachable!("cached frame must not read source"));
+            table.update(cx, |table, cx| {
+                table.delegate().install_staged_visible_lines(staged);
+                table.refresh(cx);
+                cx.notify();
+            });
+            let viewport = if region == WrappedRegion::Results {
+                &self.documents[tab_ix].result_viewport
+            } else {
+                &self.documents[tab_ix].log_viewport
+            };
+            viewport.commit_scroll_frame_target(target, row_count, row_height);
+            if wrapped {
+                self.prime_local_wrapped_frame(tab_ix, region, row_height, false, window, cx);
+            }
+            self.finish_log_scroll_frame(key, revision);
+            return;
+        }
+
         let expected_document = document.clone();
         let load_cancellation = cancellation.clone();
         let task = cx.spawn_in(window, async move |this, cx| {
@@ -600,6 +618,22 @@ impl Workspace {
             self.finish_log_scroll_frame(key, revision);
             return;
         };
+
+        if !request.requires_source_load() {
+            let staged = request.load(|_, _| unreachable!("cached frame must not read source"));
+            table.update(cx, |table, cx| {
+                table.delegate().install_staged_visible_lines(staged);
+                table.refresh(cx);
+                cx.notify();
+            });
+            self.global_viewport
+                .commit_scroll_frame_target(target, row_count, row_height);
+            if wrapped {
+                self.prime_global_wrapped_frame(row_height, false, window, cx);
+            }
+            self.finish_log_scroll_frame(key, revision);
+            return;
+        }
 
         let load_cancellation = cancellation.clone();
         let task = cx.spawn_in(window, async move |this, cx| {
