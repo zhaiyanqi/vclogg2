@@ -10,6 +10,7 @@ use gpui_component::{
     h_flex,
     input::{Input, InputEvent, InputState},
     switch::Switch,
+    tab::{Tab, TabBar},
     v_flex,
 };
 
@@ -37,7 +38,15 @@ pub struct LogColoringConfig {
     pub labels: Vec<ColorLabel>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum LogColoringSection {
+    #[default]
+    LogLevels,
+    ColorLabels,
+}
+
 pub struct ColorLabelsDialog {
+    active_section: LogColoringSection,
     highlight_log_levels: bool,
     log_level_rows: Vec<LogLevelDraft>,
     label_rows: Vec<ColorLabelDraft>,
@@ -55,6 +64,7 @@ impl ColorLabelsDialog {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut this = Self {
+            active_section: LogColoringSection::default(),
             highlight_log_levels,
             log_level_rows: Vec::with_capacity(log_level_rules.len()),
             label_rows: Vec::with_capacity(labels.len()),
@@ -249,6 +259,432 @@ impl ColorLabelsDialog {
         }
         cx.notify();
     }
+
+    fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        TabBar::new("log-coloring-tabs")
+            .w_full()
+            .flex_none()
+            .small()
+            .underline()
+            .selected_index(match self.active_section {
+                LogColoringSection::LogLevels => 0,
+                LogColoringSection::ColorLabels => 1,
+            })
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(Tab::new().label(crate::tr!("日志级别", "Log levels")))
+            .child(Tab::new().label(crate::tr!("颜色标签", "Color labels")))
+            .on_click(cx.listener(|this, index: &usize, _, cx| {
+                this.active_section = if *index == 0 {
+                    LogColoringSection::LogLevels
+                } else {
+                    LogColoringSection::ColorLabels
+                };
+                cx.notify();
+            }))
+    }
+
+    fn render_log_levels(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let dialog = cx.entity();
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .gap_3()
+            .child(
+                h_flex()
+                    .justify_between()
+                    .gap_4()
+                    .child(
+                        v_flex()
+                            .min_w_0()
+                            .flex_1()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(crate::tr!("日志级别规则", "Log-level rules")),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(crate::tr!(
+                                        "按 ASCII 单词匹配关键词；靠后的规则优先。",
+                                        "Keywords match ASCII words; later rules take precedence."
+                                    )),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .flex_none()
+                            .gap_3()
+                            .child(
+                                Switch::new("log-coloring-enabled")
+                                    .small()
+                                    .checked(self.highlight_log_levels)
+                                    .label(crate::tr!("启用着色", "Enable coloring"))
+                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                        this.highlight_log_levels = *checked;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Button::new("add-log-level")
+                                    .small()
+                                    .icon(IconName::Plus)
+                                    .label(crate::tr!("添加规则", "Add rule"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.add_log_level_rule(window, cx);
+                                    })),
+                            ),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        h_flex()
+                            .flex_none()
+                            .gap_3()
+                            .px_3()
+                            .py_2()
+                            .bg(cx.theme().muted)
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .child(crate::tr!("关键词", "Keyword")),
+                            )
+                            .child(
+                                div()
+                                    .w_24()
+                                    .flex_none()
+                                    .text_center()
+                                    .child(crate::tr!("预览", "Preview")),
+                            )
+                            .child(
+                                div()
+                                    .w_20()
+                                    .flex_none()
+                                    .text_center()
+                                    .child(crate::tr!("文字颜色", "Text")),
+                            )
+                            .child(
+                                div()
+                                    .w_20()
+                                    .flex_none()
+                                    .text_center()
+                                    .child(crate::tr!("背景色", "Background")),
+                            )
+                            .child(div().w_8().flex_none()),
+                    )
+                    .child(
+                        v_flex()
+                            .id("log-level-rules-scroll")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .when(self.log_level_rows.is_empty(), |this| {
+                                this.child(
+                                    v_flex()
+                                        .size_full()
+                                        .items_center()
+                                        .justify_center()
+                                        .gap_1()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(crate::tr!(
+                                            "尚未配置日志级别",
+                                            "No log levels configured"
+                                        ))
+                                        .child(div().text_sm().child(crate::tr!(
+                                            "使用“添加规则”创建第一条规则",
+                                            "Use Add rule to create the first rule"
+                                        ))),
+                                )
+                            })
+                            .children(self.log_level_rows.iter().map(|row| {
+                                let row_id = row.id.clone();
+                                let remove_id = row.id.clone();
+                                let dialog = dialog.clone();
+                                let text_color = row
+                                    .text_color
+                                    .read(cx)
+                                    .displayed_color()
+                                    .unwrap_or_else(|| rgb(0).into());
+                                let background = row
+                                    .background_color
+                                    .read(cx)
+                                    .displayed_color()
+                                    .unwrap_or_else(|| rgb(0).into());
+                                h_flex()
+                                    .id(format!("log-level-color-row-{row_id}"))
+                                    .gap_3()
+                                    .px_3()
+                                    .py_2()
+                                    .border_t_1()
+                                    .border_color(cx.theme().border)
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .flex_1()
+                                            .child(Input::new(&row.keyword).small()),
+                                    )
+                                    .child(
+                                        h_flex().w_24().flex_none().justify_center().child(
+                                            h_flex()
+                                                .h_7()
+                                                .w_full()
+                                                .justify_center()
+                                                .rounded(cx.theme().radius / 2.)
+                                                .border_1()
+                                                .border_color(cx.theme().border)
+                                                .bg(background)
+                                                .text_color(text_color)
+                                                .text_sm()
+                                                .child(crate::tr!("示例日志", "Sample log")),
+                                        ),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .w_20()
+                                            .flex_none()
+                                            .justify_center()
+                                            .child(ColorPicker::new(&row.text_color).small()),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .w_20()
+                                            .flex_none()
+                                            .justify_center()
+                                            .child(ColorPicker::new(&row.background_color).small()),
+                                    )
+                                    .child(
+                                        h_flex().w_8().flex_none().justify_end().child(
+                                            Button::new(format!("remove-log-level-{remove_id}"))
+                                                .small()
+                                                .ghost()
+                                                .icon(IconName::Delete)
+                                                .tooltip(crate::tr!(
+                                                    "删除日志级别规则",
+                                                    "Delete log-level rule"
+                                                ))
+                                                .on_click(move |_, _, cx| {
+                                                    dialog.update(cx, |this, cx| {
+                                                        this.log_level_rows
+                                                            .retain(|row| row.id != remove_id);
+                                                        cx.notify();
+                                                    });
+                                                }),
+                                        ),
+                                    )
+                            })),
+                    ),
+            )
+    }
+
+    fn render_color_labels(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let dialog = cx.entity();
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .gap_3()
+            .child(
+                h_flex()
+                    .justify_between()
+                    .gap_4()
+                    .child(
+                        v_flex()
+                            .min_w_0()
+                            .flex_1()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(crate::tr!("颜色标签", "Color labels")),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(crate::tr!(
+                                        "列表顺序决定轮换颜色的顺序；修改颜色会同步更新引用该标签的文件规则。",
+                                        "List order controls Cycle color. Color changes update file rules that reference the label."
+                                    )),
+                            ),
+                    )
+                    .child(
+                        Button::new("add-color-label")
+                            .small()
+                            .flex_none()
+                            .icon(IconName::Plus)
+                            .label(crate::tr!("添加标签", "Add label"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.add_label(window, cx);
+                            })),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        h_flex()
+                            .flex_none()
+                            .gap_3()
+                            .px_3()
+                            .py_2()
+                            .bg(cx.theme().muted)
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .child(crate::tr!("标签名称", "Label name")),
+                            )
+                            .child(
+                                div()
+                                    .w_24()
+                                    .flex_none()
+                                    .text_center()
+                                    .child(crate::tr!("预览", "Preview")),
+                            )
+                            .child(
+                                div()
+                                    .w_20()
+                                    .flex_none()
+                                    .text_center()
+                                    .child(crate::tr!("文字颜色", "Text")),
+                            )
+                            .child(
+                                div()
+                                    .w_20()
+                                    .flex_none()
+                                    .text_center()
+                                    .child(crate::tr!("背景色", "Background")),
+                            )
+                            .child(div().w_8().flex_none()),
+                    )
+                    .child(
+                        v_flex()
+                            .id("color-labels-scroll")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .when(self.label_rows.is_empty(), |this| {
+                                this.child(
+                                    v_flex()
+                                        .size_full()
+                                        .items_center()
+                                        .justify_center()
+                                        .gap_1()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(crate::tr!(
+                                            "尚未创建颜色标签",
+                                            "No color labels created"
+                                        ))
+                                        .child(
+                                            div().text_sm().child(crate::tr!(
+                                                "使用“添加标签”创建第一个标签",
+                                                "Use Add label to create the first label"
+                                            )),
+                                        ),
+                                )
+                            })
+                            .children(self.label_rows.iter().map(|row| {
+                                let row_id = row.id.clone();
+                                let remove_id = row.id.clone();
+                                let dialog = dialog.clone();
+                                let text_color = row
+                                    .text_color
+                                    .read(cx)
+                                    .displayed_color()
+                                    .unwrap_or_else(|| rgb(0).into());
+                                let background = row
+                                    .background_color
+                                    .read(cx)
+                                    .displayed_color()
+                                    .unwrap_or_else(|| rgb(0).into());
+                                h_flex()
+                                    .id(format!("color-label-row-{row_id}"))
+                                    .gap_3()
+                                    .px_3()
+                                    .py_2()
+                                    .border_t_1()
+                                    .border_color(cx.theme().border)
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .flex_1()
+                                            .child(Input::new(&row.name).small()),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .w_24()
+                                            .flex_none()
+                                            .justify_center()
+                                            .child(
+                                                h_flex()
+                                                    .h_7()
+                                                    .w_full()
+                                                    .justify_center()
+                                                    .rounded(cx.theme().radius / 2.)
+                                                    .border_1()
+                                                    .border_color(cx.theme().border)
+                                                    .bg(background)
+                                                    .text_color(text_color)
+                                                    .text_sm()
+                                                    .child(crate::tr!("示例日志", "Sample log")),
+                                            ),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .w_20()
+                                            .flex_none()
+                                            .justify_center()
+                                            .child(ColorPicker::new(&row.text_color).small()),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .w_20()
+                                            .flex_none()
+                                            .justify_center()
+                                            .child(ColorPicker::new(&row.background_color).small()),
+                                    )
+                                    .child(
+                                        h_flex().w_8().flex_none().justify_end().child(
+                                            Button::new(format!("remove-color-label-{remove_id}"))
+                                                .small()
+                                                .ghost()
+                                                .icon(IconName::Delete)
+                                                .tooltip(crate::tr!(
+                                                    "删除颜色标签",
+                                                    "Delete color label"
+                                                ))
+                                                .on_click(move |_, _, cx| {
+                                                    dialog.update(cx, |this, cx| {
+                                                        this.label_rows
+                                                            .retain(|row| row.id != remove_id);
+                                                        cx.notify();
+                                                    });
+                                                }),
+                                        ),
+                                    )
+                            })),
+                    ),
+            )
+    }
 }
 
 fn color_picker(
@@ -273,260 +709,16 @@ fn picker_value(
 impl Render for ColorLabelsDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _performance_scope = crate::ui_performance::scope("ColorLabelsDialog::render");
-        let dialog = cx.entity();
         v_flex()
             .id("log-coloring-dialog-content")
             .size_full()
             .min_h_0()
             .overflow_hidden()
-            .gap_4()
-            .child(
-                v_flex()
-                    .gap_1()
-                    .child(
-                        h_flex()
-                            .justify_between()
-                            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(
-                                crate::tr!("日志级别", "Log levels"),
-                            ))
-                            .child(
-                                Switch::new("log-coloring-enabled")
-                                    .small()
-                                    .checked(self.highlight_log_levels)
-                                    .tooltip(crate::tr!(
-                                        "启用日志级别着色",
-                                        "Enable log-level coloring"
-                                    ))
-                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                        this.highlight_log_levels = *checked;
-                                        cx.notify();
-                                    })),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(crate::tr!(
-                                "按 ASCII 单词匹配关键词；靠后的规则优先。",
-                                "Keywords match ASCII words; later rules take precedence."
-                            )),
-                    ),
-            )
-            .child(
-                v_flex()
-                    .id("log-coloring-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .gap_4()
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .when(self.log_level_rows.is_empty(), |this| {
-                                this.child(
-                                    div()
-                                        .py_4()
-                                        .text_center()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(crate::tr!(
-                                            "尚未配置日志级别",
-                                            "No log levels configured"
-                                        )),
-                                )
-                            })
-                            .children(self.log_level_rows.iter().map(|row| {
-                                let row_id = row.id.clone();
-                                let remove_id = row.id.clone();
-                                let dialog = dialog.clone();
-                                let text_color = row
-                                    .text_color
-                                    .read(cx)
-                                    .displayed_color()
-                                    .unwrap_or_else(|| rgb(0).into());
-                                let background = row
-                                    .background_color
-                                    .read(cx)
-                                    .displayed_color()
-                                    .unwrap_or_else(|| rgb(0).into());
-                                h_flex()
-                                    .id(format!("log-level-color-row-{row_id}"))
-                                    .items_center()
-                                    .gap_3()
-                                    .px_3()
-                                    .py_2()
-                                    .rounded(cx.theme().radius)
-                                    .border_1()
-                                    .border_color(cx.theme().border)
-                                    .bg(cx.theme().background)
-                                    .child(
-                                        div()
-                                            .min_w_0()
-                                            .flex_1()
-                                            .child(Input::new(&row.keyword).small()),
-                                    )
-                                    .child(
-                                        div()
-                                            .w_20()
-                                            .rounded(cx.theme().radius / 2.)
-                                            .bg(background)
-                                            .text_center()
-                                            .text_color(text_color)
-                                            .child(crate::tr!("预览", "Preview")),
-                                    )
-                                    .child(
-                                        v_flex()
-                                            .gap_1()
-                                            .child(div().text_sm().child(crate::tr!("文字", "Text")))
-                                            .child(ColorPicker::new(&row.text_color).small()),
-                                    )
-                                    .child(
-                                        v_flex()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .child(crate::tr!("背景", "Background")),
-                                            )
-                                            .child(ColorPicker::new(&row.background_color).small()),
-                                    )
-                                    .child(
-                                        Button::new(format!("remove-log-level-{remove_id}"))
-                                            .small()
-                                            .ghost()
-                                            .icon(IconName::Delete)
-                                            .tooltip(crate::tr!(
-                                                "删除日志级别",
-                                                "Delete log level"
-                                            ))
-                                            .on_click(move |_, _, cx| {
-                                                dialog.update(cx, |this, cx| {
-                                                    this.log_level_rows
-                                                        .retain(|row| row.id != remove_id);
-                                                    cx.notify();
-                                                });
-                                            }),
-                                    )
-                            }))
-                            .child(
-                                Button::new("add-log-level")
-                                    .small()
-                                    .icon(IconName::Plus)
-                                    .label(crate::tr!("添加日志级别", "Add log level"))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.add_log_level_rule(window, cx);
-                                    })),
-                            ),
-                    )
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(
-                                crate::tr!("颜色标签", "Color labels"),
-                            ))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(crate::tr!(
-                                        "标签顺序决定“轮换颜色”的顺序；颜色会同步更新使用该标签的文件规则。",
-                                        "Label order determines Cycle color order. Colors update file rules that use the label."
-                                    )),
-                            )
-                            .when(self.label_rows.is_empty(), |this| {
-                                this.child(
-                                    div()
-                                        .py_4()
-                                        .text_center()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(crate::tr!(
-                                            "尚未创建颜色标签",
-                                            "No color labels created"
-                                        )),
-                                )
-                            })
-                            .children(self.label_rows.iter().map(|row| {
-                                let row_id = row.id.clone();
-                                let remove_id = row.id.clone();
-                                let dialog = dialog.clone();
-                                let text_color = row
-                                    .text_color
-                                    .read(cx)
-                                    .displayed_color()
-                                    .unwrap_or_else(|| rgb(0).into());
-                                let background = row
-                                    .background_color
-                                    .read(cx)
-                                    .displayed_color()
-                                    .unwrap_or_else(|| rgb(0).into());
-                                h_flex()
-                                    .id(format!("color-label-row-{row_id}"))
-                                    .items_center()
-                                    .gap_3()
-                                    .px_3()
-                                    .py_2()
-                                    .rounded(cx.theme().radius)
-                                    .border_1()
-                                    .border_color(cx.theme().border)
-                                    .bg(cx.theme().background)
-                                    .child(
-                                        div()
-                                            .min_w_0()
-                                            .flex_1()
-                                            .child(Input::new(&row.name).small()),
-                                    )
-                                    .child(
-                                        div()
-                                            .w_20()
-                                            .rounded(cx.theme().radius / 2.)
-                                            .bg(background)
-                                            .text_center()
-                                            .text_color(text_color)
-                                            .child(crate::tr!("预览", "Preview")),
-                                    )
-                                    .child(
-                                        v_flex()
-                                            .gap_1()
-                                            .child(div().text_sm().child(crate::tr!("文字", "Text")))
-                                            .child(ColorPicker::new(&row.text_color).small()),
-                                    )
-                                    .child(
-                                        v_flex()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .child(crate::tr!("背景", "Background")),
-                                            )
-                                            .child(ColorPicker::new(&row.background_color).small()),
-                                    )
-                                    .child(
-                                        Button::new(format!("remove-color-label-{remove_id}"))
-                                            .small()
-                                            .ghost()
-                                            .icon(IconName::Delete)
-                                            .tooltip(crate::tr!(
-                                                "删除颜色标签",
-                                                "Delete color label"
-                                            ))
-                                            .on_click(move |_, _, cx| {
-                                                dialog.update(cx, |this, cx| {
-                                                    this.label_rows.retain(|row| row.id != remove_id);
-                                                    cx.notify();
-                                                });
-                                            }),
-                                    )
-                            }))
-                            .child(
-                                Button::new("add-color-label")
-                                    .small()
-                                    .icon(IconName::Plus)
-                                    .label(crate::tr!("添加标签", "Add label"))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.add_label(window, cx);
-                                    })),
-                            ),
-                    ),
-            )
+            .gap_3()
+            .child(self.render_tabs(cx))
+            .child(match self.active_section {
+                LogColoringSection::LogLevels => self.render_log_levels(cx).into_any_element(),
+                LogColoringSection::ColorLabels => self.render_color_labels(cx).into_any_element(),
+            })
     }
 }
