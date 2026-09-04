@@ -761,10 +761,8 @@ impl Workspace {
         }
         if let Some(context) = restore_context {
             if !context.word_wrap {
-                let table = self.global_table.read(cx);
-                let base = table.vertical_scroll_handle.0.borrow().base_handle.clone();
-                let offset = base.offset();
-                base.set_offset(point(-px(context.horizontal_offset), offset.y));
+                self.global_viewport
+                    .set_horizontal_offset(px(context.horizontal_offset));
             }
             if context.active && context.results_visible {
                 self.active_log_region = LogRegion::GlobalResults;
@@ -798,7 +796,7 @@ impl Workspace {
             table.delegate_mut().set_groups(groups);
             table.delegate_mut().set_search_matcher(matcher);
             // set_groups remaps the delegate-owned active row and row selection by stable keys.
-            // Do not mirror that maintenance through TableState because SelectRow is navigation.
+            // Do not mirror that maintenance through list state because SelectRow is navigation.
             table.refresh(cx);
             cx.notify();
         });
@@ -2031,10 +2029,8 @@ impl Workspace {
         let word_wrap = self.global_viewport.is_wrapped();
         self.restore_global_viewport_anchor(context.viewport, self.log_row_height(), cx);
         if !word_wrap {
-            let table = self.global_table.read(cx);
-            let base = table.vertical_scroll_handle.0.borrow().base_handle.clone();
-            let offset = base.offset();
-            base.set_offset(point(-px(context.horizontal_offset), offset.y));
+            self.global_viewport
+                .set_horizontal_offset(px(context.horizontal_offset));
         }
         if context.active && context.results_visible {
             self.active_log_region = LogRegion::GlobalResults;

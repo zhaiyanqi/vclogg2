@@ -8,18 +8,11 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, AppContext as _, Bounds, Context, Div, HighlightStyle, Hsla,
-    InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Pixels,
-    SharedString, Stateful, Styled as _, StyledText, Task, Window, div, linear_color_stop,
-    linear_gradient, point, prelude::FluentBuilder as _, px,
+    AnyElement, App, AppContext as _, Bounds, Context, Div, HighlightStyle, Hsla, IntoElement,
+    ParentElement as _, Pixels, SharedString, Styled as _, Task, div, linear_color_stop,
+    linear_gradient, prelude::FluentBuilder as _, px,
 };
-use gpui_base::{GlobalState, TextSelection};
-use gpui_component::{
-    ActiveTheme as _, ElementExt as _, h_flex,
-    table::{Column, TableDelegate, TableState},
-    theme::try_parse_color,
-    v_flex,
-};
+use gpui_component::{ActiveTheme as _, h_flex, theme::try_parse_color};
 use vclogg_core::{CompressedRows, LinePreviewReader, LogDocument, SearchMatcher};
 
 #[cfg(test)]
@@ -28,13 +21,14 @@ use vclogg_core::LinePreview;
 use crate::color_labels::{
     LogColorStyle, ResolvedColorRules, ResolvedLogLevelRules, resolve_log_level_rules,
 };
-use crate::selectable_log_text::{LogText, SelectableLogText, TextSelectionCache};
+use crate::selectable_log_text::{LogText, TextSelectionCache};
 use crate::state_store::{AppSettings, DEFAULT_WORD_BOUNDARY_CHARACTERS, LogFontFamily};
 use crate::ui_theme;
 use crate::virtual_log_lines::{
     LogRowKey, LogRowProjection, MAX_VISIBLE_LINE_COLUMNS, StagedVisibleLineLoadRequest,
     StagedVisibleLineLoadResult, VisibleLineLoadRequest, VisibleLineLoadResult, VisibleLineStore,
 };
+use crate::virtual_log_list::{VirtualLogListDelegate, VirtualLogListState};
 
 pub(crate) fn log_cell_horizontal_padding(cx: &App) -> Pixels {
     cx.theme().spacing_tokens().sm
@@ -96,8 +90,7 @@ pub(crate) fn log_line_number_cell(
         .child((source_row + 1).to_string())
 }
 
-/// 固定行高模式下 `DataTable` 会在固定列组右边缘画一条 1px 竖线，且画在固定列组内部的最后
-/// 1px 上。自动换行模式自己拼行，需要在同一位置补一条一样的线，两种模式才看起来一致。
+/// 固定列组右边缘的 1px 分隔线不参与布局，固定行和自动换行因此保持一致。
 pub(crate) fn log_fixed_column_divider_overlay(fixed_columns_width: Pixels, cx: &App) -> Div {
     div()
         .absolute()
@@ -246,12 +239,12 @@ pub(crate) trait LogTableRows {
     fn schedule_visible_log_rows(
         &mut self,
         visible_range: Range<usize>,
-        cx: &mut Context<TableState<Self>>,
+        cx: &mut Context<VirtualLogListState<Self, LogRowKey>>,
     ) where
-        Self: Sized + TableDelegate;
+        Self: Sized + 'static;
 }
 
-pub(crate) trait LogTableStateExt {
+pub(crate) trait VirtualLogListStateExt {
     fn active_log_row(&self) -> Option<usize>;
     fn set_active_log_row(&mut self, row_ix: usize, cx: &mut Context<Self>)
     where
@@ -262,41 +255,24 @@ pub(crate) trait LogTableStateExt {
     fn refresh_log_rows(&mut self, cx: &mut Context<Self>)
     where
         Self: Sized;
-    /// Hands the unchanged visible window to the fixed table owner and invalidates its view in
-    /// the same entity update.
+    /// Reacquires the unchanged visible window and invalidates its view in the same entity update.
     fn reacquire_visible_log_rows(&mut self, cx: &mut Context<Self>)
     where
         Self: Sized;
 }
 
-pub(crate) fn scroll_uniform_log_row_to_viewport_y(
-    handle: &gpui::UniformListScrollHandle,
-    row_ix: usize,
-    viewport_y: Pixels,
-    row_height: Pixels,
-) {
-    let base_handle = {
-        let mut state = handle.0.borrow_mut();
-        state.deferred_scroll_to_item = None;
-        state.base_handle.clone()
-    };
-    let top = (row_height * row_ix as f32 - viewport_y).max(px(0.));
-    base_handle.set_offset(point(base_handle.offset().x, -top));
-}
-
-impl<D> LogTableStateExt for TableState<D>
+impl<D> VirtualLogListStateExt for VirtualLogListState<D, LogRowKey>
 where
-    D: TableDelegate + LogTableCursor + LogTableRows,
+    D: LogTableCursor + LogTableRows + 'static,
 {
     fn active_log_row(&self) -> Option<usize> {
-        self.delegate().active_log_row()
+        self.selected_row()
+            .or_else(|| self.delegate().active_log_row())
     }
 
     fn set_active_log_row(&mut self, row_ix: usize, cx: &mut Context<Self>) {
         self.delegate().set_active_log_row(Some(row_ix));
-        self.delegate().suppress_next_table_clear();
         self.set_selected_row(row_ix, cx);
-        self.clear_selection(cx);
     }
 
     fn sync_active_log_row(&mut self, cx: &mut Context<Self>) -> bool {
@@ -843,12 +819,6 @@ impl LogRowSource {
                 self.source_row(row_ix)
             })
     }
-
-    fn line_text(&self, source_row: usize) -> Option<LogText> {
-        (!self.visible_lines.source_unavailable(source_row))
-            .then(|| self.visible_lines.line(source_row))
-            .flatten()
-    }
 }
 
 impl LogRowPresenter {
@@ -1278,7 +1248,7 @@ impl LogTableDelegate {
     fn schedule_visible_rows(
         &mut self,
         visible_range: Range<usize>,
-        cx: &mut Context<TableState<Self>>,
+        cx: &mut Context<VirtualLogListState<Self, LogRowKey>>,
     ) {
         let Some(request) = self.request_visible_rows(visible_range) else {
             return;
@@ -1301,10 +1271,6 @@ impl LogTableDelegate {
         }));
     }
 
-    fn line_text(&self, source_row: usize) -> Option<LogText> {
-        self.source.line_text(source_row)
-    }
-
     fn row_presentation(&self, source_row: usize) -> Option<LogRowPresentation> {
         let text = self.source.visible_lines.line(source_row)?;
         if self.source.visible_lines.source_unavailable(source_row) {
@@ -1316,6 +1282,13 @@ impl LogTableDelegate {
             });
         }
         Some(self.presenter.present(text))
+    }
+
+    #[cfg(test)]
+    fn line_text(&self, source_row: usize) -> Option<LogText> {
+        (!self.source.visible_lines.source_unavailable(source_row))
+            .then(|| self.source.visible_lines.line(source_row))
+            .flatten()
     }
 
     pub(crate) fn begin_pointer_selection(
@@ -1437,6 +1410,14 @@ impl LogTableDelegate {
         self.presenter.log_font_size
     }
 
+    pub(crate) fn max_line_columns(&self) -> usize {
+        self.source.document.metadata().longest_line_columns
+    }
+
+    pub(crate) fn empty_message(&self) -> SharedString {
+        self.presenter.empty_message.clone()
+    }
+
     pub fn settle_table_selection(&self, row_ix: usize) -> Option<usize> {
         self.interaction
             .row_selection
@@ -1488,6 +1469,50 @@ impl LogTableDelegate {
     }
 }
 
+impl VirtualLogListDelegate for LogTableDelegate {
+    type Key = LogRowKey;
+    type Row = WrappedLogRow;
+    type VisibleRequest = VisibleLineLoadRequest<usize>;
+
+    fn row_count(&self) -> usize {
+        LogTableDelegate::row_count(self)
+    }
+
+    fn stable_row_key(&self, row_ix: usize) -> Option<Self::Key> {
+        self.row_key(row_ix)
+    }
+
+    fn minimum_row_height(&self) -> Pixels {
+        log_line_height(
+            self.presenter.log_font_size,
+            self.presenter.log_line_spacing,
+        )
+    }
+
+    fn row(&self, row_ix: usize) -> Option<Self::Row> {
+        self.wrapped_row(row_ix)
+    }
+
+    fn request_visible_rows(&self, range: Range<usize>) -> Option<Self::VisibleRequest> {
+        LogTableDelegate::request_visible_rows(self, range)
+    }
+
+    fn unwrapped_content_width(&self, cx: &App) -> Pixels {
+        line_marker_column_width()
+            + if self.presenter.show_line_numbers {
+                px(self.presenter.line_number_width as f32)
+            } else {
+                px(0.)
+            }
+            + message_column_width(
+                self.max_line_columns(),
+                self.resolved_font_family(cx),
+                self.presenter.log_font_size,
+                cx,
+            )
+    }
+}
+
 impl LogTableCursor for LogTableDelegate {
     fn active_log_row(&self) -> Option<usize> {
         self.interaction.active_row.get()
@@ -1514,283 +1539,9 @@ impl LogTableRows for LogTableDelegate {
     fn schedule_visible_log_rows(
         &mut self,
         visible_range: Range<usize>,
-        cx: &mut Context<TableState<Self>>,
+        cx: &mut Context<VirtualLogListState<Self, LogRowKey>>,
     ) {
         self.schedule_visible_rows(visible_range, cx);
-    }
-}
-
-impl TableDelegate for LogTableDelegate {
-    fn columns_count(&self, _: &App) -> usize {
-        if self.presenter.show_line_numbers {
-            3
-        } else {
-            2
-        }
-    }
-
-    fn rows_count(&self, _: &App) -> usize {
-        self.row_count()
-    }
-
-    fn column(&self, col_ix: usize, cx: &App) -> Column {
-        let base = px(self.presenter.log_font_size as f32);
-        if col_ix == 0 {
-            let width = line_marker_column_width();
-            Column::new("marker", crate::tr!("标记", "Mark"))
-                .p_0()
-                .width(width)
-                .min_width(width)
-                .max_width(width)
-                .resizable(false)
-                .fixed_left()
-                .movable(false)
-        } else if self.presenter.show_line_numbers && col_ix == 1 {
-            let width = px(self.presenter.line_number_width as f32);
-            Column::new("line-number", crate::tr!("行", "Line"))
-                .p_0()
-                .width(width)
-                .min_width(width)
-                .max_width(width)
-                .resizable(false)
-                .fixed_left()
-                .movable(false)
-                .text_right()
-        } else if col_ix == 1 + usize::from(self.presenter.show_line_numbers) {
-            Column::new("message", crate::tr!("日志", "Log"))
-                .p_0()
-                .width(message_column_width(
-                    self.source.document.metadata().longest_line_columns,
-                    self.resolved_font_family(cx),
-                    self.presenter.log_font_size,
-                    cx,
-                ))
-                .min_width(base * 24.)
-                .movable(false)
-        } else {
-            unreachable!("log table exposes marker, message, and optional line-number columns")
-        }
-    }
-
-    fn render_header(
-        &mut self,
-        _: &mut Window,
-        _: &mut Context<TableState<Self>>,
-    ) -> Stateful<Div> {
-        div().id("header").hidden()
-    }
-
-    fn render_tr(
-        &mut self,
-        row_ix: usize,
-        _: &mut Window,
-        cx: &mut Context<TableState<Self>>,
-    ) -> Stateful<Div> {
-        let _performance_scope = crate::ui_performance::scope("LogTableDelegate::render_tr");
-        let source_row = self.source_row(row_ix);
-        let source_row_ix = source_row.unwrap_or(row_ix);
-        let log_level_style = source_row
-            .and_then(|source_row| self.line_text(source_row))
-            .and_then(|line| self.presenter.log_level_style(&line));
-        let row_bounds = self.interaction.row_bounds.clone();
-        div()
-            .id(format!(
-                "document-{}-row-{source_row_ix}",
-                self.source.document_id
-            ))
-            .border_0()
-            .on_prepaint(move |bounds, _, _| {
-                row_bounds.borrow_mut().insert(row_ix, bounds);
-            })
-            .when_some(log_level_style, |row, style| row.bg(style.background))
-            .when(source_row.is_some(), |row| {
-                row.on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |table, event: &MouseDownEvent, window, cx| {
-                        if event.modifiers.control
-                            || event.modifiers.shift
-                            || event.click_count >= 3
-                        {
-                            GlobalState::suppress_text_selection(cx);
-                            TextSelection::clear(window, cx);
-                        }
-                        table.delegate().begin_pointer_selection(
-                            row_ix,
-                            event.modifiers.control,
-                            event.modifiers.shift,
-                            event.click_count,
-                        );
-                        let table = cx.entity();
-                        window.defer(cx, move |_, cx| {
-                            table.update(cx, |table, cx| {
-                                table.set_active_log_row(row_ix, cx);
-                            });
-                        });
-                        cx.notify();
-                    }),
-                )
-                .on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(move |table, _: &MouseDownEvent, _, cx| {
-                        table.delegate().prepare_context_selection(row_ix);
-                        table.set_active_log_row(row_ix, cx);
-                        cx.notify();
-                    }),
-                )
-            })
-    }
-
-    fn render_td(
-        &mut self,
-        row_ix: usize,
-        col_ix: usize,
-        window: &mut Window,
-        cx: &mut Context<TableState<Self>>,
-    ) -> impl IntoElement {
-        let _performance_scope = crate::ui_performance::scope("LogTableDelegate::render_td");
-        let source_row = self.source_row(row_ix).unwrap_or(row_ix);
-        let selected = self.interaction.row_selection.borrow().contains(row_ix);
-        let line_height = log_line_height(
-            self.presenter.log_font_size,
-            self.presenter.log_line_spacing,
-        );
-        if col_ix == 0 {
-            let marked = self.presenter.marked_rows.contains(source_row);
-            let matched = self.presenter.matched_rows.contains(source_row);
-            let log_level_accent = self
-                .line_text(source_row)
-                .and_then(|line| self.presenter.log_level_style(&line))
-                .map(|style| style.foreground);
-            h_flex()
-                .relative()
-                .size_full()
-                .justify_center()
-                .when_some(log_level_accent, |cell, accent| {
-                    cell.child(log_level_accent_overlay(accent))
-                })
-                .child(line_marker(marked, matched, cx))
-                .into_any_element()
-        } else if self.presenter.show_line_numbers && col_ix == 1 {
-            log_line_number_cell(
-                source_row,
-                self.presenter.log_font_size,
-                line_height,
-                self.line_number_text_color(cx),
-                self.line_number_background_color(cx),
-                self.show_line_number_row_separators(),
-                cx,
-            )
-            .size_full()
-            .into_any_element()
-        } else if col_ix == 1 + usize::from(self.presenter.show_line_numbers) {
-            let presentation =
-                self.row_presentation(source_row)
-                    .unwrap_or_else(|| LogRowPresentation {
-                        text: LogText::default(),
-                        highlights: Arc::default(),
-                        log_level_style: None,
-                        source_unavailable: false,
-                    });
-            let source_unavailable = presentation.source_unavailable;
-            let text_color = presentation
-                .log_level_style
-                .map_or_else(|| self.log_text_color(cx), |style| style.foreground);
-            let text = presentation.text;
-            let highlights = presentation
-                .highlights
-                .iter()
-                .cloned()
-                .map(|(range, highlight)| (range, text_highlight_style(highlight, cx)))
-                .collect::<Vec<_>>();
-            let styled_text = StyledText::new(text.display().clone()).with_highlights(highlights);
-            let selection = self
-                .interaction
-                .text_selections
-                .handle(source_row, &text, window, cx);
-            h_flex()
-                .relative()
-                .size_full()
-                .overflow_hidden()
-                .px(log_cell_horizontal_padding(cx))
-                .text_color(text_color)
-                .when(selected, |cell| {
-                    cell.bg(log_row_selection_color(cx))
-                        .child(log_row_selection_overlay(
-                            row_ix == 0
-                                || !self.interaction.row_selection.borrow().contains(row_ix - 1),
-                            row_ix + 1 >= self.row_count()
-                                || !self.interaction.row_selection.borrow().contains(row_ix + 1),
-                            cx,
-                        ))
-                })
-                .text_size(px(self.presenter.log_font_size as f32))
-                .line_height(line_height)
-                .font_family(self.resolved_font_family(cx))
-                .when(source_unavailable, |cell| {
-                    cell.text_color(cx.theme().danger)
-                })
-                .when(self.presenter.show_row_separators && !selected, |cell| {
-                    cell.border_b_1().border_color(cx.theme().border)
-                })
-                .child(
-                    SelectableLogText::new(
-                        selection,
-                        source_row as u64,
-                        text,
-                        styled_text,
-                        ui_theme::text_selection_highlight(cx),
-                    )
-                    .suppress_selection(self.is_text_selection_suppressed())
-                    .word_boundary_characters(self.interaction.word_boundary_characters.clone()),
-                )
-                .into_any_element()
-        } else {
-            unreachable!("log table exposes marker, message, and optional line-number columns")
-        }
-    }
-
-    fn render_empty(
-        &mut self,
-        _: &mut Window,
-        cx: &mut Context<TableState<Self>>,
-    ) -> impl IntoElement {
-        v_flex()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .gap_2()
-            .text_color(cx.theme().muted_foreground)
-            .child(self.presenter.empty_message.clone())
-    }
-
-    fn visible_rows_changed(
-        &mut self,
-        visible_range: Range<usize>,
-        _: &mut Window,
-        cx: &mut Context<TableState<Self>>,
-    ) {
-        self.interaction
-            .row_bounds
-            .borrow_mut()
-            .retain(|row_ix, _| visible_range.contains(row_ix));
-        self.schedule_visible_rows(visible_range, cx);
-    }
-
-    fn cell_text(&self, row_ix: usize, col_ix: usize, _: &App) -> String {
-        let Some(source_row) = self.source_row(row_ix) else {
-            return String::new();
-        };
-        if self.presenter.show_line_numbers && col_ix == 0 {
-            (source_row + 1).to_string()
-        } else if col_ix == usize::from(self.presenter.show_line_numbers) {
-            self.source
-                .visible_lines
-                .line(source_row)
-                .map(|text| text.display().to_string())
-                .unwrap_or_default()
-        } else {
-            String::new()
-        }
     }
 }
 
@@ -2234,20 +1985,6 @@ mod tests {
         assert_eq!(line_number_font_size(13), px(11.));
         assert_eq!(line_number_font_size(8), px(8.));
         assert_eq!(line_number_font_size(40), px(18.));
-    }
-
-    #[test]
-    fn exact_row_position_replaces_a_deferred_table_scroll() {
-        let handle = gpui::UniformListScrollHandle::new();
-        handle.scroll_to_item(80, gpui::ScrollStrategy::Center);
-
-        scroll_uniform_log_row_to_viewport_y(&handle, 40, px(7.), px(20.));
-
-        assert!(handle.0.borrow().deferred_scroll_to_item.is_none());
-        assert_eq!(
-            px(20.) * 40. + handle.0.borrow().base_handle.offset().y,
-            px(7.)
-        );
     }
 
     #[test]

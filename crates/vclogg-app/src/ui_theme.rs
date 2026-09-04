@@ -235,7 +235,7 @@ pub(crate) fn is_dark(cx: &App) -> bool {
 }
 
 /// The table token is reserved for the three log/result surfaces in VCLogg2.
-/// Keep the legacy and semantic projections aligned because DataTable and the
+/// Keep the legacy and semantic projections aligned because virtualized lists and the
 /// wrapped virtual list consume different sides of the theme seam.
 pub(crate) fn apply_log_background(custom: Option<&str>, mode: ThemeMode, cx: &mut App) {
     let background = custom

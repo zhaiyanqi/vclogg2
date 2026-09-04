@@ -1,6 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashSet},
     future::Future,
     ops::Range,
     path::{Path, PathBuf},
@@ -46,7 +46,6 @@ use gpui_component::{
     select::{Select, SelectEvent, SelectState},
     status_bar::StatusBar,
     tab::{Tab, TabBar},
-    table::{DataTable, TableDelegate, TableEvent, TableState},
     theme::ThemeMode,
     v_flex,
 };
@@ -84,10 +83,10 @@ use crate::{
     },
     history_dialog::{HistoryDialog, HistoryDialogEvent},
     log_table::{
-        LogTableCursor, LogTableDelegate, LogTableStateExt, TextHighlight, line_marker,
+        LogTableCursor, LogTableDelegate, TextHighlight, VirtualLogListStateExt, line_marker,
         line_marker_column_width, log_cell_horizontal_padding, log_fixed_column_divider_overlay,
         log_level_accent_overlay, log_line_height, log_line_number_cell, log_row_selection_color,
-        log_row_selection_overlay, log_row_separator_overlay, scroll_uniform_log_row_to_viewport_y,
+        log_row_selection_overlay, log_row_separator_overlay, message_column_width,
         text_highlight_style,
     },
     path_identity::{
@@ -114,10 +113,6 @@ use crate::{
     settings_dialog::{
         SettingsCategory, SettingsDialog, SettingsDialogEvent, SettingsNetworkSnapshot,
     },
-    sparse_virtual_list::{
-        SparseListMeasurements, SparseVirtualListScrollHandle, prefix_height_for,
-        row_for_absolute_y, sparse_v_virtual_list,
-    },
     state_store::{
         AppSettings, CloudSettings, FileSessionState, LastWorkspaceFile, RecentFile,
         ShortcutSettings, StateStore, ThemePreference, normalize_search_history,
@@ -125,6 +120,10 @@ use crate::{
     tab_resume::{PersistedLogRegion, TabResumeState, ViewportBookmark},
     ui_theme,
     virtual_log_lines::{LogRowKey, StagedVisibleLineLoadRequest, StagedVisibleLineLoadResult},
+    virtual_log_list::{
+        VirtualLogListDelegate, VirtualLogListEvent, VirtualLogListScrollHandle,
+        VirtualLogListState, VirtualLogRow, VirtualLogViewport, v_virtual_log_list,
+    },
     workspace_state::{
         CloudController, GlobalSearchDocumentResult, GlobalSearchResults, GlobalSearchState,
         PersistenceController, QuickFindBoundary, QuickFindDirection, QuickFindMatch,
@@ -134,7 +133,6 @@ use crate::{
     },
 };
 
-const WRAPPED_HEIGHT_CACHE_LIMIT: usize = 4096;
 const PREVIEW_BYTE_LIMIT: usize = 1024 * 1024;
 const PREVIEW_LINE_LIMIT: usize = 200;
 const MAX_DOCUMENT_PREPARE_WORKERS: usize = 4;
@@ -679,12 +677,6 @@ fn restored_log_region(active_region: PersistedLogRegion, results_visible: bool)
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct RowViewportPosition {
-    row_ix: usize,
-    viewport_y: Pixels,
-}
-
 struct DocumentTab {
     id: u64,
     opened_at: i64,
@@ -692,8 +684,8 @@ struct DocumentTab {
     view: FileViewState,
     document: Arc<LogDocument>,
     session_base: FileSessionState,
-    log_table: Entity<TableState<LogTableDelegate>>,
-    result_table: Entity<TableState<LogTableDelegate>>,
+    log_table: Entity<VirtualLogListState<LogTableDelegate, LogRowKey>>,
+    result_table: Entity<VirtualLogListState<LogTableDelegate, LogRowKey>>,
     log_viewport: LogViewportState<usize>,
     result_viewport: LogViewportState<usize>,
     search_query: SearchQuery,
@@ -720,53 +712,6 @@ struct PreparedTabFrame {
     log_jump: Option<PreparedLogJump>,
     log_lines: Option<StagedVisibleLineLoadResult<usize>>,
     result_lines: Option<StagedVisibleLineLoadResult<usize>>,
-}
-
-struct WordWrapDisableLocalPlan {
-    document_id: u64,
-    document: Arc<LogDocument>,
-    log_revision: u64,
-    result_revision: u64,
-    log_request: Option<StagedVisibleLineLoadRequest<usize>>,
-    result_request: Option<StagedVisibleLineLoadRequest<usize>>,
-    log_anchor: Option<RowViewportAnchor<LogRowKey>>,
-    result_anchor: Option<RowViewportAnchor<LogRowKey>>,
-}
-
-struct PreparedWordWrapDisableLocal {
-    document_id: u64,
-    document: Arc<LogDocument>,
-    log_revision: u64,
-    result_revision: u64,
-    log_lines: Option<StagedVisibleLineLoadResult<usize>>,
-    result_lines: Option<StagedVisibleLineLoadResult<usize>>,
-    log_anchor: Option<RowViewportAnchor<LogRowKey>>,
-    result_anchor: Option<RowViewportAnchor<LogRowKey>>,
-}
-
-struct WordWrapDisableGlobalPlan {
-    content_revision: u64,
-    layout_revision: u64,
-    visible_line_revision: u64,
-    request: Option<StagedVisibleLineLoadRequest<(u64, usize)>>,
-    documents: BTreeMap<u64, Arc<LogDocument>>,
-    anchor: Option<RowViewportAnchor<LogRowKey>>,
-}
-
-struct PreparedWordWrapDisableGlobal {
-    content_revision: u64,
-    layout_revision: u64,
-    visible_line_revision: u64,
-    lines: Option<StagedVisibleLineLoadResult<(u64, usize)>>,
-    anchor: Option<RowViewportAnchor<LogRowKey>>,
-}
-
-struct PreparedWordWrapDisable {
-    active_document_id: Option<u64>,
-    scope: SearchScope,
-    row_height: Pixels,
-    local: Option<PreparedWordWrapDisableLocal>,
-    global: Option<PreparedWordWrapDisableGlobal>,
 }
 
 #[derive(Clone, Copy)]
@@ -904,607 +849,10 @@ impl PendingLogScrollFrames {
     }
 }
 
-struct WrappedListState<K> {
-    item_count: Rc<Cell<usize>>,
-    base_height: Rc<Cell<Pixels>>,
-    measured_heights: Rc<RefCell<BTreeMap<usize, Pixels>>>,
-    pending_heights: RefCell<BTreeMap<usize, Pixels>>,
-    measured_rows: RefCell<VecDeque<usize>>,
-    height_corrections: Rc<RefCell<Vec<(usize, Pixels)>>>,
-    scroll_handle: SparseVirtualListScrollHandle,
-    text_selections: RefCell<TextSelectionCache<K>>,
-    measurement_anchor: Rc<Cell<Option<RowViewportPosition>>>,
-    pending_scrollbar_offset: Rc<Cell<Option<Point<Pixels>>>>,
-    layout_key: RefCell<Option<WrappedLayoutKey>>,
-    row_bounds: Rc<RefCell<BTreeMap<usize, Bounds<Pixels>>>>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LogViewportMode {
-    Fixed,
-    Wrapped,
-}
-
 #[derive(Clone, Copy)]
 struct WrappedFramePrimeOptions {
     minimum_viewport_height: Pixels,
     reset_for_mode_switch: bool,
-}
-
-#[derive(Clone, Copy)]
-struct LogWheelScrollRequest {
-    delta_y: Pixels,
-    row_count: usize,
-    row_height: Pixels,
-    line_count: usize,
-    line_scroll: bool,
-    scale: f32,
-}
-
-#[derive(Clone)]
-struct FixedListState {
-    scroll_handle: UniformListScrollHandle,
-    pending_scrollbar_offset: Rc<Cell<Option<Point<Pixels>>>>,
-    row_bounds: Rc<RefCell<BTreeMap<usize, Bounds<Pixels>>>>,
-}
-
-struct LogViewportState<K> {
-    mode: Cell<LogViewportMode>,
-    fixed: FixedListState,
-    wrapped: WrappedListState<K>,
-}
-
-impl<K: Clone + Ord> LogViewportState<K> {
-    fn new(
-        word_wrap: bool,
-        scroll_handle: UniformListScrollHandle,
-        row_bounds: Rc<RefCell<BTreeMap<usize, Bounds<Pixels>>>>,
-    ) -> Self {
-        Self {
-            mode: Cell::new(if word_wrap {
-                LogViewportMode::Wrapped
-            } else {
-                LogViewportMode::Fixed
-            }),
-            fixed: FixedListState {
-                scroll_handle,
-                pending_scrollbar_offset: Rc::default(),
-                row_bounds,
-            },
-            wrapped: WrappedListState::default(),
-        }
-    }
-
-    fn is_wrapped(&self) -> bool {
-        self.mode.get() == LogViewportMode::Wrapped
-    }
-
-    fn set_word_wrap(&self, enabled: bool) {
-        self.fixed.pending_scrollbar_offset.set(None);
-        self.wrapped.pending_scrollbar_offset.set(None);
-        self.mode.set(if enabled {
-            LogViewportMode::Wrapped
-        } else {
-            LogViewportMode::Fixed
-        });
-    }
-
-    fn capture_viewport_position(
-        &self,
-        row_count: usize,
-        preferred_row: Option<usize>,
-        row_height: Pixels,
-    ) -> Option<RowViewportPosition> {
-        if self.is_wrapped() {
-            return self.wrapped.capture_row_viewport_position(preferred_row);
-        }
-        if row_count == 0 {
-            return None;
-        }
-        let base = self.fixed.scroll_handle.0.borrow().base_handle.clone();
-        let top = (-base.offset().y).max(px(0.));
-        let first = (top / row_height.max(px(1.))).floor().max(0.) as usize;
-        let viewport_height = base.bounds().size.height;
-        let row_ix = viewport_anchor_row(row_count, first, preferred_row, |row_ix| {
-            let viewport_y = row_height * row_ix as f32 + base.offset().y;
-            row_intersects_viewport(viewport_y, row_height, viewport_height)
-        });
-        Some(RowViewportPosition {
-            row_ix,
-            viewport_y: row_height * row_ix as f32 + base.offset().y,
-        })
-    }
-
-    fn is_at_end(&self) -> bool {
-        let (top, max) = if self.is_wrapped() {
-            (
-                (-self.wrapped.scroll_handle.offset().y).max(px(0.)),
-                self.wrapped.scroll_handle.max_offset().y.max(px(0.)),
-            )
-        } else {
-            let base = self.fixed.scroll_handle.0.borrow().base_handle.clone();
-            (
-                (-base.offset().y).max(px(0.)),
-                base.max_offset().y.max(px(0.)),
-            )
-        };
-        max > px(0.) && top >= max - px(0.5)
-    }
-
-    fn restore_viewport(
-        &self,
-        row_ix: usize,
-        viewport_y: Pixels,
-        at_end: bool,
-        row_height: Pixels,
-    ) {
-        if at_end {
-            self.scroll_to_end();
-        } else if self.is_wrapped() {
-            self.wrapped.scroll_row_to_viewport_y(row_ix, viewport_y);
-        } else {
-            scroll_uniform_log_row_to_viewport_y(
-                &self.fixed.scroll_handle,
-                row_ix,
-                viewport_y,
-                row_height,
-            );
-        }
-    }
-
-    fn scroll_to_end(&self) {
-        if self.is_wrapped() {
-            self.wrapped.scroll_to_end();
-        } else {
-            self.fixed.scroll_handle.scroll_to_bottom();
-        }
-    }
-
-    fn center_row(&self, row_ix: usize) {
-        if self.is_wrapped() {
-            self.wrapped.center_row(row_ix);
-        } else {
-            self.fixed
-                .scroll_handle
-                .scroll_to_item_strict(row_ix, ScrollStrategy::Center);
-        }
-    }
-
-    fn first_visible(&self, row_count: usize, row_height: Pixels) -> usize {
-        if self.is_wrapped() {
-            self.wrapped.first_visible_row()
-        } else if row_count == 0 {
-            0
-        } else {
-            let top = (-self.fixed.scroll_handle.0.borrow().base_handle.offset().y).max(px(0.));
-            ((top / row_height.max(px(1.))).floor().max(0.) as usize)
-                .min(row_count.saturating_sub(1))
-        }
-    }
-
-    fn prospective_wrapped_measurement_range(
-        &self,
-        row_count: usize,
-        viewport_height: Pixels,
-        row_height: Pixels,
-    ) -> Range<usize> {
-        wrapped_viewport_measurement_range(
-            self.first_visible(row_count, row_height),
-            viewport_height,
-            row_height,
-            row_count,
-        )
-    }
-
-    fn row_at_position(&self, position: Point<Pixels>) -> Option<usize> {
-        let bounds = if self.is_wrapped() {
-            &self.wrapped.row_bounds
-        } else {
-            &self.fixed.row_bounds
-        };
-        bounds
-            .borrow()
-            .iter()
-            .find_map(|(row_ix, bounds)| bounds.contains(&position).then_some(*row_ix))
-    }
-
-    fn visible_row_edge(&self, after: bool) -> Option<usize> {
-        let bounds = if self.is_wrapped() {
-            self.wrapped.row_bounds.borrow()
-        } else {
-            self.fixed.row_bounds.borrow()
-        };
-        if after {
-            bounds.keys().next_back().copied()
-        } else {
-            bounds.keys().next().copied()
-        }
-    }
-
-    fn place_at_top(&self, row_ix: usize, row_height: Pixels) {
-        if self.is_wrapped() {
-            self.wrapped.place_row_at_top(row_ix);
-        } else {
-            scroll_uniform_log_row_to_viewport_y(
-                &self.fixed.scroll_handle,
-                row_ix,
-                px(0.),
-                row_height,
-            );
-        }
-    }
-
-    fn page_size(&self, fixed_visible_rows: usize, base_height: Pixels) -> usize {
-        if self.is_wrapped() {
-            (self.wrapped.scroll_handle.bounds().size.height / base_height)
-                .floor()
-                .max(1.) as usize
-        } else {
-            fixed_visible_rows.max(1)
-        }
-    }
-
-    fn reveal_row(&self, row_ix: usize, strategy: ScrollStrategy) {
-        if self.is_wrapped() {
-            self.wrapped.scroll_handle.scroll_to_item(row_ix, strategy);
-        } else {
-            self.fixed
-                .scroll_handle
-                .scroll_to_item_strict(row_ix, strategy);
-        }
-    }
-
-    fn wheel_scroll_target(
-        &self,
-        current: Point<Pixels>,
-        request: LogWheelScrollRequest,
-    ) -> Option<Point<Pixels>> {
-        let LogWheelScrollRequest {
-            delta_y,
-            row_count,
-            row_height,
-            line_count,
-            line_scroll,
-            scale,
-        } = request;
-        if row_count == 0 || delta_y == px(0.) {
-            return None;
-        }
-        if self.is_wrapped() {
-            let max_y = self.wrapped.scroll_handle.max_offset().y.max(px(0.));
-            let target_y = if line_scroll {
-                let current_top = (-current.y).clamp(px(0.), max_y);
-                let corrections = self.wrapped.height_corrections.borrow();
-                let current_row =
-                    row_for_absolute_y(row_count, row_height, &corrections, current_top);
-                let target_row = if delta_y < px(0.) {
-                    current_row.saturating_add(line_count)
-                } else {
-                    current_row.saturating_sub(line_count)
-                }
-                .min(row_count.saturating_sub(1));
-                -prefix_height_for(row_height, &corrections, target_row).min(max_y)
-            } else {
-                (current.y + delta_y * scale).clamp(-max_y, px(0.))
-            };
-            return (target_y != current.y).then_some(point(current.x, target_y));
-        }
-
-        if row_height <= px(0.) {
-            return None;
-        }
-        let base = self.fixed.scroll_handle.0.borrow().base_handle.clone();
-        let max_y = base.max_offset().y.max(px(0.));
-        let target_y = if line_scroll {
-            let current_top = (-current.y).clamp(px(0.), max_y);
-            let current_row = row_for_absolute_y(row_count, row_height, &[], current_top);
-            let target_row = if delta_y < px(0.) {
-                current_row.saturating_add(line_count)
-            } else {
-                current_row.saturating_sub(line_count)
-            }
-            .min(row_count.saturating_sub(1));
-            -(row_height * target_row as f32).min(max_y)
-        } else {
-            (current.y + delta_y * scale).clamp(-max_y, px(0.))
-        };
-        (target_y != current.y).then_some(point(current.x, target_y))
-    }
-
-    fn horizontal_offset(&self) -> Pixels {
-        if self.is_wrapped() {
-            px(0.)
-        } else {
-            let base = self.fixed.scroll_handle.0.borrow().base_handle.clone();
-            (-base.offset().x).max(px(0.))
-        }
-    }
-
-    fn set_horizontal_offset(&self, offset: Pixels) {
-        if self.is_wrapped() {
-            return;
-        }
-        let base = self.fixed.scroll_handle.0.borrow().base_handle.clone();
-        base.set_offset(point(-offset, base.offset().y));
-    }
-
-    fn wrapped_base_height(&self) -> Pixels {
-        self.wrapped.base_height.get()
-    }
-
-    fn wrapped_viewport_height(&self) -> Pixels {
-        self.wrapped.scroll_handle.bounds().size.height
-    }
-
-    fn committed_viewport_height(&self) -> Pixels {
-        if self.is_wrapped() {
-            self.wrapped.scroll_handle.bounds().size.height
-        } else {
-            self.fixed
-                .scroll_handle
-                .0
-                .borrow()
-                .base_handle
-                .bounds()
-                .size
-                .height
-        }
-    }
-
-    fn wrapped_scroll_handle(&self) -> SparseVirtualListScrollHandle {
-        self.wrapped.scroll_handle.clone()
-    }
-
-    fn wrapped_row_bounds(&self) -> Rc<RefCell<BTreeMap<usize, Bounds<Pixels>>>> {
-        self.wrapped.row_bounds.clone()
-    }
-
-    fn wrapped_selection(
-        &self,
-        key: K,
-        text: &LogText,
-        window: &Window,
-        cx: &mut App,
-    ) -> LogTextSelection {
-        self.wrapped
-            .text_selections
-            .borrow_mut()
-            .handle(key, text, window, cx)
-    }
-
-    fn wrapped_sizes(&self, count: usize, base_height: Pixels) -> SparseListMeasurements {
-        self.wrapped.sizes(count, base_height)
-    }
-
-    fn wrapped_logical_scroll_handle(
-        &self,
-        item_count: usize,
-        slot_height: Pixels,
-    ) -> LogicalVirtualScrollHandle {
-        self.wrapped.logical_scroll_handle(item_count, slot_height)
-    }
-
-    fn atomic_fixed_scroll_handle(&self) -> AtomicUniformScrollHandle {
-        AtomicUniformScrollHandle {
-            handle: self.fixed.scroll_handle.clone(),
-            pending_offset: self.fixed.pending_scrollbar_offset.clone(),
-        }
-    }
-
-    fn take_pending_scrollbar_offset(&self) -> Option<Point<Pixels>> {
-        if self.is_wrapped() {
-            self.wrapped.pending_scrollbar_offset.take()
-        } else {
-            self.fixed.pending_scrollbar_offset.take()
-        }
-    }
-
-    fn committed_scroll_offset(&self) -> Point<Pixels> {
-        if self.is_wrapped() {
-            self.wrapped.scroll_handle.offset()
-        } else {
-            self.fixed.scroll_handle.0.borrow().base_handle.offset()
-        }
-    }
-
-    fn viewport_offset_for_target(
-        &self,
-        target: LogScrollFrameTarget,
-        item_count: usize,
-        slot_height: Pixels,
-    ) -> Point<Pixels> {
-        match target {
-            LogScrollFrameTarget::Viewport(offset) => offset,
-            LogScrollFrameTarget::Scrollbar(offset) if self.is_wrapped() => self
-                .wrapped
-                .viewport_offset_for_logical_scrollbar_offset(offset, item_count, slot_height),
-            LogScrollFrameTarget::Scrollbar(offset) => offset,
-        }
-    }
-
-    fn scroll_frame_preload_range(
-        &self,
-        target: LogScrollFrameTarget,
-        row_count: usize,
-        viewport_height: Pixels,
-        row_height: Pixels,
-    ) -> Range<usize> {
-        if !self.is_wrapped() || matches!(target, LogScrollFrameTarget::Scrollbar(_)) {
-            return scrollbar_preload_range(
-                target.offset(),
-                row_count,
-                viewport_height,
-                row_height,
-            );
-        }
-        if row_count == 0 {
-            return 0..0;
-        }
-
-        let top = (-target.offset().y).clamp(
-            px(0.),
-            self.wrapped.scroll_handle.max_offset().y.max(px(0.)),
-        );
-        let first = row_for_absolute_y(
-            row_count,
-            row_height,
-            &self.wrapped.height_corrections.borrow(),
-            top,
-        )
-        .min(row_count.saturating_sub(1));
-        let visible_count = (viewport_height / row_height.max(px(1.))).ceil().max(1.) as usize;
-        first.saturating_sub(2)
-            ..first
-                .saturating_add(visible_count)
-                .saturating_add(2)
-                .min(row_count)
-    }
-
-    fn commit_scroll_frame_target(
-        &self,
-        target: LogScrollFrameTarget,
-        item_count: usize,
-        slot_height: Pixels,
-    ) {
-        match target {
-            LogScrollFrameTarget::Scrollbar(offset) if self.is_wrapped() => self
-                .wrapped
-                .apply_logical_scrollbar_offset(offset, item_count, slot_height),
-            LogScrollFrameTarget::Viewport(offset) if self.is_wrapped() => {
-                self.wrapped.clear_measurement_anchor();
-                let max_y = self.wrapped.scroll_handle.max_offset().y.max(px(0.));
-                self.wrapped.scroll_handle.set_offset(point(
-                    self.wrapped.scroll_handle.offset().x,
-                    offset.y.clamp(-max_y, px(0.)),
-                ));
-            }
-            LogScrollFrameTarget::Scrollbar(offset) | LogScrollFrameTarget::Viewport(offset) => {
-                let base = self.fixed.scroll_handle.0.borrow().base_handle.clone();
-                let max_y = base.max_offset().y.max(px(0.));
-                base.set_offset(point(base.offset().x, offset.y.clamp(-max_y, px(0.))));
-            }
-        }
-    }
-
-    fn queue_wrapped_measured_height(
-        &self,
-        row_ix: usize,
-        height: Pixels,
-        base_height: Pixels,
-    ) -> bool {
-        self.wrapped
-            .queue_measured_height(row_ix, height, base_height)
-    }
-
-    fn effective_row_height(&self, row_ix: usize, base_height: Pixels) -> Pixels {
-        if self.is_wrapped() {
-            self.wrapped.row_height(row_ix).unwrap_or(base_height)
-        } else {
-            base_height
-        }
-    }
-
-    fn has_known_wrapped_row_height(&self, row_ix: usize) -> bool {
-        self.wrapped.has_known_row_height(row_ix)
-    }
-
-    fn prime_wrapped_measured_heights(
-        &self,
-        count: usize,
-        base_height: Pixels,
-        heights: impl IntoIterator<Item = (usize, Pixels)>,
-    ) {
-        self.wrapped
-            .prime_measured_heights(count, base_height, heights);
-    }
-
-    fn wrapped_measured_heights_by_key<T: Ord>(
-        &self,
-        key_for_row: impl Fn(usize) -> Option<T>,
-    ) -> BTreeMap<T, Pixels> {
-        self.wrapped.measured_heights_by_key(key_for_row)
-    }
-
-    fn reset_wrapped_with_remapped_heights<T: Ord>(
-        &mut self,
-        count: usize,
-        base_height: Pixels,
-        measured_heights: BTreeMap<T, Pixels>,
-        row_for_key: impl Fn(&T) -> Option<usize>,
-    ) {
-        self.wrapped
-            .reset_with_remapped_heights(count, base_height, measured_heights, row_for_key);
-    }
-
-    fn invalidate_wrapped(&mut self) {
-        self.wrapped.invalidate();
-    }
-
-    fn reset_wrapped_scroll_for_mode_switch(&mut self) {
-        self.wrapped.reset_scroll_for_mode_switch();
-    }
-
-    fn wrapped_layout_width(&self) -> Option<Pixels> {
-        self.wrapped.layout_width()
-    }
-
-    fn capture_wrapped_viewport_position(
-        &self,
-        preferred_row: Option<usize>,
-    ) -> Option<RowViewportPosition> {
-        self.wrapped.capture_row_viewport_position(preferred_row)
-    }
-
-    fn ensure_wrapped_measurement_anchor(&self, preferred_row: Option<usize>) {
-        if self.wrapped.measurement_anchor.get().is_none()
-            && let Some(anchor) = self.capture_wrapped_viewport_position(preferred_row)
-        {
-            self.wrapped.measurement_anchor.set(Some(anchor));
-        }
-    }
-
-    fn invalidate_wrapped_layout_preserving_position(
-        &self,
-        key: WrappedLayoutKey,
-        preferred_row: Option<usize>,
-    ) -> bool {
-        if !self.wrapped.needs_layout_invalidation(&key) {
-            return false;
-        }
-        self.ensure_wrapped_measurement_anchor(preferred_row);
-        self.wrapped.invalidate_for_layout(key)
-    }
-
-    fn retain_wrapped_visible_rows(&self, visible_range: &Range<usize>) {
-        self.wrapped.retain_visible_rows(visible_range);
-    }
-
-    fn wrapped_first_visible_row(&self) -> usize {
-        self.wrapped.first_visible_row()
-    }
-}
-
-#[derive(Clone, Debug)]
-struct WrappedLayoutKey {
-    content_revision: u64,
-    width: Pixels,
-    rem_size: Pixels,
-    font_family: SharedString,
-    font_size: u16,
-    base_height: Pixels,
-    horizontal_padding: Pixels,
-}
-
-impl WrappedLayoutKey {
-    fn is_equivalent_to(&self, other: &Self) -> bool {
-        self.content_revision == other.content_revision
-            && (self.width - other.width).abs() < px(0.5)
-            && self.rem_size == other.rem_size
-            && self.font_family == other.font_family
-            && self.font_size == other.font_size
-            && self.base_height == other.base_height
-            && self.horizontal_padding == other.horizontal_padding
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -1583,100 +931,16 @@ impl LogRegionSurface {
         }
     }
 
-    fn bind_table<D>(&mut self, table: &Entity<TableState<D>>, cx: &mut Context<Self>)
-    where
-        D: TableDelegate + 'static,
+    fn bind_table<D, K>(
+        &mut self,
+        table: &Entity<VirtualLogListState<D, K>>,
+        cx: &mut Context<Self>,
+    ) where
+        D: 'static,
+        K: 'static,
     {
         self._table_subscription = Some(cx.observe(table, |_, _, cx| cx.notify()));
     }
-}
-
-#[derive(Clone)]
-struct LogicalVirtualScrollHandle {
-    handle: SparseVirtualListScrollHandle,
-    measured_heights: Rc<RefCell<BTreeMap<usize, Pixels>>>,
-    height_corrections: Rc<RefCell<Vec<(usize, Pixels)>>>,
-    pending_offset: Rc<Cell<Option<Point<Pixels>>>>,
-    item_count: usize,
-    slot_height: Pixels,
-}
-
-impl ScrollbarHandle for LogicalVirtualScrollHandle {
-    fn viewport_bounds(&self) -> Bounds<Pixels> {
-        self.handle.bounds()
-    }
-
-    fn offset(&self) -> Point<Pixels> {
-        let viewport_height = self.handle.bounds().size.height;
-        let logical_height = self.slot_height * self.item_count as f32;
-        let logical_max = (logical_height - viewport_height).max(px(0.));
-        let actual_max = self.handle.max_offset().y.max(px(0.));
-        let actual_top = (-self.handle.offset().y).clamp(px(0.), actual_max);
-        let logical_top = if actual_top >= actual_max - px(0.5) {
-            logical_max
-        } else {
-            let corrections = self.height_corrections.borrow();
-            let row =
-                row_for_absolute_y(self.item_count, self.slot_height, &corrections, actual_top);
-            let actual_row_top = prefix_height_for(self.slot_height, &corrections, row);
-            let actual_row_height = self
-                .measured_heights
-                .borrow()
-                .get(&row)
-                .copied()
-                .unwrap_or(self.slot_height)
-                .max(self.slot_height);
-            let fraction = ((actual_top - actual_row_top) / actual_row_height).clamp(0., 1.);
-            (self.slot_height * row as f32 + self.slot_height * fraction).clamp(px(0.), logical_max)
-        };
-        point(self.handle.offset().x, -logical_top)
-    }
-
-    fn set_offset(&self, offset: Point<Pixels>) {
-        self.pending_offset.set(Some(offset));
-    }
-
-    fn content_size(&self) -> Size<Pixels> {
-        size(
-            self.handle.bounds().size.width,
-            self.slot_height * self.item_count as f32,
-        )
-    }
-}
-
-#[derive(Clone)]
-struct AtomicUniformScrollHandle {
-    handle: UniformListScrollHandle,
-    pending_offset: Rc<Cell<Option<Point<Pixels>>>>,
-}
-
-impl ScrollbarHandle for AtomicUniformScrollHandle {
-    fn viewport_bounds(&self) -> Bounds<Pixels> {
-        self.handle.0.borrow().base_handle.bounds()
-    }
-
-    fn offset(&self) -> Point<Pixels> {
-        self.handle.0.borrow().base_handle.offset()
-    }
-
-    fn set_offset(&self, offset: Point<Pixels>) {
-        self.pending_offset.set(Some(offset));
-    }
-
-    fn content_size(&self) -> Size<Pixels> {
-        let state = self.handle.0.borrow();
-        let base = &state.base_handle;
-        (base.max_offset() + base.bounds().size.into()).into()
-    }
-}
-
-fn centered_scroll_top(
-    row_top: Pixels,
-    row_height: Pixels,
-    viewport_height: Pixels,
-    max_top: Pixels,
-) -> Pixels {
-    (row_top + row_height / 2. - viewport_height / 2.).clamp(px(0.), max_top.max(px(0.)))
 }
 
 fn centered_log_jump_preload_range(
@@ -1731,30 +995,10 @@ fn search_scope_switch_preload_range(
     centered_log_jump_preload_range(anchor_row, row_count, visible_row_count)
 }
 
-fn viewport_anchor_row(
-    count: usize,
-    first_visible: usize,
-    selected: Option<usize>,
-    selected_is_visible: impl FnOnce(usize) -> bool,
-) -> usize {
-    selected
-        .filter(|row_ix| selected_is_visible(*row_ix))
-        .unwrap_or(first_visible)
-        .min(count.saturating_sub(1))
-}
-
 fn log_font_layout_changed(current: &AppSettings, next: &AppSettings) -> bool {
     current.log_font_size != next.log_font_size
         || current.log_line_spacing != next.log_line_spacing
         || current.log_font_family != next.log_font_family
-}
-
-fn row_intersects_viewport(
-    viewport_y: Pixels,
-    row_height: Pixels,
-    viewport_height: Pixels,
-) -> bool {
-    viewport_y + row_height > px(0.) && viewport_y < viewport_height
 }
 
 fn point_in_text_selection_regions(
@@ -1765,9 +1009,9 @@ fn point_in_text_selection_regions(
 }
 
 fn restore_current_result_selection(
-    table: &mut TableState<LogTableDelegate>,
+    table: &mut VirtualLogListState<LogTableDelegate, LogRowKey>,
     row_ix: usize,
-    cx: &mut Context<TableState<LogTableDelegate>>,
+    cx: &mut Context<VirtualLogListState<LogTableDelegate, LogRowKey>>,
 ) {
     table.delegate().settle_table_selection(row_ix);
     table.set_active_log_row(row_ix, cx);
@@ -1822,26 +1066,6 @@ fn scrollbar_preload_range(
             .min(row_count)
 }
 
-fn fixed_mode_preload_range(
-    anchor_row: usize,
-    anchor_viewport_y: Pixels,
-    row_count: usize,
-    viewport_height: Pixels,
-    row_height: Pixels,
-) -> Range<usize> {
-    if row_count == 0 {
-        return 0..0;
-    }
-    let anchor_row = anchor_row.min(row_count - 1);
-    let fixed_top = (row_height.max(px(1.)) * anchor_row as f32 - anchor_viewport_y).max(px(0.));
-    scrollbar_preload_range(
-        point(px(0.), -fixed_top),
-        row_count,
-        viewport_height,
-        row_height,
-    )
-}
-
 fn take_pending_log_scroll_target<K: Clone + Ord>(
     pending: &mut PendingLogScrollFrames,
     key: (u64, WrappedRegion),
@@ -1858,416 +1082,6 @@ fn take_pending_log_scroll_target<K: Clone + Ord>(
 #[cfg(test)]
 #[path = "workspace/scroll_position_tests.rs"]
 mod scroll_position_tests;
-
-impl<K> Default for WrappedListState<K> {
-    fn default() -> Self {
-        Self {
-            item_count: Rc::new(Cell::new(0)),
-            base_height: Rc::new(Cell::new(px(0.))),
-            measured_heights: Rc::new(RefCell::new(BTreeMap::new())),
-            pending_heights: RefCell::new(BTreeMap::new()),
-            measured_rows: RefCell::new(VecDeque::new()),
-            height_corrections: Rc::new(RefCell::new(Vec::new())),
-            scroll_handle: SparseVirtualListScrollHandle::new(),
-            text_selections: RefCell::default(),
-            measurement_anchor: Rc::new(Cell::new(None)),
-            pending_scrollbar_offset: Rc::default(),
-            layout_key: RefCell::new(None),
-            row_bounds: Rc::default(),
-        }
-    }
-}
-
-impl<K: Clone + Ord> WrappedListState<K> {
-    fn logical_scroll_handle(
-        &self,
-        item_count: usize,
-        slot_height: Pixels,
-    ) -> LogicalVirtualScrollHandle {
-        LogicalVirtualScrollHandle {
-            handle: self.scroll_handle.clone(),
-            measured_heights: self.measured_heights.clone(),
-            height_corrections: self.height_corrections.clone(),
-            pending_offset: self.pending_scrollbar_offset.clone(),
-            item_count,
-            slot_height,
-        }
-    }
-    fn sizes(&self, count: usize, base_height: Pixels) -> SparseListMeasurements {
-        if self.item_count.get() != count || self.base_height.get() != base_height {
-            self.item_count.set(count);
-            self.base_height.set(base_height);
-            self.measured_heights.borrow_mut().clear();
-            self.pending_heights.borrow_mut().clear();
-            self.measured_rows.borrow_mut().clear();
-            self.height_corrections.borrow_mut().clear();
-            self.row_bounds.borrow_mut().clear();
-            if let Some(anchor) = self.measurement_anchor.get() {
-                self.scroll_row_to_viewport_y(
-                    anchor.row_ix.min(count.saturating_sub(1)),
-                    anchor.viewport_y,
-                );
-            }
-        }
-        let pending = std::mem::take(&mut *self.pending_heights.borrow_mut());
-        if !pending.is_empty() {
-            let old_top = (-self.scroll_handle.offset().y).max(px(0.));
-            let old_max = self.scroll_handle.max_offset().y.max(px(0.));
-            let was_at_bottom = old_max > px(0.) && old_top >= old_max - px(0.5);
-            let explicit_anchor = self.measurement_anchor.get();
-            let anchor = explicit_anchor.unwrap_or_else(|| {
-                let row = self.first_visible_row();
-                RowViewportPosition {
-                    row_ix: row,
-                    viewport_y: self.prefix_height(row) - old_top,
-                }
-            });
-            let mut next = self.measured_heights.borrow().clone();
-            let mut measured_rows = self.measured_rows.borrow_mut();
-            for (row_ix, height) in pending {
-                if row_ix >= count {
-                    continue;
-                }
-                next.insert(row_ix, height.max(base_height));
-                if let Some(old_ix) = measured_rows.iter().position(|row| *row == row_ix) {
-                    measured_rows.remove(old_ix);
-                }
-                measured_rows.push_back(row_ix);
-            }
-            while measured_rows.len() > WRAPPED_HEIGHT_CACHE_LIMIT {
-                if let Some(evicted) = measured_rows.pop_front() {
-                    next.remove(&evicted);
-                }
-            }
-            let mut corrections = measured_rows
-                .iter()
-                .filter_map(|row_ix| {
-                    next.get(row_ix)
-                        .map(|height| (*row_ix, *height - base_height))
-                })
-                .collect::<Vec<_>>();
-            corrections.sort_by_key(|(row_ix, _)| *row_ix);
-            let mut cumulative = px(0.);
-            for (_, correction) in &mut corrections {
-                cumulative += *correction;
-                *correction = cumulative;
-            }
-            *self.height_corrections.borrow_mut() = corrections;
-            *self.measured_heights.borrow_mut() = next;
-            if explicit_anchor.is_none() && was_at_bottom {
-                self.scroll_handle.scroll_to_bottom();
-            } else {
-                self.set_row_viewport_y(anchor.row_ix, anchor.viewport_y);
-            }
-        }
-        SparseListMeasurements {
-            item_count: count,
-            base_height,
-            measured_heights: self.measured_heights.clone(),
-            cumulative_corrections: self.height_corrections.clone(),
-        }
-    }
-
-    fn queue_measured_height(&self, row_ix: usize, height: Pixels, base_height: Pixels) -> bool {
-        let height = height.max(base_height);
-        let current_height = self
-            .pending_heights
-            .borrow()
-            .get(&row_ix)
-            .copied()
-            .or_else(|| self.measured_heights.borrow().get(&row_ix).copied())
-            .or_else(|| (row_ix < self.item_count.get()).then_some(base_height));
-        let Some(current_height) = current_height else {
-            return false;
-        };
-        if (current_height - height).abs() < px(0.5) {
-            return false;
-        }
-        self.pending_heights.borrow_mut().insert(row_ix, height);
-        true
-    }
-
-    fn row_height(&self, row_ix: usize) -> Option<Pixels> {
-        self.pending_heights
-            .borrow()
-            .get(&row_ix)
-            .copied()
-            .or_else(|| self.measured_heights.borrow().get(&row_ix).copied())
-            .or_else(|| (row_ix < self.item_count.get()).then_some(self.base_height.get()))
-    }
-
-    fn has_known_row_height(&self, row_ix: usize) -> bool {
-        // A measured single-line row does not need a sparse correction, so its retained bounds
-        // are the evidence that this layout revision has already measured it.
-        self.pending_heights.borrow().contains_key(&row_ix)
-            || self.measured_heights.borrow().contains_key(&row_ix)
-            || self.row_bounds.borrow().contains_key(&row_ix)
-    }
-
-    fn prime_measured_heights(
-        &self,
-        count: usize,
-        base_height: Pixels,
-        heights: impl IntoIterator<Item = (usize, Pixels)>,
-    ) {
-        self.sizes(count, base_height);
-        for (row_ix, height) in heights {
-            self.queue_measured_height(row_ix, height, base_height);
-        }
-        self.sizes(count, base_height);
-    }
-
-    fn measured_heights_by_key<T: Ord>(
-        &self,
-        key_for_row: impl Fn(usize) -> Option<T>,
-    ) -> BTreeMap<T, Pixels> {
-        let measured_heights = self.measured_heights.borrow();
-        let pending_heights = self.pending_heights.borrow();
-        let mut measured_rows = self
-            .measured_rows
-            .borrow()
-            .iter()
-            .copied()
-            .collect::<Vec<_>>();
-        measured_rows.extend(pending_heights.keys().copied());
-        measured_rows.sort_unstable();
-        measured_rows.dedup();
-        measured_rows
-            .into_iter()
-            .filter_map(|row_ix| {
-                let key = key_for_row(row_ix)?;
-                let height = pending_heights
-                    .get(&row_ix)
-                    .copied()
-                    .or_else(|| measured_heights.get(&row_ix).copied())?;
-                Some((key, height))
-            })
-            .collect()
-    }
-
-    fn reset_with_remapped_heights<T: Ord>(
-        &mut self,
-        count: usize,
-        base_height: Pixels,
-        measured_heights: BTreeMap<T, Pixels>,
-        row_for_key: impl Fn(&T) -> Option<usize>,
-    ) {
-        self.invalidate();
-        let retained = measured_heights
-            .iter()
-            .filter_map(|(key, height)| Some((row_for_key(key)?, *height)));
-        self.prime_measured_heights(count, base_height, retained);
-    }
-
-    fn invalidate(&mut self) {
-        self.item_count.set(0);
-        self.base_height.set(px(0.));
-        self.measured_heights.borrow_mut().clear();
-        self.pending_heights.borrow_mut().clear();
-        self.measured_rows.borrow_mut().clear();
-        self.height_corrections.borrow_mut().clear();
-        self.text_selections.borrow_mut().clear();
-        self.row_bounds.borrow_mut().clear();
-        self.pending_scrollbar_offset.set(None);
-    }
-
-    fn invalidate_for_layout(&self, key: WrappedLayoutKey) -> bool {
-        if !self.needs_layout_invalidation(&key) {
-            return false;
-        }
-        self.layout_key.replace(Some(key));
-        self.item_count.set(0);
-        self.base_height.set(px(0.));
-        self.measured_heights.borrow_mut().clear();
-        self.pending_heights.borrow_mut().clear();
-        self.measured_rows.borrow_mut().clear();
-        self.height_corrections.borrow_mut().clear();
-        self.text_selections.borrow_mut().clear();
-        self.row_bounds.borrow_mut().clear();
-        self.pending_scrollbar_offset.set(None);
-        true
-    }
-
-    fn needs_layout_invalidation(&self, key: &WrappedLayoutKey) -> bool {
-        key.width > px(0.)
-            && !self
-                .layout_key
-                .borrow()
-                .as_ref()
-                .is_some_and(|current| current.is_equivalent_to(key))
-    }
-
-    fn layout_width(&self) -> Option<Pixels> {
-        self.layout_key.borrow().as_ref().map(|key| key.width)
-    }
-
-    fn capture_row_viewport_position(
-        &self,
-        preferred_row: Option<usize>,
-    ) -> Option<RowViewportPosition> {
-        let count = self.item_count.get();
-        if count == 0 {
-            return None;
-        }
-        let top = (-self.scroll_handle.offset().y).max(px(0.));
-        let viewport_height = self.scroll_handle.bounds().size.height;
-        let first = self.first_visible_row();
-        let row_ix = viewport_anchor_row(count, first, preferred_row, |row_ix| {
-            let row_top = self.prefix_height(row_ix);
-            let row_height = self
-                .measured_heights
-                .borrow()
-                .get(&row_ix)
-                .copied()
-                .unwrap_or(self.base_height.get());
-            row_intersects_viewport(row_top - top, row_height, viewport_height)
-        });
-        Some(RowViewportPosition {
-            row_ix,
-            viewport_y: self.prefix_height(row_ix) - top,
-        })
-    }
-
-    fn restore_viewport(&self, row_ix: usize, viewport_y: Pixels, at_end: bool) {
-        if at_end {
-            self.scroll_to_end();
-        } else {
-            self.scroll_row_to_viewport_y(row_ix, viewport_y);
-        }
-    }
-
-    fn scroll_to_end(&self) {
-        self.clear_measurement_anchor();
-        self.scroll_handle.scroll_to_bottom();
-    }
-
-    fn scroll_row_to_viewport_y(&self, row_ix: usize, viewport_y: Pixels) {
-        self.measurement_anchor
-            .set(Some(RowViewportPosition { row_ix, viewport_y }));
-        self.set_row_viewport_y(row_ix, viewport_y);
-    }
-
-    fn set_row_viewport_y(&self, row_ix: usize, viewport_y: Pixels) {
-        let top = (self.prefix_height(row_ix) - viewport_y).max(px(0.));
-        self.scroll_handle
-            .set_offset(point(self.scroll_handle.offset().x, -top));
-    }
-
-    fn reset_scroll_for_mode_switch(&mut self) {
-        self.scroll_handle = SparseVirtualListScrollHandle::new();
-        self.clear_measurement_anchor();
-        self.pending_scrollbar_offset.set(None);
-    }
-
-    fn apply_logical_scrollbar_offset(
-        &self,
-        offset: Point<Pixels>,
-        item_count: usize,
-        slot_height: Pixels,
-    ) {
-        self.measurement_anchor.set(None);
-        let offset =
-            self.viewport_offset_for_logical_scrollbar_offset(offset, item_count, slot_height);
-        self.scroll_handle.set_offset(offset);
-    }
-
-    fn viewport_offset_for_logical_scrollbar_offset(
-        &self,
-        offset: Point<Pixels>,
-        item_count: usize,
-        slot_height: Pixels,
-    ) -> Point<Pixels> {
-        let viewport_height = self.scroll_handle.bounds().size.height;
-        let logical_height = slot_height * item_count as f32;
-        let logical_max = (logical_height - viewport_height).max(px(0.));
-        let requested_top = (-offset.y).clamp(px(0.), logical_max);
-        let actual_top = if requested_top >= logical_max - px(0.5) {
-            self.scroll_handle.max_offset().y.max(px(0.))
-        } else {
-            let row = (requested_top / slot_height).floor().max(0.) as usize;
-            let row = row.min(item_count.saturating_sub(1));
-            let logical_row_top = slot_height * row as f32;
-            let fraction = ((requested_top - logical_row_top) / slot_height).clamp(0., 1.);
-            let corrections = self.height_corrections.borrow();
-            let actual_row_top = prefix_height_for(slot_height, &corrections, row);
-            let actual_row_height = self
-                .measured_heights
-                .borrow()
-                .get(&row)
-                .copied()
-                .unwrap_or(slot_height)
-                .max(slot_height);
-            actual_row_top + actual_row_height * fraction
-        };
-        point(self.scroll_handle.offset().x, -actual_top)
-    }
-
-    fn clear_measurement_anchor(&self) {
-        self.measurement_anchor.set(None);
-    }
-
-    fn first_visible_row(&self) -> usize {
-        let top = -self.scroll_handle.offset().y;
-        let count = self.item_count.get();
-        row_for_absolute_y(
-            count,
-            self.base_height.get(),
-            &self.height_corrections.borrow(),
-            top,
-        )
-    }
-
-    fn place_row_at_top(&self, row_ix: usize) {
-        self.clear_measurement_anchor();
-        let y = self.prefix_height(row_ix);
-        self.scroll_handle.set_offset(point(px(0.), -y));
-    }
-
-    fn center_row(&self, row_ix: usize) {
-        self.clear_measurement_anchor();
-        let count = self.item_count.get();
-        if row_ix >= count {
-            self.scroll_handle
-                .scroll_to_item(row_ix, ScrollStrategy::Center);
-            return;
-        }
-        let row_height = self
-            .measured_heights
-            .borrow()
-            .get(&row_ix)
-            .copied()
-            .unwrap_or(self.base_height.get());
-        let viewport_height = self.scroll_handle.bounds().size.height;
-        if viewport_height <= px(0.) {
-            self.scroll_handle
-                .scroll_to_item(row_ix, ScrollStrategy::Center);
-            return;
-        }
-        let row_top = self.prefix_height(row_ix);
-        let content_height = self.prefix_height(count);
-        let top = centered_scroll_top(
-            row_top,
-            row_height,
-            viewport_height,
-            content_height - viewport_height,
-        );
-        self.restore_viewport(row_ix, row_top - top, false);
-    }
-
-    fn retain_visible_rows(&self, visible_range: &Range<usize>) {
-        self.row_bounds
-            .borrow_mut()
-            .retain(|row_ix, _| visible_range.contains(row_ix));
-    }
-
-    fn prefix_height(&self, row_ix: usize) -> Pixels {
-        prefix_height_for(
-            self.base_height.get(),
-            &self.height_corrections.borrow(),
-            row_ix,
-        )
-    }
-}
 
 impl DocumentTab {
     fn result_rows(&self, cx: &App) -> CompressedRows {
@@ -2784,7 +1598,7 @@ pub struct Workspace {
     quick_find: QuickFindState,
     view_state: WorkspaceViewState,
     global_search: GlobalSearchState,
-    global_table: Entity<TableState<GlobalSearchTableDelegate>>,
+    global_table: Entity<VirtualLogListState<GlobalSearchTableDelegate, LogRowKey>>,
     log_viewer: SharedDisplayState,
     search_results_viewer: SharedDisplayState,
     global_viewport: LogViewportState<(u64, usize)>,
@@ -2812,9 +1626,10 @@ pub struct Workspace {
     row_drag_frame_scheduled: bool,
     visible_line_tasks: BTreeMap<(u64, WrappedRegion), Task<()>>,
     pending_log_scroll_frames: PendingLogScrollFrames,
-    word_wrap_transition_task: Option<Task<()>>,
-    word_wrap_transition_cancellation: Option<Arc<AtomicBool>>,
-    word_wrap_transition_revision: u64,
+    scroll_frame_tasks: BTreeMap<(u64, WrappedRegion), Task<()>>,
+    scroll_frame_cancellations: BTreeMap<(u64, WrappedRegion), Arc<AtomicBool>>,
+    active_scroll_frames: BTreeMap<(u64, WrappedRegion), (u64, LogScrollFrameTarget)>,
+    next_scroll_frame_revision: u64,
     global_group_toggle_task: Option<Task<()>>,
     global_group_toggle_revision: u64,
     global_result_replace_task: Option<Task<()>>,
@@ -2877,6 +1692,7 @@ mod document_commands;
 mod document_lifecycle;
 mod document_opening;
 mod log_presentation;
+mod log_viewport;
 mod preferences;
 mod quick_find;
 mod render_shell;
@@ -2886,6 +1702,8 @@ mod tab_lifecycle;
 mod view_state;
 mod viewport_orchestration;
 mod window_registry;
+
+use log_viewport::*;
 use view_state::*;
 
 impl Workspace {
@@ -2907,19 +1725,14 @@ impl Workspace {
             let workspace = cx.weak_entity();
             cx.new(move |cx| WorkspaceStatusSurface::new(workspace, cx))
         };
-        let global_table = cx.new(|cx| {
-            TableState::new(GlobalSearchTableDelegate::new(), window, cx)
-                .loop_selection(false)
-                .row_selectable(false)
-                .sortable(false)
-                .col_movable(false)
-                .col_selectable(false)
+        let global_table = cx.new(|_| {
+            VirtualLogListState::new(GlobalSearchTableDelegate::new(), VirtualLogViewport::new())
         });
         let global_viewport = {
             let table = global_table.read(cx);
             LogViewportState::new(
                 false,
-                table.vertical_scroll_handle.clone(),
+                table.viewport().clone(),
                 table.delegate().row_bounds_handle(),
             )
         };
@@ -3010,8 +1823,8 @@ impl Workspace {
         subscriptions.push(cx.subscribe_in(
             &global_table,
             window,
-            |this, table, event: &TableEvent, window, cx| {
-                if matches!(event, TableEvent::ClearSelection) {
+            |this, table, event: &VirtualLogListEvent, window, cx| {
+                if matches!(event, VirtualLogListEvent::ClearSelection) {
                     if table.read(cx).delegate().take_suppressed_table_clear() {
                         return;
                     }
@@ -3021,7 +1834,7 @@ impl Workspace {
                     cx.notify();
                     return;
                 }
-                let TableEvent::SelectRow(row_ix) = event else {
+                let VirtualLogListEvent::SelectRow(row_ix) = event else {
                     return;
                 };
                 let keep_quick_find_focus = this.quick_find_input_has_focus(window, cx);
@@ -3406,9 +2219,10 @@ impl Workspace {
             row_drag_frame_scheduled: false,
             visible_line_tasks: BTreeMap::new(),
             pending_log_scroll_frames: PendingLogScrollFrames::default(),
-            word_wrap_transition_task: None,
-            word_wrap_transition_cancellation: None,
-            word_wrap_transition_revision: 0,
+            scroll_frame_tasks: BTreeMap::new(),
+            scroll_frame_cancellations: BTreeMap::new(),
+            active_scroll_frames: BTreeMap::new(),
+            next_scroll_frame_revision: 0,
             global_group_toggle_task: None,
             global_group_toggle_revision: 0,
             global_result_replace_task: None,

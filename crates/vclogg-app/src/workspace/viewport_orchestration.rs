@@ -339,6 +339,54 @@ impl Workspace {
 
     pub(super) fn invalidate_log_scroll_frame(&mut self, key: (u64, WrappedRegion)) {
         self.pending_log_scroll_frames.clear(key);
+        if let Some(cancellation) = self.scroll_frame_cancellations.remove(&key) {
+            cancellation.store(true, Ordering::Release);
+        }
+        self.scroll_frame_tasks.remove(&key);
+        self.active_scroll_frames.remove(&key);
+    }
+
+    fn begin_log_scroll_frame(
+        &mut self,
+        key: (u64, WrappedRegion),
+        target: LogScrollFrameTarget,
+    ) -> Option<(u64, Arc<AtomicBool>)> {
+        if self
+            .active_scroll_frames
+            .get(&key)
+            .is_some_and(|(_, active_target)| *active_target == target)
+        {
+            return None;
+        }
+        if let Some(cancellation) = self.scroll_frame_cancellations.remove(&key) {
+            cancellation.store(true, Ordering::Release);
+        }
+        self.scroll_frame_tasks.remove(&key);
+        self.next_scroll_frame_revision = self.next_scroll_frame_revision.saturating_add(1);
+        let revision = self.next_scroll_frame_revision;
+        let cancellation = Arc::new(AtomicBool::new(false));
+        self.active_scroll_frames.insert(key, (revision, target));
+        self.scroll_frame_cancellations
+            .insert(key, cancellation.clone());
+        Some((revision, cancellation))
+    }
+
+    fn log_scroll_frame_is_current(&self, key: (u64, WrappedRegion), revision: u64) -> bool {
+        self.active_scroll_frames
+            .get(&key)
+            .is_some_and(|(active_revision, _)| *active_revision == revision)
+    }
+
+    fn finish_log_scroll_frame(&mut self, key: (u64, WrappedRegion), revision: u64) {
+        if let Some((active_revision, target)) = self.active_scroll_frames.get(&key).copied()
+            && active_revision == revision
+        {
+            if self.pending_log_scroll_frames.latest(key) == Some(target) {
+                self.pending_log_scroll_frames.clear(key);
+            }
+            self.active_scroll_frames.remove(&key);
+            self.scroll_frame_cancellations.remove(&key);
+        }
     }
 
     pub(super) fn prepare_pending_log_scroll_frame(
@@ -390,7 +438,12 @@ impl Workspace {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
+        let key = (document_id, region);
+        let Some((revision, cancellation)) = self.begin_log_scroll_frame(key, target) else {
+            return;
+        };
         let Some(tab_ix) = self.documents.iter().position(|tab| tab.id == document_id) else {
+            self.finish_log_scroll_frame(key, revision);
             return;
         };
         let table = if region == WrappedRegion::Results {
@@ -405,22 +458,10 @@ impl Workspace {
                 &self.documents[tab_ix].log_viewport
             };
             let wrapped = viewport.is_wrapped();
-            let viewport_height = if wrapped {
-                viewport.wrapped_viewport_height()
-            } else {
-                viewport
-                    .fixed
-                    .scroll_handle
-                    .0
-                    .borrow()
-                    .base_handle
-                    .bounds()
-                    .size
-                    .height
-            };
+            let viewport_height = viewport.committed_viewport_height();
             (wrapped, viewport_height)
         };
-        let (row_count, document, request) = {
+        let (row_count, content_revision, document, request) = {
             let table = table.read(cx);
             let delegate = table.delegate();
             let row_count = delegate.row_count();
@@ -433,34 +474,88 @@ impl Workspace {
                 viewport.scroll_frame_preload_range(target, row_count, viewport_height, row_height);
             (
                 row_count,
+                delegate.content_revision(),
                 delegate.visible_document(),
                 delegate.stage_visible_rows(range),
             )
         };
-        if let Some(request) = request {
-            // klogg resolves the final scrollbar position in paintEvent and performs one
-            // contiguous visible-window read before presenting the pixmap. Our line reader keeps
-            // verified source blocks hot, so doing the staged window synchronously here provides
-            // the same one-frame contract without exposing an empty virtual list.
-            let mut reader = LinePreviewReader::default();
-            let staged = request.load(|source_row, max_bytes| {
-                reader.line_preview(&document, *source_row, max_bytes)
-            });
-            table.update(cx, |table, cx| {
-                table.delegate().install_staged_visible_lines(staged);
-                table.refresh(cx);
-                cx.notify();
-            });
-        }
-        let viewport = if region == WrappedRegion::Results {
-            &self.documents[tab_ix].result_viewport
-        } else {
-            &self.documents[tab_ix].log_viewport
+        let Some(request) = request else {
+            let viewport = if region == WrappedRegion::Results {
+                &self.documents[tab_ix].result_viewport
+            } else {
+                &self.documents[tab_ix].log_viewport
+            };
+            viewport.commit_scroll_frame_target(target, row_count, row_height);
+            if wrapped {
+                self.prime_local_wrapped_frame(tab_ix, region, row_height, false, window, cx);
+            }
+            self.finish_log_scroll_frame(key, revision);
+            return;
         };
-        viewport.commit_scroll_frame_target(target, row_count, row_height);
-        if wrapped {
-            self.prime_local_wrapped_frame(tab_ix, region, row_height, false, window, cx);
-        }
+
+        let expected_document = document.clone();
+        let load_cancellation = cancellation.clone();
+        let task = cx.spawn_in(window, async move |this, cx| {
+            let staged = cx
+                .background_spawn(async move {
+                    let mut reader = LinePreviewReader::default();
+                    request.load_cancellable(&load_cancellation, |source_row, max_bytes| {
+                        reader.line_preview(&document, *source_row, max_bytes)
+                    })
+                })
+                .await;
+            if cancellation.load(Ordering::Acquire) {
+                return;
+            }
+            _ = this.update_in(cx, |this, window, cx| {
+                if !this.log_scroll_frame_is_current(key, revision) {
+                    return;
+                }
+                let Some(tab_ix) = this.documents.iter().position(|tab| tab.id == document_id)
+                else {
+                    this.finish_log_scroll_frame(key, revision);
+                    return;
+                };
+                let current_table = if region == WrappedRegion::Results {
+                    this.documents[tab_ix].result_table.clone()
+                } else {
+                    this.documents[tab_ix].log_table.clone()
+                };
+                let is_current = {
+                    let current = current_table.read(cx);
+                    current_table.entity_id() == table.entity_id()
+                        && current.delegate().row_count() == row_count
+                        && current.delegate().content_revision() == content_revision
+                        && Arc::ptr_eq(&current.delegate().visible_document(), &expected_document)
+                };
+                if !is_current {
+                    this.finish_log_scroll_frame(key, revision);
+                    return;
+                }
+                current_table.update(cx, |table, cx| {
+                    table.delegate().install_staged_visible_lines(staged);
+                    table.refresh(cx);
+                    cx.notify();
+                });
+                let viewport = if region == WrappedRegion::Results {
+                    &this.documents[tab_ix].result_viewport
+                } else {
+                    &this.documents[tab_ix].log_viewport
+                };
+                viewport.commit_scroll_frame_target(target, row_count, row_height);
+                if wrapped {
+                    this.prime_local_wrapped_frame(tab_ix, region, row_height, false, window, cx);
+                }
+                this.finish_log_scroll_frame(key, revision);
+                let surface = if region == WrappedRegion::Results {
+                    this.search_results_viewer.surface.clone()
+                } else {
+                    this.log_viewer.surface.clone()
+                };
+                Self::refresh_log_surfaces_atomically([surface], window, cx);
+            });
+        });
+        self.scroll_frame_tasks.insert(key, task);
     }
 
     pub(super) fn prepare_global_scroll_frame(
@@ -470,24 +565,16 @@ impl Workspace {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
+        let key = (0, WrappedRegion::GlobalResults);
+        let Some((revision, cancellation)) = self.begin_log_scroll_frame(key, target) else {
+            return;
+        };
         self.global_group_toggle_task.take();
         self.global_group_toggle_revision = self.global_group_toggle_revision.saturating_add(1);
         let wrapped = self.global_viewport.is_wrapped();
-        let viewport_height = if wrapped {
-            self.global_viewport.wrapped_viewport_height()
-        } else {
-            self.global_viewport
-                .fixed
-                .scroll_handle
-                .0
-                .borrow()
-                .base_handle
-                .bounds()
-                .size
-                .height
-        };
+        let viewport_height = self.global_viewport.committed_viewport_height();
         let table = self.global_table.clone();
-        let (row_count, request, documents) = {
+        let (row_count, content_revision, request, documents) = {
             let table = table.read(cx);
             let delegate = table.delegate();
             let row_count = delegate.rows_len();
@@ -502,29 +589,72 @@ impl Workspace {
                 .as_ref()
                 .map(|request| delegate.staged_visible_documents(request))
                 .unwrap_or_default();
-            (row_count, request, documents)
+            (row_count, delegate.content_revision(), request, documents)
         };
-        if let Some(request) = request {
-            let mut readers = BTreeMap::<u64, LinePreviewReader>::new();
-            let staged = request.load(|(document_id, source_row), max_bytes| {
-                let document = documents.get(document_id)?;
-                readers.entry(*document_id).or_default().line_preview(
-                    document,
-                    *source_row,
-                    max_bytes,
-                )
+        let Some(request) = request else {
+            self.global_viewport
+                .commit_scroll_frame_target(target, row_count, row_height);
+            if wrapped {
+                self.prime_global_wrapped_frame(row_height, false, window, cx);
+            }
+            self.finish_log_scroll_frame(key, revision);
+            return;
+        };
+
+        let load_cancellation = cancellation.clone();
+        let task = cx.spawn_in(window, async move |this, cx| {
+            let staged = cx
+                .background_spawn(async move {
+                    let mut readers = BTreeMap::<u64, LinePreviewReader>::new();
+                    request.load_cancellable(
+                        &load_cancellation,
+                        |(document_id, source_row), max_bytes| {
+                            let document = documents.get(document_id)?;
+                            readers.entry(*document_id).or_default().line_preview(
+                                document,
+                                *source_row,
+                                max_bytes,
+                            )
+                        },
+                    )
+                })
+                .await;
+            if cancellation.load(Ordering::Acquire) {
+                return;
+            }
+            _ = this.update_in(cx, |this, window, cx| {
+                if !this.log_scroll_frame_is_current(key, revision) {
+                    return;
+                }
+                let is_current = {
+                    let current = this.global_table.read(cx);
+                    this.global_table.entity_id() == table.entity_id()
+                        && current.delegate().rows_len() == row_count
+                        && current.delegate().content_revision() == content_revision
+                };
+                if !is_current {
+                    this.finish_log_scroll_frame(key, revision);
+                    return;
+                }
+                this.global_table.update(cx, |table, cx| {
+                    table.delegate().install_staged_visible_lines(staged);
+                    table.refresh(cx);
+                    cx.notify();
+                });
+                this.global_viewport
+                    .commit_scroll_frame_target(target, row_count, row_height);
+                if wrapped {
+                    this.prime_global_wrapped_frame(row_height, false, window, cx);
+                }
+                this.finish_log_scroll_frame(key, revision);
+                Self::refresh_log_surfaces_atomically(
+                    [this.search_results_viewer.surface.clone()],
+                    window,
+                    cx,
+                );
             });
-            table.update(cx, |table, cx| {
-                table.delegate().install_staged_visible_lines(staged);
-                table.refresh(cx);
-                cx.notify();
-            });
-        }
-        self.global_viewport
-            .commit_scroll_frame_target(target, row_count, row_height);
-        if wrapped {
-            self.prime_global_wrapped_frame(row_height, false, window, cx);
-        }
+        });
+        self.scroll_frame_tasks.insert(key, task);
     }
 
     pub(super) fn schedule_local_visible_lines(
@@ -545,7 +675,9 @@ impl Workspace {
         let (request, document) = {
             let table = table.read(cx);
             let delegate = table.delegate();
-            let Some(request) = delegate.request_visible_rows(visible_range) else {
+            let Some(request) =
+                VirtualLogListDelegate::request_visible_rows(delegate, visible_range)
+            else {
                 return;
             };
             (request, delegate.visible_document())
@@ -646,22 +778,17 @@ impl Workspace {
         true
     }
 
-    pub(super) fn switch_visible_line_owner(
+    pub(super) fn refresh_visible_line_owner(
         &mut self,
         document_id: u64,
         region: WrappedRegion,
-        mode: LogViewportMode,
         cx: &mut Context<Self>,
     ) {
         self.invalidate_log_scroll_frame((document_id, region));
         self.visible_line_tasks.remove(&(document_id, region));
         if region == WrappedRegion::GlobalResults {
             self.global_table.update(cx, |table, cx| {
-                if mode == LogViewportMode::Fixed {
-                    table.reacquire_visible_log_rows(cx);
-                } else {
-                    table.delegate_mut().reset_visible_line_owner();
-                }
+                table.reacquire_visible_log_rows(cx);
             });
             return;
         }
@@ -674,11 +801,7 @@ impl Workspace {
             tab.log_table.clone()
         };
         table.update(cx, |table, cx| {
-            if mode == LogViewportMode::Fixed {
-                table.reacquire_visible_log_rows(cx);
-            } else {
-                table.delegate_mut().reset_visible_line_owner();
-            }
+            table.reacquire_visible_log_rows(cx);
         });
     }
 
@@ -705,20 +828,12 @@ impl Workspace {
         };
         self.bind_active_display_tables(cx);
         let row_height = self.log_row_height();
-        let (document_id, log_mode, result_mode, surfaces) = {
+        let (document_id, log_wrapped, result_wrapped, surfaces) = {
             let tab = &self.documents[tab_ix];
             (
                 tab.id,
-                if tab.log_viewport.is_wrapped() {
-                    LogViewportMode::Wrapped
-                } else {
-                    LogViewportMode::Fixed
-                },
-                if tab.result_viewport.is_wrapped() {
-                    LogViewportMode::Wrapped
-                } else {
-                    LogViewportMode::Fixed
-                },
+                tab.log_viewport.is_wrapped(),
+                tab.result_viewport.is_wrapped(),
                 [
                     self.log_viewer.surface.clone(),
                     self.search_results_viewer.surface.clone(),
@@ -726,12 +841,12 @@ impl Workspace {
             )
         };
 
-        for (region, mode) in [
-            (WrappedRegion::Log, log_mode),
-            (WrappedRegion::Results, result_mode),
+        for (region, wrapped) in [
+            (WrappedRegion::Log, log_wrapped),
+            (WrappedRegion::Results, result_wrapped),
         ] {
-            self.switch_visible_line_owner(document_id, region, mode, cx);
-            if mode == LogViewportMode::Wrapped {
+            self.refresh_visible_line_owner(document_id, region, cx);
+            if wrapped {
                 self.prime_local_wrapped_frame(tab_ix, region, row_height, false, window, cx);
             }
         }
@@ -790,13 +905,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.bind_active_display_tables(cx);
-        let mode = if self.global_viewport.is_wrapped() {
-            LogViewportMode::Wrapped
-        } else {
-            LogViewportMode::Fixed
-        };
-        self.switch_visible_line_owner(0, WrappedRegion::GlobalResults, mode, cx);
-        if mode == LogViewportMode::Wrapped {
+        let wrapped = self.global_viewport.is_wrapped();
+        self.refresh_visible_line_owner(0, WrappedRegion::GlobalResults, cx);
+        if wrapped {
             self.prime_global_wrapped_frame(self.log_row_height(), false, window, cx);
         }
         Self::refresh_log_surfaces_atomically(
@@ -889,15 +1000,7 @@ impl Workspace {
                 scrollbar_preload_range(
                     self.global_viewport.committed_scroll_offset(),
                     row_count,
-                    self.global_viewport
-                        .fixed
-                        .scroll_handle
-                        .0
-                        .borrow()
-                        .base_handle
-                        .bounds()
-                        .size
-                        .height,
+                    self.global_viewport.committed_viewport_height(),
                     row_height,
                 )
             };
@@ -971,10 +1074,8 @@ impl Workspace {
             .remove(&(document_id, WrappedRegion::Log));
         self.visible_line_tasks
             .remove(&(document_id, WrappedRegion::Results));
-        self.pending_log_scroll_frames
-            .clear((document_id, WrappedRegion::Log));
-        self.pending_log_scroll_frames
-            .clear((document_id, WrappedRegion::Results));
+        self.invalidate_log_scroll_frame((document_id, WrappedRegion::Log));
+        self.invalidate_log_scroll_frame((document_id, WrappedRegion::Results));
         let Some(tab) = self.documents.iter().find(|tab| tab.id == document_id) else {
             return;
         };
@@ -994,7 +1095,9 @@ impl Workspace {
         let (request, documents) = {
             let table = table.read(cx);
             let delegate = table.delegate();
-            let Some(request) = delegate.request_visible_rows(visible_range) else {
+            let Some(request) =
+                VirtualLogListDelegate::request_visible_rows(delegate, visible_range)
+            else {
                 return;
             };
             let documents = delegate.visible_documents(&request);
@@ -1025,95 +1128,6 @@ impl Workspace {
         });
         self.visible_line_tasks
             .insert((0, WrappedRegion::GlobalResults), task);
-    }
-
-    fn local_fixed_mode_preload_range(
-        &self,
-        tab_ix: usize,
-        region: WrappedRegion,
-        anchor: Option<RowViewportAnchor<LogRowKey>>,
-        row_height: Pixels,
-        window: &Window,
-        cx: &App,
-    ) -> Range<usize> {
-        let tab = &self.documents[tab_ix];
-        let (table, viewport) = if region == WrappedRegion::Results {
-            (&tab.result_table, &tab.result_viewport)
-        } else {
-            (&tab.log_table, &tab.log_viewport)
-        };
-        let table = table.read(cx);
-        let delegate = table.delegate();
-        let row_count = delegate.row_count();
-        let anchor_row = anchor
-            .and_then(|anchor| delegate.nearest_row_ix_for_key(anchor.key))
-            .or_else(|| {
-                (row_count > 0).then(|| {
-                    anchor.map_or_else(
-                        || viewport.first_visible(row_count, row_height),
-                        |anchor| anchor.fallback_ix.min(row_count - 1),
-                    )
-                })
-            })
-            .unwrap_or_default();
-        let measured_height = self
-            .row_drag_bounds
-            .get(&(tab.id, region))
-            .map_or(px(0.), |bounds| bounds.size.height);
-        let known_height = measured_height.max(viewport.committed_viewport_height());
-        let viewport_height = if known_height > px(0.) {
-            known_height
-        } else {
-            window.viewport_size().height
-        };
-        fixed_mode_preload_range(
-            anchor_row,
-            anchor.map_or(px(0.), |anchor| anchor.viewport_y),
-            row_count,
-            viewport_height,
-            row_height,
-        )
-    }
-
-    fn global_fixed_mode_preload_range(
-        &self,
-        anchor: Option<RowViewportAnchor<LogRowKey>>,
-        row_height: Pixels,
-        window: &Window,
-        cx: &App,
-    ) -> Range<usize> {
-        let table = self.global_table.read(cx);
-        let delegate = table.delegate();
-        let row_count = delegate.rows_len();
-        let anchor_row = anchor
-            .and_then(|anchor| delegate.nearest_row_ix_for_key(anchor.key))
-            .or_else(|| anchor.and_then(|anchor| delegate.closest_match_row(anchor.fallback_ix)))
-            .or_else(|| {
-                (row_count > 0).then(|| {
-                    anchor.map_or_else(
-                        || self.global_viewport.first_visible(row_count, row_height),
-                        |anchor| anchor.fallback_ix.min(row_count - 1),
-                    )
-                })
-            })
-            .unwrap_or_default();
-        let measured_height = self
-            .row_drag_bounds
-            .get(&(0, WrappedRegion::GlobalResults))
-            .map_or(px(0.), |bounds| bounds.size.height);
-        let known_height = measured_height.max(self.global_viewport.committed_viewport_height());
-        let viewport_height = if known_height > px(0.) {
-            known_height
-        } else {
-            window.viewport_size().height
-        };
-        fixed_mode_preload_range(
-            anchor_row,
-            anchor.map_or(px(0.), |anchor| anchor.viewport_y),
-            row_count,
-            viewport_height,
-            row_height,
-        )
     }
 
     pub(super) fn prime_local_wrapped_frame(
@@ -1423,326 +1437,6 @@ impl Workspace {
         );
     }
 
-    fn begin_word_wrap_disable(
-        &mut self,
-        row_height: Pixels,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(cancellation) = self.word_wrap_transition_cancellation.take() {
-            cancellation.store(true, Ordering::Release);
-        }
-        self.word_wrap_transition_task.take();
-        self.word_wrap_transition_revision = self.word_wrap_transition_revision.saturating_add(1);
-        let transition_revision = self.word_wrap_transition_revision;
-        let active_document_id = self.active_document().map(|tab| tab.id);
-        let scope = self.global_search.scope;
-
-        let local = self.active_ix.and_then(|tab_ix| {
-            self.documents[tab_ix].log_viewport.is_wrapped().then(|| {
-                let tab = &self.documents[tab_ix];
-                let document_id = tab.id;
-                let document = tab.document.clone();
-                let log_anchor = Self::capture_local_row_viewport_anchor(
-                    tab,
-                    WrappedRegion::Log,
-                    row_height,
-                    cx,
-                );
-                let result_anchor = Self::capture_local_row_viewport_anchor(
-                    tab,
-                    WrappedRegion::Results,
-                    row_height,
-                    cx,
-                );
-                let log_range = self.local_fixed_mode_preload_range(
-                    tab_ix,
-                    WrappedRegion::Log,
-                    log_anchor,
-                    row_height,
-                    window,
-                    cx,
-                );
-                let result_range = self.local_fixed_mode_preload_range(
-                    tab_ix,
-                    WrappedRegion::Results,
-                    result_anchor,
-                    row_height,
-                    window,
-                    cx,
-                );
-                let (log_revision, log_request) = {
-                    let table = tab.log_table.read(cx);
-                    (
-                        table.delegate().visible_line_revision(),
-                        table.delegate().stage_visible_rows(log_range),
-                    )
-                };
-                let (result_revision, result_request) = {
-                    let table = tab.result_table.read(cx);
-                    (
-                        table.delegate().visible_line_revision(),
-                        table.delegate().stage_visible_rows(result_range),
-                    )
-                };
-                WordWrapDisableLocalPlan {
-                    document_id,
-                    document,
-                    log_revision,
-                    result_revision,
-                    log_request,
-                    result_request,
-                    log_anchor,
-                    result_anchor,
-                }
-            })
-        });
-
-        let global =
-            (scope.owns_global_word_wrap() && self.global_viewport.is_wrapped()).then(|| {
-                let anchor = self.capture_global_row_viewport_anchor(row_height, cx);
-                let range = self.global_fixed_mode_preload_range(anchor, row_height, window, cx);
-                let table = self.global_table.read(cx);
-                let delegate = table.delegate();
-                let request = delegate.stage_visible_rows(range);
-                let documents = request
-                    .as_ref()
-                    .map(|request| delegate.staged_visible_documents(request))
-                    .unwrap_or_default();
-                WordWrapDisableGlobalPlan {
-                    content_revision: delegate.content_revision(),
-                    layout_revision: delegate.layout_revision(),
-                    visible_line_revision: delegate.visible_line_revision(),
-                    request,
-                    documents,
-                    anchor,
-                }
-            });
-
-        if local.is_none() && global.is_none() {
-            return;
-        }
-
-        let cancellation = Arc::new(AtomicBool::new(false));
-        self.word_wrap_transition_cancellation = Some(cancellation.clone());
-        self.word_wrap_transition_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let prepared = cx
-                .background_spawn(async move {
-                    let local = local.map(|plan| {
-                        let mut reader = LinePreviewReader::default();
-                        let log_lines = plan.log_request.map(|request| {
-                            request.load_cancellable(&cancellation, |source_row, max_bytes| {
-                                reader.line_preview(&plan.document, *source_row, max_bytes)
-                            })
-                        });
-                        let result_lines = plan.result_request.map(|request| {
-                            request.load_cancellable(&cancellation, |source_row, max_bytes| {
-                                reader.line_preview(&plan.document, *source_row, max_bytes)
-                            })
-                        });
-                        PreparedWordWrapDisableLocal {
-                            document_id: plan.document_id,
-                            document: plan.document,
-                            log_revision: plan.log_revision,
-                            result_revision: plan.result_revision,
-                            log_lines,
-                            result_lines,
-                            log_anchor: plan.log_anchor,
-                            result_anchor: plan.result_anchor,
-                        }
-                    });
-                    let global = global.map(|plan| {
-                        let mut readers = BTreeMap::<u64, LinePreviewReader>::new();
-                        let lines = plan.request.map(|request| {
-                            request.load_cancellable(
-                                &cancellation,
-                                |(document_id, source_row), max_bytes| {
-                                    let document = plan.documents.get(document_id)?;
-                                    readers.entry(*document_id).or_default().line_preview(
-                                        document,
-                                        *source_row,
-                                        max_bytes,
-                                    )
-                                },
-                            )
-                        });
-                        PreparedWordWrapDisableGlobal {
-                            content_revision: plan.content_revision,
-                            layout_revision: plan.layout_revision,
-                            visible_line_revision: plan.visible_line_revision,
-                            lines,
-                            anchor: plan.anchor,
-                        }
-                    });
-                    PreparedWordWrapDisable {
-                        active_document_id,
-                        scope,
-                        row_height,
-                        local,
-                        global,
-                    }
-                })
-                .await;
-            _ = this.update_in(cx, |this, window, cx| {
-                if this.word_wrap_transition_revision != transition_revision {
-                    return;
-                }
-                if !this.word_wrap_disable_targets_are_current(&prepared) {
-                    this.word_wrap_transition_task = None;
-                    this.word_wrap_transition_cancellation = None;
-                    return;
-                }
-                if !this.prepared_word_wrap_disable_frame_is_current(&prepared, cx) {
-                    this.word_wrap_transition_task = None;
-                    this.word_wrap_transition_cancellation = None;
-                    this.begin_word_wrap_disable(this.log_row_height(), window, cx);
-                    return;
-                }
-                this.commit_prepared_word_wrap_disable(prepared, window, cx);
-            });
-        }));
-    }
-
-    fn word_wrap_disable_targets_are_current(&self, prepared: &PreparedWordWrapDisable) -> bool {
-        if self.active_document().map(|tab| tab.id) != prepared.active_document_id
-            || self.global_search.scope != prepared.scope
-        {
-            return false;
-        }
-        if let Some(local) = prepared.local.as_ref()
-            && self
-                .documents
-                .iter()
-                .find(|tab| tab.id == local.document_id)
-                .is_none_or(|tab| !tab.log_viewport.is_wrapped())
-        {
-            return false;
-        }
-        if prepared.global.is_some() && !self.global_viewport.is_wrapped() {
-            return false;
-        }
-        true
-    }
-
-    fn prepared_word_wrap_disable_frame_is_current(
-        &self,
-        prepared: &PreparedWordWrapDisable,
-        cx: &App,
-    ) -> bool {
-        if let Some(local) = prepared.local.as_ref() {
-            let Some(tab) = self
-                .documents
-                .iter()
-                .find(|tab| tab.id == local.document_id)
-            else {
-                return false;
-            };
-            if !Arc::ptr_eq(&tab.document, &local.document)
-                || tab.log_table.read(cx).delegate().visible_line_revision() != local.log_revision
-                || tab.result_table.read(cx).delegate().visible_line_revision()
-                    != local.result_revision
-            {
-                return false;
-            }
-        }
-        if let Some(global) = prepared.global.as_ref() {
-            let table = self.global_table.read(cx);
-            if table.delegate().content_revision() != global.content_revision
-                || table.delegate().layout_revision() != global.layout_revision
-                || table.delegate().visible_line_revision() != global.visible_line_revision
-            {
-                return false;
-            }
-        }
-        true
-    }
-
-    fn commit_prepared_word_wrap_disable(
-        &mut self,
-        prepared: PreparedWordWrapDisable,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let mut refreshed_surfaces = Vec::with_capacity(3);
-        if let Some(global) = prepared.global {
-            self.invalidate_log_scroll_frame((0, WrappedRegion::GlobalResults));
-            self.visible_line_tasks
-                .remove(&(0, WrappedRegion::GlobalResults));
-            if let Some(lines) = global.lines {
-                self.global_table.update(cx, |table, cx| {
-                    table.delegate().install_staged_visible_lines(lines);
-                    table.refresh(cx);
-                    cx.notify();
-                });
-            }
-            self.global_viewport.set_word_wrap(false);
-            self.position_global_row_viewport_anchor(global.anchor, prepared.row_height, cx);
-            refreshed_surfaces.push(self.search_results_viewer.surface.clone());
-            self.schedule_workspace_search_state_save(window, cx);
-        }
-        if let Some(local) = prepared.local {
-            for region in [WrappedRegion::Log, WrappedRegion::Results] {
-                self.invalidate_log_scroll_frame((local.document_id, region));
-                self.visible_line_tasks.remove(&(local.document_id, region));
-            }
-            let Some(tab_ix) = self
-                .documents
-                .iter()
-                .position(|tab| tab.id == local.document_id)
-            else {
-                return;
-            };
-            if let Some(lines) = local.log_lines {
-                let table = self.documents[tab_ix].log_table.clone();
-                table.update(cx, |table, cx| {
-                    table.delegate().install_staged_visible_lines(lines);
-                    table.refresh(cx);
-                    cx.notify();
-                });
-            }
-            if let Some(lines) = local.result_lines {
-                let table = self.documents[tab_ix].result_table.clone();
-                table.update(cx, |table, cx| {
-                    table.delegate().install_staged_visible_lines(lines);
-                    table.refresh(cx);
-                    cx.notify();
-                });
-            }
-            let document_id = {
-                let tab = &mut self.documents[tab_ix];
-                tab.log_viewport.set_word_wrap(false);
-                tab.result_viewport.set_word_wrap(false);
-                tab.view.word_wrap = false;
-                tab.id
-            };
-            let tab = &self.documents[tab_ix];
-            Self::position_local_row_viewport_anchor(
-                tab,
-                WrappedRegion::Log,
-                local.log_anchor,
-                prepared.row_height,
-                cx,
-            );
-            Self::position_local_row_viewport_anchor(
-                tab,
-                WrappedRegion::Results,
-                local.result_anchor,
-                prepared.row_height,
-                cx,
-            );
-            refreshed_surfaces.extend([
-                self.log_viewer.surface.clone(),
-                self.search_results_viewer.surface.clone(),
-            ]);
-            self.schedule_checkpoint(document_id, window, cx);
-        }
-        self.word_wrap_transition_task = None;
-        self.word_wrap_transition_cancellation = None;
-        Self::refresh_log_surfaces_atomically(refreshed_surfaces, window, cx);
-        window.push_notification(crate::tr!("已关闭自动换行", "Word wrap disabled"), cx);
-        cx.notify();
-    }
-
     pub(super) fn toggle_word_wrap(
         &mut self,
         _: &ToggleWordWrap,
@@ -1776,22 +1470,13 @@ impl Workspace {
                 self.prepare_pending_log_scroll_frame(document_id, region, row_height, window, cx);
             }
         }
-        let target_mode = if enabled {
-            LogViewportMode::Wrapped
-        } else {
-            LogViewportMode::Fixed
-        };
-        if !enabled {
-            self.begin_word_wrap_disable(row_height, window, cx);
-            return;
-        }
         let mut refreshed_surfaces = Vec::with_capacity(3);
 
         if self.global_search.scope.owns_global_word_wrap()
             && self.global_viewport.is_wrapped() != enabled
         {
             let anchor = self.capture_global_row_viewport_anchor(row_height, cx);
-            self.switch_visible_line_owner(0, WrappedRegion::GlobalResults, target_mode, cx);
+            self.refresh_visible_line_owner(0, WrappedRegion::GlobalResults, cx);
             if enabled {
                 self.prime_global_wrapped_frame(row_height, true, window, cx);
             }
@@ -1817,13 +1502,8 @@ impl Workspace {
                     cx,
                 );
                 let document_id = self.documents[active_ix].id;
-                self.switch_visible_line_owner(document_id, WrappedRegion::Log, target_mode, cx);
-                self.switch_visible_line_owner(
-                    document_id,
-                    WrappedRegion::Results,
-                    target_mode,
-                    cx,
-                );
+                self.refresh_visible_line_owner(document_id, WrappedRegion::Log, cx);
+                self.refresh_visible_line_owner(document_id, WrappedRegion::Results, cx);
                 if enabled {
                     self.prime_wrapped_first_frame(active_ix, row_height, window, cx);
                 }
@@ -1861,7 +1541,14 @@ impl Workspace {
             Self::refresh_log_surfaces_atomically(refreshed_surfaces, window, cx);
         }
 
-        window.push_notification(crate::tr!("已开启自动换行", "Word wrap enabled"), cx);
+        window.push_notification(
+            if enabled {
+                crate::tr!("已开启自动换行", "Word wrap enabled")
+            } else {
+                crate::tr!("已关闭自动换行", "Word wrap disabled")
+            },
+            cx,
+        );
         cx.notify();
     }
 

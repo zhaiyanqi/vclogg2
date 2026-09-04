@@ -30,12 +30,12 @@ mod search_context;
 mod selectable_log_text;
 mod settings_dialog;
 mod single_instance;
-mod sparse_virtual_list;
 mod state_store;
 mod tab_resume;
 mod ui_performance;
 mod ui_theme;
 mod virtual_log_lines;
+mod virtual_log_list;
 mod workspace;
 mod workspace_state;
 

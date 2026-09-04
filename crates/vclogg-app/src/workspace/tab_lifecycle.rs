@@ -618,6 +618,10 @@ impl Workspace {
             .retain(|(tab_id, _), _| !document_ids.contains(tab_id));
         self.visible_line_tasks
             .retain(|(document_id, _), _| *document_id == 0 || !document_ids.contains(document_id));
+        for document_id in &document_ids {
+            self.invalidate_log_scroll_frame((*document_id, WrappedRegion::Log));
+            self.invalidate_log_scroll_frame((*document_id, WrappedRegion::Results));
+        }
         if self.tabs.is_empty() {
             self.document_tab_scroll = ScrollHandle::new();
             self.pending_document_tab_reveal.set(None);

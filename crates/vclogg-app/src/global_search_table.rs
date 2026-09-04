@@ -8,17 +8,11 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, AppContext as _, Bounds, Context, Div, Element, GlobalElementId, Hsla,
-    InspectorElementId, InteractiveElement as _, IntoElement, LayoutId, MouseButton,
-    MouseDownEvent, ParentElement as _, Pixels, RenderOnce, SharedString, Stateful, Styled as _,
-    StyledText, Task, Window, div, prelude::FluentBuilder as _, px, svg,
+    App, AppContext as _, Bounds, Context, Hsla, IntoElement, ParentElement as _, Pixels,
+    RenderOnce, SharedString, Styled as _, Task, Window, div, prelude::FluentBuilder as _, px, svg,
 };
-use gpui_base::{GlobalState, TextSelection};
 use gpui_component::{
-    ActiveTheme as _, ElementExt as _, Icon, IconName, StyledExt as _, h_flex,
-    table::{Column, TableDelegate, TableState},
-    theme::try_parse_color,
-    v_flex,
+    ActiveTheme as _, Icon, IconName, StyledExt as _, h_flex, theme::try_parse_color,
 };
 use vclogg_core::{CompressedRows, LinePreviewReader, LogDocument, SearchMatcher};
 
@@ -26,18 +20,16 @@ use crate::color_labels::{
     LogColorStyle, ResolvedColorRules, ResolvedLogLevelRules, resolve_log_level_rules,
 };
 use crate::log_table::{
-    LogTableCursor, LogTableRows, LogTableStateExt, RowSelection, combined_match_ranges,
-    line_marker, line_marker_column_width, log_cell_horizontal_padding, log_level_accent_overlay,
-    log_line_height, log_line_number_cell, log_row_selection_color, log_row_selection_overlay,
-    message_column_width,
+    LogTableCursor, LogTableRows, RowSelection, combined_match_ranges, line_marker_column_width,
+    log_line_height, message_column_width,
 };
-use crate::selectable_log_text::{LogText, SelectableLogText, TextSelectionCache};
+use crate::selectable_log_text::{LogText, TextSelectionCache};
 use crate::state_store::{AppSettings, DEFAULT_WORD_BOUNDARY_CHARACTERS, LogFontFamily};
-use crate::ui_theme;
 use crate::virtual_log_lines::{
     LogRowKey, StagedVisibleLineLoadRequest, StagedVisibleLineLoadResult, VisibleLineLoadRequest,
     VisibleLineLoadResult, VisibleLineSnapshot, VisibleLineStore,
 };
+use crate::virtual_log_list::{VirtualLogListDelegate, VirtualLogListState};
 
 #[derive(Clone)]
 pub struct GlobalSearchGroup {
@@ -273,82 +265,6 @@ struct GlobalSearchGroupHeaderPresentation {
     state_label: Option<String>,
     state_failed: bool,
     icon: GlobalSearchGroupIcon,
-}
-
-/// Defers a spanning table row until after DataTable's fixed-column chrome while preserving
-/// the table viewport's content mask. The stock deferred element intentionally escapes clipping
-/// for popovers, which would let a partially visible virtual row paint outside the result region.
-struct DeferredTableRow {
-    child: Option<AnyElement>,
-}
-
-impl DeferredTableRow {
-    fn new(child: impl IntoElement) -> Self {
-        Self {
-            child: Some(child.into_any_element()),
-        }
-    }
-}
-
-impl Element for DeferredTableRow {
-    type RequestLayoutState = ();
-    type PrepaintState = ();
-
-    fn id(&self) -> Option<gpui::ElementId> {
-        None
-    }
-
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (LayoutId, Self::RequestLayoutState) {
-        let _performance_scope = crate::ui_performance::scope("DeferredTableRow::request_layout");
-        (self.child.as_mut().unwrap().request_layout(window, cx), ())
-    }
-
-    fn prepaint(
-        &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
-        _: Bounds<Pixels>,
-        _: &mut Self::RequestLayoutState,
-        window: &mut Window,
-        _: &mut App,
-    ) -> Self::PrepaintState {
-        let _performance_scope = crate::ui_performance::scope("DeferredTableRow::prepaint");
-        let child = self.child.take().unwrap();
-        let element_offset = window.element_offset();
-        let content_mask = window.content_mask();
-        window.defer_draw(child, element_offset, 0, Some(content_mask));
-    }
-
-    fn paint(
-        &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
-        _: Bounds<Pixels>,
-        _: &mut Self::RequestLayoutState,
-        _: &mut Self::PrepaintState,
-        _: &mut Window,
-        _: &mut App,
-    ) {
-        let _performance_scope = crate::ui_performance::scope("DeferredTableRow::paint");
-    }
-}
-
-impl IntoElement for DeferredTableRow {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
 }
 
 fn format_group_result_count(result_count: usize) -> String {
@@ -1234,6 +1150,10 @@ impl GlobalSearchTableDelegate {
         self.presenter.log_font_size
     }
 
+    pub(crate) fn max_line_columns(&self) -> usize {
+        self.projection.max_line_columns
+    }
+
     pub(crate) fn wrapped_row(&self, row_ix: usize) -> Option<WrappedGlobalRow> {
         match self.flat_row(row_ix)? {
             FlatRow::Group { group_ix } => {
@@ -1393,10 +1313,6 @@ impl GlobalSearchTableDelegate {
         self.visible_lines.install_staged(loaded);
     }
 
-    pub(crate) fn visible_line_revision(&self) -> u64 {
-        self.visible_lines.revision()
-    }
-
     pub(crate) fn install_groups_replacement(
         &mut self,
         groups: Vec<GlobalSearchGroup>,
@@ -1433,7 +1349,7 @@ impl GlobalSearchTableDelegate {
     fn schedule_visible_rows(
         &mut self,
         visible_range: Range<usize>,
-        cx: &mut Context<TableState<Self>>,
+        cx: &mut Context<VirtualLogListState<Self, LogRowKey>>,
     ) {
         let Some(request) = self.request_visible_rows(visible_range) else {
             return;
@@ -1461,14 +1377,6 @@ impl GlobalSearchTableDelegate {
         }));
     }
 
-    fn line_text(&self, group_ix: usize, source_row: usize) -> Option<LogText> {
-        let group = self.projection.groups.get(group_ix)?;
-        let key = (group.source.document_id, source_row);
-        (!self.visible_lines.source_unavailable(key))
-            .then(|| self.visible_lines.line(key))
-            .flatten()
-    }
-
     fn row_presentation(
         &self,
         group_ix: usize,
@@ -1489,6 +1397,15 @@ impl GlobalSearchTableDelegate {
             self.presenter
                 .present(text, &group.presentation.color_rules),
         )
+    }
+
+    #[cfg(test)]
+    fn line_text(&self, group_ix: usize, source_row: usize) -> Option<LogText> {
+        let group = self.projection.groups.get(group_ix)?;
+        let key = (group.source.document_id, source_row);
+        (!self.visible_lines.source_unavailable(key))
+            .then(|| self.visible_lines.line(key))
+            .flatten()
     }
 
     pub(crate) fn begin_pointer_selection(
@@ -1865,6 +1782,46 @@ impl GlobalSearchTableDelegate {
     }
 }
 
+impl VirtualLogListDelegate for GlobalSearchTableDelegate {
+    type Key = LogRowKey;
+    type Row = WrappedGlobalRow;
+    type VisibleRequest = VisibleLineLoadRequest<(u64, usize)>;
+
+    fn row_count(&self) -> usize {
+        self.rows_len()
+    }
+
+    fn stable_row_key(&self, row_ix: usize) -> Option<Self::Key> {
+        self.row_key(row_ix)
+    }
+
+    fn minimum_row_height(&self) -> Pixels {
+        log_line_height(
+            self.presenter.log_font_size,
+            self.presenter.log_line_spacing,
+        )
+    }
+
+    fn row(&self, row_ix: usize) -> Option<Self::Row> {
+        self.wrapped_row(row_ix)
+    }
+
+    fn request_visible_rows(&self, range: Range<usize>) -> Option<Self::VisibleRequest> {
+        GlobalSearchTableDelegate::request_visible_rows(self, range)
+    }
+
+    fn unwrapped_content_width(&self, cx: &App) -> Pixels {
+        line_marker_column_width()
+            + px(self.presenter.line_number_width as f32)
+            + message_column_width(
+                self.max_line_columns(),
+                self.resolved_font_family(cx),
+                self.presenter.log_font_size,
+                cx,
+            )
+    }
+}
+
 impl LogTableCursor for GlobalSearchTableDelegate {
     fn active_log_row(&self) -> Option<usize> {
         self.interaction.active_row.get()
@@ -1891,358 +1848,9 @@ impl LogTableRows for GlobalSearchTableDelegate {
     fn schedule_visible_log_rows(
         &mut self,
         visible_range: Range<usize>,
-        cx: &mut Context<TableState<Self>>,
+        cx: &mut Context<VirtualLogListState<Self, LogRowKey>>,
     ) {
         self.schedule_visible_rows(visible_range, cx);
-    }
-}
-
-impl TableDelegate for GlobalSearchTableDelegate {
-    fn columns_count(&self, _: &App) -> usize {
-        3
-    }
-
-    fn rows_count(&self, _: &App) -> usize {
-        self.projection.rows_len
-    }
-
-    fn column(&self, col_ix: usize, cx: &App) -> Column {
-        let base = px(self.presenter.log_font_size as f32);
-        match col_ix {
-            0 => {
-                let width = line_marker_column_width();
-                Column::new("global-marker", crate::tr!("标记", "Mark"))
-                    .p_0()
-                    .width(width)
-                    .min_width(width)
-                    .max_width(width)
-                    .resizable(false)
-                    .fixed_left()
-                    .movable(false)
-            }
-            1 => {
-                let width = px(self.presenter.line_number_width as f32);
-                Column::new("global-line-number", crate::tr!("行", "Line"))
-                    .p_0()
-                    .width(width)
-                    .min_width(width)
-                    .max_width(width)
-                    .resizable(false)
-                    .fixed_left()
-                    .movable(false)
-                    .text_right()
-            }
-            2 => Column::new("global-message", crate::tr!("文件与日志", "File & log"))
-                .p_0()
-                .width(message_column_width(
-                    self.projection.max_line_columns,
-                    self.resolved_font_family(cx),
-                    self.presenter.log_font_size,
-                    cx,
-                ))
-                .min_width(base * 24.)
-                .movable(false),
-            _ => unreachable!("global results expose marker, line-number, and message columns"),
-        }
-    }
-
-    fn render_header(
-        &mut self,
-        _: &mut Window,
-        _: &mut Context<TableState<Self>>,
-    ) -> Stateful<Div> {
-        div().id("header").hidden()
-    }
-
-    fn render_tr(
-        &mut self,
-        row_ix: usize,
-        _: &mut Window,
-        cx: &mut Context<TableState<Self>>,
-    ) -> Stateful<Div> {
-        let _performance_scope =
-            crate::ui_performance::scope("GlobalSearchTableDelegate::render_tr");
-        let row_bounds = self.interaction.row_bounds.clone();
-        match self.flat_row(row_ix) {
-            Some(FlatRow::Group { group_ix }) => {
-                let group = &self.projection.groups[group_ix];
-                let document_id = group.source.document_id;
-                let header = GlobalSearchGroupHeader::new(
-                    group.source.title.clone(),
-                    group.source.path.clone(),
-                    group.projection.rows.len(),
-                    self.resolved_font_family(cx),
-                    self.presenter.log_font_size,
-                )
-                .truncated(group.presentation.truncated)
-                .failure(group.presentation.failure.clone())
-                .collapsed(self.interaction.collapsed_documents.contains(&document_id));
-                div()
-                    .id(("global-search-group", document_id))
-                    .relative()
-                    .on_prepaint(move |bounds, _, _| {
-                        row_bounds.borrow_mut().insert(row_ix, bounds);
-                    })
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |table, _: &MouseDownEvent, _, cx| {
-                            table.delegate().clear_row_selection();
-                            table.set_active_log_row(row_ix, cx);
-                        }),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(|table, _: &MouseDownEvent, _, cx| {
-                            table.delegate().clear_row_selection();
-                            table.clear_selection(cx);
-                        }),
-                    )
-                    // DataTable appends its fixed-column divider after the delegate row.
-                    // Paint the spanning file header last so result-only column chrome
-                    // cannot bleed through it.
-                    .child(DeferredTableRow::new(
-                        div().absolute().inset_0().child(header),
-                    ))
-            }
-            Some(FlatRow::Match {
-                group_ix,
-                source_row,
-            }) => {
-                let group = &self.projection.groups[group_ix];
-                let log_level_style = self
-                    .line_text(group_ix, source_row)
-                    .and_then(|line| self.presenter.log_level_style(&line));
-                div()
-                    .id(format!(
-                        "global-search-result-{}-{source_row}",
-                        group.source.document_id
-                    ))
-                    .border_0()
-                    .on_prepaint(move |bounds, _, _| {
-                        row_bounds.borrow_mut().insert(row_ix, bounds);
-                    })
-                    .on_mouse_down(MouseButton::Left, |event: &MouseDownEvent, window, cx| {
-                        if event.click_count >= 3 {
-                            GlobalState::suppress_text_selection(cx);
-                            TextSelection::clear(window, cx);
-                        }
-                    })
-                    .when_some(log_level_style, |row, style| row.bg(style.background))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |table, event: &MouseDownEvent, window, cx| {
-                            if event.modifiers.control
-                                || event.modifiers.shift
-                                || event.click_count >= 3
-                            {
-                                GlobalState::suppress_text_selection(cx);
-                                TextSelection::clear(window, cx);
-                            }
-                            table.delegate().begin_pointer_selection(
-                                row_ix,
-                                event.modifiers.control,
-                                event.modifiers.shift,
-                                event.click_count,
-                            );
-                            let table = cx.entity();
-                            window.defer(cx, move |_, cx| {
-                                table.update(cx, |table, cx| {
-                                    table.set_active_log_row(row_ix, cx);
-                                });
-                            });
-                            cx.notify();
-                        }),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(move |table, _: &MouseDownEvent, _, cx| {
-                            table.delegate().prepare_context_selection(row_ix);
-                            table.set_active_log_row(row_ix, cx);
-                            cx.notify();
-                        }),
-                    )
-            }
-            None => div().id(("global-search-empty-row", row_ix)),
-        }
-    }
-
-    fn render_td(
-        &mut self,
-        row_ix: usize,
-        col_ix: usize,
-        window: &mut Window,
-        cx: &mut Context<TableState<Self>>,
-    ) -> impl IntoElement {
-        let _performance_scope =
-            crate::ui_performance::scope("GlobalSearchTableDelegate::render_td");
-        let Some(row) = self.flat_row(row_ix) else {
-            return div().into_any_element();
-        };
-        let line_height = log_line_height(
-            self.presenter.log_font_size,
-            self.presenter.log_line_spacing,
-        );
-        match row {
-            FlatRow::Group { .. } => div().into_any_element(),
-            FlatRow::Match {
-                group_ix,
-                source_row,
-            } => {
-                let group = &self.projection.groups[group_ix];
-                let selected = self.interaction.row_selection.borrow().contains(row_ix);
-                if col_ix == 0 {
-                    let marked = group.presentation.marked_rows.contains(source_row);
-                    let matched = group.presentation.matched_rows.contains(source_row);
-                    let log_level_accent = self
-                        .line_text(group_ix, source_row)
-                        .and_then(|line| self.presenter.log_level_style(&line))
-                        .map(|style| style.foreground);
-                    h_flex()
-                        .relative()
-                        .size_full()
-                        .justify_center()
-                        .when_some(log_level_accent, |cell, accent| {
-                            cell.child(log_level_accent_overlay(accent))
-                        })
-                        .child(line_marker(marked, matched, cx))
-                        .into_any_element()
-                } else if col_ix == 1 {
-                    log_line_number_cell(
-                        source_row,
-                        self.presenter.log_font_size,
-                        line_height,
-                        self.line_number_text_color(cx),
-                        self.line_number_background_color(cx),
-                        self.show_line_number_row_separators(),
-                        cx,
-                    )
-                    .size_full()
-                    .into_any_element()
-                } else if col_ix == 2 {
-                    let presentation =
-                        self.row_presentation(group_ix, source_row)
-                            .unwrap_or_else(|| GlobalRowPresentation {
-                                text: LogText::default(),
-                                highlights: Arc::default(),
-                                log_level_style: None,
-                                source_unavailable: false,
-                            });
-                    let source_unavailable = presentation.source_unavailable;
-                    let text_color = presentation
-                        .log_level_style
-                        .map_or_else(|| self.log_text_color(cx), |style| style.foreground);
-                    let text = presentation.text;
-                    let highlights = presentation
-                        .highlights
-                        .iter()
-                        .cloned()
-                        .map(|(range, highlight)| {
-                            (range, crate::log_table::text_highlight_style(highlight, cx))
-                        })
-                        .collect::<Vec<_>>();
-                    let styled_text =
-                        StyledText::new(text.display().clone()).with_highlights(highlights);
-                    let selection = self.interaction.text_selections.handle(
-                        (group.source.document_id, source_row),
-                        &text,
-                        window,
-                        cx,
-                    );
-                    h_flex()
-                        .relative()
-                        .size_full()
-                        .overflow_hidden()
-                        .px(log_cell_horizontal_padding(cx))
-                        .text_color(text_color)
-                        .when(selected, |cell| {
-                            cell.bg(log_row_selection_color(cx))
-                                .child(log_row_selection_overlay(
-                                    row_ix == 0 || !self.is_row_selected(row_ix - 1),
-                                    row_ix + 1 >= self.projection.rows_len
-                                        || !self.is_row_selected(row_ix + 1),
-                                    cx,
-                                ))
-                        })
-                        .text_size(px(self.presenter.log_font_size as f32))
-                        .line_height(line_height)
-                        .font_family(self.resolved_font_family(cx))
-                        .when(source_unavailable, |cell| {
-                            cell.text_color(cx.theme().danger)
-                        })
-                        .when(self.presenter.show_row_separators && !selected, |cell| {
-                            cell.border_b_1().border_color(cx.theme().border)
-                        })
-                        .child(
-                            SelectableLogText::new(
-                                selection,
-                                group.source.document_id.rotate_left(32) ^ source_row as u64,
-                                text,
-                                styled_text,
-                                ui_theme::text_selection_highlight(cx),
-                            )
-                            .word_boundary_characters(
-                                self.interaction.word_boundary_characters.clone(),
-                            )
-                            .suppress_selection(self.is_text_selection_suppressed()),
-                        )
-                        .into_any_element()
-                } else {
-                    div().into_any_element()
-                }
-            }
-        }
-    }
-
-    fn render_empty(
-        &mut self,
-        _: &mut Window,
-        cx: &mut Context<TableState<Self>>,
-    ) -> impl IntoElement {
-        v_flex()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .gap_2()
-            .text_color(cx.theme().muted_foreground)
-            .child(crate::tr!("尚未执行全局搜索", "Global search has not run"))
-    }
-
-    fn visible_rows_changed(
-        &mut self,
-        visible_range: Range<usize>,
-        _: &mut Window,
-        cx: &mut Context<TableState<Self>>,
-    ) {
-        self.interaction
-            .row_bounds
-            .borrow_mut()
-            .retain(|row_ix, _| visible_range.contains(row_ix));
-        self.schedule_visible_rows(visible_range, cx);
-    }
-
-    fn cell_text(&self, row_ix: usize, col_ix: usize, _: &App) -> String {
-        let Some(row) = self.flat_row(row_ix) else {
-            return String::new();
-        };
-        match row {
-            FlatRow::Group { group_ix } if col_ix == 2 => self.projection.groups[group_ix]
-                .source
-                .path
-                .display()
-                .to_string(),
-            FlatRow::Match { source_row, .. } if col_ix == 1 => (source_row + 1).to_string(),
-            FlatRow::Match {
-                group_ix,
-                source_row,
-            } if col_ix == 2 => {
-                let group = &self.projection.groups[group_ix];
-                self.visible_lines
-                    .line((group.source.document_id, source_row))
-                    .map(|text| text.display().to_string())
-                    .unwrap_or_default()
-            }
-            _ => String::new(),
-        }
     }
 }
 

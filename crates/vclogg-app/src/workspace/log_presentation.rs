@@ -60,38 +60,6 @@ impl Workspace {
         point_in_text_selection_regions(position, [log_bounds, result_bounds].into_iter().flatten())
     }
 
-    pub(super) fn update_wrapped_height(
-        &mut self,
-        document_id: u64,
-        region: WrappedRegion,
-        row_ix: usize,
-        height: Pixels,
-        base_height: Pixels,
-        cx: &mut Context<Self>,
-    ) {
-        let changed = match region {
-            WrappedRegion::Log | WrappedRegion::Results => self
-                .documents
-                .iter()
-                .position(|tab| tab.id == document_id)
-                .is_some_and(|tab_ix| {
-                    let state = if region == WrappedRegion::Log {
-                        &self.documents[tab_ix].log_viewport
-                    } else {
-                        &self.documents[tab_ix].result_viewport
-                    };
-                    state.queue_wrapped_measured_height(row_ix, height, base_height)
-                }),
-            WrappedRegion::GlobalResults => {
-                self.global_viewport
-                    .queue_wrapped_measured_height(row_ix, height, base_height)
-            }
-        };
-        if changed && let Some(surface) = self.log_region_surface(document_id, region) {
-            surface.update(cx, |_, cx| cx.notify());
-        }
-    }
-
     pub(super) fn select_wrapped_log_row(
         &mut self,
         document_id: u64,
@@ -789,7 +757,7 @@ impl Workspace {
         visible_range: Range<usize>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
+    ) -> Vec<VirtualLogRow<LogRowKey>> {
         let _performance_scope = crate::ui_performance::scope("Workspace::render_wrapped_log_rows");
         let Some(tab_ix) = self.documents.iter().position(|tab| tab.id == document_id) else {
             return Vec::new();
@@ -799,6 +767,9 @@ impl Workspace {
         } else {
             self.documents[tab_ix].log_table.clone()
         };
+        table.update(cx, |table, _| {
+            table.set_visible_range(visible_range.clone())
+        });
         self.schedule_local_visible_lines(document_id, region, visible_range.clone(), cx);
         let (
             show_line_numbers,
@@ -810,6 +781,7 @@ impl Workspace {
             log_text_color,
             font_size,
             font_family,
+            max_line_columns,
         ) = {
             let table = table.read(cx);
             let delegate = table.delegate();
@@ -823,6 +795,7 @@ impl Workspace {
                 delegate.log_text_color(cx),
                 delegate.log_font_size(),
                 delegate.resolved_font_family(cx),
+                delegate.max_line_columns(),
             )
         };
         let base_height = self.log_row_height();
@@ -833,7 +806,15 @@ impl Workspace {
             } else {
                 px(0.)
             };
-        let workspace = cx.weak_entity();
+        let viewport = if region == WrappedRegion::Results {
+            &self.documents[tab_ix].result_viewport
+        } else {
+            &self.documents[tab_ix].log_viewport
+        };
+        let word_wrap = viewport.is_wrapped();
+        let horizontal_offset = viewport.horizontal_offset();
+        let message_width =
+            message_column_width(max_line_columns, font_family.clone(), font_size, cx);
         let suppress_text_selection = self.row_drag_selection.is_some_and(|drag| {
             drag.document_id == document_id
                 && drag.region == region
@@ -851,7 +832,8 @@ impl Workspace {
 
         visible_range
             .filter_map(|row_ix| {
-                let row = table.read(cx).delegate().wrapped_row(row_ix)?;
+                let row_key = table.read(cx).delegate().stable_row_key(row_ix)?;
+                let row = table.read(cx).delegate().row(row_ix)?;
                 let selected_above =
                     row_ix > 0 && table.read(cx).delegate().is_row_selected(row_ix - 1);
                 let selected_below = row_ix + 1 < table.read(cx).delegate().row_count()
@@ -871,7 +853,6 @@ impl Workspace {
                 let log_level_style = (!source_unavailable)
                     .then_some(row.log_level_style)
                     .flatten();
-                let measure_workspace = workspace.clone();
                 let row_bounds = rendered_row_bounds.clone();
                 let line = SelectableLogText::new(
                     selection,
@@ -881,20 +862,10 @@ impl Workspace {
                     ui_theme::text_selection_highlight(cx),
                 )
                 .suppress_selection(suppress_text_selection)
-                .word_boundary_characters(self.app_settings.word_boundary_characters.clone())
-                .on_measure(move |height, _, cx| {
-                    _ = measure_workspace.update(cx, |this, cx| {
-                        this.update_wrapped_height(
-                            document_id,
-                            region,
-                            row_ix,
-                            height,
-                            base_height,
-                            cx,
-                        );
-                    });
-                });
-                Some(
+                .word_boundary_characters(self.app_settings.word_boundary_characters.clone());
+                Some(VirtualLogRow::new(
+                    row_ix,
+                    row_key,
                     div()
                         .id(format!(
                             "wrapped-log-row-{document_id}-{}-{source_row}",
@@ -906,6 +877,7 @@ impl Workspace {
                         .relative()
                         .w_full()
                         .min_h(base_height)
+                        .when(!word_wrap, |row| row.h(base_height).overflow_hidden())
                         .flex()
                         .items_start()
                         .when_some(log_level_style, |row, style| {
@@ -967,7 +939,8 @@ impl Workspace {
                                 .min_w_0()
                                 .flex_1()
                                 .overflow_hidden()
-                                .whitespace_normal()
+                                .when(word_wrap, |cell| cell.whitespace_normal())
+                                .when(!word_wrap, |cell| cell.whitespace_nowrap())
                                 .px(log_cell_horizontal_padding(cx))
                                 .text_color(
                                     log_level_style
@@ -991,11 +964,17 @@ impl Workspace {
                                 .when(show_row_separators && !row.selected, |cell| {
                                     cell.child(log_row_separator_overlay(false, cx))
                                 })
-                                .child(line),
+                                .child(
+                                    div()
+                                        .relative()
+                                        .when(!word_wrap, |content| {
+                                            content.left(-horizontal_offset).w(message_width)
+                                        })
+                                        .child(line),
+                                ),
                         )
-                        .child(log_fixed_column_divider_overlay(fixed_columns_width, cx))
-                        .into_any_element(),
-                )
+                        .child(log_fixed_column_divider_overlay(fixed_columns_width, cx)),
+                ))
             })
             .collect()
     }
@@ -1019,19 +998,46 @@ impl Workspace {
             &tab.log_table
         };
         let delegate = table.read(cx).delegate();
-        let count = delegate.row_count();
-        let base_height = self.log_row_height();
+        let count = VirtualLogListDelegate::row_count(delegate);
+        let base_height = snap_to_device_pixels(delegate.minimum_row_height(), self.scale_factor);
+        if count == 0 {
+            return v_flex()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .gap_2()
+                .text_color(cx.theme().muted_foreground)
+                .child(delegate.empty_message())
+                .into_any_element();
+        }
+        let fixed_columns_width = line_marker_column_width()
+            + if delegate.show_line_numbers() {
+                px(delegate.line_number_width() as f32)
+            } else {
+                px(0.)
+            };
+        let content_width = if (if region == WrappedRegion::Results {
+            &tab.result_viewport
+        } else {
+            &tab.log_viewport
+        })
+        .is_wrapped()
+        {
+            px(0.)
+        } else {
+            delegate.unwrapped_content_width(cx)
+        };
         let wrapped = if region == WrappedRegion::Results {
             &tab.result_viewport
         } else {
             &tab.log_viewport
         };
+        let word_wrap = wrapped.is_wrapped();
         if wrapped.wrapped_base_height() != base_height {
             wrapped.ensure_wrapped_measurement_anchor(table.read(cx).active_log_row());
         }
-        let sizes = wrapped.wrapped_sizes(count, base_height);
-        let scroll_handle = wrapped.wrapped_scroll_handle();
-        let list_scroll = scroll_handle.clone();
+        wrapped.wrapped_sizes(count, base_height);
+        let list_scroll = wrapped.wrapped_scroll_handle();
         let logical_scroll = wrapped.wrapped_logical_scroll_handle(count, base_height);
         let list_id = format!("wrapped-{}-{}", document_id, region as u8);
         let scrollbar_background = *cx.theme().tokens.table;
@@ -1045,15 +1051,18 @@ impl Workspace {
                     .relative()
                     .flex_1()
                     .min_h_0()
-                    .key_context("DataTable")
+                    .key_context("VirtualLogList")
                     .child(crate::ui_performance::element(
-                        "WrappedLogVirtualList::request_layout",
-                        "WrappedLogVirtualList::prepaint",
-                        "WrappedLogVirtualList::paint",
-                        sparse_v_virtual_list(
+                        "VirtualLogList::request_layout",
+                        "VirtualLogList::prepaint",
+                        "VirtualLogList::paint",
+                        v_virtual_log_list(
                             surface,
                             list_id,
-                            sizes,
+                            list_scroll,
+                            count,
+                            base_height,
+                            content_width,
                             move |_, range, window, cx| {
                                 workspace
                                     .update(cx, |workspace, cx| {
@@ -1068,8 +1077,8 @@ impl Workspace {
                                     .unwrap_or_default()
                             },
                         )
-                        .track_scroll(&list_scroll)
-                        .size_full(),
+                        .size_full()
+                        .when(!word_wrap, |list| list.pb(Scrollbar::width())),
                     ))
                     .child(
                         div()
@@ -1092,7 +1101,30 @@ impl Workspace {
                                 .max_fps(60),
                             ),
                     ),
-            );
+            )
+            .when(!word_wrap, |container| {
+                container.child(
+                    div()
+                        .absolute()
+                        .left(fixed_columns_width)
+                        .right(Scrollbar::width())
+                        .bottom_0()
+                        .h(Scrollbar::width())
+                        .bg(scrollbar_background)
+                        .child(
+                            persistent_log_scrollbar(
+                                Scrollbar::horizontal(&logical_scroll)
+                                    .id(format!(
+                                        "log-horizontal-scrollbar-{document_id}-{}",
+                                        region as u8
+                                    ))
+                                    .viewport_from_layout(),
+                                scrollbar_background,
+                            )
+                            .max_fps(60),
+                        ),
+                )
+            });
         crate::ui_performance::element(
             "WrappedLogTable::request_layout",
             "WrappedLogTable::prepaint",
@@ -2354,9 +2386,12 @@ impl Workspace {
         visible_range: Range<usize>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
+    ) -> Vec<VirtualLogRow<LogRowKey>> {
         let _performance_scope =
             crate::ui_performance::scope("Workspace::render_wrapped_global_rows");
+        self.global_table.update(cx, |table, _| {
+            table.set_visible_range(visible_range.clone())
+        });
         self.schedule_global_visible_lines(visible_range.clone(), cx);
         let (
             font_size,
@@ -2367,6 +2402,7 @@ impl Workspace {
             log_text_color,
             show_line_number_row_separators,
             show_row_separators,
+            max_line_columns,
         ) = {
             let table = self.global_table.read(cx);
             (
@@ -2378,12 +2414,16 @@ impl Workspace {
                 table.delegate().log_text_color(cx),
                 table.delegate().show_line_number_row_separators(),
                 table.delegate().show_row_separators(),
+                table.delegate().max_line_columns(),
             )
         };
         let base_height = self.log_row_height();
         let marker_width = line_marker_column_width();
         let fixed_columns_width = marker_width + px(line_number_width as f32);
-        let workspace = cx.weak_entity();
+        let word_wrap = self.global_viewport.is_wrapped();
+        let horizontal_offset = self.global_viewport.horizontal_offset();
+        let message_width =
+            message_column_width(max_line_columns, font_family.clone(), font_size, cx);
         let suppress_text_selection = self.row_drag_selection.is_some_and(|drag| {
             drag.region == WrappedRegion::GlobalResults && drag.mode == RowDragMode::Lines
         });
@@ -2393,7 +2433,8 @@ impl Workspace {
 
         visible_range
             .filter_map(|row_ix| {
-                let row = self.global_table.read(cx).delegate().wrapped_row(row_ix)?;
+                let row =
+                    VirtualLogListDelegate::row(self.global_table.read(cx).delegate(), row_ix)?;
                 let row_bounds = rendered_row_bounds.clone();
                 match row {
                     WrappedGlobalRow::Group {
@@ -2404,7 +2445,9 @@ impl Workspace {
                         truncated,
                         failure,
                         collapsed,
-                    } => Some(
+                    } => Some(VirtualLogRow::new(
+                        row_ix,
+                        LogRowKey::FileGroup { document_id },
                         div()
                             .id(("wrapped-global-group", document_id))
                             .on_prepaint(move |bounds, _, _| {
@@ -2440,9 +2483,8 @@ impl Workspace {
                                 .truncated(truncated)
                                 .failure(failure)
                                 .collapsed(collapsed),
-                            )
-                            .into_any_element(),
-                    ),
+                            ),
+                    )),
                     WrappedGlobalRow::Match {
                         document_id,
                         source_row,
@@ -2477,7 +2519,6 @@ impl Workspace {
                             .with_highlights(Self::highlight_styles(&highlights, cx));
                         let log_level_style =
                             (!source_unavailable).then_some(log_level_style).flatten();
-                        let measure_workspace = workspace.clone();
                         let row_bounds = rendered_row_bounds.clone();
                         let selectable = SelectableLogText::new(
                             selection,
@@ -2489,20 +2530,13 @@ impl Workspace {
                         .word_boundary_characters(
                             self.app_settings.word_boundary_characters.clone(),
                         )
-                        .suppress_selection(suppress_text_selection)
-                        .on_measure(move |height, _, cx| {
-                            _ = measure_workspace.update(cx, |this, cx| {
-                                this.update_wrapped_height(
-                                    document_id,
-                                    WrappedRegion::GlobalResults,
-                                    row_ix,
-                                    height,
-                                    base_height,
-                                    cx,
-                                );
-                            });
-                        });
-                        Some(
+                        .suppress_selection(suppress_text_selection);
+                        Some(VirtualLogRow::new(
+                            row_ix,
+                            LogRowKey::Row {
+                                document_id,
+                                source_row,
+                            },
                             div()
                                 .id(format!("wrapped-global-result-{document_id}-{source_row}"))
                                 .on_prepaint(move |bounds, _, _| {
@@ -2511,6 +2545,7 @@ impl Workspace {
                                 .relative()
                                 .w_full()
                                 .min_h(base_height)
+                                .when(!word_wrap, |row| row.h(base_height).overflow_hidden())
                                 .flex()
                                 .items_start()
                                 .when_some(log_level_style, |row, style| {
@@ -2557,7 +2592,8 @@ impl Workspace {
                                         .min_w_0()
                                         .flex_1()
                                         .overflow_hidden()
-                                        .whitespace_normal()
+                                        .when(word_wrap, |cell| cell.whitespace_normal())
+                                        .when(!word_wrap, |cell| cell.whitespace_nowrap())
                                         .px(log_cell_horizontal_padding(cx))
                                         .text_color(
                                             log_level_style
@@ -2581,11 +2617,19 @@ impl Workspace {
                                         .when(show_row_separators && !selected, |cell| {
                                             cell.child(log_row_separator_overlay(false, cx))
                                         })
-                                        .child(selectable),
+                                        .child(
+                                            div()
+                                                .relative()
+                                                .when(!word_wrap, |content| {
+                                                    content
+                                                        .left(-horizontal_offset)
+                                                        .w(message_width)
+                                                })
+                                                .child(selectable),
+                                        ),
                                 )
-                                .child(log_fixed_column_divider_overlay(fixed_columns_width, cx))
-                                .into_any_element(),
-                        )
+                                .child(log_fixed_column_divider_overlay(fixed_columns_width, cx)),
+                        ))
                     }
                 }
             })
@@ -2601,15 +2645,31 @@ impl Workspace {
         let _performance_scope =
             crate::ui_performance::scope("Workspace::render_wrapped_global_table");
         let delegate = self.global_table.read(cx).delegate();
-        let count = delegate.rows_len();
-        let base_height = self.log_row_height();
+        let count = VirtualLogListDelegate::row_count(delegate);
+        let base_height = snap_to_device_pixels(delegate.minimum_row_height(), self.scale_factor);
+        if count == 0 {
+            return v_flex()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .gap_2()
+                .text_color(cx.theme().muted_foreground)
+                .child(crate::tr!("尚未执行全局搜索", "Global search has not run"))
+                .into_any_element();
+        }
+        let fixed_columns_width =
+            line_marker_column_width() + px(delegate.line_number_width() as f32);
+        let content_width = if self.global_viewport.is_wrapped() {
+            px(0.)
+        } else {
+            delegate.unwrapped_content_width(cx)
+        };
         if self.global_viewport.wrapped_base_height() != base_height {
             self.global_viewport
                 .ensure_wrapped_measurement_anchor(self.global_table.read(cx).active_log_row());
         }
-        let sizes = self.global_viewport.wrapped_sizes(count, base_height);
-        let scroll_handle = self.global_viewport.wrapped_scroll_handle();
-        let list_scroll = scroll_handle.clone();
+        self.global_viewport.wrapped_sizes(count, base_height);
+        let list_scroll = self.global_viewport.wrapped_scroll_handle();
         let logical_scroll = self
             .global_viewport
             .wrapped_logical_scroll_handle(count, base_height);
@@ -2624,12 +2684,15 @@ impl Workspace {
                     .relative()
                     .flex_1()
                     .min_h_0()
-                    .key_context("DataTable")
+                    .key_context("VirtualLogList")
                     .child(
-                        sparse_v_virtual_list(
+                        v_virtual_log_list(
                             surface,
                             "wrapped-global-results",
-                            sizes,
+                            list_scroll,
+                            count,
+                            base_height,
+                            content_width,
                             move |_, range, window, cx| {
                                 workspace
                                     .update(cx, |workspace, cx| {
@@ -2638,8 +2701,10 @@ impl Workspace {
                                     .unwrap_or_default()
                             },
                         )
-                        .track_scroll(&list_scroll)
-                        .size_full(),
+                        .size_full()
+                        .when(!self.global_viewport.is_wrapped(), |list| {
+                            list.pb(Scrollbar::width())
+                        }),
                     )
                     .child(
                         div()
@@ -2660,111 +2725,27 @@ impl Workspace {
                             ),
                     ),
             )
+            .when(!self.global_viewport.is_wrapped(), |container| {
+                container.child(
+                    div()
+                        .absolute()
+                        .left(fixed_columns_width)
+                        .right(Scrollbar::width())
+                        .bottom_0()
+                        .h(Scrollbar::width())
+                        .bg(scrollbar_background)
+                        .child(
+                            persistent_log_scrollbar(
+                                Scrollbar::horizontal(&logical_scroll)
+                                    .id("global-results-horizontal-scrollbar")
+                                    .viewport_from_layout(),
+                                scrollbar_background,
+                            )
+                            .max_fps(60),
+                        ),
+                )
+            })
             .into_any_element()
-    }
-
-    pub(super) fn render_headerless_data_table<D>(
-        table: &Entity<TableState<D>>,
-        vertical_scroll_handle: AtomicUniformScrollHandle,
-        row_height: Pixels,
-        cx: &mut Context<Self>,
-    ) -> AnyElement
-    where
-        D: TableDelegate,
-    {
-        let _performance_scope =
-            crate::ui_performance::scope("Workspace::render_headerless_data_table");
-        let (horizontal_scroll_handle, horizontal_content_width) = {
-            let table = table.read(cx);
-            let delegate = table.delegate();
-            let horizontal_content_width = (0..delegate.columns_count(cx))
-                .map(|col_ix| delegate.column(col_ix, cx).width)
-                .fold(px(0.), |width, column_width| width + column_width);
-            (
-                table.horizontal_scroll_handle.clone(),
-                horizontal_content_width,
-            )
-        };
-        let table_id = table.entity_id();
-        let scrollbar_background = *cx.theme().tokens.table;
-        let scrollbar_width = Scrollbar::width();
-        // The horizontal track extends beneath the vertical scrollbar gutter. Model the
-        // same extra width as content so its maximum offset still matches the table viewport.
-        let horizontal_scrollbar_content_width = horizontal_content_width + scrollbar_width;
-
-        let element = v_flex()
-            .size_full()
-            .min_w_0()
-            .min_h_0()
-            .child(
-                h_flex()
-                    .w_full()
-                    .flex_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .child(
-                        div()
-                            .relative()
-                            .h_full()
-                            .flex_1()
-                            .min_w_0()
-                            .min_h_0()
-                            .child(crate::ui_performance::element(
-                                "LogDataTable::request_layout",
-                                "LogDataTable::prepaint",
-                                "LogDataTable::paint",
-                                DataTable::new(table)
-                                    .with_size(row_height)
-                                    .bordered(false)
-                                    .scrollbar_visible(false, false),
-                            )),
-                    )
-                    .child(
-                        div()
-                            .relative()
-                            .h_full()
-                            .w(scrollbar_width)
-                            .flex_none()
-                            .bg(scrollbar_background)
-                            .child(
-                                persistent_log_scrollbar(
-                                    Scrollbar::vertical(&vertical_scroll_handle)
-                                        .id(("log-vertical-scrollbar", table_id))
-                                        .viewport_from_layout(),
-                                    scrollbar_background,
-                                )
-                                .max_fps(60),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .relative()
-                    .w_full()
-                    .h(scrollbar_width)
-                    .flex_none()
-                    .bg(scrollbar_background)
-                    .child(
-                        persistent_log_scrollbar(
-                            Scrollbar::horizontal(&horizontal_scroll_handle)
-                                .id(("log-horizontal-scrollbar", table_id))
-                                .scroll_size(size(
-                                    horizontal_scrollbar_content_width,
-                                    scrollbar_width,
-                                ))
-                                .viewport_from_layout(),
-                            scrollbar_background,
-                        )
-                        .max_fps(60),
-                    ),
-            );
-        crate::ui_performance::element(
-            "HeaderlessLogTable::request_layout",
-            "HeaderlessLogTable::prepaint",
-            "HeaderlessLogTable::paint",
-            element,
-        )
-        .into_any_element()
     }
 
     pub(super) fn render_log_region_surface(
@@ -2790,15 +2771,7 @@ impl Workspace {
             if let Some(target) = target {
                 self.prepare_global_scroll_frame(target, row_height, window, cx);
             }
-            if self.global_viewport.is_wrapped() {
-                return self.render_wrapped_global_table(surface, cx.weak_entity(), cx);
-            }
-            return Self::render_headerless_data_table(
-                &self.global_table,
-                self.global_viewport.atomic_fixed_scroll_handle(),
-                row_height,
-                cx,
-            );
+            return self.render_wrapped_global_table(surface, cx.weak_entity(), cx);
         }
         let Some(tab_ix) = self.documents.iter().position(|tab| tab.id == document_id) else {
             return div().into_any_element();
@@ -2822,27 +2795,7 @@ impl Workspace {
         if let Some(target) = target {
             self.prepare_local_scroll_frame(document_id, region, target, row_height, window, cx);
         }
-        let tab = &self.documents[tab_ix];
-        let table = if region == WrappedRegion::Results {
-            &tab.result_table
-        } else {
-            &tab.log_table
-        };
-        let viewport = if region == WrappedRegion::Results {
-            &tab.result_viewport
-        } else {
-            &tab.log_viewport
-        };
-        if viewport.is_wrapped() {
-            self.render_wrapped_log_table(document_id, region, surface, cx.weak_entity(), cx)
-        } else {
-            Self::render_headerless_data_table(
-                table,
-                viewport.atomic_fixed_scroll_handle(),
-                row_height,
-                cx,
-            )
-        }
+        self.render_wrapped_log_table(document_id, region, surface, cx.weak_entity(), cx)
     }
 
     pub(super) fn render_new_tab_workspace(&self, cx: &mut Context<Self>) -> impl IntoElement {

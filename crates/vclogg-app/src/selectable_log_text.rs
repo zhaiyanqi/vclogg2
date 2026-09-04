@@ -17,7 +17,6 @@ use gpui_base::{
 
 const CACHE_LIMIT: usize = 2048;
 const TAB_STOP_COLUMNS: usize = 8;
-type MeasureCallback = dyn Fn(Pixels, &mut Window, &mut App);
 
 #[derive(Clone)]
 struct TabExpansion {
@@ -535,7 +534,6 @@ pub struct SelectableLogText {
     selection_color: gpui::Hsla,
     suppress_selection: bool,
     word_boundary_characters: SharedString,
-    on_measure: Option<Box<MeasureCallback>>,
 }
 
 impl SelectableLogText {
@@ -554,7 +552,6 @@ impl SelectableLogText {
             selection_color,
             suppress_selection: false,
             word_boundary_characters: SharedString::default(),
-            on_measure: None,
         }
     }
 
@@ -565,14 +562,6 @@ impl SelectableLogText {
 
     pub fn word_boundary_characters(mut self, characters: impl Into<SharedString>) -> Self {
         self.word_boundary_characters = characters.into();
-        self
-    }
-
-    pub fn on_measure(
-        mut self,
-        callback: impl Fn(Pixels, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        self.on_measure = Some(Box::new(callback));
         self
     }
 
@@ -739,9 +728,6 @@ impl Element for SelectableLogText {
         self.styled_text
             .prepaint(id, inspector_id, bounds, &mut (), window, cx);
         let text_bounds = self.styled_text.layout().bounds();
-        if let Some(on_measure) = &self.on_measure {
-            on_measure(text_bounds.size.height, window, cx);
-        }
         let hitbox = window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal);
         // gpui-component 的 register 会向当前全部文本选择参与者发布快照。空闲帧若让
         // 每个可见日志行都注册，会形成 O(可见行数²) 的重复遍历；仅保留鼠标所在行

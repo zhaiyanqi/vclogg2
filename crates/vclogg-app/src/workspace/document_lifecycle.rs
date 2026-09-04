@@ -443,7 +443,7 @@ impl Workspace {
             if self.global_search.preference_for(&path).unwrap_or(true) {
                 self.global_search.selected_documents.insert(document_id);
             }
-            let log_table = cx.new(|cx| {
+            let log_table = cx.new(|_| {
                 let mut delegate = LogTableDelegate::all(document_id, document.clone());
                 delegate.set_marked_rows(marked_rows_snapshot.clone());
                 delegate.set_view_options(session.show_line_numbers, session.show_row_separators);
@@ -460,14 +460,9 @@ impl Workspace {
                         .flatten(),
                 );
                 delegate.set_color_rules(resolved_color_rules.clone());
-                TableState::new(delegate, window, cx)
-                    .loop_selection(false)
-                    .row_selectable(false)
-                    .sortable(false)
-                    .col_movable(false)
-                    .col_selectable(false)
+                VirtualLogListState::new(delegate, VirtualLogViewport::new())
             });
-            let result_table = cx.new(|cx| {
+            let result_table = cx.new(|_| {
                 let mut delegate =
                     LogTableDelegate::projected(document_id, document.clone(), result_rows);
                 delegate.set_marked_rows(marked_rows_snapshot);
@@ -485,12 +480,7 @@ impl Workspace {
                         .flatten(),
                 );
                 delegate.set_color_rules(resolved_color_rules.clone());
-                TableState::new(delegate, window, cx)
-                    .loop_selection(false)
-                    .row_selectable(false)
-                    .sortable(false)
-                    .col_movable(false)
-                    .col_selectable(false)
+                VirtualLogListState::new(delegate, VirtualLogViewport::new())
             });
             let result_mode_select = cx.new(|cx| {
                 SelectState::new(
@@ -504,13 +494,13 @@ impl Workspace {
             self.subscriptions.push(cx.subscribe_in(
                 &log_table,
                 window,
-                move |this, table, event: &TableEvent, window, cx| {
+                move |this, table, event: &VirtualLogListEvent, window, cx| {
                     let keep_quick_find_focus = this.quick_find_input_has_focus(window, cx);
                     let source_row = match event {
-                        TableEvent::SelectRow(row_ix) => {
+                        VirtualLogListEvent::SelectRow(row_ix) => {
                             table.read(cx).delegate().settle_table_selection(*row_ix)
                         }
-                        TableEvent::ClearSelection => {
+                        VirtualLogListEvent::ClearSelection => {
                             if table.read(cx).delegate().take_suppressed_table_clear() {
                                 return;
                             }
@@ -518,7 +508,6 @@ impl Workspace {
                             table.read(cx).delegate().set_active_log_row(None);
                             None
                         }
-                        _ => return,
                     };
                     this.selected_source_row = source_row;
                     this.active_log_region = LogRegion::Body;
@@ -542,11 +531,11 @@ impl Workspace {
             self.subscriptions.push(cx.subscribe_in(
                 &result_table,
                 window,
-                move |this, table, event: &TableEvent, window, cx| {
+                move |this, table, event: &VirtualLogListEvent, window, cx| {
                     let keep_quick_find_focus = this.quick_find_input_has_focus(window, cx);
                     let result_ix = match event {
-                        TableEvent::SelectRow(result_ix) => *result_ix,
-                        TableEvent::ClearSelection => {
+                        VirtualLogListEvent::SelectRow(result_ix) => *result_ix,
+                        VirtualLogListEvent::ClearSelection => {
                             if table.read(cx).delegate().take_suppressed_table_clear() {
                                 return;
                             }
@@ -561,7 +550,6 @@ impl Workspace {
                             this.schedule_checkpoint(document_id, window, cx);
                             return;
                         }
-                        _ => return,
                     };
                     let Some(tab_ix) = this.documents.iter().position(|tab| tab.id == document_id)
                     else {
@@ -652,7 +640,7 @@ impl Workspace {
                 let table = log_table.read(cx);
                 LogViewportState::new(
                     session.word_wrap,
-                    table.vertical_scroll_handle.clone(),
+                    table.viewport().clone(),
                     table.delegate().row_bounds_handle(),
                 )
             };
@@ -660,7 +648,7 @@ impl Workspace {
                 let table = result_table.read(cx);
                 LogViewportState::new(
                     session.word_wrap,
-                    table.vertical_scroll_handle.clone(),
+                    table.viewport().clone(),
                     table.delegate().row_bounds_handle(),
                 )
             };

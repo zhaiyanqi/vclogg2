@@ -1640,7 +1640,11 @@ impl Workspace {
         } else {
             (document_id, region)
         };
-        let latest_target = self.pending_log_scroll_frames.latest(key);
+        let latest_target = self.pending_log_scroll_frames.latest(key).or_else(|| {
+            self.active_scroll_frames
+                .get(&key)
+                .map(|(_, target)| *target)
+        });
         let wheel_request = LogWheelScrollRequest {
             delta_y,
             row_count,
