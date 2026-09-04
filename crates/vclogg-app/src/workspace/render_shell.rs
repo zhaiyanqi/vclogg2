@@ -1968,9 +1968,9 @@ impl Workspace {
             .is_some_and(|tab| tab.load_state == DocumentLoadState::Ready);
         let query_value = self.query.read(cx).value().to_string();
         let query_empty = query_value.is_empty();
+        let query_focused = self.query.focus_handle(cx).is_focused(window);
         let search_suggestions = self.search_autocomplete_suggestions(cx);
-        let show_search_suggestions =
-            !search_suggestions.is_empty() && self.query.focus_handle(cx).is_focused(window);
+        let show_search_suggestions = !search_suggestions.is_empty() && query_focused;
         let search_history_open = self.search_autocomplete_mode == SearchAutocompleteMode::History;
         let global_selected_count = self.global_search.selected_documents.len();
         let search_scope_tooltip = match self.global_search.scope {
@@ -2206,6 +2206,14 @@ impl Workspace {
                                 Input::new(&self.query)
                                     .small()
                                     .size_full()
+                                    // Keep the frame geometry stable across focus changes so the
+                                    // text and placeholder retain the same vertical baseline.
+                                    .focus_ring(false)
+                                    .border_color(if query_focused {
+                                        cx.theme().ring
+                                    } else {
+                                        cx.theme().input
+                                    })
                                     .prefix(
                                         Icon::new(IconName::Search)
                                             .text_color(cx.theme().muted_foreground),
