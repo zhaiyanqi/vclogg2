@@ -3768,7 +3768,7 @@ impl Render for Workspace {
             .when(
                 self.file_drop_visible && self.file_drop_tab_transfer.is_none(),
                 |this| {
-                    this.child(
+                    this.child(render_shell::deferred_workspace_overlay(
                         div()
                             .id("file-drop-overlay")
                             .absolute()
@@ -3807,13 +3807,13 @@ impl Render for Workspace {
                                         .opacity(delta)
                                 },
                             ),
-                    )
+                    ))
                 },
             )
             .when(
                 self.file_drop_visible && self.file_drop_tab_transfer.is_some(),
                 |this| {
-                    this.child(
+                    this.child(render_shell::deferred_workspace_overlay(
                         h_flex()
                             .id("tab-transfer-drop-hint")
                             .absolute()
@@ -3848,7 +3848,7 @@ impl Render for Workspace {
                                         .opacity(delta)
                                 },
                             ),
-                    )
+                    ))
                 },
             )
             .child(crate::modal_event_layer::render_foreground_pointer_barrier())

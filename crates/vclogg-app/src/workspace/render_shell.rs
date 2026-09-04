@@ -1,5 +1,13 @@
 use super::*;
 
+// Paint after priority-0 table chrome, while staying below component popups and dialogs.
+const WORKSPACE_OVERLAY_PRIORITY: usize = 1;
+const _: () = assert!(WORKSPACE_OVERLAY_PRIORITY < POPUP_PRIORITY);
+
+pub(super) fn deferred_workspace_overlay(child: impl IntoElement) -> impl IntoElement {
+    deferred(child).with_priority(WORKSPACE_OVERLAY_PRIORITY)
+}
+
 impl Workspace {
     /// 菜单按钮为 28px 高、11px 横向内边距、8px 圆角和 12px 常规字重。
     /// `Button` 的 size 预设只有 24/32px 两档，够不到 28px；独立文字层同时避免
@@ -2532,5 +2540,62 @@ impl Workspace {
                             }))
                     })),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{Context, Render, TestAppContext, rgb};
+
+    use super::*;
+
+    const CONTENT_COLOR: u32 = 0x12_34_56;
+    const OVERLAY_COLOR: u32 = 0x65_43_21;
+
+    struct DeferredOverlayHarness;
+
+    impl Render for DeferredOverlayHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(deferred(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .w_64()
+                        .h_64()
+                        .bg(rgb(CONTENT_COLOR)),
+                ))
+                .child(deferred_workspace_overlay(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .w_32()
+                        .h_32()
+                        .bg(rgb(OVERLAY_COLOR)),
+                ))
+        }
+    }
+
+    #[gpui::test]
+    fn workspace_overlay_paints_above_deferred_content(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| DeferredOverlayHarness);
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let (content_order, overlay_order) = cx.update(|window, _| {
+            let quads = window.painted_quads();
+            let order_for = |color| {
+                quads
+                    .iter()
+                    .find(|quad| quad.background == rgb(color).into())
+                    .unwrap_or_else(|| panic!("missing {color:#x} quad in {quads:#?}"))
+                    .order
+            };
+            (order_for(CONTENT_COLOR), order_for(OVERLAY_COLOR))
+        });
+
+        assert!(overlay_order > content_order);
     }
 }
