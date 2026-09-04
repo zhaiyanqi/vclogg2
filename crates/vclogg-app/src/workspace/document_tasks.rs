@@ -450,15 +450,15 @@ pub(super) fn apply_color_label_to_keywords(
             .find(|rule| rule.case_sensitive && rule.keyword == *keyword)
         {
             rule.label_id = Some(label.id.clone());
-            rule.color = label.color;
-            rule.alpha = label.alpha;
+            rule.color = label.background_color;
+            rule.alpha = label.background_alpha;
             rule.enabled = true;
         } else {
             rules.push(KeywordColorRule {
                 label_id: Some(label.id.clone()),
                 keyword: keyword.clone(),
-                color: label.color,
-                alpha: label.alpha,
+                color: label.background_color,
+                alpha: label.background_alpha,
                 case_sensitive: true,
                 enabled: true,
             });

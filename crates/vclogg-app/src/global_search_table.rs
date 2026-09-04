@@ -22,12 +22,14 @@ use gpui_component::{
 };
 use vclogg_core::{CompressedRows, LinePreviewReader, LogDocument, SearchMatcher};
 
-use crate::color_labels::ResolvedColorRules;
+use crate::color_labels::{
+    LogColorStyle, ResolvedColorRules, ResolvedLogLevelRules, resolve_log_level_rules,
+};
 use crate::log_table::{
     LogTableCursor, LogTableRows, LogTableStateExt, RowSelection, combined_match_ranges,
-    line_marker, line_marker_column_width, log_cell_horizontal_padding, log_line_height,
-    log_line_number_cell, log_row_selection_color, log_row_selection_overlay, message_column_width,
-    severity_accent_overlay, severity_style,
+    line_marker, line_marker_column_width, log_cell_horizontal_padding, log_level_accent_overlay,
+    log_line_height, log_line_number_cell, log_row_selection_color, log_row_selection_overlay,
+    message_column_width,
 };
 use crate::selectable_log_text::{LogText, SelectableLogText, TextSelectionCache};
 use crate::state_store::{AppSettings, DEFAULT_WORD_BOUNDARY_CHARACTERS, LogFontFamily};
@@ -130,6 +132,7 @@ struct GlobalRowPresenter {
     show_line_number_row_separators: bool,
     show_row_separators: bool,
     highlight_log_levels: bool,
+    log_level_rules: Arc<ResolvedLogLevelRules>,
 }
 
 struct GlobalInteractionState {
@@ -177,6 +180,7 @@ impl Default for GlobalRowPresenter {
             show_line_number_row_separators: false,
             show_row_separators: false,
             highlight_log_levels: false,
+            log_level_rules: Arc::default(),
         }
     }
 }
@@ -190,6 +194,7 @@ impl GlobalRowPresenter {
             self.quick_find_matcher.as_ref(),
         );
         GlobalRowPresentation {
+            log_level_style: self.log_level_style(&text),
             highlights: source_highlights
                 .into_iter()
                 .filter_map(|(range, highlight)| {
@@ -199,6 +204,12 @@ impl GlobalRowPresenter {
             text,
             source_unavailable: false,
         }
+    }
+
+    fn log_level_style(&self, text: &LogText) -> Option<LogColorStyle> {
+        self.highlight_log_levels
+            .then(|| self.log_level_rules.matching_style(text.source()))
+            .flatten()
     }
 }
 
@@ -222,6 +233,7 @@ impl Default for GlobalInteractionState {
 struct GlobalRowPresentation {
     text: LogText,
     highlights: Arc<[(Range<usize>, crate::log_table::TextHighlight)]>,
+    log_level_style: Option<LogColorStyle>,
     source_unavailable: bool,
 }
 
@@ -242,7 +254,7 @@ pub(crate) enum WrappedGlobalRow {
         selected: bool,
         marked: bool,
         matched: bool,
-        highlight_severity: bool,
+        log_level_style: Option<LogColorStyle>,
         source_unavailable: bool,
         highlights: Arc<[(Range<usize>, crate::log_table::TextHighlight)]>,
     },
@@ -685,6 +697,7 @@ impl GlobalSearchTableDelegate {
             .and_then(|value| try_parse_color(value).ok());
         self.presenter.show_line_number_row_separators = settings.show_line_number_row_separators;
         self.presenter.show_row_separators = settings.default_show_row_separators;
+        self.presenter.log_level_rules = resolve_log_level_rules(&settings.log_level_color_rules);
         self.visible_lines
             .set_overscan(usize::from(settings.viewer_overscan.clamp(4, 40)));
     }
@@ -1252,7 +1265,7 @@ impl GlobalSearchTableDelegate {
                     matched: group.presentation.matched_rows.contains(source_row),
                     highlights: presentation.highlights,
                     text: presentation.text,
-                    highlight_severity: self.presenter.highlight_log_levels,
+                    log_level_style: presentation.log_level_style,
                     source_unavailable: presentation.source_unavailable,
                 })
             }
@@ -1468,6 +1481,7 @@ impl GlobalSearchTableDelegate {
             return Some(GlobalRowPresentation {
                 text,
                 highlights: Arc::default(),
+                log_level_style: None,
                 source_unavailable: true,
             });
         }
@@ -1995,13 +2009,9 @@ impl TableDelegate for GlobalSearchTableDelegate {
                 source_row,
             }) => {
                 let group = &self.projection.groups[group_ix];
-                let severity = self
-                    .presenter
-                    .highlight_log_levels
-                    .then(|| self.line_text(group_ix, source_row))
-                    .flatten()
-                    .and_then(|line| line.severity())
-                    .map(|severity| severity_style(severity, cx));
+                let log_level_style = self
+                    .line_text(group_ix, source_row)
+                    .and_then(|line| self.presenter.log_level_style(&line));
                 div()
                     .id(format!(
                         "global-search-result-{}-{source_row}",
@@ -2017,7 +2027,7 @@ impl TableDelegate for GlobalSearchTableDelegate {
                             TextSelection::clear(window, cx);
                         }
                     })
-                    .when_some(severity, |row, style| row.bg(style.background))
+                    .when_some(log_level_style, |row, style| row.bg(style.background))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |table, event: &MouseDownEvent, window, cx| {
@@ -2083,20 +2093,16 @@ impl TableDelegate for GlobalSearchTableDelegate {
                 if col_ix == 0 {
                     let marked = group.presentation.marked_rows.contains(source_row);
                     let matched = group.presentation.matched_rows.contains(source_row);
-                    let severity_accent = self
-                        .presenter
-                        .highlight_log_levels
-                        .then(|| self.line_text(group_ix, source_row))
-                        .flatten()
-                        .and_then(|line| line.severity())
-                        .map(|severity| severity_style(severity, cx))
-                        .map(|style| style.accent);
+                    let log_level_accent = self
+                        .line_text(group_ix, source_row)
+                        .and_then(|line| self.presenter.log_level_style(&line))
+                        .map(|style| style.foreground);
                     h_flex()
                         .relative()
                         .size_full()
                         .justify_center()
-                        .when_some(severity_accent, |cell, accent| {
-                            cell.child(severity_accent_overlay(accent))
+                        .when_some(log_level_accent, |cell, accent| {
+                            cell.child(log_level_accent_overlay(accent))
                         })
                         .child(line_marker(marked, matched, cx))
                         .into_any_element()
@@ -2118,9 +2124,13 @@ impl TableDelegate for GlobalSearchTableDelegate {
                             .unwrap_or_else(|| GlobalRowPresentation {
                                 text: LogText::default(),
                                 highlights: Arc::default(),
+                                log_level_style: None,
                                 source_unavailable: false,
                             });
                     let source_unavailable = presentation.source_unavailable;
+                    let text_color = presentation
+                        .log_level_style
+                        .map_or_else(|| self.log_text_color(cx), |style| style.foreground);
                     let text = presentation.text;
                     let highlights = presentation
                         .highlights
@@ -2143,7 +2153,7 @@ impl TableDelegate for GlobalSearchTableDelegate {
                         .size_full()
                         .overflow_hidden()
                         .px(log_cell_horizontal_padding(cx))
-                        .text_color(self.log_text_color(cx))
+                        .text_color(text_color)
                         .when(selected, |cell| {
                             cell.bg(log_row_selection_color(cx))
                                 .child(log_row_selection_overlay(

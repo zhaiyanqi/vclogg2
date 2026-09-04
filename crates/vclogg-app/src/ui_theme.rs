@@ -78,14 +78,6 @@ pub(crate) struct ProductColors {
     pub(crate) marker_matched_border: Hsla,
     pub(crate) marker_marked: Hsla,
     pub(crate) marker_marked_border: Hsla,
-    pub(crate) severity_error_background: Hsla,
-    pub(crate) severity_error_accent: Hsla,
-    pub(crate) severity_warning_background: Hsla,
-    pub(crate) severity_warning_accent: Hsla,
-    pub(crate) severity_info_background: Hsla,
-    pub(crate) severity_info_accent: Hsla,
-    pub(crate) severity_debug_background: Hsla,
-    pub(crate) severity_debug_accent: Hsla,
 }
 
 /// Installs a complete product theme before any window renders. The persisted
@@ -160,15 +152,6 @@ fn product_colors(mode: ThemeMode) -> ProductColors {
             marker_matched_border: color(0xd83b01),
             marker_marked: color(0xf5b942),
             marker_marked_border: color(0x8a5a00),
-            severity_error_background: color(0x3b2025),
-            severity_error_accent: color(0xd13438),
-            severity_warning_background: color(0x3b321e),
-            severity_warning_accent: color(0xe9a800),
-            // info/debug 按 error/warning 的同一明度关系设置，避免在深色底上过亮。
-            severity_info_background: color(0x1c2b3d),
-            severity_info_accent: color(0x0f6cbd),
-            severity_debug_background: color(0x242832),
-            severity_debug_accent: color(0x7a828d),
         }
     } else {
         ProductColors {
@@ -229,14 +212,6 @@ fn product_colors(mode: ThemeMode) -> ProductColors {
             marker_matched_border: color(0xd83b01),
             marker_marked: color(0xf5b942),
             marker_marked_border: color(0x8a5a00),
-            severity_error_background: color(0xfff0f1),
-            severity_error_accent: color(0xd13438),
-            severity_warning_background: color(0xfff8e8),
-            severity_warning_accent: color(0xe9a800),
-            severity_info_background: color(0xeff7ff),
-            severity_info_accent: color(0x0f6cbd),
-            severity_debug_background: color(0xf5f6f8),
-            severity_debug_accent: color(0x7a828d),
         }
     }
 }

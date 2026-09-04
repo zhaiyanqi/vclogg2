@@ -75,8 +75,10 @@ pub struct PredefinedFilterRecord {
 pub struct ColorLabelRecord {
     pub id: String,
     pub name: String,
-    pub color: u32,
-    pub alpha: u8,
+    pub text_color: u32,
+    pub text_alpha: u8,
+    pub background_color: u32,
+    pub background_alpha: u8,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -84,6 +86,7 @@ pub struct AppSettingsRecord {
     pub default_show_line_numbers: bool,
     pub default_show_row_separators: bool,
     pub highlight_log_levels: bool,
+    pub log_level_color_rules: String,
     pub log_font_size: i64,
     pub log_line_spacing: i64,
     pub log_font_family: String,

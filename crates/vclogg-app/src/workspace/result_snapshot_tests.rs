@@ -281,8 +281,8 @@ fn cycling_an_existing_color_rule_prepares_removal() {
     let rule = KeywordColorRule {
         label_id: Some(label.id.clone()),
         keyword: "needle".to_string(),
-        color: label.color,
-        alpha: label.alpha,
+        color: label.background_color,
+        alpha: label.background_alpha,
         case_sensitive: true,
         enabled: true,
     };
@@ -346,12 +346,12 @@ fn cancelled_color_rule_update_does_not_build_matchers() {
 fn prepared_document_color_rules_reject_stale_label_snapshots() {
     let original_label = default_color_labels()[0].clone();
     let mut changed_label = original_label.clone();
-    changed_label.color = 0x123456;
+    changed_label.background_color = 0x123456;
     let keyword_rules = vec![KeywordColorRule {
         label_id: Some(original_label.id.clone()),
         keyword: "needle".to_string(),
-        color: original_label.color,
-        alpha: original_label.alpha,
+        color: original_label.background_color,
+        alpha: original_label.background_alpha,
         case_sensitive: true,
         enabled: true,
     }];
@@ -373,8 +373,11 @@ fn prepared_document_color_rules_reject_stale_label_snapshots() {
         std::slice::from_ref(&changed_label),
     );
     assert_eq!(
-        rebuilt.matching_ranges("needle")[0].1,
-        color_with_alpha(changed_label.color, changed_label.alpha)
+        rebuilt.matching_ranges("needle")[0].1.background,
+        color_with_alpha(
+            changed_label.background_color,
+            changed_label.background_alpha
+        )
     );
 
     let placeholder = installable_color_rules(
@@ -415,8 +418,10 @@ fn color_label_resolution_batch_preserves_document_inputs() {
     assert!(Arc::ptr_eq(&prepared[0].document, &document));
     assert_eq!(prepared[0].rules, vec![rule]);
     assert_eq!(
-        prepared[0].resolved.matching_ranges("needle")[0].1,
-        color_with_alpha(label.color, label.alpha)
+        prepared[0].resolved.matching_ranges("needle")[0]
+            .1
+            .background,
+        color_with_alpha(label.background_color, label.background_alpha)
     );
 }
 

@@ -817,7 +817,15 @@ impl Workspace {
         if self.color_labels_saving {
             return;
         }
-        let labels = cx.new(|cx| ColorLabelsDialog::new(self.color_labels.clone(), window, cx));
+        let labels = cx.new(|cx| {
+            ColorLabelsDialog::new(
+                self.app_settings.highlight_log_levels,
+                self.app_settings.log_level_color_rules.clone(),
+                self.color_labels.clone(),
+                window,
+                cx,
+            )
+        });
         let workspace = cx.entity();
         let (color_labels_dialog_size, color_labels_dialog_margin_top) =
             management_dialog_geometry(window);
@@ -828,7 +836,7 @@ impl Workspace {
                 .w(color_labels_dialog_size.width)
                 .h(color_labels_dialog_size.height)
                 .margin_top(color_labels_dialog_margin_top)
-                .title(crate::tr!("颜色标签", "Color labels"))
+                .title(crate::tr!("日志着色", "Log coloring"))
                 .child(labels.clone())
                 .footer(
                     DialogFooter::new()
@@ -847,7 +855,7 @@ impl Workspace {
                         ),
                 )
                 .on_ok(move |_, window, cx| {
-                    let draft = match labels.read(cx).labels(cx) {
+                    let draft = match labels.read(cx).config(cx) {
                         Ok(draft) => draft,
                         Err(error) => {
                             window.push_notification(error, cx);
@@ -855,7 +863,17 @@ impl Workspace {
                         }
                     };
                     workspace.update(cx, |this, cx| {
-                        this.save_color_labels(draft, window, cx);
+                        let log_level_rules = draft.log_level_rules;
+                        let highlight_log_levels = draft.highlight_log_levels;
+                        this.update_app_setting(
+                            move |settings| {
+                                settings.highlight_log_levels = highlight_log_levels;
+                                settings.log_level_color_rules = log_level_rules;
+                            },
+                            window,
+                            cx,
+                        );
+                        this.save_color_labels(draft.labels, window, cx);
                     });
                     true
                 })

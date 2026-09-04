@@ -14,7 +14,8 @@ pub use vclogg_data::{CloudSettings, DatabaseInfo, HistorySession, LastWorkspace
 
 use crate::app_log::AppLogLevel;
 use crate::color_labels::{
-    ColorLabel, KeywordColorRule, decode_rules, default_color_labels, encode_rules,
+    ColorLabel, KeywordColorRule, LogLevelColorRule, decode_rules, default_color_labels,
+    default_log_level_rules, encode_rules,
 };
 use crate::i18n::Language;
 use crate::predefined_filters::{
@@ -229,6 +230,7 @@ pub struct AppSettings {
     pub dark_log_text_color: Option<String>,
     pub dark_log_background_color: Option<String>,
     pub highlight_log_levels: bool,
+    pub log_level_color_rules: Vec<LogLevelColorRule>,
     pub log_font_size: u16,
     pub log_line_spacing: u16,
     pub log_font_family: LogFontFamily,
@@ -268,6 +270,7 @@ impl Default for AppSettings {
             dark_log_text_color: None,
             dark_log_background_color: None,
             highlight_log_levels: false,
+            log_level_color_rules: default_log_level_rules(),
             log_font_size: 13,
             log_line_spacing: 6,
             log_font_family: LogFontFamily::Consolas,
@@ -351,8 +354,10 @@ impl StateStore {
                 .map(|label| ColorLabelRecord {
                     id: label.id,
                     name: label.name,
-                    color: label.color,
-                    alpha: label.alpha,
+                    text_color: label.text_color,
+                    text_alpha: label.text_alpha,
+                    background_color: label.background_color,
+                    background_alpha: label.background_alpha,
                 })
                 .collect(),
         };
@@ -494,8 +499,10 @@ impl StateStore {
                     .map(|label| ColorLabel {
                         id: label.id,
                         name: label.name,
-                        color: label.color,
-                        alpha: label.alpha,
+                        text_color: label.text_color,
+                        text_alpha: label.text_alpha,
+                        background_color: label.background_color,
+                        background_alpha: label.background_alpha,
                     })
                     .collect()
             })
@@ -508,8 +515,10 @@ impl StateStore {
             .map(|label| ColorLabelRecord {
                 id: label.id.clone(),
                 name: label.name.clone(),
-                color: label.color,
-                alpha: label.alpha,
+                text_color: label.text_color,
+                text_alpha: label.text_alpha,
+                background_color: label.background_color,
+                background_alpha: label.background_alpha,
             })
             .collect::<Vec<_>>();
         self.repository.save_color_labels(&labels)
@@ -616,6 +625,12 @@ fn app_settings_from_record(record: AppSettingsRecord) -> AppSettings {
         dark_log_text_color: normalize_optional_hex_color(record.dark_log_text_color),
         dark_log_background_color: normalize_optional_hex_color(record.dark_log_background_color),
         highlight_log_levels: record.highlight_log_levels,
+        log_level_color_rules: if record.log_level_color_rules.trim().is_empty() {
+            default_log_level_rules()
+        } else {
+            serde_json::from_str(&record.log_level_color_rules)
+                .unwrap_or_else(|_| default_log_level_rules())
+        },
         log_font_size: bounded_u16(record.log_font_size, 8, 32),
         log_line_spacing: bounded_u16(record.log_line_spacing, 1, 40),
         log_font_family: LogFontFamily::from_database(&record.log_font_family),
@@ -657,6 +672,8 @@ fn app_settings_to_record(settings: AppSettings) -> AppSettingsRecord {
         default_show_line_numbers: settings.default_show_line_numbers,
         default_show_row_separators: settings.default_show_row_separators,
         highlight_log_levels: settings.highlight_log_levels,
+        log_level_color_rules: serde_json::to_string(&settings.log_level_color_rules)
+            .unwrap_or_else(|_| "[]".to_string()),
         log_font_size: i64::from(settings.log_font_size),
         log_line_spacing: i64::from(settings.log_line_spacing),
         log_font_family: settings.log_font_family.database_value().into(),

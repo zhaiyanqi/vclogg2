@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use vclogg_core::SearchMatcher;
 
 const DEFAULT_COLOR_LABEL_ALPHA: u8 = 179;
+const DEFAULT_HIGHLIGHT_TEXT_COLOR: u32 = 0x141414;
 const DEFAULT_COLOR_LABELS: [(&str, &str, u32); 10] = [
     ("天蓝", "Sky blue", 0x38bdf8),
     ("琥珀", "Amber", 0xf28e2b),
@@ -27,9 +28,18 @@ fn opaque_color_alpha() -> u8 {
 pub struct ColorLabel {
     pub id: String,
     pub name: String,
-    pub color: u32,
+    #[serde(default = "default_highlight_text_color")]
+    pub text_color: u32,
     #[serde(default = "opaque_color_alpha")]
-    pub alpha: u8,
+    pub text_alpha: u8,
+    #[serde(alias = "color")]
+    pub background_color: u32,
+    #[serde(default = "opaque_color_alpha", alias = "alpha")]
+    pub background_alpha: u8,
+}
+
+fn default_highlight_text_color() -> u32 {
+    DEFAULT_HIGHLIGHT_TEXT_COLOR
 }
 
 impl ColorLabel {
@@ -64,6 +74,35 @@ pub struct KeywordColorRule {
     pub enabled: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct LogLevelColorRule {
+    pub id: String,
+    pub keyword: String,
+    pub text_color: u32,
+    #[serde(default = "opaque_color_alpha")]
+    pub text_alpha: u8,
+    pub background_color: u32,
+    #[serde(default = "opaque_color_alpha")]
+    pub background_alpha: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LogColorStyle {
+    pub foreground: Hsla,
+    pub background: Hsla,
+}
+
+#[derive(Clone, Default)]
+pub struct ResolvedLogLevelRules {
+    rules: Arc<[ResolvedLogLevelRule]>,
+}
+
+#[derive(Clone)]
+struct ResolvedLogLevelRule {
+    keyword: Arc<str>,
+    style: LogColorStyle,
+}
+
 #[derive(Clone, Default)]
 pub struct ResolvedColorRules {
     case_sensitive: Option<CaseSensitiveColorRules>,
@@ -79,8 +118,10 @@ struct CaseSensitiveColorRules {
 
 #[derive(Clone, Copy)]
 struct ResolvedColorRuleMetadata {
-    color: u32,
-    alpha: u8,
+    text_color: u32,
+    text_alpha: u8,
+    background_color: u32,
+    background_alpha: u8,
     order: usize,
 }
 
@@ -102,7 +143,7 @@ impl ResolvedColorRules {
         })
     }
 
-    pub fn matching_ranges(&self, text: &str) -> Vec<(Range<usize>, Hsla, usize)> {
+    pub fn matching_ranges(&self, text: &str) -> Vec<(Range<usize>, LogColorStyle, usize)> {
         if !self.layers.is_empty() {
             let mut ranges = Vec::new();
             let mut order_offset = 0_usize;
@@ -139,19 +180,18 @@ impl ResolvedColorRules {
                 let metadata = case_sensitive.rules[pattern];
                 ranges.push((
                     matched.start()..matched.end(),
-                    color_with_alpha(metadata.color, metadata.alpha),
+                    metadata.style(),
                     metadata.order,
                 ));
             }
         }
         for rule in self.fallback.iter() {
-            ranges.extend(rule.matcher.matching_ranges(text).into_iter().map(|range| {
-                (
-                    range,
-                    color_with_alpha(rule.metadata.color, rule.metadata.alpha),
-                    rule.metadata.order,
-                )
-            }));
+            ranges.extend(
+                rule.matcher
+                    .matching_ranges(text)
+                    .into_iter()
+                    .map(|range| (range, rule.metadata.style(), rule.metadata.order)),
+            );
         }
         ranges
     }
@@ -169,6 +209,31 @@ impl ResolvedColorRules {
     }
 }
 
+impl ResolvedColorRuleMetadata {
+    fn style(self) -> LogColorStyle {
+        LogColorStyle {
+            foreground: color_with_alpha(self.text_color, self.text_alpha),
+            background: color_with_alpha(self.background_color, self.background_alpha),
+        }
+    }
+}
+
+impl ResolvedLogLevelRules {
+    pub fn matching_style(&self, text: &str) -> Option<LogColorStyle> {
+        let mut matched = None;
+        for word in
+            text.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        {
+            for rule in self.rules.iter() {
+                if word.eq_ignore_ascii_case(rule.keyword.as_ref()) {
+                    matched = Some(rule.style);
+                }
+            }
+        }
+        matched
+    }
+}
+
 pub fn color_with_alpha(color: u32, alpha: u8) -> Hsla {
     rgba((color << 8) | u32::from(alpha)).into()
 }
@@ -180,10 +245,49 @@ pub fn default_color_labels() -> Vec<ColorLabel> {
         .map(|(ix, (name, _, color))| ColorLabel {
             id: format!("color-label-{}", ix + 1),
             name: name.to_string(),
-            color,
-            alpha: DEFAULT_COLOR_LABEL_ALPHA,
+            text_color: DEFAULT_HIGHLIGHT_TEXT_COLOR,
+            text_alpha: u8::MAX,
+            background_color: color,
+            background_alpha: DEFAULT_COLOR_LABEL_ALPHA,
         })
         .collect()
+}
+
+pub fn default_log_level_rules() -> Vec<LogLevelColorRule> {
+    vec![
+        LogLevelColorRule {
+            id: "log-level-info".to_string(),
+            keyword: "INFO".to_string(),
+            text_color: 0x0c4a6e,
+            text_alpha: u8::MAX,
+            background_color: 0xe0f2fe,
+            background_alpha: u8::MAX,
+        },
+        LogLevelColorRule {
+            id: "log-level-error".to_string(),
+            keyword: "ERROR".to_string(),
+            text_color: 0x7f1d1d,
+            text_alpha: u8::MAX,
+            background_color: 0xfee2e2,
+            background_alpha: u8::MAX,
+        },
+    ]
+}
+
+pub fn resolve_log_level_rules(rules: &[LogLevelColorRule]) -> Arc<ResolvedLogLevelRules> {
+    Arc::new(ResolvedLogLevelRules {
+        rules: rules
+            .iter()
+            .filter(|rule| !rule.keyword.trim().is_empty())
+            .map(|rule| ResolvedLogLevelRule {
+                keyword: Arc::from(rule.keyword.trim()),
+                style: LogColorStyle {
+                    foreground: color_with_alpha(rule.text_color, rule.text_alpha),
+                    background: color_with_alpha(rule.background_color, rule.background_alpha),
+                },
+            })
+            .collect(),
+    })
 }
 
 pub fn resolve_color_rules(
@@ -197,14 +301,31 @@ pub fn resolve_color_rules(
         .enumerate()
         .filter(|(_, rule)| rule.enabled && !rule.keyword.is_empty())
     {
-        let (color, alpha) = rule
+        let style = rule
             .label_id
             .as_deref()
             .and_then(|id| labels.iter().find(|label| label.id == id))
-            .map_or((rule.color, rule.alpha), |label| (label.color, label.alpha));
+            .map_or(
+                (
+                    DEFAULT_HIGHLIGHT_TEXT_COLOR,
+                    u8::MAX,
+                    rule.color,
+                    rule.alpha,
+                ),
+                |label| {
+                    (
+                        label.text_color,
+                        label.text_alpha,
+                        label.background_color,
+                        label.background_alpha,
+                    )
+                },
+            );
         let metadata = ResolvedColorRuleMetadata {
-            color,
-            alpha,
+            text_color: style.0,
+            text_alpha: style.1,
+            background_color: style.2,
+            background_alpha: style.3,
             order,
         };
         if rule.case_sensitive {
@@ -317,5 +438,64 @@ mod tests {
 
         assert_eq!(ranges.len(), 2);
         assert!(ranges[1].2 > ranges[0].2);
+    }
+
+    #[test]
+    fn default_log_levels_are_info_then_error() {
+        assert_eq!(
+            default_log_level_rules()
+                .into_iter()
+                .map(|rule| rule.keyword)
+                .collect::<Vec<_>>(),
+            ["INFO", "ERROR"]
+        );
+    }
+
+    #[test]
+    fn log_level_rules_match_ascii_words_and_later_rules_win() {
+        let rules = default_log_level_rules();
+        let resolved = resolve_log_level_rules(&rules);
+
+        assert_eq!(
+            resolved.matching_style("2026 info started"),
+            Some(LogColorStyle {
+                foreground: color_with_alpha(rules[0].text_color, rules[0].text_alpha),
+                background: color_with_alpha(rules[0].background_color, rules[0].background_alpha),
+            })
+        );
+        assert!(resolved.matching_style("INFORMATION started").is_none());
+        assert_eq!(
+            resolved.matching_style("INFO request ended with ERROR"),
+            Some(LogColorStyle {
+                foreground: color_with_alpha(rules[1].text_color, rules[1].text_alpha),
+                background: color_with_alpha(rules[1].background_color, rules[1].background_alpha),
+            })
+        );
+    }
+
+    #[test]
+    fn color_label_rules_resolve_both_text_and_background() {
+        let label = default_color_labels().remove(0);
+        let resolved = resolve_color_rules(
+            &[KeywordColorRule {
+                label_id: Some(label.id.clone()),
+                keyword: "needle".into(),
+                color: 0,
+                alpha: 0,
+                case_sensitive: true,
+                enabled: true,
+            }],
+            std::slice::from_ref(&label),
+        );
+        let style = resolved.matching_ranges("needle")[0].1;
+
+        assert_eq!(
+            style.foreground,
+            color_with_alpha(label.text_color, label.text_alpha)
+        );
+        assert_eq!(
+            style.background,
+            color_with_alpha(label.background_color, label.background_alpha)
+        );
     }
 }

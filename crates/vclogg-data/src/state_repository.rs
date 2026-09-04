@@ -20,7 +20,7 @@ use crate::{
 };
 
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
-pub const STATE_SCHEMA_VERSION: u32 = 5;
+pub const STATE_SCHEMA_VERSION: u32 = 6;
 
 /// Owns SQLite access for durable file-history and workspace records.
 pub struct StateRepository {
@@ -426,7 +426,7 @@ impl StateRepository {
                         line_number_text_color, line_number_background_color,
                         theme_preference, open_directory_command, viewer_overscan, language,
                         app_log_level, light_log_text_color, light_log_background_color,
-                        dark_log_text_color, dark_log_background_color
+                        dark_log_text_color, dark_log_background_color, log_level_color_rules
                  FROM app_settings WHERE id = 1",
                 [],
                 |row| {
@@ -471,6 +471,7 @@ impl StateRepository {
                         light_log_background_color: row.get(37)?,
                         dark_log_text_color: row.get(38)?,
                         dark_log_background_color: row.get(39)?,
+                        log_level_color_rules: row.get(40)?,
                     })
                 },
             )
@@ -498,8 +499,8 @@ impl StateRepository {
                      line_number_text_color, line_number_background_color,
                      theme_preference, open_directory_command, viewer_overscan, language,
                      app_log_level, light_log_text_color, light_log_background_color,
-                     dark_log_text_color, dark_log_background_color
-                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40)
+                     dark_log_text_color, dark_log_background_color, log_level_color_rules
+                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41)
                  ON CONFLICT(id) DO UPDATE SET
                      default_show_line_numbers = excluded.default_show_line_numbers,
                      default_show_row_separators = excluded.default_show_row_separators,
@@ -540,7 +541,8 @@ impl StateRepository {
                      light_log_text_color = excluded.light_log_text_color,
                      light_log_background_color = excluded.light_log_background_color,
                      dark_log_text_color = excluded.dark_log_text_color,
-                     dark_log_background_color = excluded.dark_log_background_color",
+                     dark_log_background_color = excluded.dark_log_background_color,
+                     log_level_color_rules = excluded.log_level_color_rules",
                 params![
                     settings.default_show_line_numbers,
                     settings.default_show_row_separators,
@@ -582,6 +584,7 @@ impl StateRepository {
                     settings.light_log_background_color,
                     settings.dark_log_text_color,
                     settings.dark_log_background_color,
+                    settings.log_level_color_rules,
                 ],
             )
             .context("无法保存应用设置")?;
@@ -756,15 +759,20 @@ impl StateRepository {
             return Ok(None);
         }
         let mut statement = connection
-            .prepare("SELECT label_id, name, color, alpha FROM color_labels ORDER BY position ASC")
+            .prepare(
+                "SELECT label_id, name, text_color, text_alpha, color, alpha
+                 FROM color_labels ORDER BY position ASC",
+            )
             .context("无法读取颜色标签")?;
         let rows = statement
             .query_map([], |row| {
                 Ok(ColorLabelRecord {
                     id: row.get(0)?,
                     name: row.get(1)?,
-                    color: row.get(2)?,
-                    alpha: u8::try_from(row.get::<_, i64>(3)?).unwrap_or(u8::MAX),
+                    text_color: row.get(2)?,
+                    text_alpha: u8::try_from(row.get::<_, i64>(3)?).unwrap_or(u8::MAX),
+                    background_color: row.get(4)?,
+                    background_alpha: u8::try_from(row.get::<_, i64>(5)?).unwrap_or(u8::MAX),
                 })
             })
             .context("无法查询颜色标签")?;
@@ -782,14 +790,17 @@ impl StateRepository {
         for (position, label) in labels.iter().enumerate() {
             transaction
                 .execute(
-                    "INSERT INTO color_labels(position, label_id, name, color, alpha)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    "INSERT INTO color_labels(
+                         position, label_id, name, text_color, text_alpha, color, alpha
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                     params![
                         i64::try_from(position).unwrap_or(i64::MAX),
                         label.id,
                         label.name,
-                        label.color,
-                        label.alpha,
+                        label.text_color,
+                        label.text_alpha,
+                        label.background_color,
+                        label.background_alpha,
                     ],
                 )
                 .with_context(|| format!("无法保存颜色标签：{}", label.name))?;
@@ -1046,6 +1057,7 @@ fn initialize_schema(connection: &Connection, defaults: &StateMigrationDefaults)
                  default_show_line_numbers INTEGER NOT NULL DEFAULT 1,
                  default_show_row_separators INTEGER NOT NULL DEFAULT 0,
                  highlight_log_levels INTEGER NOT NULL DEFAULT 0,
+                 log_level_color_rules TEXT NOT NULL DEFAULT '',
                  log_font_size INTEGER NOT NULL DEFAULT 13,
                  log_line_spacing INTEGER NOT NULL DEFAULT 6,
                  log_font_family TEXT NOT NULL DEFAULT 'consolas',
@@ -1101,7 +1113,9 @@ fn initialize_schema(connection: &Connection, defaults: &StateMigrationDefaults)
                  label_id TEXT NOT NULL UNIQUE,
                  name TEXT NOT NULL,
                  color INTEGER NOT NULL,
-                 alpha INTEGER NOT NULL DEFAULT 255
+                 alpha INTEGER NOT NULL DEFAULT 255,
+                 text_color INTEGER NOT NULL DEFAULT 1315860,
+                 text_alpha INTEGER NOT NULL DEFAULT 255
              );
              CREATE TABLE IF NOT EXISTS color_label_settings (
                  id INTEGER PRIMARY KEY CHECK(id = 1),
@@ -1160,29 +1174,38 @@ fn ensure_color_label_columns(
     connection: &Connection,
     default_labels: &[ColorLabelRecord],
 ) -> Result<()> {
-    if table_columns(connection, "color_labels")?.contains("alpha") {
-        return Ok(());
-    }
-    connection
-        .execute(
-            "ALTER TABLE color_labels ADD COLUMN alpha INTEGER NOT NULL DEFAULT 255",
-            [],
-        )
-        .context("无法迁移颜色标签透明度字段")?;
-    for label in default_labels {
+    let columns = table_columns(connection, "color_labels")?;
+    if !columns.contains("alpha") {
         connection
             .execute(
-                "UPDATE color_labels SET alpha = ?1 WHERE label_id = ?2 AND color = ?3",
-                params![label.alpha, label.id, label.color],
+                "ALTER TABLE color_labels ADD COLUMN alpha INTEGER NOT NULL DEFAULT 255",
+                [],
             )
-            .with_context(|| format!("无法迁移颜色标签透明度：{}", label.name))?;
+            .context("无法迁移颜色标签透明度字段")?;
+        for label in default_labels {
+            connection
+                .execute(
+                    "UPDATE color_labels SET alpha = ?1 WHERE label_id = ?2 AND color = ?3",
+                    params![label.background_alpha, label.id, label.background_color],
+                )
+                .with_context(|| format!("无法迁移颜色标签透明度：{}", label.name))?;
+        }
     }
+    ensure_columns(
+        connection,
+        "color_labels",
+        &[
+            ("text_color", "INTEGER NOT NULL DEFAULT 1315860"),
+            ("text_alpha", "INTEGER NOT NULL DEFAULT 255"),
+        ],
+    )?;
     Ok(())
 }
 
 fn ensure_app_settings_columns(connection: &Connection, default_log_level: &str) -> Result<()> {
-    const COLUMNS: [(&str, &str); 37] = [
+    const COLUMNS: [(&str, &str); 38] = [
         ("highlight_log_levels", "INTEGER NOT NULL DEFAULT 0"),
+        ("log_level_color_rules", "TEXT NOT NULL DEFAULT ''"),
         ("log_font_size", "INTEGER NOT NULL DEFAULT 13"),
         ("log_line_spacing", "INTEGER NOT NULL DEFAULT 6"),
         ("log_font_family", "TEXT NOT NULL DEFAULT 'consolas'"),
@@ -1329,7 +1352,7 @@ mod tests {
     }
 
     #[test]
-    fn version_four_database_adds_theme_scoped_log_colors() {
+    fn version_four_database_adds_theme_and_log_coloring_fields() {
         let connection = Connection::open_in_memory().expect("应能创建内存数据库");
         connection
             .execute_batch(
@@ -1353,8 +1376,14 @@ mod tests {
             "light_log_background_color",
             "dark_log_text_color",
             "dark_log_background_color",
+            "log_level_color_rules",
         ] {
             assert!(columns.contains(column), "缺少迁移字段 {column}");
+        }
+        let label_columns =
+            table_columns(&connection, "color_labels").expect("应能读取迁移后的颜色标签字段");
+        for column in ["text_color", "text_alpha", "color", "alpha"] {
+            assert!(label_columns.contains(column), "缺少颜色标签字段 {column}");
         }
     }
 }

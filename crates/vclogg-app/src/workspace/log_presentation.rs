@@ -868,10 +868,9 @@ impl Workspace {
                 };
                 let styled_text = StyledText::new(row.text.display().clone())
                     .with_highlights(Self::highlight_styles(&row.highlights, cx));
-                let severity = (!source_unavailable && row.highlight_severity)
-                    .then(|| row.text.severity())
-                    .flatten()
-                    .map(|severity| severity_style(severity, cx));
+                let log_level_style = (!source_unavailable)
+                    .then_some(row.log_level_style)
+                    .flatten();
                 let measure_workspace = workspace.clone();
                 let row_bounds = rendered_row_bounds.clone();
                 let line = SelectableLogText::new(
@@ -909,9 +908,9 @@ impl Workspace {
                         .min_h(base_height)
                         .flex()
                         .items_start()
-                        .when_some(severity, |row, style| {
+                        .when_some(log_level_style, |row, style| {
                             row.bg(style.background)
-                                .child(severity_accent_overlay(style.accent))
+                                .child(log_level_accent_overlay(style.foreground))
                         })
                         .on_mouse_down(
                             MouseButton::Left,
@@ -970,7 +969,10 @@ impl Workspace {
                                 .overflow_hidden()
                                 .whitespace_normal()
                                 .px(log_cell_horizontal_padding(cx))
-                                .text_color(log_text_color)
+                                .text_color(
+                                    log_level_style
+                                        .map_or(log_text_color, |style| style.foreground),
+                                )
                                 .text_size(px(font_size as f32))
                                 .line_height(base_height)
                                 .font_family(font_family.clone())
@@ -1820,7 +1822,10 @@ impl Workspace {
                             .rounded(cx.theme().radius / 2.)
                             .border_1()
                             .border_color(cx.theme().input)
-                            .bg(color_with_alpha(label.color, label.alpha));
+                            .bg(color_with_alpha(
+                                label.background_color,
+                                label.background_alpha,
+                            ));
                         menu = menu.item(
                             PopupMenuItem::new(label.localized_name())
                                 .icon(color_swatch)
@@ -2445,7 +2450,7 @@ impl Workspace {
                         selected,
                         marked,
                         matched,
-                        highlight_severity,
+                        log_level_style,
                         source_unavailable,
                         highlights,
                     } => {
@@ -2470,10 +2475,8 @@ impl Workspace {
                         );
                         let styled_text = StyledText::new(text.display().clone())
                             .with_highlights(Self::highlight_styles(&highlights, cx));
-                        let severity = (!source_unavailable && highlight_severity)
-                            .then(|| text.severity())
-                            .flatten()
-                            .map(|severity| severity_style(severity, cx));
+                        let log_level_style =
+                            (!source_unavailable).then_some(log_level_style).flatten();
                         let measure_workspace = workspace.clone();
                         let row_bounds = rendered_row_bounds.clone();
                         let selectable = SelectableLogText::new(
@@ -2510,9 +2513,9 @@ impl Workspace {
                                 .min_h(base_height)
                                 .flex()
                                 .items_start()
-                                .when_some(severity, |row, style| {
+                                .when_some(log_level_style, |row, style| {
                                     row.bg(style.background)
-                                        .child(severity_accent_overlay(style.accent))
+                                        .child(log_level_accent_overlay(style.foreground))
                                 })
                                 .on_mouse_down(
                                     MouseButton::Left,
@@ -2556,7 +2559,10 @@ impl Workspace {
                                         .overflow_hidden()
                                         .whitespace_normal()
                                         .px(log_cell_horizontal_padding(cx))
-                                        .text_color(log_text_color)
+                                        .text_color(
+                                            log_level_style
+                                                .map_or(log_text_color, |style| style.foreground),
+                                        )
                                         .text_size(px(font_size as f32))
                                         .line_height(base_height)
                                         .font_family(font_family.clone())

@@ -25,8 +25,10 @@ use vclogg_core::{CompressedRows, LinePreviewReader, LogDocument, SearchMatcher}
 #[cfg(test)]
 use vclogg_core::LinePreview;
 
-use crate::color_labels::ResolvedColorRules;
-use crate::selectable_log_text::{LogSeverity, LogText, SelectableLogText, TextSelectionCache};
+use crate::color_labels::{
+    LogColorStyle, ResolvedColorRules, ResolvedLogLevelRules, resolve_log_level_rules,
+};
+use crate::selectable_log_text::{LogText, SelectableLogText, TextSelectionCache};
 use crate::state_store::{AppSettings, DEFAULT_WORD_BOUNDARY_CHARACTERS, LogFontFamily};
 use crate::ui_theme;
 use crate::virtual_log_lines::{
@@ -119,37 +121,8 @@ pub(crate) fn log_row_selection_overlay(
         .border_color(cx.theme().table_active_border)
 }
 
-/// 级别着色使用「整行实色底 + 最左侧 3px 色条」。
-#[derive(Clone, Copy)]
-pub(crate) struct SeverityStyle {
-    pub(crate) background: Hsla,
-    pub(crate) accent: Hsla,
-}
-
-pub(crate) fn severity_style(severity: LogSeverity, cx: &App) -> SeverityStyle {
-    let colors = ui_theme::palette(cx);
-    match severity {
-        LogSeverity::Error => SeverityStyle {
-            background: colors.severity_error_background,
-            accent: colors.severity_error_accent,
-        },
-        LogSeverity::Warning => SeverityStyle {
-            background: colors.severity_warning_background,
-            accent: colors.severity_warning_accent,
-        },
-        LogSeverity::Info => SeverityStyle {
-            background: colors.severity_info_background,
-            accent: colors.severity_info_accent,
-        },
-        LogSeverity::Debug => SeverityStyle {
-            background: colors.severity_debug_background,
-            accent: colors.severity_debug_accent,
-        },
-    }
-}
-
 /// 级别色条使用不占布局的绝对定位覆盖层，挂在标记列上即可贴住行的左缘。
-pub(crate) fn severity_accent_overlay(accent: Hsla) -> Div {
+pub(crate) fn log_level_accent_overlay(accent: Hsla) -> Div {
     div()
         .absolute()
         .left_0()
@@ -221,13 +194,11 @@ pub(crate) fn line_marker(marked: bool, matched: bool, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// 命中与标记的正文高亮使用实色底配深色文字，背景与前景必须成对给出，
-/// 避免深色主题下出现浅底浅字。
+/// 命中与标记的正文高亮始终成对提供背景与前景，避免自定义颜色在不同主题下失去可读性。
 pub(crate) fn text_highlight_style(highlight: TextHighlight, cx: &App) -> HighlightStyle {
     let colors = ui_theme::palette(cx);
     let (background, foreground) = match highlight {
-        // 颜色标签由用户挑选，统一使用近黑文字保证可读。
-        TextHighlight::Color(color) => (color, gpui::rgb(0x141414).into()),
+        TextHighlight::Color(style) => (style.background, style.foreground),
         TextHighlight::Search => (colors.search_match, colors.search_match_foreground),
         TextHighlight::QuickFind => (colors.quick_find, colors.quick_find_foreground),
     };
@@ -240,7 +211,7 @@ pub(crate) fn text_highlight_style(highlight: TextHighlight, cx: &App) -> Highli
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum TextHighlight {
-    Color(gpui::Hsla),
+    Color(LogColorStyle),
     Search,
     QuickFind,
 }
@@ -730,6 +701,7 @@ struct LogRowPresenter {
     matched_rows: CompressedRows,
     quick_find_matcher: Option<SearchMatcher>,
     color_rules: Arc<ResolvedColorRules>,
+    log_level_rules: Arc<ResolvedLogLevelRules>,
 }
 
 struct LogInteractionState {
@@ -900,6 +872,7 @@ impl LogRowPresenter {
             matched_rows: CompressedRows::default(),
             quick_find_matcher: None,
             color_rules: Arc::default(),
+            log_level_rules: Arc::default(),
         }
     }
 
@@ -911,6 +884,7 @@ impl LogRowPresenter {
             self.quick_find_matcher.as_ref(),
         );
         LogRowPresentation {
+            log_level_style: self.log_level_style(&text),
             highlights: source_highlights
                 .into_iter()
                 .filter_map(|(range, highlight)| {
@@ -920,6 +894,12 @@ impl LogRowPresenter {
             text,
             source_unavailable: false,
         }
+    }
+
+    fn log_level_style(&self, text: &LogText) -> Option<LogColorStyle> {
+        self.highlight_log_levels
+            .then(|| self.log_level_rules.matching_style(text.source()))
+            .flatten()
     }
 }
 
@@ -941,6 +921,7 @@ impl Default for LogInteractionState {
 struct LogRowPresentation {
     text: LogText,
     highlights: Arc<[(Range<usize>, TextHighlight)]>,
+    log_level_style: Option<LogColorStyle>,
     source_unavailable: bool,
 }
 
@@ -950,7 +931,7 @@ pub(crate) struct WrappedLogRow {
     pub selected: bool,
     pub marked: bool,
     pub matched: bool,
-    pub highlight_severity: bool,
+    pub log_level_style: Option<LogColorStyle>,
     pub source_unavailable: bool,
     pub highlights: Arc<[(Range<usize>, TextHighlight)]>,
 }
@@ -1039,6 +1020,7 @@ impl LogTableDelegate {
             .log_text_color(true)
             .and_then(|value| try_parse_color(value).ok());
         self.presenter.show_line_number_row_separators = settings.show_line_number_row_separators;
+        self.presenter.log_level_rules = resolve_log_level_rules(&settings.log_level_color_rules);
         self.source
             .visible_lines
             .set_overscan(usize::from(settings.viewer_overscan.clamp(4, 40)));
@@ -1189,7 +1171,7 @@ impl LogTableDelegate {
             selected: self.interaction.row_selection.borrow().contains(row_ix),
             marked: self.presenter.marked_rows.contains(source_row),
             matched: self.presenter.matched_rows.contains(source_row),
-            highlight_severity: self.presenter.highlight_log_levels,
+            log_level_style: presentation.log_level_style,
             source_unavailable: presentation.source_unavailable,
             highlights: presentation.highlights,
             text: presentation.text,
@@ -1329,6 +1311,7 @@ impl LogTableDelegate {
             return Some(LogRowPresentation {
                 text,
                 highlights: Arc::default(),
+                log_level_style: None,
                 source_unavailable: true,
             });
         }
@@ -1606,11 +1589,9 @@ impl TableDelegate for LogTableDelegate {
         let _performance_scope = crate::ui_performance::scope("LogTableDelegate::render_tr");
         let source_row = self.source_row(row_ix);
         let source_row_ix = source_row.unwrap_or(row_ix);
-        let severity = source_row
-            .filter(|_| self.presenter.highlight_log_levels)
+        let log_level_style = source_row
             .and_then(|source_row| self.line_text(source_row))
-            .and_then(|line| line.severity())
-            .map(|severity| severity_style(severity, cx));
+            .and_then(|line| self.presenter.log_level_style(&line));
         let row_bounds = self.interaction.row_bounds.clone();
         div()
             .id(format!(
@@ -1621,7 +1602,7 @@ impl TableDelegate for LogTableDelegate {
             .on_prepaint(move |bounds, _, _| {
                 row_bounds.borrow_mut().insert(row_ix, bounds);
             })
-            .when_some(severity, |row, style| row.bg(style.background))
+            .when_some(log_level_style, |row, style| row.bg(style.background))
             .when(source_row.is_some(), |row| {
                 row.on_mouse_down(
                     MouseButton::Left,
@@ -1676,20 +1657,16 @@ impl TableDelegate for LogTableDelegate {
         if col_ix == 0 {
             let marked = self.presenter.marked_rows.contains(source_row);
             let matched = self.presenter.matched_rows.contains(source_row);
-            let severity_accent = self
-                .presenter
-                .highlight_log_levels
-                .then(|| self.line_text(source_row))
-                .flatten()
-                .and_then(|line| line.severity())
-                .map(|severity| severity_style(severity, cx))
-                .map(|style| style.accent);
+            let log_level_accent = self
+                .line_text(source_row)
+                .and_then(|line| self.presenter.log_level_style(&line))
+                .map(|style| style.foreground);
             h_flex()
                 .relative()
                 .size_full()
                 .justify_center()
-                .when_some(severity_accent, |cell, accent| {
-                    cell.child(severity_accent_overlay(accent))
+                .when_some(log_level_accent, |cell, accent| {
+                    cell.child(log_level_accent_overlay(accent))
                 })
                 .child(line_marker(marked, matched, cx))
                 .into_any_element()
@@ -1711,9 +1688,13 @@ impl TableDelegate for LogTableDelegate {
                     .unwrap_or_else(|| LogRowPresentation {
                         text: LogText::default(),
                         highlights: Arc::default(),
+                        log_level_style: None,
                         source_unavailable: false,
                     });
             let source_unavailable = presentation.source_unavailable;
+            let text_color = presentation
+                .log_level_style
+                .map_or_else(|| self.log_text_color(cx), |style| style.foreground);
             let text = presentation.text;
             let highlights = presentation
                 .highlights
@@ -1731,7 +1712,7 @@ impl TableDelegate for LogTableDelegate {
                 .size_full()
                 .overflow_hidden()
                 .px(log_cell_horizontal_padding(cx))
-                .text_color(self.log_text_color(cx))
+                .text_color(text_color)
                 .when(selected, |cell| {
                     cell.bg(log_row_selection_color(cx))
                         .child(log_row_selection_overlay(

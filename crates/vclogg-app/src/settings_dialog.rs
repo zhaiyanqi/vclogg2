@@ -2547,7 +2547,7 @@ impl Render for SettingsDialog {
                                 div()
                                     .text_sm()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(crate::tr!("突出 ERROR、WARN、INFO 与 DEBUG 等级的整行日志", "Highlight complete lines for ERROR, WARN, INFO, and DEBUG levels")),
+                                    .child(crate::tr!("按“高亮 → 日志着色…”中的关键词与颜色突出整行日志", "Highlight complete lines using keywords and colors from Highlight → Log coloring…")),
                             ),
                     )
                     .child(

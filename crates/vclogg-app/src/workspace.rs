@@ -89,9 +89,9 @@ use crate::{
     log_table::{
         LogTableCursor, LogTableDelegate, LogTableStateExt, TextHighlight, line_marker,
         line_marker_column_width, log_cell_horizontal_padding, log_fixed_column_divider_overlay,
-        log_line_height, log_line_number_cell, log_row_selection_color, log_row_selection_overlay,
-        log_row_separator_overlay, scroll_uniform_log_row_to_viewport_y, severity_accent_overlay,
-        severity_style, text_highlight_style,
+        log_level_accent_overlay, log_line_height, log_line_number_cell, log_row_selection_color,
+        log_row_selection_overlay, log_row_separator_overlay, scroll_uniform_log_row_to_viewport_y,
+        text_highlight_style,
     },
     path_identity::{
         PathMatchKey, decode_persisted_path, deduplicate_paths, encode_persisted_path,
