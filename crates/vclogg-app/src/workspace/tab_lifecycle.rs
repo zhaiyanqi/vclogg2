@@ -537,18 +537,28 @@ impl Workspace {
             )
         };
         let workspace = cx.entity();
-        window.open_alert_dialog(cx, move |alert, _, _| {
+        window.open_alert_dialog(cx, move |alert, _, cx| {
             let workspace = workspace.clone();
             let ids = ids.clone();
             alert
                 .icon(Icon::new(IconName::Info))
                 .title(title.clone())
                 .description(description.clone())
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text(crate::tr!("关闭标签", "Close tabs"))
-                        .cancel_text(crate::tr!("取消", "Cancel"))
-                        .show_cancel(true),
+                .footer(
+                    DialogFooter::new()
+                        .justify_center()
+                        .child(crate::dialog_focus::dialog_cancel_action(
+                            "close-tabs-cancel-action",
+                            Button::new("close-tabs-cancel").label(crate::tr!("取消", "Cancel")),
+                            cx,
+                        ))
+                        .child(crate::dialog_focus::dialog_confirm_action(
+                            "close-tabs-confirm-action",
+                            Button::new("close-tabs-confirm")
+                                .primary()
+                                .label(crate::tr!("关闭标签", "Close tabs")),
+                            cx,
+                        )),
                 )
                 .on_ok(move |_, window, cx| {
                     workspace.update(cx, |this, cx| {
@@ -1055,18 +1065,28 @@ impl Workspace {
             focus_input.update(cx, |input, cx| input.select_all(window, cx));
         });
         let workspace = cx.entity();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let rename_for_submit = rename.clone();
             let input_for_submit = input.clone();
             let workspace = workspace.clone();
             dialog
                 .title(crate::tr!("重命名标签", "Rename tab"))
+                .close_button(false)
                 .child(rename.clone())
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text(crate::tr!("保存", "Save"))
-                        .cancel_text(crate::tr!("取消", "Cancel"))
-                        .show_cancel(true),
+                .footer(
+                    DialogFooter::new()
+                        .child(crate::dialog_focus::dialog_cancel_action(
+                            "rename-tab-cancel-action",
+                            Button::new("rename-tab-cancel").label(crate::tr!("取消", "Cancel")),
+                            cx,
+                        ))
+                        .child(crate::dialog_focus::dialog_confirm_action(
+                            "rename-tab-confirm-action",
+                            Button::new("rename-tab-confirm")
+                                .primary()
+                                .label(crate::tr!("保存", "Save")),
+                            cx,
+                        )),
                 )
                 .on_ok(move |_, window, cx| {
                     let Some(title) = rename_for_submit.read(cx).title(cx) else {

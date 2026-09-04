@@ -258,19 +258,27 @@ impl Workspace {
                             ));
                             let (history_dialog_size, history_dialog_margin_top) =
                                 management_dialog_geometry(window);
-                            window.open_dialog(cx, move |dialog, _, _| {
+                            window.open_dialog(cx, move |dialog, _, cx| {
                                 let history = history.clone();
                                 dialog
                                     .w(history_dialog_size.width)
                                     .h(history_dialog_size.height)
                                     .margin_top(history_dialog_margin_top)
                                     .title(crate::tr!("文件历史", "File history"))
+                                    .close_button(false)
                                     .content(move |content, _, _| {
                                         content.min_h_0().overflow_hidden().child(history.clone())
                                     })
-                                    .button_props(
-                                        DialogButtonProps::default()
-                                            .ok_text(crate::tr!("关闭", "Close")),
+                                    .footer(
+                                        DialogFooter::new().child(
+                                            crate::dialog_focus::dialog_confirm_action(
+                                                "history-dialog-close-action",
+                                                Button::new("history-dialog-close")
+                                                    .primary()
+                                                    .label(crate::tr!("关闭", "Close")),
+                                                cx,
+                                            ),
+                                        ),
                                     )
                             });
                         }
@@ -609,7 +617,7 @@ impl Workspace {
         ));
         let workspace = cx.entity();
         let (settings_dialog_size, settings_dialog_margin_top) = management_dialog_geometry(window);
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let settings = settings.clone();
             let workspace_for_save = workspace.clone();
             let workspace_for_cancel = workspace.clone();
@@ -621,28 +629,26 @@ impl Workspace {
                 .h(settings_dialog_size.height)
                 .margin_top(settings_dialog_margin_top)
                 .title(crate::tr!("设置", "Settings"))
+                .close_button(false)
                 .child(settings.clone())
                 .footer(
                     h_flex()
                         .w_full()
                         .justify_end()
                         .gap_2()
-                        .child(
+                        .child(crate::dialog_focus::dialog_cancel_action(
+                            "settings-dialog-cancel-action",
                             Button::new("settings-dialog-cancel")
-                                .label(crate::tr!("取消", "Cancel"))
-                                .on_click(|_, window, cx| {
-                                    window.dispatch_action(Box::new(Cancel), cx)
-                                }),
-                        )
-                        .child(
+                                .label(crate::tr!("取消", "Cancel")),
+                            cx,
+                        ))
+                        .child(crate::dialog_focus::dialog_confirm_action(
+                            "settings-dialog-save-action",
                             Button::new("settings-dialog-save")
                                 .primary()
-                                .label(crate::tr!("保存", "Save"))
-                                .on_click(|_, window, cx| {
-                                    window
-                                        .dispatch_action(Box::new(Confirm { secondary: false }), cx)
-                                }),
-                        ),
+                                .label(crate::tr!("保存", "Save")),
+                            cx,
+                        )),
                 )
                 .on_ok(move |_, window, cx| {
                     let (draft, search_history, network_settings) = {
@@ -829,7 +835,7 @@ impl Workspace {
         let workspace = cx.entity();
         let (color_labels_dialog_size, color_labels_dialog_margin_top) =
             management_dialog_geometry(window);
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let labels = labels.clone();
             let workspace = workspace.clone();
             dialog
@@ -837,22 +843,23 @@ impl Workspace {
                 .h(color_labels_dialog_size.height)
                 .margin_top(color_labels_dialog_margin_top)
                 .title(crate::tr!("日志着色", "Log coloring"))
+                .close_button(false)
                 .child(labels.clone())
                 .footer(
                     DialogFooter::new()
-                        .child(
-                            DialogClose::new().child(
-                                Button::new("color-label-dialog-cancel")
-                                    .label(crate::tr!("取消", "Cancel")),
-                            ),
-                        )
-                        .child(
-                            DialogAction::new().child(
-                                Button::new("color-label-dialog-save")
-                                    .primary()
-                                    .label(crate::tr!("保存", "Save")),
-                            ),
-                        ),
+                        .child(crate::dialog_focus::dialog_cancel_action(
+                            "color-label-dialog-cancel-action",
+                            Button::new("color-label-dialog-cancel")
+                                .label(crate::tr!("取消", "Cancel")),
+                            cx,
+                        ))
+                        .child(crate::dialog_focus::dialog_confirm_action(
+                            "color-label-dialog-save-action",
+                            Button::new("color-label-dialog-save")
+                                .primary()
+                                .label(crate::tr!("保存", "Save")),
+                            cx,
+                        )),
                 )
                 .on_ok(move |_, window, cx| {
                     let draft = match labels.read(cx).config(cx) {
@@ -990,6 +997,7 @@ impl Workspace {
                 .pb_0()
                 .margin_top(predefined_filters_dialog_margin_top)
                 .title(crate::tr!("预定义过滤器", "Predefined filters"))
+                .close_button(false)
                 .content(move |content, _, _| {
                     content
                         .p_0()
@@ -1722,12 +1730,22 @@ impl Workspace {
                 .icon(Icon::new(IconName::Info).text_color(cx.theme().danger))
                 .title(crate::tr!("清除历史？", "Clear history?"))
                 .description(crate::tr!("未打开、未收藏且没有行标记的文件会话将被删除。日志文件本身不会改变。", "File sessions that are not open, favorited, or marked will be deleted. Log files will not be changed."))
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_variant(ButtonVariant::Danger)
-                        .ok_text(crate::tr!("清除历史", "Clear history"))
-                        .cancel_text(crate::tr!("取消", "Cancel"))
-                        .show_cancel(true),
+                .footer(
+                    DialogFooter::new()
+                        .justify_center()
+                        .child(crate::dialog_focus::dialog_cancel_action(
+                            "clear-history-cancel-action",
+                            Button::new("clear-history-cancel")
+                                .label(crate::tr!("取消", "Cancel")),
+                            cx,
+                        ))
+                        .child(crate::dialog_focus::dialog_confirm_action(
+                            "clear-history-confirm-action",
+                            Button::new("clear-history-confirm")
+                                .danger()
+                                .label(crate::tr!("清除历史", "Clear history")),
+                            cx,
+                        )),
                 )
                 .on_ok(move |_, window, cx| {
                     workspace.update(cx, |this, cx| this.clear_history(window, cx));

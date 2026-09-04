@@ -102,7 +102,7 @@ impl Workspace {
         let picker = cx.new(|_| GlobalSearchFilesDialog::new(files));
         let workspace = cx.entity();
         let dialog_width = large_dialog_size(window).width;
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let picker = picker.clone();
             let workspace = workspace.clone();
             dialog
@@ -111,22 +111,23 @@ impl Workspace {
                     "参与多标签搜索的文件",
                     "Files in multi-tab search"
                 ))
+                .close_button(false)
                 .child(picker.clone())
                 .footer(
                     DialogFooter::new()
-                        .child(
-                            DialogClose::new().child(
-                                Button::new("global-search-files-dialog-cancel")
-                                    .label(crate::tr!("取消", "Cancel")),
-                            ),
-                        )
-                        .child(
-                            DialogAction::new().child(
-                                Button::new("global-search-files-dialog-save")
-                                    .primary()
-                                    .label(crate::tr!("保存", "Save")),
-                            ),
-                        ),
+                        .child(crate::dialog_focus::dialog_cancel_action(
+                            "global-search-files-dialog-cancel-action",
+                            Button::new("global-search-files-dialog-cancel")
+                                .label(crate::tr!("取消", "Cancel")),
+                            cx,
+                        ))
+                        .child(crate::dialog_focus::dialog_confirm_action(
+                            "global-search-files-dialog-save-action",
+                            Button::new("global-search-files-dialog-save")
+                                .primary()
+                                .label(crate::tr!("保存", "Save")),
+                            cx,
+                        )),
                 )
                 .on_ok(move |_, window, cx| {
                     let selected = picker.read(cx).selected_document_ids();
@@ -147,27 +148,28 @@ impl Workspace {
             DirectorySearchDialog::new(self.global_search.directory_options.clone(), window, cx)
         });
         let workspace = cx.entity();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let picker_for_submit = picker.clone();
             let workspace = workspace.clone();
             dialog
                 .title(crate::tr!("目录搜索设置", "Directory search settings"))
+                .close_button(false)
                 .child(picker.clone())
                 .footer(
                     DialogFooter::new()
-                        .child(
-                            DialogClose::new().child(
-                                Button::new("directory-search-dialog-cancel")
-                                    .label(crate::tr!("取消", "Cancel")),
-                            ),
-                        )
-                        .child(
-                            DialogAction::new().child(
-                                Button::new("directory-search-dialog-save")
-                                    .primary()
-                                    .label(crate::tr!("保存", "Save")),
-                            ),
-                        ),
+                        .child(crate::dialog_focus::dialog_cancel_action(
+                            "directory-search-dialog-cancel-action",
+                            Button::new("directory-search-dialog-cancel")
+                                .label(crate::tr!("取消", "Cancel")),
+                            cx,
+                        ))
+                        .child(crate::dialog_focus::dialog_confirm_action(
+                            "directory-search-dialog-save-action",
+                            Button::new("directory-search-dialog-save")
+                                .primary()
+                                .label(crate::tr!("保存", "Save")),
+                            cx,
+                        )),
                 )
                 .on_ok(move |_, window, cx| {
                     let Some(options) = picker_for_submit.read(cx).options(cx) else {

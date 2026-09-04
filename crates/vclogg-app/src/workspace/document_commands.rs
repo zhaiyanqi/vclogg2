@@ -316,22 +316,33 @@ impl Workspace {
         let focus = input.focus_handle(cx);
         window.defer(cx, move |window, cx| focus.focus(window, cx));
 
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let input_for_confirm = input.clone();
             let workspace_for_confirm = workspace.clone();
             dialog
                 .title(crate::tr!("转到行", "Go to line"))
+                .close_button(false)
                 .child(
                     v_flex()
                         .gap_3()
                         .child(crate::tr!("输入源日志中的行号。确认后会选择该行并滚动到可见位置。", "Enter a source log line number. The line will be selected and scrolled into view."))
                         .child(Input::new(&input)),
                 )
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text(crate::tr!("转到", "Go"))
-                        .cancel_text(crate::tr!("取消", "Cancel"))
-                        .show_cancel(true),
+                .footer(
+                    DialogFooter::new()
+                        .child(crate::dialog_focus::dialog_cancel_action(
+                            "go-to-line-cancel-action",
+                            Button::new("go-to-line-cancel")
+                                .label(crate::tr!("取消", "Cancel")),
+                            cx,
+                        ))
+                        .child(crate::dialog_focus::dialog_confirm_action(
+                            "go-to-line-confirm-action",
+                            Button::new("go-to-line-confirm")
+                                .primary()
+                                .label(crate::tr!("转到", "Go")),
+                            cx,
+                        )),
                 )
                 .on_ok(move |_, window, cx| {
                     let value = input_for_confirm.read(cx).value().trim().to_string();

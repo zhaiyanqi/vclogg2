@@ -28,18 +28,15 @@ use gpui::{
 use gpui_base::{
     GlobalState, POPUP_PRIORITY, Scrollbar, ScrollbarHandle, ScrollbarMode, TextSelection,
     TextSelectionScopeId,
-    actions::{
-        Cancel, Confirm, SelectDown, SelectFirst, SelectLast, SelectPageDown, SelectPageUp,
-        SelectUp,
-    },
+    actions::{SelectDown, SelectFirst, SelectLast, SelectPageDown, SelectPageUp, SelectUp},
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, ElementExt as _, FocusableExt as _, Icon, IconName,
     IndexPath, Root, Selectable as _, Side, Sizable as _, StyledExt as _, TitleBar, WindowExt as _,
     animation::ease_out_cubic,
-    button::{Button, ButtonCustomVariant, ButtonRounded, ButtonVariant, ButtonVariants as _},
+    button::{Button, ButtonCustomVariant, ButtonRounded, ButtonVariants as _},
     checkbox::Checkbox,
-    dialog::{DialogAction, DialogButtonProps, DialogClose, DialogFooter},
+    dialog::DialogFooter,
     h_flex,
     input::{Input, InputEvent, InputState},
     menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem},

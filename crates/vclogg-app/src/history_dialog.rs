@@ -9,8 +9,8 @@ use gpui::{
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, StyledExt as _,
     WindowExt as _,
-    button::{Button, ButtonVariant, ButtonVariants as _},
-    dialog::DialogButtonProps,
+    button::{Button, ButtonVariants as _},
+    dialog::DialogFooter,
     h_flex,
     input::{Input, InputEvent, InputState},
     scroll::{Scrollbar, ScrollbarMode},
@@ -224,7 +224,7 @@ impl HistoryDialog {
         }
         let count = paths.len();
         let dialog = cx.entity();
-        window.open_alert_dialog(cx, move |alert, _, _| {
+        window.open_alert_dialog(cx, move |alert, _, cx| {
             let dialog = dialog.clone();
             let paths = paths.clone();
             alert
@@ -234,12 +234,22 @@ impl HistoryDialog {
                     crate::tr_args!("删除 {count} 个临时搜索结果？", "Delete {count} temporary search results?")
                 })
                 .description(crate::tr!("这些临时文件会移入系统回收站；当前仍打开的结果不会进入本次操作。", "These temporary files will be moved to the system trash. Results that are still open are excluded."))
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_variant(ButtonVariant::Danger)
-                        .ok_text(crate::tr!("移入回收站", "Move to Trash"))
-                        .cancel_text(crate::tr!("取消", "Cancel"))
-                        .show_cancel(true),
+                .footer(
+                    DialogFooter::new()
+                        .justify_center()
+                        .child(crate::dialog_focus::dialog_cancel_action(
+                            "history-delete-temporary-cancel-action",
+                            Button::new("history-delete-temporary-cancel")
+                                .label(crate::tr!("取消", "Cancel")),
+                            cx,
+                        ))
+                        .child(crate::dialog_focus::dialog_confirm_action(
+                            "history-delete-temporary-confirm-action",
+                            Button::new("history-delete-temporary-confirm")
+                                .danger()
+                                .label(crate::tr!("移入回收站", "Move to Trash")),
+                            cx,
+                        )),
                 )
                 .on_ok(move |_, window, cx| {
                     dialog.update(cx, |this, cx| {

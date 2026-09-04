@@ -16,9 +16,9 @@ use gpui::{
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
     StyledExt as _, ThemeStyled as _, WindowExt as _,
-    button::{Button, ButtonVariant, ButtonVariants as _},
+    button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
-    dialog::{Cancel, Confirm, DialogButtonProps, DialogFooter},
+    dialog::DialogFooter,
     h_flex,
     input::{Input, InputEvent, InputState},
     menu::{DropdownMenu as _, PopupMenuItem},
@@ -607,6 +607,7 @@ impl PredefinedFiltersDialog {
                 .h(dialog_size.height)
                 .margin_top(margin_top)
                 .title(title.clone())
+                .close_button(false)
                 .content(move |container, _, _| {
                     container
                         .p_0()
@@ -777,12 +778,22 @@ impl PredefinedFiltersDialog {
                 .icon(Icon::new(IconName::Info).text_color(cx.theme().danger))
                 .title(crate::tr_args!("删除 {selected_count} 个本地过滤器？", "Delete {selected_count} local filters?"))
                 .description(crate::tr!("这只会删除所选的本地过滤器；已经发布的云端过滤器不会被删除。", "This deletes only the selected local filters. Published cloud filters won’t be deleted."))
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_variant(ButtonVariant::Danger)
-                        .ok_text(crate::tr!("删除所选", "Delete selected"))
-                        .cancel_text(crate::tr!("取消", "Cancel"))
-                        .show_cancel(true),
+                .footer(
+                    DialogFooter::new()
+                        .justify_center()
+                        .child(crate::dialog_focus::dialog_cancel_action(
+                            "filter-delete-selected-cancel-action",
+                            Button::new("filter-delete-selected-cancel")
+                                .label(crate::tr!("取消", "Cancel")),
+                            cx,
+                        ))
+                        .child(crate::dialog_focus::dialog_confirm_action(
+                            "filter-delete-selected-confirm-action",
+                            Button::new("filter-delete-selected-confirm")
+                                .danger()
+                                .label(crate::tr!("删除所选", "Delete selected")),
+                            cx,
+                        )),
                 )
                 .on_ok(move |_, _, cx| {
                     dialog.update(cx, |this, cx| {
@@ -836,12 +847,22 @@ impl PredefinedFiltersDialog {
                     "确定删除本地过滤器“{name}”吗？",
                     "Delete the local filter “{name}”?"
                 ))
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_variant(ButtonVariant::Danger)
-                        .ok_text(crate::tr!("删除过滤器", "Delete filter"))
-                        .cancel_text(crate::tr!("取消", "Cancel"))
-                        .show_cancel(true),
+                .footer(
+                    DialogFooter::new()
+                        .justify_center()
+                        .child(crate::dialog_focus::dialog_cancel_action(
+                            "filter-delete-local-cancel-action",
+                            Button::new("filter-delete-local-cancel")
+                                .label(crate::tr!("取消", "Cancel")),
+                            cx,
+                        ))
+                        .child(crate::dialog_focus::dialog_confirm_action(
+                            "filter-delete-local-confirm-action",
+                            Button::new("filter-delete-local-confirm")
+                                .danger()
+                                .label(crate::tr!("删除过滤器", "Delete filter")),
+                            cx,
+                        )),
                 )
                 .on_ok(move |_, _, cx| {
                     dialog.update(cx, |this, cx| {
@@ -2130,7 +2151,7 @@ impl PredefinedFiltersDialog {
         };
         let revision_number = revision.revision;
         let dialog = cx.entity();
-        window.open_alert_dialog(cx, move |alert, _, _| {
+        window.open_alert_dialog(cx, move |alert, _, cx| {
             let dialog = dialog.clone();
             alert
                 .title(crate::tr_args!("恢复修订 {revision_number}？", "Restore revision {revision_number}?"))
@@ -2138,11 +2159,22 @@ impl PredefinedFiltersDialog {
                     "所选历史内容会恢复到本地，形成待提交的修改；云端修订 {revision_number} 不会改变。",
                     "The selected history will be restored locally as pending changes. Cloud revision {revision_number} won’t change."
                 ))
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text(crate::tr!("恢复到本地", "Restore locally"))
-                        .cancel_text(crate::tr!("取消", "Cancel"))
-                        .show_cancel(true),
+                .footer(
+                    DialogFooter::new()
+                        .justify_center()
+                        .child(crate::dialog_focus::dialog_cancel_action(
+                            "filter-restore-revision-cancel-action",
+                            Button::new("filter-restore-revision-cancel")
+                                .label(crate::tr!("取消", "Cancel")),
+                            cx,
+                        ))
+                        .child(crate::dialog_focus::dialog_confirm_action(
+                            "filter-restore-revision-confirm-action",
+                            Button::new("filter-restore-revision-confirm")
+                                .primary()
+                                .label(crate::tr!("恢复到本地", "Restore locally")),
+                            cx,
+                        )),
                 )
                 .on_ok(move |_, window, cx| {
                     dialog.update(cx, |this, cx| this.restore_cloud_revision(window, cx));
@@ -2292,12 +2324,22 @@ impl PredefinedFiltersDialog {
                     "确定删除自己分享的“{filter_name}”吗？删除后其他用户将无法再查找或下载。",
                     "Delete your shared filter “{filter_name}”? Other users will no longer be able to find or download it."
                 ))
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_variant(ButtonVariant::Danger)
-                        .ok_text(crate::tr!("删除分享", "Delete share"))
-                        .cancel_text(crate::tr!("取消", "Cancel"))
-                        .show_cancel(true),
+                .footer(
+                    DialogFooter::new()
+                        .justify_center()
+                        .child(crate::dialog_focus::dialog_cancel_action(
+                            "filter-delete-cloud-cancel-action",
+                            Button::new("filter-delete-cloud-cancel")
+                                .label(crate::tr!("取消", "Cancel")),
+                            cx,
+                        ))
+                        .child(crate::dialog_focus::dialog_confirm_action(
+                            "filter-delete-cloud-confirm-action",
+                            Button::new("filter-delete-cloud-confirm")
+                                .danger()
+                                .label(crate::tr!("删除分享", "Delete share")),
+                            cx,
+                        )),
                 )
                 .on_ok(move |_, window, cx| {
                     dialog.update(cx, |this, cx| {
@@ -4791,16 +4833,15 @@ impl PredefinedFiltersDialog {
                                     )
                                 }),
                         )
-                        .child(
+                        .child(crate::dialog_focus::dialog_cancel_action(
+                            "cloud-detail-finish-action",
                             Button::new("cloud-detail-finish")
                                 .large()
                                 .outline()
                                 .w_24()
-                                .label(crate::tr!("关闭", "Close"))
-                                .on_click(|_, window, cx| {
-                                    window.dispatch_action(Box::new(Cancel), cx)
-                                }),
-                        ),
+                                .label(crate::tr!("关闭", "Close")),
+                            cx,
+                        )),
             )
     }
 
@@ -5073,14 +5114,15 @@ impl PredefinedFiltersDialog {
                     .gap_2()
                     .px_6()
                     .py_3()
-                    .child(
+                    .child(crate::dialog_focus::dialog_cancel_action(
+                        "cloud-share-cancel-action",
                         Button::new("cloud-share-cancel")
                             .large()
                             .outline()
                             .w_24()
-                            .label(crate::tr!("取消", "Cancel"))
-                            .on_click(|_, window, cx| window.dispatch_action(Box::new(Cancel), cx)),
-                    )
+                            .label(crate::tr!("取消", "Cancel")),
+                        cx,
+                    ))
                     .child(
                         Button::new("cloud-share-confirm")
                             .large()
@@ -5239,16 +5281,15 @@ impl PredefinedFiltersDialog {
                     .py_2()
                     .when(self.active_tab == DialogTab::Local, |footer| {
                         footer
-                            .child(
+                            .child(crate::dialog_focus::dialog_cancel_action(
+                                "predefined-filter-dialog-cancel-action",
                                 Button::new("predefined-filter-dialog-cancel")
                                     .large()
                                     .outline()
                                     .w_24()
-                                    .label(crate::tr!("取消", "Cancel"))
-                                    .on_click(|_, window, cx| {
-                                        window.dispatch_action(Box::new(Cancel), cx)
-                                    }),
-                            )
+                                    .label(crate::tr!("取消", "Cancel")),
+                                cx,
+                            ))
                             .child(
                                 Button::new("predefined-filter-dialog-apply")
                                     .large()
@@ -5271,32 +5312,28 @@ impl PredefinedFiltersDialog {
                                         this.save_filters(window, cx)
                                     })),
                             )
-                            .child(
+                            .child(crate::dialog_focus::dialog_confirm_action_when(
+                                "predefined-filter-dialog-confirm-action",
                                 Button::new("predefined-filter-dialog-confirm")
                                     .large()
                                     .primary()
                                     .w_24()
                                     .label(crate::tr!("确定", "OK"))
-                                    .disabled(busy || !drafts_valid)
-                                    .on_click(|_, window, cx| {
-                                        window.dispatch_action(
-                                            Box::new(Confirm { secondary: false }),
-                                            cx,
-                                        )
-                                    }),
-                            )
+                                    .disabled(busy || !drafts_valid),
+                                !(busy || !drafts_valid),
+                                cx,
+                            ))
                     })
                     .when(self.active_tab == DialogTab::Cloud, |footer| {
-                        footer.child(
+                        footer.child(crate::dialog_focus::dialog_cancel_action(
+                            "predefined-filter-dialog-close-action",
                             Button::new("predefined-filter-dialog-close")
                                 .large()
                                 .outline()
                                 .w_24()
-                                .label(crate::tr!("关闭", "Close"))
-                                .on_click(|_, window, cx| {
-                                    window.dispatch_action(Box::new(Cancel), cx)
-                                }),
-                        )
+                                .label(crate::tr!("关闭", "Close")),
+                            cx,
+                        ))
                     }),
             )
     }
