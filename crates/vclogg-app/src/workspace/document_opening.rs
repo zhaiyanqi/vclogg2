@@ -236,6 +236,8 @@ impl Workspace {
                     Ok(prepare_document_shell(
                         path,
                         path_buf_map_get(&overrides.sessions, path).cloned(),
+                        self.app_settings.default_case_sensitive,
+                        self.app_settings.default_use_regex,
                     )),
                 )
             })
@@ -295,7 +297,14 @@ impl Workspace {
             move_completions,
             target_indices,
         } = overrides;
+        let case_sensitive = self.app_settings.default_case_sensitive;
+        let regex = self.app_settings.default_use_regex;
         let search_result_limit = self.app_settings.search_result_limit();
+        let search_options = SearchPreparationOptions {
+            case_sensitive,
+            regex,
+            max_results: search_result_limit,
+        };
         let color_labels = self.color_labels.clone();
 
         self.open_task = Some(cx.spawn_in(window, async move |this, cx| {
@@ -335,7 +344,10 @@ impl Workspace {
                             path,
                             preview_store.as_deref(),
                             path_buf_map_get(&preview_sessions, path).cloned(),
-                            effective_search_result_limit,
+                            SearchPreparationOptions {
+                                max_results: effective_search_result_limit,
+                                ..search_options
+                            },
                             &preview_color_labels,
                         )
                     })
@@ -404,7 +416,10 @@ impl Workspace {
                             path_buf_map_get(&cached_complete_documents, path).cloned(),
                             full_store.as_deref(),
                             path_buf_map_get(&sessions, path).cloned(),
-                            effective_search_result_limit,
+                            SearchPreparationOptions {
+                                max_results: effective_search_result_limit,
+                                ..search_options
+                            },
                             &color_labels,
                         )
                     })

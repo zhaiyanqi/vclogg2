@@ -253,8 +253,12 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let search_result_limit = self.app_settings.search_result_limit();
-        self.global_search.directory_query =
-            Self::restored_search_query(&session.context.query, search_result_limit);
+        self.global_search.directory_query = Self::restored_search_query(
+            &session.context.query,
+            self.app_settings.default_case_sensitive,
+            self.app_settings.default_use_regex,
+            search_result_limit,
+        );
         self.global_search.directory_options = Self::restored_directory_options(session.options);
         let keyword_color_rules = session.context.keyword_color_rules.clone();
         let resolved_color_rules = resolve_color_rules(&keyword_color_rules, &self.color_labels);
@@ -1153,19 +1157,19 @@ impl Workspace {
     pub(super) fn persisted_search_query(query: &SearchQuery) -> PersistedSearchQuery {
         PersistedSearchQuery {
             text: query.text.clone(),
-            case_sensitive: query.case_sensitive,
-            regex: query.regex,
         }
     }
 
     pub(super) fn restored_search_query(
         query: &PersistedSearchQuery,
+        case_sensitive: bool,
+        regex: bool,
         fallback_limit: Option<usize>,
     ) -> SearchQuery {
         SearchQuery {
             text: query.text.clone(),
-            case_sensitive: query.case_sensitive,
-            regex: query.regex,
+            case_sensitive,
+            regex,
             max_results: fallback_limit,
         }
     }
@@ -1454,8 +1458,12 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let search_result_limit = self.app_settings.search_result_limit();
-        self.global_search.query =
-            Self::restored_search_query(&state.all_open.query, search_result_limit);
+        self.global_search.query = Self::restored_search_query(
+            &state.all_open.query,
+            self.app_settings.default_case_sensitive,
+            self.app_settings.default_use_regex,
+            search_result_limit,
+        );
         self.view_state
             .restore_directory_sessions(state.directories.clone());
         let active_directory_session = state
@@ -1467,8 +1475,12 @@ impl Workspace {
             || (state.directory.clone(), state.directory_options.clone()),
             |session| (session.context, session.options),
         );
-        self.global_search.directory_query =
-            Self::restored_search_query(&directory_context.query, search_result_limit);
+        self.global_search.directory_query = Self::restored_search_query(
+            &directory_context.query,
+            self.app_settings.default_case_sensitive,
+            self.app_settings.default_use_regex,
+            search_result_limit,
+        );
         self.global_search.directory_options = Self::restored_directory_options(directory_options);
         let all_open_keyword_color_rules = state.all_open.keyword_color_rules.clone();
         let all_open_resolved_color_rules =
@@ -1525,36 +1537,15 @@ impl Workspace {
         ) {
             self.restore_retained_global_context(self.global_search.scope, window, cx);
         }
-        let (text, case_sensitive, regex) = match self.global_search.scope {
-            SearchScope::CurrentFile => self.active_document().map_or_else(
-                || {
-                    (
-                        String::new(),
-                        self.app_settings.default_case_sensitive,
-                        self.app_settings.default_use_regex,
-                    )
-                },
-                |tab| {
-                    (
-                        tab.search_query.text.clone(),
-                        tab.search_query.case_sensitive,
-                        tab.search_query.regex,
-                    )
-                },
-            ),
-            SearchScope::AllOpenFiles => (
-                self.global_search.query.text.clone(),
-                self.global_search.query.case_sensitive,
-                self.global_search.query.regex,
-            ),
-            SearchScope::Directory => (
-                self.global_search.directory_query.text.clone(),
-                self.global_search.directory_query.case_sensitive,
-                self.global_search.directory_query.regex,
-            ),
+        let text = match self.global_search.scope {
+            SearchScope::CurrentFile => self
+                .active_document()
+                .map_or_else(String::new, |tab| tab.search_query.text.clone()),
+            SearchScope::AllOpenFiles => self.global_search.query.text.clone(),
+            SearchScope::Directory => self.global_search.directory_query.text.clone(),
         };
-        self.case_sensitive = case_sensitive;
-        self.regex = regex;
+        self.case_sensitive = self.app_settings.default_case_sensitive;
+        self.regex = self.app_settings.default_use_regex;
         self.query
             .update(cx, |query, cx| query.set_value(text, window, cx));
     }
@@ -1653,6 +1644,8 @@ impl Workspace {
         let context = SearchSessionState {
             query: Self::restored_search_query(
                 &persisted.query,
+                self.app_settings.default_case_sensitive,
+                self.app_settings.default_use_regex,
                 self.app_settings.search_result_limit(),
             ),
             keyword_color_rules: persisted.keyword_color_rules.clone(),
@@ -1726,8 +1719,12 @@ impl Workspace {
         }) else {
             return;
         };
-        let query =
-            Self::restored_search_query(&persisted.query, self.app_settings.search_result_limit());
+        let query = Self::restored_search_query(
+            &persisted.query,
+            self.app_settings.default_case_sensitive,
+            self.app_settings.default_use_regex,
+            self.app_settings.search_result_limit(),
+        );
         let all_open_paths = if scope == SearchScope::AllOpenFiles {
             let mut paths = persisted
                 .source_paths
@@ -2121,25 +2118,8 @@ impl Workspace {
             SearchScope::AllOpenFiles => self.global_search.query.text.clone(),
             SearchScope::Directory => self.global_search.directory_query.text.clone(),
         };
-        let (case_sensitive, regex) = match next_scope {
-            SearchScope::CurrentFile => self
-                .active_document()
-                .map(|tab| (tab.search_query.case_sensitive, tab.search_query.regex))
-                .unwrap_or((
-                    self.app_settings.default_case_sensitive,
-                    self.app_settings.default_use_regex,
-                )),
-            SearchScope::AllOpenFiles => (
-                self.global_search.query.case_sensitive,
-                self.global_search.query.regex,
-            ),
-            SearchScope::Directory => (
-                self.global_search.directory_query.case_sensitive,
-                self.global_search.directory_query.regex,
-            ),
-        };
-        self.case_sensitive = case_sensitive;
-        self.regex = regex;
+        self.case_sensitive = self.app_settings.default_case_sensitive;
+        self.regex = self.app_settings.default_use_regex;
         if self.query.read(cx).value().as_ref() != text {
             self.query
                 .update(cx, |state, cx| state.set_value(text, window, cx));
@@ -2162,8 +2142,9 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Updates only the active search session. Application defaults seed sessions when they are
-    /// created, but changing one scope must not silently rewrite every other scope.
+    /// Updates the application-wide search options, mirrors the controls into every window, and
+    /// persists the single canonical pair in app settings. Submitted searches keep the options
+    /// with which their current results were produced.
     pub(super) fn set_active_search_options(
         &mut self,
         case_sensitive: bool,
@@ -2171,35 +2152,33 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.case_sensitive == case_sensitive && self.regex == regex {
+        if self.app_settings.default_case_sensitive == case_sensitive
+            && self.app_settings.default_use_regex == regex
+            && self.case_sensitive == case_sensitive
+            && self.regex == regex
+        {
             return;
         }
-        self.cancel_search();
-        self.case_sensitive = case_sensitive;
-        self.regex = regex;
-        let checkpoint = match self.global_search.scope {
-            SearchScope::CurrentFile => self.active_ix.map(|active_ix| {
-                let tab = &mut self.documents[active_ix];
-                tab.search_query.case_sensitive = case_sensitive;
-                tab.search_query.regex = regex;
-                tab.id
-            }),
-            SearchScope::AllOpenFiles => {
-                self.global_search.query.case_sensitive = case_sensitive;
-                self.global_search.query.regex = regex;
-                None
-            }
-            SearchScope::Directory => {
-                self.global_search.directory_query.case_sensitive = case_sensitive;
-                self.global_search.directory_query.regex = regex;
-                None
-            }
-        };
-        if let Some(document_id) = checkpoint {
-            self.schedule_checkpoint(document_id, window, cx);
-        } else {
-            self.schedule_workspace_search_state_save(window, cx);
+        self.apply_global_search_options(case_sensitive, regex);
+
+        let source_window = window.window_handle();
+        let other_workspaces = cx.update_global::<WorkspaceWindowRegistry, _>(|registry, _| {
+            registry.search_options = Some((case_sensitive, regex));
+            registry
+                .windows
+                .iter()
+                .filter(|entry| entry.window != source_window)
+                .map(|entry| entry.workspace.clone())
+                .collect::<Vec<_>>()
+        });
+        for workspace in other_workspaces {
+            workspace.update(cx, |workspace, cx| {
+                workspace.apply_global_search_options(case_sensitive, regex);
+                cx.notify();
+            });
         }
+
+        self.queue_app_settings_save(self.app_settings.clone(), false, window, cx);
         cx.notify();
     }
 
@@ -2417,7 +2396,10 @@ impl Workspace {
                 .await;
 
             _ = this.update_in(cx, |this, window, cx| {
-                if !this.searches.is_current(target, revision) {
+                // Release the loading state before presenting any outcome. In particular, a
+                // changed source may need to start a reload below, and missing/replaced tabs must
+                // not leave this completed search installed as the active controller task.
+                if !this.searches.finish(target, revision) {
                     return;
                 }
                 if matches!(&result, Ok((SearchRun::Completed(_), _))) {
@@ -2426,12 +2408,21 @@ impl Workspace {
                 let highlight_matches = this.app_settings.highlight_matches;
                 let Some(tab_ix) = this.documents.iter().position(|tab| tab.id == document_id)
                 else {
+                    if matches!(this.activity, Activity::Searching) {
+                        this.activity = Activity::Ready;
+                    }
+                    cx.notify();
                     return;
                 };
                 let tab = &mut this.documents[tab_ix];
                 if tab.search_revision != revision {
+                    if matches!(this.activity, Activity::Searching) {
+                        this.activity = Activity::Ready;
+                    }
+                    cx.notify();
                     return;
                 }
+                let mut reload_after_source_change = false;
                 let results_changed = match result {
                     Ok((SearchRun::Completed(result), search_matcher)) => {
                         tab.search_query = query;
@@ -2448,8 +2439,12 @@ impl Workspace {
                         false
                     }
                     Ok((SearchRun::SourceChanged, _)) => {
-                        window.push_notification("搜索期间文件内容已改变，请重新加载后重试。", cx);
+                        // The old immutable snapshot can never produce a successful retry. Carry
+                        // the submitted query into the existing reload pipeline, which rebuilds
+                        // the document and its results while preserving selection and viewport.
+                        tab.search_query = query;
                         this.activity = Activity::Error;
+                        reload_after_source_change = true;
                         false
                     }
                     Err(error) => {
@@ -2462,7 +2457,32 @@ impl Workspace {
                 if results_changed {
                     this.refresh_document_result_rows_atomically(document_id, window, cx);
                 }
-                this.searches.finish(target, revision);
+                if reload_after_source_change {
+                    let reload_started = this.reload_document(
+                        document_id,
+                        false,
+                        ReloadStrategy::Full,
+                        window,
+                        cx,
+                    );
+                    if reload_started {
+                        window.push_notification(
+                            crate::tr!(
+                                "文件内容已改变，正在重新加载并重新搜索",
+                                "The file changed. Reloading and searching again."
+                            ),
+                            cx,
+                        );
+                    } else {
+                        window.push_notification(
+                            crate::tr!(
+                                "文件内容已改变，请在当前文件操作完成后重新加载并搜索",
+                                "The file changed. Reload and search again after the current file operation finishes."
+                            ),
+                            cx,
+                        );
+                    }
+                }
                 cx.notify();
             });
         });

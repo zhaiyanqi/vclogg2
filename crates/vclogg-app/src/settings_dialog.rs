@@ -264,7 +264,7 @@ impl SettingsCategory {
                 "外观 界面主题 深色 浅色 显示行号 显示行号行间分隔线 行号栏宽度 行号文字颜色 行号背景色 日志级别着色 日志分隔线 日志字体 日志字号 日志行距 theme font color"
             }
             Self::Search => {
-                "搜索 默认区分大小写 默认使用正则表达式 最大搜索结果数 高亮已提交搜索的匹配文字 搜索历史 历史记录 管理 删除 清空 大小写 正则 结果 高亮 search regex case highlight history"
+                "搜索 区分大小写 使用正则表达式 最大搜索结果数 高亮已提交搜索的匹配文字 搜索历史 历史记录 管理 删除 清空 大小写 正则 结果 高亮 search regex case highlight history"
             }
             Self::Scrolling => {
                 "滚动与交互 滚动与动态效果 按完整日志行滚动 每次滚动行数 自动换行时仍按完整日志行滚动 像素滚动距离 分词边界字符 相邻行预读取 减少动态效果 滚轮 像素 行数 自动换行 分词 双击 预读取 scroll motion word wrap"
@@ -2334,12 +2334,12 @@ impl Render for SettingsDialog {
                         h_flex()
                             .justify_between()
                             .gap_4()
-                            .child(div().text_sm().child(crate::tr!("默认区分大小写", "Case-sensitive by default")))
+                            .child(div().text_sm().child(crate::tr!("区分大小写", "Case-sensitive")))
                             .child(
                                 Switch::new("settings-default-case-sensitive")
                                     .small()
                                     .checked(self.draft.default_case_sensitive)
-                                    .tooltip(crate::tr!("默认区分大小写", "Case-sensitive by default"))
+                                    .tooltip(crate::tr!("区分大小写", "Case-sensitive"))
                                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                         this.draft.default_case_sensitive = *checked;
                                         SettingsDialog::draft_changed(cx);
@@ -2350,12 +2350,12 @@ impl Render for SettingsDialog {
                         h_flex()
                             .justify_between()
                             .gap_4()
-                            .child(div().text_sm().child(crate::tr!("默认使用正则表达式", "Use regular expressions by default")))
+                            .child(div().text_sm().child(crate::tr!("使用正则表达式", "Use regular expressions")))
                             .child(
                                 Switch::new("settings-default-use-regex")
                                     .small()
                                     .checked(self.draft.default_use_regex)
-                                    .tooltip(crate::tr!("默认使用正则表达式", "Use regular expressions by default"))
+                                    .tooltip(crate::tr!("使用正则表达式", "Use regular expressions"))
                                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                         this.draft.default_use_regex = *checked;
                                         SettingsDialog::draft_changed(cx);

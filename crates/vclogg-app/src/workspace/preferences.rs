@@ -1,6 +1,21 @@
 use super::*;
 
 impl Workspace {
+    pub(super) fn initial_search_settings(cx: &App) -> (AppSettings, (bool, bool)) {
+        let search_options = cx
+            .global::<WorkspaceWindowRegistry>()
+            .search_options
+            .unwrap_or_default();
+        (
+            AppSettings {
+                default_case_sensitive: search_options.0,
+                default_use_regex: search_options.1,
+                ..AppSettings::default()
+            },
+            search_options,
+        )
+    }
+
     fn capture_font_viewport_anchors(&self, cx: &App) -> FontViewportAnchors {
         let row_height = self.log_row_height();
         FontViewportAnchors {
@@ -1138,21 +1153,12 @@ impl Workspace {
             }));
     }
 
-    pub(super) fn apply_search_defaults(&mut self, case_sensitive: bool, regex: bool) {
+    pub(super) fn apply_global_search_options(&mut self, case_sensitive: bool, regex: bool) {
         self.app_settings.default_case_sensitive = case_sensitive;
         self.app_settings.default_use_regex = regex;
-        if self.documents.is_empty()
-            && self.global_search.query.text.is_empty()
-            && self.global_search.directory_query.text.is_empty()
-        {
-            self.case_sensitive = case_sensitive;
-            self.regex = regex;
-            self.global_search.query.case_sensitive = case_sensitive;
-            self.global_search.query.regex = regex;
-            self.global_search.directory_query.case_sensitive = case_sensitive;
-            self.global_search.directory_query.regex = regex;
-        }
-        self.search_defaults_modified = true;
+        self.case_sensitive = case_sensitive;
+        self.regex = regex;
+        self.search_options_modified = true;
     }
 
     pub(super) fn queue_app_settings_save(
@@ -1174,6 +1180,21 @@ impl Workspace {
                 if let Some(previous_save) = previous_save {
                     previous_save.await;
                 }
+                let Some(settings) = this
+                    .update_in(cx, |_, _, cx| {
+                        let mut settings = settings;
+                        if let Some((case_sensitive, regex)) =
+                            cx.global::<WorkspaceWindowRegistry>().search_options
+                        {
+                            settings.default_case_sensitive = case_sensitive;
+                            settings.default_use_regex = regex;
+                        }
+                        settings
+                    })
+                    .ok()
+                else {
+                    return;
+                };
                 let result = cx
                     .background_spawn(async move { store.save_app_settings(settings) })
                     .await;
@@ -1195,8 +1216,8 @@ impl Workspace {
                         ),
                         Err(error) => window.push_notification(
                             crate::tr_args!(
-                                "搜索默认值未能保存：{error}",
-                                "Couldn’t save search defaults: {error}"
+                                "搜索选项未能保存：{error}",
+                                "Couldn’t save search options: {error}"
                             ),
                             cx,
                         ),
@@ -1257,7 +1278,14 @@ impl Workspace {
         Self::apply_theme_preference(settings.theme_preference, window, cx);
         self.app_settings = settings.clone();
         if commit_defaults {
-            self.apply_search_defaults(settings.default_case_sensitive, settings.default_use_regex);
+            cx.update_global::<WorkspaceWindowRegistry, _>(|registry, _| {
+                registry.search_options =
+                    Some((settings.default_case_sensitive, settings.default_use_regex));
+            });
+            self.apply_global_search_options(
+                settings.default_case_sensitive,
+                settings.default_use_regex,
+            );
             let document_id = self.active_ix.map(|active_ix| {
                 let tab = &mut self.documents[active_ix];
                 tab.view.show_line_numbers = settings.default_show_line_numbers;
@@ -1319,7 +1347,7 @@ impl Workspace {
                 workspace.app_settings = shared_settings.clone();
                 workspace.refresh_localized_input_copy(window, cx);
                 if commit_defaults {
-                    workspace.apply_search_defaults(
+                    workspace.apply_global_search_options(
                         shared_settings.default_case_sensitive,
                         shared_settings.default_use_regex,
                     );

@@ -2,6 +2,20 @@ use std::{fs, time::SystemTime};
 
 use super::*;
 
+#[test]
+fn restored_search_queries_use_the_application_options() {
+    let persisted = PersistedSearchQuery {
+        text: "needle".into(),
+    };
+
+    let restored = Workspace::restored_search_query(&persisted, true, true, Some(250));
+
+    assert_eq!(restored.text, "needle");
+    assert!(restored.case_sensitive);
+    assert!(restored.regex);
+    assert_eq!(restored.max_results, Some(250));
+}
+
 struct TemporaryFile(PathBuf);
 
 impl Drop for TemporaryFile {

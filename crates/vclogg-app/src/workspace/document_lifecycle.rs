@@ -85,8 +85,6 @@ impl Workspace {
         left.custom_title == right.custom_title
             && left.selected_row == right.selected_row
             && left.query_text == right.query_text
-            && left.case_sensitive == right.case_sensitive
-            && left.regex == right.regex
             && left.result_mode == right.result_mode
             && left.marked_rows == right.marked_rows
             && left.show_line_numbers == right.show_line_numbers
@@ -140,8 +138,6 @@ impl Workspace {
             custom_title: tab.file.custom_title.clone(),
             selected_row,
             query_text: tab.search_query.text.clone(),
-            case_sensitive: tab.search_query.case_sensitive,
-            regex: tab.search_query.regex,
             result_mode: tab.result_mode.database_value(),
             marked_rows,
             show_line_numbers: tab.view.show_line_numbers,
@@ -408,8 +404,6 @@ impl Workspace {
 
             let uses_default_view_options = prepared.session.is_none();
             let session = prepared.session.unwrap_or_else(|| FileSessionState {
-                case_sensitive: self.app_settings.default_case_sensitive,
-                regex: self.app_settings.default_use_regex,
                 show_line_numbers: self.app_settings.default_show_line_numbers,
                 show_row_separators: self.app_settings.default_show_row_separators,
                 ..FileSessionState::default()
@@ -424,8 +418,8 @@ impl Workspace {
                 .map(str::to_owned);
             let search_query = SearchQuery {
                 text: session.query_text.clone(),
-                case_sensitive: session.case_sensitive,
-                regex: session.regex,
+                case_sensitive: prepared.search_case_sensitive,
+                regex: prepared.search_regex,
                 max_results: self.app_settings.search_result_limit(),
             };
             let result_mode = ResultMode::from_database(session.result_mode);
@@ -1200,8 +1194,8 @@ impl Workspace {
                 .into();
             tab.search_query = SearchQuery {
                 text: session.query_text.clone(),
-                case_sensitive: session.case_sensitive,
-                regex: session.regex,
+                case_sensitive: prepared.search_case_sensitive,
+                regex: prepared.search_regex,
                 max_results: self.app_settings.search_result_limit(),
             };
             tab.result_mode = ResultMode::from_database(session.result_mode);
@@ -1744,12 +1738,12 @@ impl Workspace {
         strategy: ReloadStrategy,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         if self.open_task.is_some() {
-            return;
+            return false;
         }
         let Some(document_ix) = self.documents.iter().position(|tab| tab.id == document_id) else {
-            return;
+            return false;
         };
         self.cancel_search_for(document_id);
         let tab = &mut self.documents[document_ix];
@@ -1867,5 +1861,6 @@ impl Workspace {
                 );
             });
         }));
+        true
     }
 }

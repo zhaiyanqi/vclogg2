@@ -1,5 +1,12 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+pub(super) struct SearchPreparationOptions {
+    pub(super) case_sensitive: bool,
+    pub(super) regex: bool,
+    pub(super) max_results: Option<usize>,
+}
+
 fn search_path_snapshot(
     path: &Path,
     matcher: Option<&SearchMatcher>,
@@ -556,7 +563,7 @@ pub(super) fn prepare_document(
     cached_complete_document: Option<Arc<LogDocument>>,
     store: Option<&StateStore>,
     session_override: Option<FileSessionState>,
-    search_result_limit: Option<usize>,
+    search_options: SearchPreparationOptions,
     color_labels: &[ColorLabel],
 ) -> Result<PreparedDocument> {
     let (document, pending_index_cache) = match cached_complete_document {
@@ -587,15 +594,15 @@ pub(super) fn prepare_document(
             }
         }
     };
-    let query = session
-        .as_ref()
-        .map(|state| SearchQuery {
-            text: state.query_text.clone(),
-            case_sensitive: state.case_sensitive,
-            regex: state.regex,
-            max_results: search_result_limit,
-        })
-        .unwrap_or_default();
+    let query = SearchQuery {
+        text: session
+            .as_ref()
+            .map(|state| state.query_text.clone())
+            .unwrap_or_default(),
+        case_sensitive: search_options.case_sensitive,
+        regex: search_options.regex,
+        max_results: search_options.max_results,
+    };
     let search = (|| {
         let matcher = SearchMatcher::new(&query)?;
         let result = if query.text.is_empty() {
@@ -629,6 +636,8 @@ pub(super) fn prepare_document(
         resolved_color_rules,
         search_result,
         search_matcher,
+        search_case_sensitive: search_options.case_sensitive,
+        search_regex: search_options.regex,
         warning,
         load_state: DocumentLoadState::Ready,
         pending_index_cache,
@@ -684,6 +693,8 @@ pub(super) fn installable_color_rules(
 pub(super) fn prepare_document_shell(
     path: &std::path::Path,
     session: Option<FileSessionState>,
+    case_sensitive: bool,
+    regex: bool,
 ) -> PreparedDocument {
     PreparedDocument {
         document: Arc::new(LogDocument::placeholder(path)),
@@ -693,6 +704,8 @@ pub(super) fn prepare_document_shell(
         resolved_color_rules: Arc::default(),
         search_result: SearchResult::default(),
         search_matcher: None,
+        search_case_sensitive: case_sensitive,
+        search_regex: regex,
         warning: None,
         load_state: DocumentLoadState::Opening,
         pending_index_cache: None,
@@ -716,7 +729,7 @@ pub(super) fn prepare_document_preview(
     path: &std::path::Path,
     store: Option<&StateStore>,
     session_override: Option<FileSessionState>,
-    search_result_limit: Option<usize>,
+    search_options: SearchPreparationOptions,
     color_labels: &[ColorLabel],
 ) -> Result<PreparedDocument> {
     let mut warning = None;
@@ -764,15 +777,15 @@ pub(super) fn prepare_document_preview(
         ),
     };
     let document = Arc::new(document);
-    let query = session
-        .as_ref()
-        .map(|state| SearchQuery {
-            text: state.query_text.clone(),
-            case_sensitive: state.case_sensitive,
-            regex: state.regex,
-            max_results: search_result_limit,
-        })
-        .unwrap_or_default();
+    let query = SearchQuery {
+        text: session
+            .as_ref()
+            .map(|state| state.query_text.clone())
+            .unwrap_or_default(),
+        case_sensitive: search_options.case_sensitive,
+        regex: search_options.regex,
+        max_results: search_options.max_results,
+    };
     let search_matcher = match SearchMatcher::new(&query) {
         Ok(matcher) => matcher,
         Err(error) => {
@@ -796,6 +809,8 @@ pub(super) fn prepare_document_preview(
         resolved_color_rules,
         search_result: SearchResult::default(),
         search_matcher,
+        search_case_sensitive: search_options.case_sensitive,
+        search_regex: search_options.regex,
         warning,
         load_state: DocumentLoadState::Preview,
         pending_index_cache: None,

@@ -413,13 +413,12 @@ impl Workspace {
     }
 
     pub(super) fn sync_active_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (title, query, search_options, selected_row) = self
+        let (title, query, selected_row) = self
             .active_document()
             .map(|tab| {
                 (
                     format!("{} — VCLogg2", tab.file.title),
                     tab.search_query.text.clone(),
-                    (tab.search_query.case_sensitive, tab.search_query.regex),
                     {
                         let table = tab.log_table.read(cx);
                         table
@@ -432,10 +431,6 @@ impl Workspace {
                 (
                     crate::tr!("新标签页 — VCLogg2", "New tab — VCLogg2").to_string(),
                     String::new(),
-                    (
-                        self.app_settings.default_case_sensitive,
-                        self.app_settings.default_use_regex,
-                    ),
                     None,
                 )
             });
@@ -446,7 +441,8 @@ impl Workspace {
             self.view_state.active_search = self
                 .active_document()
                 .map(|tab| SearchSessionKey::CurrentFile(tab.id));
-            (self.case_sensitive, self.regex) = search_options;
+            self.case_sensitive = self.app_settings.default_case_sensitive;
+            self.regex = self.app_settings.default_use_regex;
             self.query
                 .update(cx, |state, cx| state.set_value(query, window, cx));
         }

@@ -42,8 +42,6 @@ pub struct FileSessionState {
     pub custom_title: Option<String>,
     pub selected_row: Option<usize>,
     pub query_text: String,
-    pub case_sensitive: bool,
-    pub regex: bool,
     pub result_mode: i64,
     pub marked_rows: CompressedRows,
     pub show_line_numbers: bool,
@@ -226,7 +224,9 @@ pub struct AppSettings {
     pub max_search_results: u32,
     pub highlight_matches: bool,
     pub word_boundary_characters: String,
+    /// Application-wide search option. The legacy field name is retained for database mapping.
     pub default_case_sensitive: bool,
+    /// Application-wide search option. The legacy field name is retained for database mapping.
     pub default_use_regex: bool,
     pub shortcuts: ShortcutSettings,
 }
@@ -281,8 +281,6 @@ impl Default for FileSessionState {
             custom_title: None,
             selected_row: None,
             query_text: String::new(),
-            case_sensitive: false,
-            regex: false,
             result_mode: 0,
             marked_rows: CompressedRows::default(),
             show_line_numbers: true,
@@ -672,8 +670,6 @@ fn file_session_from_record(record: FileSessionRecord) -> FileSessionState {
         custom_title: record.custom_title,
         selected_row: record.selected_row,
         query_text: record.query_text,
-        case_sensitive: record.case_sensitive,
-        regex: record.regex,
         result_mode: record.result_mode,
         marked_rows,
         show_line_numbers: record.show_line_numbers,
@@ -690,8 +686,6 @@ fn file_session_to_record(state: &FileSessionState) -> Result<FileSessionRecord>
         custom_title: state.custom_title.clone(),
         selected_row: state.selected_row,
         query_text: state.query_text.clone(),
-        case_sensitive: state.case_sensitive,
-        regex: state.regex,
         result_mode: state.result_mode,
         marked_rows: encode_marked_rows(&state.marked_rows),
         show_line_numbers: state.show_line_numbers,
@@ -841,28 +835,6 @@ mod session_load_tests {
     }
 
     #[test]
-    fn file_search_session_round_trips_its_own_match_options() {
-        let database = TemporaryDatabase::new("file-search-options");
-        let store = StateStore::open(database.0.clone()).expect("应能打开测试状态库");
-        let path = database.0.with_file_name("search.log");
-        let mut expected = session("error-[0-9]+");
-        expected.case_sensitive = true;
-        expected.regex = true;
-
-        store
-            .save_sessions(&[(path.clone(), expected.clone())])
-            .expect("应能保存文件搜索会话");
-        let restored = store
-            .load_session(&path)
-            .expect("应能读取文件搜索会话")
-            .expect("文件搜索会话应存在");
-
-        assert_eq!(restored.query_text, expected.query_text);
-        assert!(restored.case_sensitive);
-        assert!(restored.regex);
-    }
-
-    #[test]
     fn marked_rows_use_compressed_storage_and_accept_legacy_lists() {
         let rows = CompressedRows::from_inclusive_ranges([(0, 999_999), (2_000_000, 2_000_010)]);
 
@@ -996,6 +968,8 @@ mod session_load_tests {
             word_boundary_characters: "._-".into(),
             open_directory_command: "tool --path {directory}".into(),
             line_number_text_color: Some("#AABBCC".into()),
+            default_case_sensitive: true,
+            default_use_regex: true,
             ..AppSettings::default()
         };
         store

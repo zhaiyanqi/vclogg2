@@ -48,8 +48,6 @@ pub struct FileSessionRecord {
     pub custom_title: Option<String>,
     pub selected_row: Option<usize>,
     pub query_text: String,
-    pub case_sensitive: bool,
-    pub regex: bool,
     pub result_mode: i64,
     pub marked_rows: String,
     pub show_line_numbers: bool,

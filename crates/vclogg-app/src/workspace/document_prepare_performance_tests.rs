@@ -11,8 +11,8 @@ use vclogg_core::LogDocument;
 use crate::state_store::FileSessionState;
 
 use super::{
-    directory_search_scan_paths, path_match_key, prepare_document, prepare_paths_bounded,
-    prepare_paths_bounded_while,
+    SearchPreparationOptions, directory_search_scan_paths, path_match_key, prepare_document,
+    prepare_paths_bounded, prepare_paths_bounded_while,
 };
 
 struct TemporaryDirectory(PathBuf);
@@ -99,18 +99,29 @@ fn cached_complete_document_handoff_does_not_reopen_the_source() {
     let document = std::sync::Arc::new(LogDocument::open(&path).expect("应能打开缓存交接测试日志"));
     fs::remove_file(&path).expect("应能移除缓存交接测试日志");
 
-    let prepared = prepare_document(&path, Some(document.clone()), None, None, None, &[])
-        .expect("缓存完整文档应在源路径暂时不可用时直接交接");
+    let prepared = prepare_document(
+        &path,
+        Some(document.clone()),
+        None,
+        None,
+        SearchPreparationOptions {
+            case_sensitive: false,
+            regex: false,
+            max_results: None,
+        },
+        &[],
+    )
+    .expect("缓存完整文档应在源路径暂时不可用时直接交接");
 
     assert!(std::sync::Arc::ptr_eq(&prepared.document, &document));
     assert!(prepared.pending_index_cache.is_none());
 }
 
 #[test]
-fn saved_search_is_prepared_with_the_ready_document() {
+fn saved_search_is_prepared_with_the_application_search_options() {
     let temporary = TemporaryDirectory::new("prepared-saved-search");
     let path = temporary.0.join("source.log");
-    fs::write(&path, b"alpha\nbeta\nalpha\n").expect("应能写入已保存搜索测试日志");
+    fs::write(&path, b"alpha\nAlpha\nalpha\n").expect("应能写入已保存搜索测试日志");
     let document =
         std::sync::Arc::new(LogDocument::open(&path).expect("应能打开已保存搜索测试日志"));
     let session = FileSessionState {
@@ -118,8 +129,19 @@ fn saved_search_is_prepared_with_the_ready_document() {
         ..FileSessionState::default()
     };
 
-    let prepared = prepare_document(&path, Some(document), None, Some(session), Some(100), &[])
-        .expect("文档准备应恢复已保存搜索");
+    let prepared = prepare_document(
+        &path,
+        Some(document),
+        None,
+        Some(session),
+        SearchPreparationOptions {
+            case_sensitive: true,
+            regex: false,
+            max_results: Some(100),
+        },
+        &[],
+    )
+    .expect("文档准备应恢复已保存搜索");
 
     assert_eq!(prepared.load_state, super::DocumentLoadState::Ready);
     assert_eq!(

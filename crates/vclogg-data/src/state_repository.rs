@@ -298,7 +298,7 @@ impl StateRepository {
                 .join(",");
             let sql = format!(
                 "SELECT path, revision, custom_title, selected_row, query_text,
-                        case_sensitive, regex, result_mode, marked_rows,
+                        result_mode, marked_rows,
                         show_line_numbers, show_row_separators, keyword_color_rules, word_wrap,
                         resume_state
                  FROM file_sessions
@@ -824,8 +824,8 @@ impl StateRepository {
 fn load_session_row(connection: &Connection, path: &Path) -> Result<Option<FileSessionRecord>> {
     connection
         .query_row(
-            "SELECT revision, custom_title, selected_row, query_text, case_sensitive, regex,
-                    result_mode, marked_rows, show_line_numbers, show_row_separators,
+            "SELECT revision, custom_title, selected_row, query_text, result_mode,
+                    marked_rows, show_line_numbers, show_row_separators,
                     keyword_color_rules, word_wrap, resume_state
              FROM file_sessions
              WHERE path = ?1",
@@ -847,15 +847,13 @@ fn file_session_from_row(
             .get::<_, Option<i64>>(offset + 2)?
             .and_then(|row| usize::try_from(row).ok()),
         query_text: row.get(offset + 3)?,
-        case_sensitive: row.get::<_, i64>(offset + 4)? != 0,
-        regex: row.get::<_, i64>(offset + 5)? != 0,
-        result_mode: row.get(offset + 6)?,
-        marked_rows: row.get(offset + 7)?,
-        show_line_numbers: row.get::<_, i64>(offset + 8)? != 0,
-        show_row_separators: row.get::<_, i64>(offset + 9)? != 0,
-        keyword_color_rules: row.get(offset + 10)?,
-        word_wrap: row.get::<_, i64>(offset + 11)? != 0,
-        resume_state: row.get(offset + 12)?,
+        result_mode: row.get(offset + 4)?,
+        marked_rows: row.get(offset + 5)?,
+        show_line_numbers: row.get::<_, i64>(offset + 6)? != 0,
+        show_row_separators: row.get::<_, i64>(offset + 7)? != 0,
+        keyword_color_rules: row.get(offset + 8)?,
+        word_wrap: row.get::<_, i64>(offset + 9)? != 0,
+        resume_state: row.get(offset + 10)?,
     })
 }
 
@@ -872,12 +870,6 @@ fn merge_session_changes(
     }
     if base.query_text != desired.query_text {
         latest.query_text.clone_from(&desired.query_text);
-    }
-    if base.case_sensitive != desired.case_sensitive {
-        latest.case_sensitive = desired.case_sensitive;
-    }
-    if base.regex != desired.regex {
-        latest.regex = desired.regex;
     }
     if base.result_mode != desired.result_mode {
         latest.result_mode = desired.result_mode;
@@ -911,16 +903,14 @@ fn save_session_row(connection: &Connection, path: &Path, state: &FileSessionRec
         .execute(
             "INSERT INTO file_sessions(
                  path, custom_title, last_opened_at, selected_row, query_text,
-                 case_sensitive, regex, result_mode, marked_rows,
+                 result_mode, marked_rows,
                  show_line_numbers, show_row_separators, keyword_color_rules, word_wrap,
                  resume_state
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT(path) DO UPDATE SET
                  custom_title = excluded.custom_title,
                  selected_row = excluded.selected_row,
                  query_text = excluded.query_text,
-                 case_sensitive = excluded.case_sensitive,
-                 regex = excluded.regex,
                  result_mode = excluded.result_mode,
                  marked_rows = excluded.marked_rows,
                  show_line_numbers = excluded.show_line_numbers,
@@ -935,8 +925,6 @@ fn save_session_row(connection: &Connection, path: &Path, state: &FileSessionRec
                 unix_timestamp(),
                 selected_row,
                 state.query_text,
-                state.case_sensitive,
-                state.regex,
                 state.result_mode,
                 state.marked_rows,
                 state.show_line_numbers,
@@ -1130,6 +1118,8 @@ fn initialize_schema(connection: &Connection, defaults: &StateMigrationDefaults)
 }
 
 fn ensure_session_columns(connection: &Connection) -> Result<()> {
+    // `case_sensitive` and `regex` are retained only so older databases and binaries keep a
+    // compatible table shape. Current code stores the canonical pair once in `app_settings`.
     const COLUMNS: [(&str, &str); 13] = [
         ("custom_title", "TEXT"),
         ("selected_row", "INTEGER"),

@@ -28,8 +28,6 @@ pub(crate) enum PersistedSearchScope {
 #[serde(default)]
 pub(crate) struct PersistedSearchQuery {
     pub text: String,
-    pub case_sensitive: bool,
-    pub regex: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -452,14 +450,12 @@ mod tests {
     }
 
     #[test]
-    fn serialized_scopes_keep_independent_query_and_presentation_state() {
+    fn serialized_scopes_keep_independent_query_text_and_presentation_state() {
         let state = WorkspaceSearchState {
             active_scope: PersistedSearchScope::Directory,
             all_open: PersistedGlobalSearchContext {
                 query: PersistedSearchQuery {
                     text: "all open".into(),
-                    case_sensitive: true,
-                    regex: false,
                 },
                 result_mode: 2,
                 word_wrap: true,
@@ -480,8 +476,6 @@ mod tests {
                 context: PersistedGlobalSearchContext {
                     query: PersistedSearchQuery {
                         text: "directory".into(),
-                        case_sensitive: false,
-                        regex: true,
                     },
                     result_mode: 1,
                     results_visible: true,
@@ -506,15 +500,34 @@ mod tests {
         assert_eq!(restored.all_open.keyword_color_rules[0].keyword, "needle");
 
         assert_eq!(restored.all_open.query.text, "all open");
-        assert!(restored.all_open.query.case_sensitive);
         assert!(restored.all_open.word_wrap);
         assert_eq!(restored.all_open.source_paths, ["logs/a.log", "logs/b.log"]);
         assert_eq!(restored.directories[0].context.query.text, "directory");
-        assert!(restored.directories[0].context.query.regex);
         assert!(restored.directories[0].context.results_visible);
         assert_eq!(
             restored.directories[0].context.collapsed_paths,
             ["logs/x/a.log"]
+        );
+        let serialized: serde_json::Value =
+            serde_json::from_str(&json).expect("serialized state should be JSON");
+        let all_open_query = &serialized["all_open"]["query"];
+        let directory_query = &serialized["directories"][0]["context"]["query"];
+        assert!(all_open_query.get("case_sensitive").is_none());
+        assert!(all_open_query.get("regex").is_none());
+        assert!(directory_query.get("case_sensitive").is_none());
+        assert!(directory_query.get("regex").is_none());
+    }
+
+    #[test]
+    fn legacy_query_options_are_ignored_and_not_written_again() {
+        let query: PersistedSearchQuery =
+            serde_json::from_str(r#"{"text":"needle","case_sensitive":true,"regex":true}"#)
+                .expect("legacy query should deserialize");
+
+        assert_eq!(query.text, "needle");
+        assert_eq!(
+            serde_json::to_string(&query).expect("query should serialize"),
+            r#"{"text":"needle"}"#
         );
     }
 }

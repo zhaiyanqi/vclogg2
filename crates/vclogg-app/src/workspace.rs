@@ -205,6 +205,8 @@ struct PreparedDocument {
     resolved_color_rules: Arc<ResolvedColorRules>,
     search_result: SearchResult,
     search_matcher: Option<SearchMatcher>,
+    search_case_sensitive: bool,
+    search_regex: bool,
     warning: Option<String>,
     load_state: DocumentLoadState,
     pending_index_cache: Option<PendingIndexCacheWrite>,
@@ -411,6 +413,7 @@ struct WorkspaceWindowRegistry {
     closed_flush_tasks: Vec<Task<()>>,
     predefined_filters: Option<Vec<PredefinedFilter>>,
     cross_window_tab_drag: Option<CrossWindowTabDrag>,
+    search_options: Option<(bool, bool)>,
     last_settings_category: SettingsCategory,
     last_settings_category_loaded: bool,
 }
@@ -2864,7 +2867,7 @@ pub struct Workspace {
     predefined_filters_saving: bool,
     pending_predefined_filters_save: Option<(u64, Vec<PredefinedFilter>)>,
     settings_saving: bool,
-    search_defaults_modified: bool,
+    search_options_modified: bool,
     subscriptions: Vec<Subscription>,
     history_dialog_subscription: Option<Subscription>,
     predefined_filters_dialog_subscription: Option<Subscription>,
@@ -2896,6 +2899,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Self {
         window.set_window_title(crate::tr!("新标签页 — VCLogg2", "New tab — VCLogg2"));
+        let (initial_app_settings, initial_search_options) = Self::initial_search_settings(cx);
         let query =
             cx.new(|cx| InputState::new(window, cx).placeholder(crate::tr!("搜索", "Search")));
         let quick_find_query = cx.new(|cx| {
@@ -3210,11 +3214,24 @@ impl Workspace {
                         cloud_settings,
                     )) => {
                         let mut app_settings = app_settings;
-                        let preserve_search_defaults = this.search_defaults_modified;
-                        if preserve_search_defaults {
-                            app_settings.default_case_sensitive = this.case_sensitive;
-                            app_settings.default_use_regex = this.regex;
-                        }
+                        let preserve_search_options = this.search_options_modified;
+                        let local_search_options = preserve_search_options
+                            .then_some((this.case_sensitive, this.regex));
+                        let search_options = cx.update_global::<WorkspaceWindowRegistry, _>(
+                            |registry, _| {
+                                if let Some(search_options) = local_search_options {
+                                    registry.search_options = Some(search_options);
+                                    search_options
+                                } else {
+                                    *registry.search_options.get_or_insert((
+                                        app_settings.default_case_sensitive,
+                                        app_settings.default_use_regex,
+                                    ))
+                                }
+                            },
+                        );
+                        app_settings.default_case_sensitive = search_options.0;
+                        app_settings.default_use_regex = search_options.1;
                         this.persistence.store = Some(store);
                         let pending_workspace_search_save =
                             this.persistence.pending_workspace_search_save.take();
@@ -3243,12 +3260,12 @@ impl Workspace {
                         Self::apply_theme_preference(app_settings.theme_preference, window, cx);
                         this.app_settings = app_settings.clone();
                         this.restore_search_panel_height(search_panel_height, window, cx);
-                        this.apply_search_defaults(
+                        this.apply_global_search_options(
                             app_settings.default_case_sensitive,
                             app_settings.default_use_regex,
                         );
-                        this.search_defaults_modified = preserve_search_defaults;
-                        if preserve_search_defaults {
+                        this.search_options_modified = preserve_search_options;
+                        if preserve_search_options {
                             this.queue_app_settings_save(app_settings.clone(), false, window, cx);
                         }
                         this.apply_color_labels(color_labels, cx);
@@ -3383,8 +3400,8 @@ impl Workspace {
             pending_directory_group_activation: None,
             next_document_id: 1,
             next_new_tab_id: 2,
-            case_sensitive: false,
-            regex: false,
+            case_sensitive: initial_search_options.0,
+            regex: initial_search_options.1,
             activity: Activity::Ready,
             selected_source_row: None,
             row_drag_bounds: BTreeMap::new(),
@@ -3436,7 +3453,7 @@ impl Workspace {
             history_dialog_loading: false,
             history_clearing: false,
             pinned_updating: false,
-            app_settings: AppSettings::default(),
+            app_settings: initial_app_settings,
             scale_factor: 1.,
             color_labels: default_color_labels(),
             last_color_label_id: None,
@@ -3444,7 +3461,7 @@ impl Workspace {
             predefined_filters_saving: false,
             pending_predefined_filters_save: None,
             settings_saving: false,
-            search_defaults_modified: false,
+            search_options_modified: false,
             subscriptions,
             history_dialog_subscription: None,
             predefined_filters_dialog_subscription: None,
