@@ -7,6 +7,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The picker and document loader share this slot; replacing it cancels the load.
+        if self.open_task.is_some() {
+            return;
+        }
+
         let prompt = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
