@@ -89,6 +89,8 @@ pub struct AppSettingsRecord {
     pub log_level_color_rules: String,
     pub selection_styles: String,
     pub log_font_size: i64,
+    pub search_toolbar_height: i64,
+    pub search_toolbar_font_size: i64,
     pub log_line_spacing: i64,
     pub log_font_family: String,
     pub shortcut_open_file: String,

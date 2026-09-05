@@ -280,6 +280,7 @@ impl LogText {
 
 struct CachedSelection {
     selection: LogTextSelection,
+    suspended_local_selection: Option<LogTextLocalSelection>,
     last_used: u64,
     _refresh: Subscription,
     _activity_subscription: Subscription,
@@ -372,6 +373,9 @@ pub struct TextSelectionCache<K> {
     activity: Rc<TextSelectionActivity>,
 }
 
+/// A disclosure gesture captures local ranges before window-level mouse handling clears them.
+pub(crate) struct LocalTextSelectionSnapshot<K>(Vec<(K, LogTextSelection, LogTextLocalSelection)>);
+
 impl<K> Default for TextSelectionCache<K> {
     fn default() -> Self {
         Self {
@@ -416,9 +420,12 @@ impl<K: Clone + Ord> TextSelectionCache<K> {
 
     fn evict_oldest_inactive(&mut self, cx: &App) -> bool {
         let evict = self.recency.iter().find_map(|(_, key)| {
-            let selection = &self.entries[key].selection;
-            (selection.handle.snapshot(cx).is_none() && !selection.handle.has_local_selection(cx))
-                .then(|| key.clone())
+            let cached = &self.entries[key];
+            let selection = &cached.selection;
+            (cached.suspended_local_selection.is_none()
+                && selection.handle.snapshot(cx).is_none()
+                && !selection.handle.has_local_selection(cx))
+            .then(|| key.clone())
         });
         let Some(evict) = evict else {
             return false;
@@ -438,6 +445,12 @@ impl<K: Clone + Ord> TextSelectionCache<K> {
         window: &Window,
         cx: &mut App,
     ) -> LogTextSelection {
+        if let Some(cached) = self.entries.get_mut(&key)
+            && let Some(selection) = cached.suspended_local_selection.take()
+        {
+            cached.selection.state.borrow_mut().local_selection = Some(selection);
+            cached.selection.handle.set_local_selection(true, cx);
+        }
         let incompatible = self.entries.get(&key).is_some_and(|cached| {
             let state = cached.selection.state.borrow();
             if state.text.source() == text.source() {
@@ -517,6 +530,7 @@ impl<K: Clone + Ord> TextSelectionCache<K> {
             self.entries.insert(
                 key.clone(),
                 CachedSelection {
+                    suspended_local_selection: None,
                     selection: LogTextSelection {
                         handle,
                         state,
@@ -540,6 +554,50 @@ impl<K: Clone + Ord> TextSelectionCache<K> {
             selection.state.borrow_mut().text = text.clone();
         }
         selection
+    }
+
+    pub(crate) fn local_selection_snapshot(
+        &self,
+        mut includes: impl FnMut(&K) -> bool,
+    ) -> LocalTextSelectionSnapshot<K> {
+        LocalTextSelectionSnapshot(
+            self.entries
+                .iter()
+                .filter(|(key, _)| includes(key))
+                .filter_map(|(key, cached)| {
+                    let selection = cached.selection.state.borrow().local_selection.clone()?;
+                    Some((key.clone(), cached.selection.clone(), selection))
+                })
+                .collect(),
+        )
+    }
+
+    pub(crate) fn restore_local_selection(
+        &self,
+        snapshot: &LocalTextSelectionSnapshot<K>,
+        cx: &mut App,
+    ) {
+        for (key, original, selection) in &snapshot.0 {
+            if let Some(cached) = self.entries.get(key)
+                && Rc::ptr_eq(&cached.selection.state, &original.state)
+            {
+                cached.selection.state.borrow_mut().local_selection = Some(selection.clone());
+                cached.selection.handle.set_local_selection(true, cx);
+            }
+        }
+    }
+
+    /// Hidden participants are cleared by GPUI. Keep their ranges until their rows render again.
+    pub(crate) fn suspend_local_selection(&mut self, snapshot: LocalTextSelectionSnapshot<K>) {
+        for (key, original, selection) in snapshot.0 {
+            if let Some(cached) = self.entries.get_mut(&key)
+                && Rc::ptr_eq(&cached.selection.state, &original.state)
+                // A newer gesture may have cleared or replaced this range while staging.
+                && cached.selection.state.borrow().local_selection.as_ref() == Some(&selection)
+            {
+                cached.suspended_local_selection = Some(selection);
+            }
+        }
     }
 
     pub fn clear(&mut self) {

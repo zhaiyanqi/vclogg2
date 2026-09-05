@@ -2351,11 +2351,7 @@ impl Workspace {
                 self.global_table
                     .read(cx)
                     .delegate()
-                    .row_ix_for_key(LogRowKey::Row {
-                        document_id: *document_id,
-                        source_row: *source_row,
-                    })
-                    .is_some()
+                    .contains_source_row(*document_id, *source_row)
             });
         let selection_style = self.app_settings.selection_styles.resolve(
             window.is_window_active()
@@ -2381,46 +2377,58 @@ impl Workspace {
                         truncated,
                         failure,
                         collapsed,
-                    } => Some(VirtualLogRow::new(
-                        row_ix,
-                        LogRowKey::FileGroup { document_id },
-                        div()
-                            .id(("wrapped-global-group", document_id))
-                            .on_prepaint(move |bounds, _, _| {
-                                row_bounds.borrow_mut().insert(row_ix, bounds);
-                            })
-                            .relative()
-                            .w_full()
-                            .h(base_height)
-                            .flex_none()
-                            .overflow_hidden()
-                            .flex()
-                            .items_center()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                                    this.select_wrapped_global_row(row_ix, event, window, cx);
-                                }),
-                            )
-                            .on_mouse_down(
-                                MouseButton::Right,
-                                cx.listener(move |this, _: &MouseDownEvent, window, cx| {
-                                    this.prepare_wrapped_global_group_context(window, cx);
-                                }),
-                            )
-                            .child(
-                                GlobalSearchGroupHeader::new(
-                                    title,
-                                    path,
-                                    result_count,
-                                    font_family.clone(),
-                                    font_size,
+                    } => {
+                        let text_selection = self
+                            .global_viewport
+                            .local_selection_snapshot(|(id, _)| *id == document_id);
+                        Some(VirtualLogRow::new(
+                            row_ix,
+                            LogRowKey::FileGroup { document_id },
+                            div()
+                                .id(("wrapped-global-group", document_id))
+                                .on_prepaint(move |bounds, _, _| {
+                                    row_bounds.borrow_mut().insert(row_ix, bounds);
+                                })
+                                .relative()
+                                .w_full()
+                                .h(base_height)
+                                .flex_none()
+                                .overflow_hidden()
+                                .flex()
+                                .items_center()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                        if result_count > 0 {
+                                            // Mouse capture clears local ranges before this handler.
+                                            // A disclosure keeps them for the pending group toggle.
+                                            GlobalState::suppress_text_selection(cx);
+                                            this.global_viewport
+                                                .restore_local_selection(&text_selection, cx);
+                                        }
+                                        this.select_wrapped_global_row(row_ix, event, window, cx);
+                                    }),
                                 )
-                                .truncated(truncated)
-                                .failure(failure)
-                                .collapsed(collapsed),
-                            ),
-                    )),
+                                .on_mouse_down(
+                                    MouseButton::Right,
+                                    cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                                        this.prepare_wrapped_global_group_context(window, cx);
+                                    }),
+                                )
+                                .child(
+                                    GlobalSearchGroupHeader::new(
+                                        title,
+                                        path,
+                                        result_count,
+                                        font_family.clone(),
+                                        font_size,
+                                    )
+                                    .truncated(truncated)
+                                    .failure(failure)
+                                    .collapsed(collapsed),
+                                ),
+                        ))
+                    }
                     WrappedGlobalRow::Match {
                         document_id,
                         source_row,

@@ -20,7 +20,7 @@ use crate::{
 };
 
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
-pub const STATE_SCHEMA_VERSION: u32 = 7;
+pub const STATE_SCHEMA_VERSION: u32 = 8;
 
 /// Owns SQLite access for durable file-history and workspace records.
 pub struct StateRepository {
@@ -439,7 +439,8 @@ impl StateRepository {
                         line_number_text_color, line_number_background_color,
                         theme_preference, open_directory_command, viewer_overscan, language,
                         app_log_level, light_log_text_color, light_log_background_color,
-                        dark_log_text_color, dark_log_background_color, log_level_color_rules, selection_styles
+                        dark_log_text_color, dark_log_background_color, log_level_color_rules, selection_styles,
+                        search_toolbar_height, search_toolbar_font_size
                  FROM app_settings WHERE id = 1",
                 [],
                 |row| {
@@ -486,6 +487,8 @@ impl StateRepository {
                         dark_log_background_color: row.get(39)?,
                         log_level_color_rules: row.get(40)?,
                         selection_styles: row.get(41)?,
+                        search_toolbar_height: row.get(42)?,
+                        search_toolbar_font_size: row.get(43)?,
                     })
                 },
             )
@@ -514,6 +517,8 @@ impl StateRepository {
                      default_show_row_separators = excluded.default_show_row_separators,
                      highlight_log_levels = excluded.highlight_log_levels,
                      log_font_size = excluded.log_font_size,
+                     search_toolbar_height = excluded.search_toolbar_height,
+                     search_toolbar_font_size = excluded.search_toolbar_font_size,
                      log_line_spacing = excluded.log_line_spacing,
                      log_font_family = excluded.log_font_family,
                      shortcut_open_file = excluded.shortcut_open_file,
@@ -568,8 +573,9 @@ impl StateRepository {
                      line_number_text_color, line_number_background_color,
                      theme_preference, open_directory_command, viewer_overscan, language,
                      app_log_level, light_log_text_color, light_log_background_color,
-                     dark_log_text_color, dark_log_background_color, log_level_color_rules, selection_styles
-                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42)
+                     dark_log_text_color, dark_log_background_color, log_level_color_rules, selection_styles,
+                     search_toolbar_height, search_toolbar_font_size
+                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44)
                  ON CONFLICT(id) DO UPDATE SET {update}");
         connection
             .execute(
@@ -617,6 +623,8 @@ impl StateRepository {
                     settings.dark_log_background_color,
                     settings.log_level_color_rules,
                     settings.selection_styles,
+                    settings.search_toolbar_height,
+                    settings.search_toolbar_font_size,
                 ],
             )
             .context("无法保存应用设置")?;
@@ -1097,6 +1105,8 @@ fn initialize_schema(connection: &Connection, defaults: &StateMigrationDefaults)
                  log_level_color_rules TEXT NOT NULL DEFAULT '',
                  selection_styles TEXT NOT NULL DEFAULT '',
                  log_font_size INTEGER NOT NULL DEFAULT 13,
+                 search_toolbar_height INTEGER NOT NULL DEFAULT 28,
+                 search_toolbar_font_size INTEGER NOT NULL DEFAULT 13,
                  log_line_spacing INTEGER NOT NULL DEFAULT 6,
                  log_font_family TEXT NOT NULL DEFAULT 'consolas',
                  shortcut_open_file TEXT NOT NULL DEFAULT 'Ctrl+O',
@@ -1241,11 +1251,13 @@ fn ensure_color_label_columns(
 }
 
 fn ensure_app_settings_columns(connection: &Connection, default_log_level: &str) -> Result<()> {
-    const COLUMNS: [(&str, &str); 39] = [
+    const COLUMNS: [(&str, &str); 41] = [
         ("highlight_log_levels", "INTEGER NOT NULL DEFAULT 0"),
         ("log_level_color_rules", "TEXT NOT NULL DEFAULT ''"),
         ("selection_styles", "TEXT NOT NULL DEFAULT ''"),
         ("log_font_size", "INTEGER NOT NULL DEFAULT 13"),
+        ("search_toolbar_height", "INTEGER NOT NULL DEFAULT 28"),
+        ("search_toolbar_font_size", "INTEGER NOT NULL DEFAULT 13"),
         ("log_line_spacing", "INTEGER NOT NULL DEFAULT 6"),
         ("log_font_family", "TEXT NOT NULL DEFAULT 'consolas'"),
         ("shortcut_open_file", "TEXT NOT NULL DEFAULT 'Ctrl+O'"),

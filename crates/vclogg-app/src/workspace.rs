@@ -108,7 +108,10 @@ use crate::{
         PersistedGlobalSearchContext, PersistedPathSelection, PersistedSearchQuery,
         PersistedSearchRowKey, PersistedSearchScope, PersistedSearchViewport, WorkspaceSearchState,
     },
-    selectable_log_text::{LogText, LogTextSelection, SelectableLogText, TextSelectionCache},
+    selectable_log_text::{
+        LocalTextSelectionSnapshot, LogText, LogTextSelection, SelectableLogText,
+        TextSelectionCache,
+    },
     settings_dialog::{
         SettingsCategory, SettingsDialog, SettingsDialogEvent, SettingsNetworkSnapshot,
     },
@@ -138,7 +141,6 @@ const MAX_DOCUMENT_PREPARE_WORKERS: usize = 4;
 const SEARCH_SUGGESTION_ROW_HEIGHT_REMS: f32 = 3.25;
 const GITHUB_RELEASES_URL: &str = "https://github.com/zhaiyanqi/vclogg2/releases";
 const SEARCH_SUGGESTION_MAX_VISIBLE_ROWS: usize = 5;
-const SEARCH_CONTROL_HEIGHT: Pixels = px(28.);
 const SEARCH_BAR_VERTICAL_INSET: Pixels = px(6.);
 const EMPTY_WORKSPACE_CARD_HEADER_HEIGHT_REMS: f32 = 3.25;
 const EMPTY_WORKSPACE_FILE_ROW_HEIGHT_REMS: f32 = 3.2;
@@ -721,6 +723,7 @@ struct PreparedLogJump {
 
 struct PreparedGlobalGroupToggle {
     plan: GlobalGroupTogglePlan,
+    text_selection: LocalTextSelectionSnapshot<(u64, usize)>,
     staged: Option<StagedVisibleLineLoadResult<(u64, usize)>>,
     anchor: Option<RowViewportAnchor<LogRowKey>>,
     measured_heights: BTreeMap<LogRowKey, Pixels>,

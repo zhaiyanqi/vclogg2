@@ -724,6 +724,19 @@ impl GlobalSearchTableDelegate {
         }
     }
 
+    /// Result membership is independent of the group's expanded layout.
+    pub(crate) fn contains_source_row(&self, document_id: u64, source_row: usize) -> bool {
+        self.projection
+            .group_by_document
+            .get(&document_id)
+            .is_some_and(|group_ix| {
+                self.projection.groups[*group_ix]
+                    .projection
+                    .rows
+                    .contains(source_row)
+            })
+    }
+
     pub(crate) fn row_ix_for_key(&self, key: LogRowKey) -> Option<usize> {
         let document_id = match key {
             LogRowKey::FileGroup { document_id } | LogRowKey::Row { document_id, .. } => {
@@ -961,16 +974,7 @@ impl GlobalSearchTableDelegate {
             return false;
         };
         self.interaction.collapsed_documents.contains(&document_id)
-            && self
-                .projection
-                .group_by_document
-                .get(&document_id)
-                .is_some_and(|group_ix| {
-                    self.projection.groups[*group_ix]
-                        .projection
-                        .rows
-                        .contains(source_row)
-                })
+            && self.contains_source_row(document_id, source_row)
     }
 
     pub fn collapsed_document_ids(&self) -> BTreeSet<u64> {

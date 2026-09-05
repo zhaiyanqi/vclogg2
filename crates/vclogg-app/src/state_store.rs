@@ -35,6 +35,8 @@ pub(crate) fn normalize_search_history(history: impl IntoIterator<Item = String>
 pub const DEFAULT_WORD_BOUNDARY_CHARACTERS: &str =
     ".,;:!?()[]{}<>/\\|\"'`~@#$%^&*+-=，。！？；：、（）【】《》“”‘’…—";
 pub const MAX_WORD_BOUNDARY_CHARACTERS: usize = 256;
+pub(crate) const SEARCH_TOOLBAR_HEIGHT_RANGE: std::ops::RangeInclusive<u16> = 24..=48;
+pub(crate) const SEARCH_TOOLBAR_FONT_SIZE_RANGE: std::ops::RangeInclusive<u16> = 10..=20;
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -233,6 +235,8 @@ pub struct AppSettings {
     pub log_level_color_rules: Vec<LogLevelColorRule>,
     pub(crate) selection_styles: crate::selection_style::SelectionStyles,
     pub log_font_size: u16,
+    pub search_toolbar_height: u16,
+    pub search_toolbar_font_size: u16,
     pub log_line_spacing: u16,
     pub log_font_family: LogFontFamily,
     pub mouse_wheel_scroll_percent: u16,
@@ -274,6 +278,8 @@ impl Default for AppSettings {
             log_level_color_rules: default_log_level_rules(),
             selection_styles: Default::default(),
             log_font_size: 13,
+            search_toolbar_height: 28,
+            search_toolbar_font_size: 13,
             log_line_spacing: 6,
             log_font_family: LogFontFamily::Consolas,
             mouse_wheel_scroll_percent: 100,
@@ -296,6 +302,20 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
+    pub(crate) fn search_toolbar_control_height(&self) -> u16 {
+        let font_size = self.search_toolbar_font_size.clamp(
+            *SEARCH_TOOLBAR_FONT_SIZE_RANGE.start(),
+            *SEARCH_TOOLBAR_FONT_SIZE_RANGE.end(),
+        );
+        // One line at 1.25 times the font size, plus padding and borders.
+        self.search_toolbar_height
+            .clamp(
+                *SEARCH_TOOLBAR_HEIGHT_RANGE.start(),
+                *SEARCH_TOOLBAR_HEIGHT_RANGE.end(),
+            )
+            .max((font_size * 5).div_ceil(4) + 6)
+    }
+
     pub fn search_result_limit(&self) -> Option<usize> {
         usize::try_from(self.max_search_results)
             .ok()
@@ -640,6 +660,16 @@ fn app_settings_from_record(record: AppSettingsRecord) -> AppSettings {
                 .unwrap_or_else(|_| default_log_level_rules())
         },
         log_font_size: bounded_u16(record.log_font_size, 8, 32),
+        search_toolbar_height: bounded_u16(
+            record.search_toolbar_height,
+            *SEARCH_TOOLBAR_HEIGHT_RANGE.start(),
+            *SEARCH_TOOLBAR_HEIGHT_RANGE.end(),
+        ),
+        search_toolbar_font_size: bounded_u16(
+            record.search_toolbar_font_size,
+            *SEARCH_TOOLBAR_FONT_SIZE_RANGE.start(),
+            *SEARCH_TOOLBAR_FONT_SIZE_RANGE.end(),
+        ),
         log_line_spacing: bounded_u16(record.log_line_spacing, 1, 40),
         log_font_family: LogFontFamily::from_database(&record.log_font_family),
         mouse_wheel_scroll_percent: bounded_u16(record.mouse_wheel_scroll_percent, 1, 400),
@@ -684,6 +714,8 @@ fn app_settings_to_record(settings: AppSettings) -> AppSettingsRecord {
         log_level_color_rules: serde_json::to_string(&settings.log_level_color_rules)
             .unwrap_or_else(|_| "[]".to_string()),
         log_font_size: i64::from(settings.log_font_size),
+        search_toolbar_height: i64::from(settings.search_toolbar_control_height()),
+        search_toolbar_font_size: i64::from(settings.search_toolbar_font_size),
         log_line_spacing: i64::from(settings.log_line_spacing),
         log_font_family: settings.log_font_family.database_value().into(),
         shortcut_open_file: settings.shortcuts.open_file,

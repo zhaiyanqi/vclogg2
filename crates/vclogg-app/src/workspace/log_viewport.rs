@@ -247,6 +247,31 @@ impl<K: Clone + Ord> LogViewportState<K> {
             .handle(key, text, window, cx)
     }
 
+    pub(super) fn local_selection_snapshot(
+        &self,
+        includes: impl FnMut(&K) -> bool,
+    ) -> LocalTextSelectionSnapshot<K> {
+        self.text_selections
+            .borrow()
+            .local_selection_snapshot(includes)
+    }
+
+    pub(super) fn restore_local_selection(
+        &self,
+        snapshot: &LocalTextSelectionSnapshot<K>,
+        cx: &mut App,
+    ) {
+        self.text_selections
+            .borrow()
+            .restore_local_selection(snapshot, cx);
+    }
+
+    pub(super) fn suspend_local_selection(&self, snapshot: LocalTextSelectionSnapshot<K>) {
+        self.text_selections
+            .borrow_mut()
+            .suspend_local_selection(snapshot);
+    }
+
     pub(super) fn wrapped_sizes(&self, count: usize, base_height: Pixels) {
         self.viewport.set_item_count(count, base_height);
     }

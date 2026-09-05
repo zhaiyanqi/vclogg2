@@ -503,6 +503,8 @@ impl Workspace {
         if !applied {
             return false;
         }
+        self.global_viewport
+            .suspend_local_selection(prepared.text_selection);
         if self.global_viewport.is_wrapped() {
             self.prime_global_wrapped_group_toggle(
                 prepared.anchor,
@@ -533,6 +535,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let text_selection = self
+            .global_viewport
+            .local_selection_snapshot(|(id, _)| *id == document_id);
         let scrollbar_key = (0, WrappedRegion::GlobalResults);
         self.global_viewport.take_pending_scrollbar_offset();
         self.invalidate_log_scroll_frame(scrollbar_key);
@@ -585,6 +590,7 @@ impl Workspace {
             self.commit_global_group_toggle(
                 PreparedGlobalGroupToggle {
                     plan,
+                    text_selection,
                     staged: None,
                     anchor,
                     measured_heights,
@@ -619,6 +625,7 @@ impl Workspace {
                 this.commit_global_group_toggle(
                     PreparedGlobalGroupToggle {
                         plan,
+                        text_selection,
                         staged: Some(staged),
                         anchor,
                         measured_heights,

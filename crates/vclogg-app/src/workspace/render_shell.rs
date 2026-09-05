@@ -1235,6 +1235,22 @@ impl Workspace {
             .into_any_element()
     }
 
+    fn search_toolbar_button_label(
+        &self,
+        button: Button,
+        label: impl Into<SharedString>,
+    ) -> Button {
+        let label = label.into();
+        button.aria_label(label.clone()).child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(px(f32::from(self.app_settings.search_toolbar_font_size)))
+                .line_height(relative(1.25))
+                .child(label),
+        )
+    }
+
     pub(super) fn render_predefined_filters_popover(
         &self,
         has_document: bool,
@@ -1254,10 +1270,14 @@ impl Workspace {
             .trigger(
                 Button::new("predefined-filters")
                     .small()
-                    .h(SEARCH_CONTROL_HEIGHT)
+                    .h(px(f32::from(
+                        self.app_settings.search_toolbar_control_height(),
+                    )))
                     .outline()
                     .icon(IconName::BookOpen)
-                    .label(crate::tr!("过滤器", "Filters"))
+                    .map(|button| {
+                        self.search_toolbar_button_label(button, crate::tr!("过滤器", "Filters"))
+                    })
                     .dropdown_caret(true)
                     .loading(saving)
                     .disabled(!has_document)
@@ -1450,7 +1470,9 @@ impl Workspace {
             SearchScope::AllOpenFiles => Some(
                 Button::new("search-scope-global-settings")
                     .small()
-                    .h(SEARCH_CONTROL_HEIGHT)
+                    .h(px(f32::from(
+                        self.app_settings.search_toolbar_control_height(),
+                    )))
                     .outline()
                     .rounded_l_none()
                     .border_l_0()
@@ -1464,7 +1486,9 @@ impl Workspace {
             SearchScope::Directory => Some(
                 Button::new("search-scope-directory-settings")
                     .small()
-                    .h(SEARCH_CONTROL_HEIGHT)
+                    .h(px(f32::from(
+                        self.app_settings.search_toolbar_control_height(),
+                    )))
                     .outline()
                     .rounded_l_none()
                     .border_l_0()
@@ -1478,7 +1502,9 @@ impl Workspace {
         };
         let scope_button = Button::new("search-scope")
             .small()
-            .h(SEARCH_CONTROL_HEIGHT)
+            .h(px(f32::from(
+                self.app_settings.search_toolbar_control_height(),
+            )))
             .outline()
             .dropdown_caret(true)
             .when(has_scope_settings, |button| button.rounded_r_none())
@@ -1487,10 +1513,15 @@ impl Workspace {
                 SearchScope::AllOpenFiles => IconName::File,
                 SearchScope::Directory => IconName::FolderOpen,
             })
-            .label(match self.global_search.scope {
-                SearchScope::CurrentFile => crate::tr!("当前", "Current"),
-                SearchScope::AllOpenFiles => crate::tr!("全局", "Global"),
-                SearchScope::Directory => crate::tr!("目录", "Directory"),
+            .map(|button| {
+                self.search_toolbar_button_label(
+                    button,
+                    match self.global_search.scope {
+                        SearchScope::CurrentFile => crate::tr!("当前", "Current"),
+                        SearchScope::AllOpenFiles => crate::tr!("全局", "Global"),
+                        SearchScope::Directory => crate::tr!("目录", "Directory"),
+                    },
+                )
             })
             .disabled(!has_document)
             .tooltip(tooltip)
@@ -1925,6 +1956,9 @@ impl Workspace {
     ) -> impl IntoElement {
         let _performance_scope = crate::ui_performance::scope("Workspace::render_search_bar");
         let colors = ui_theme::palette(cx);
+        let control_height = px(f32::from(self.app_settings.search_toolbar_control_height()));
+        let font_size = px(f32::from(self.app_settings.search_toolbar_font_size));
+        let font_scale = f32::from(self.app_settings.search_toolbar_font_size) / 13.;
         let search_history_empty = self.search_history.is_empty();
         let has_document = self.active_document().is_some();
         let predefined_filters = self.render_predefined_filters_popover(has_document, cx);
@@ -2071,7 +2105,7 @@ impl Workspace {
                 h_flex()
                     .relative()
                     .w_full()
-                    .min_h(SEARCH_CONTROL_HEIGHT + SEARCH_BAR_VERTICAL_INSET * 2.)
+                    .min_h(control_height + SEARCH_BAR_VERTICAL_INSET * 2.)
                     .items_center()
                     .gap(px(6.))
                     .px(px(12.))
@@ -2081,13 +2115,15 @@ impl Workspace {
                     .when_some(result_mode_select, |controls, result_mode_select| {
                         controls.child(
                             div()
-                                .w(px(110.))
-                                .h(SEARCH_CONTROL_HEIGHT)
+                                .w(px(110.) * font_scale)
+                                .h(control_height)
                                 .flex_none()
                                 .child(
                                     Select::new(&result_mode_select)
                                         .small()
-                                        .h(SEARCH_CONTROL_HEIGHT)
+                                        .text_size(font_size)
+                                        .line_height(relative(1.25))
+                                        .h(control_height)
                                         .focus_ring(false),
                                 ),
                         )
@@ -2095,13 +2131,13 @@ impl Workspace {
                     .child(
                         Button::new("case-sensitive")
                             .small()
-                            .w(px(34.))
-                            .h(SEARCH_CONTROL_HEIGHT)
+                            .w(px(34.).max(control_height))
+                            .h(control_height)
                             .p_0()
                             .rounded(px(10.))
                             .font_weight(FontWeight(700.))
                             .custom(case_sensitive_variant)
-                            .label("Aa")
+                            .map(|button| self.search_toolbar_button_label(button, "Aa"))
                             .selected(self.case_sensitive)
                             .toggled(self.case_sensitive)
                             .disabled(!has_document)
@@ -2113,13 +2149,13 @@ impl Workspace {
                     .child(
                         Button::new("regular-expression")
                             .small()
-                            .w(px(34.))
-                            .h(SEARCH_CONTROL_HEIGHT)
+                            .w(px(34.).max(control_height))
+                            .h(control_height)
                             .p_0()
                             .rounded(px(10.))
                             .font_weight(FontWeight(700.))
                             .custom(regex_variant)
-                            .label(".*")
+                            .map(|button| self.search_toolbar_button_label(button, ".*"))
                             .selected(self.regex)
                             .toggled(self.regex)
                             .disabled(!has_document)
@@ -2134,7 +2170,7 @@ impl Workspace {
                         div()
                             .flex_1()
                             .min_w(px(180.))
-                            .h(SEARCH_CONTROL_HEIGHT)
+                            .h(control_height)
                             .relative()
                             .capture_key_down(cx.listener(
                                 |this, event: &KeyDownEvent, window, cx| {
@@ -2174,6 +2210,8 @@ impl Workspace {
                             .child(
                                 Input::new(&self.query)
                                     .small()
+                                    .text_size(font_size)
+                                    .line_height(relative(1.25))
                                     .size_full()
                                     .cleanable(true)
                                     .prefix(div().child(Icon::new(IconName::Search).small()))
@@ -2209,9 +2247,14 @@ impl Workspace {
                             .small()
                             .primary()
                             .icon(IconName::Search)
-                            .label(crate::tr!("搜索", "Search"))
-                            .min_w(px(88.))
-                            .h(SEARCH_CONTROL_HEIGHT)
+                            .map(|button| {
+                                self.search_toolbar_button_label(
+                                    button,
+                                    crate::tr!("搜索", "Search"),
+                                )
+                            })
+                            .min_w(px(88.) * font_scale)
+                            .h(control_height)
                             .rounded(px(10.))
                             .loading(searching_current_scope)
                             .disabled(search_disabled)
@@ -2224,8 +2267,8 @@ impl Workspace {
                             .small()
                             .ghost()
                             .icon(IconName::Close)
-                            .w(px(34.))
-                            .h(SEARCH_CONTROL_HEIGHT)
+                            .w(px(34.).max(control_height))
+                            .h(control_height)
                             .rounded(px(10.))
                             .disabled(clear_disabled)
                             .tooltip(crate::tr!("清除搜索结果", "Clear search results"))
@@ -2241,14 +2284,14 @@ impl Workspace {
                                 .child(
                                     h_flex()
                                         .min_w(px(68.))
-                                        .h(px(24.))
+                                        .h(control_height)
                                         .justify_center()
                                         .px(px(8.))
                                         .rounded(px(999.))
                                         .border_1()
                                         .border_color(cx.theme().primary.opacity(0.24))
                                         .bg(cx.theme().primary.opacity(0.08))
-                                        .text_size(px(11.))
+                                        .text_size(font_size)
                                         .font_weight(FontWeight(650.))
                                         .text_color(cx.theme().primary)
                                         .child(result_count_label),

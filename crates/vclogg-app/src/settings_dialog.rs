@@ -36,7 +36,8 @@ use crate::{
     cloud_filters::{CloudClient, CloudConnectionProfile},
     i18n::Language,
     state_store::{
-        AppSettings, CloudSettings, LogFontFamily, MAX_WORD_BOUNDARY_CHARACTERS, ShortcutSettings,
+        AppSettings, CloudSettings, LogFontFamily, MAX_WORD_BOUNDARY_CHARACTERS,
+        SEARCH_TOOLBAR_FONT_SIZE_RANGE, SEARCH_TOOLBAR_HEIGHT_RANGE, ShortcutSettings,
         ThemePreference, normalize_search_history,
     },
 };
@@ -217,8 +218,8 @@ impl SettingsCategory {
                 "Cloud server, user identity, and cookie connection",
             ),
             Self::Appearance => crate::tr!(
-                "主题、日志字体、行号与内容呈现",
-                "Theme, log font, line numbers, and content presentation",
+                "主题、搜索工具栏、日志字体、行号与内容呈现",
+                "Theme, search toolbar, log font, line numbers, and content presentation",
             ),
             Self::Search => crate::tr!(
                 "默认匹配方式、结果数量、高亮与搜索历史",
@@ -261,7 +262,7 @@ impl SettingsCategory {
                 "网络 远程服务 云端服务器 服务器地址 用户名 工号 昵称 保存 测试 连接 Cookie HTTP HTTPS network remote server user connect"
             }
             Self::Appearance => {
-                "外观 界面主题 深色 浅色 日志文字颜色 日志背景色 显示行号 显示行号行间分隔线 行号栏宽度 行号文字颜色 行号背景色 日志级别着色 日志分隔线 日志字体 日志字号 日志行距 theme log text background font color"
+                "外观 界面主题 深色 浅色 搜索工具栏 控件高度 文字大小 日志文字颜色 日志背景色 显示行号 显示行号行间分隔线 行号栏宽度 行号文字颜色 行号背景色 日志级别着色 日志分隔线 日志字体 日志字号 日志行距 theme search toolbar height size log text background font color"
             }
             Self::Search => {
                 "搜索 区分大小写 使用正则表达式 最大搜索结果数 高亮已提交搜索的匹配文字 搜索历史 历史记录 管理 删除 清空 大小写 正则 结果 高亮 search regex case highlight history"
@@ -447,6 +448,8 @@ pub struct SettingsDialog {
     font_family: Entity<SelectState<Vec<LogFontFamily>>>,
     app_log_level: Entity<SelectState<Vec<AppLogLevel>>>,
     font_size: Entity<SliderState>,
+    search_toolbar_height: Entity<SliderState>,
+    search_toolbar_font_size: Entity<SliderState>,
     line_spacing: Entity<SliderState>,
     line_number_width: Entity<SliderState>,
     line_number_text_color: Entity<ColorPickerState>,
@@ -492,6 +495,60 @@ impl SettingsDialog {
     fn draft_changed(cx: &mut Context<Self>) {
         cx.emit(SettingsDialogEvent::DraftChanged);
         cx.notify();
+    }
+
+    fn search_toolbar_size_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut settings = self.draft.clone();
+        settings.search_toolbar_height =
+            self.search_toolbar_height.read(cx).value().start().round() as u16;
+        settings.search_toolbar_font_size = self
+            .search_toolbar_font_size
+            .read(cx)
+            .value()
+            .start()
+            .round() as u16;
+        let height = settings.search_toolbar_control_height();
+        if height != settings.search_toolbar_height {
+            self.search_toolbar_height.update(cx, |slider, cx| {
+                slider.set_value(f32::from(height), window, cx);
+            });
+        }
+        Self::draft_changed(cx);
+    }
+
+    fn render_search_toolbar_settings(&self, cx: &gpui::App) -> AnyElement {
+        let slider_row = |label: &'static str, slider: &Entity<SliderState>| {
+            h_flex()
+                .items_center()
+                .justify_between()
+                .gap_4()
+                .child(label)
+                .child(
+                    h_flex()
+                        .w_56()
+                        .gap_3()
+                        .child(Slider::new(slider).flex_1())
+                        .child(div().w_10().text_right().text_sm().child(format!(
+                            "{}px",
+                            slider.read(cx).value().start().round() as u16
+                        ))),
+                )
+        };
+        v_flex()
+            .id("settings-search-toolbar-section")
+            .gap_3()
+            .p_3()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(crate::tr!("搜索工具栏", "Search toolbar")))
+            .child(div().text_sm().text_color(cx.theme().muted_foreground).child(crate::tr!(
+                "统一调整搜索输入框、按钮和下拉框；高度不足以容纳文字时自动加高",
+                "Adjusts the search field, buttons, and selectors together; height increases when needed to fit the text"
+            )))
+            .child(slider_row(crate::tr!("控件高度", "Control height"), &self.search_toolbar_height))
+            .child(slider_row(crate::tr!("文字大小", "Text size"), &self.search_toolbar_font_size))
+            .into_any_element()
     }
 
     fn current_log_color_theme(cx: &gpui::App) -> LogColorTheme {
@@ -642,6 +699,20 @@ impl SettingsDialog {
                 .step(1.)
                 .default_value(settings.log_font_size as f32)
         });
+        let search_toolbar_height = cx.new(|_| {
+            SliderState::new()
+                .min(f32::from(*SEARCH_TOOLBAR_HEIGHT_RANGE.start()))
+                .max(f32::from(*SEARCH_TOOLBAR_HEIGHT_RANGE.end()))
+                .step(1.)
+                .default_value(f32::from(settings.search_toolbar_control_height()))
+        });
+        let search_toolbar_font_size = cx.new(|_| {
+            SliderState::new()
+                .min(f32::from(*SEARCH_TOOLBAR_FONT_SIZE_RANGE.start()))
+                .max(f32::from(*SEARCH_TOOLBAR_FONT_SIZE_RANGE.end()))
+                .step(1.)
+                .default_value(f32::from(settings.search_toolbar_font_size))
+        });
         let line_spacing = cx.new(|_| {
             SliderState::new()
                 .min(1.)
@@ -749,6 +820,15 @@ impl SettingsDialog {
         subscriptions.push(cx.subscribe(&font_size, |_, _, _: &SliderEvent, cx| {
             SettingsDialog::draft_changed(cx)
         }));
+        for slider in [&search_toolbar_height, &search_toolbar_font_size] {
+            subscriptions.push(cx.subscribe_in(
+                slider,
+                window,
+                |this, _, _: &SliderEvent, window, cx| {
+                    this.search_toolbar_size_changed(window, cx);
+                },
+            ));
+        }
         subscriptions.push(
             cx.subscribe(&settings_search, |this, search, _: &InputEvent, cx| {
                 let query = search.read(cx).value().trim().to_lowercase();
@@ -916,6 +996,8 @@ impl SettingsDialog {
             font_family,
             app_log_level,
             font_size,
+            search_toolbar_height,
+            search_toolbar_font_size,
             line_spacing,
             line_number_width,
             line_number_text_color,
@@ -968,6 +1050,15 @@ impl SettingsDialog {
             .copied()
             .unwrap_or_default();
         settings.log_font_size = self.font_size.read(cx).value().start().round() as u16;
+        settings.search_toolbar_height =
+            self.search_toolbar_height.read(cx).value().start().round() as u16;
+        settings.search_toolbar_font_size = self
+            .search_toolbar_font_size
+            .read(cx)
+            .value()
+            .start()
+            .round() as u16;
+        settings.search_toolbar_height = settings.search_toolbar_control_height();
         settings.log_line_spacing = self.line_spacing.read(cx).value().start().round() as u16;
         settings.line_number_width = self.line_number_width.read(cx).value().start().round() as u16;
         settings.line_number_text_color = self
@@ -2193,6 +2284,7 @@ impl Render for SettingsDialog {
                             })),
                     ),
                                             )
+            .child(self.render_search_toolbar_settings(cx))
             .child(
                 v_flex()
                     .id("settings-log-colors-section")
