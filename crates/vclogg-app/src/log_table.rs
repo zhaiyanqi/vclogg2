@@ -28,7 +28,7 @@ use crate::virtual_log_lines::{
     LogRowKey, LogRowProjection, MAX_VISIBLE_LINE_COLUMNS, StagedVisibleLineLoadRequest,
     StagedVisibleLineLoadResult, VisibleLineLoadRequest, VisibleLineLoadResult, VisibleLineStore,
 };
-use crate::virtual_log_list::{VirtualLogListDelegate, VirtualLogListState};
+use crate::virtual_log_list::{VirtualLogListDelegate, VirtualLogListEvent, VirtualLogListState};
 
 pub(crate) fn log_cell_horizontal_padding(cx: &App) -> Pixels {
     cx.theme().spacing_tokens().sm
@@ -242,13 +242,15 @@ where
     D: LogTableCursor + LogTableRows + 'static,
 {
     fn active_log_row(&self) -> Option<usize> {
-        self.selected_row()
-            .or_else(|| self.delegate().active_log_row())
+        // Result navigation updates the delegate without emitting a body-selection event.
+        // Anchoring must read that same cursor, including after projection remapping.
+        self.delegate().active_log_row()
     }
 
     fn set_active_log_row(&mut self, row_ix: usize, cx: &mut Context<Self>) {
         self.delegate().set_active_log_row(Some(row_ix));
-        self.set_selected_row(row_ix, cx);
+        cx.emit(VirtualLogListEvent::SelectRow(row_ix));
+        cx.notify();
     }
 
     fn sync_active_log_row(&mut self, cx: &mut Context<Self>) -> bool {

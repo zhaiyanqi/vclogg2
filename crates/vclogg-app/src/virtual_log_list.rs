@@ -788,12 +788,12 @@ impl VirtualLogVisibleRange {
     }
 }
 
-/// Entity-owned delegate and interaction state for a virtual log list.
+/// Entity-owned delegate and viewport for a virtual log list.
+/// The delegate owns the active row; this host only publishes selection events.
 pub(crate) struct VirtualLogListState<M, K> {
     delegate: M,
     viewport: VirtualLogViewport<K>,
     visible_range: VirtualLogVisibleRange,
-    selected_row: Option<usize>,
     _key: PhantomData<K>,
 }
 
@@ -803,7 +803,6 @@ impl<M: 'static, K: 'static> VirtualLogListState<M, K> {
             delegate,
             viewport,
             visible_range: VirtualLogVisibleRange::default(),
-            selected_row: None,
             _key: PhantomData,
         }
     }
@@ -828,26 +827,11 @@ impl<M: 'static, K: 'static> VirtualLogListState<M, K> {
         self.visible_range.rows = range;
     }
 
-    pub(crate) fn selected_row(&self) -> Option<usize> {
-        self.selected_row
-    }
-
-    pub(crate) fn set_selected_row(&mut self, row_ix: usize, cx: &mut Context<Self>)
-    where
-        M: 'static,
-        K: 'static,
-    {
-        self.selected_row = Some(row_ix);
-        cx.emit(VirtualLogListEvent::SelectRow(row_ix));
-        cx.notify();
-    }
-
     pub(crate) fn clear_selection(&mut self, cx: &mut Context<Self>)
     where
         M: 'static,
         K: 'static,
     {
-        self.selected_row = None;
         cx.emit(VirtualLogListEvent::ClearSelection);
         cx.notify();
     }
