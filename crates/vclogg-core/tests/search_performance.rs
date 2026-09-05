@@ -7,7 +7,8 @@ use std::{
 };
 
 use vclogg_core::{
-    LogDocument, SearchCancellation, SearchProgress, SearchQuery, SearchRun, search_with_progress,
+    LogDocument, SearchCancellation, SearchMatcher, SearchProgress, SearchQuery, SearchRun,
+    search_with_compiled_matcher, search_with_progress,
 };
 
 struct TemporaryDirectory(PathBuf);
@@ -87,4 +88,61 @@ fn benchmark_literal_search() {
         "搜索 {LINE_COUNT} 行，执行 {RUNS} 次：{elapsed:?}，平均：{:?}",
         elapsed / RUNS as u32
     );
+}
+
+#[test]
+#[ignore = "手动性能基准：cargo test -p vclogg-core --release benchmark_parallel_regex_search -- --ignored --nocapture"]
+fn benchmark_parallel_regex_search() {
+    const LINE_COUNT: usize = 1_000_000;
+    const RUNS: usize = 5;
+    let temporary = TemporaryDirectory::new("regex-search-performance");
+    let path = temporary.0.join("large.log");
+    let mut writer = BufWriter::new(File::create(&path).unwrap());
+    for row in 0..LINE_COUNT {
+        let message = if row % 97 == 0 {
+            "target-token"
+        } else {
+            "ordinary-message"
+        };
+        writeln!(writer, "2026-09-05 INFO request={row} {message} completed").unwrap();
+    }
+    writer.flush().unwrap();
+    let document = LogDocument::open(&path).unwrap();
+    let query = SearchQuery {
+        text: r"^20\d\d-\d\d-\d\d\s+INFO\s+request=\d+\s+target-token\s+completed$".into(),
+        case_sensitive: false,
+        regex: true,
+        max_results: None,
+    };
+    for threads in [1, 8] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap();
+        let matcher = SearchMatcher::new(&query).unwrap();
+        let cancellation = SearchCancellation::default();
+        let run = || {
+            pool.install(|| {
+                search_with_compiled_matcher(
+                    black_box(&document),
+                    matcher.as_ref(),
+                    None,
+                    &cancellation,
+                )
+            })
+        };
+        // Warm the same pool and matcher; exclude compilation and file indexing.
+        assert!(matches!(run(), SearchRun::Completed(_)));
+        let started = Instant::now();
+        for _ in 0..RUNS {
+            let SearchRun::Completed(result) = run() else {
+                panic!("search should complete")
+            };
+            assert_eq!(result.len(), LINE_COUNT.div_ceil(97));
+        }
+        eprintln!(
+            "{threads} 线程正则搜索 {LINE_COUNT} 行，平均：{:?}",
+            started.elapsed() / RUNS as u32
+        );
+    }
 }

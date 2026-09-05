@@ -6,10 +6,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use rayon::ThreadPoolBuilder;
+use rayon::{ThreadPoolBuilder, prelude::*};
 use vclogg_core::{
-    LogDocument, SearchCancellation, SearchProgress, SearchQuery, SearchRun, search,
-    search_with_progress,
+    LogDocument, SearchCancellation, SearchMatcher, SearchProgress, SearchQuery, SearchRun, search,
+    search_with_compiled_matcher, search_with_progress,
 };
 
 const LINE_COUNT: usize = 240_000;
@@ -174,4 +174,79 @@ fn source_changes_never_publish_partial_search_results() {
 
     assert!(matches!(run, SearchRun::SourceChanged));
     assert!(search(&document, &query).is_err());
+}
+
+#[test]
+fn parallel_regex_matches_serial_and_combined_index_search() {
+    let (temporary, document) = large_document();
+    let serial_pool = ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+    let parallel_pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+    for (text, case_sensitive) in [
+        (r"\bmessage=target-token\s+completed$", true),
+        (r"\bREQUEST=\d+\s+MESSAGE=target-token", false),
+    ] {
+        for max_results in [None, Some(17)] {
+            let query = SearchQuery {
+                text: text.into(),
+                case_sensitive,
+                regex: true,
+                max_results,
+            };
+            let matcher = SearchMatcher::new(&query).unwrap();
+            let cancellation = SearchCancellation::default();
+            let expected = serial_pool.install(|| search(&document, &query)).unwrap();
+            let expected_rows = (0..LINE_COUNT)
+                .step_by(MATCH_INTERVAL)
+                .take(max_results.unwrap_or(usize::MAX))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                expected.line_indices.iter().collect::<Vec<_>>(),
+                expected_rows
+            );
+
+            // The same compiled matcher is also shared by concurrent file searches.
+            let results = parallel_pool.install(|| {
+                (0..2)
+                    .into_par_iter()
+                    .map(|_| {
+                        search_with_compiled_matcher(
+                            &document,
+                            matcher.as_ref(),
+                            max_results,
+                            &cancellation,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            });
+            for result in results {
+                let SearchRun::Completed(result) = result else {
+                    panic!("search should complete")
+                };
+                assert_eq!(result.line_indices, expected.line_indices);
+                assert_eq!(result.truncated, expected.truncated);
+            }
+
+            let (_, pending_cache, result) = parallel_pool
+                .install(|| {
+                    LogDocument::open_with_index_cache_and_search_cancellable(
+                        document.path(),
+                        temporary.0.join("regex-cache"),
+                        matcher.as_ref().unwrap(),
+                        max_results,
+                        &cancellation,
+                    )
+                })
+                .unwrap()
+                .unwrap();
+            assert!(
+                pending_cache.is_some(),
+                "exercise the combined uncached path"
+            );
+            let SearchRun::Completed(result) = result else {
+                panic!("search should complete")
+            };
+            assert_eq!(result.line_indices, expected.line_indices);
+            assert_eq!(result.truncated, expected.truncated);
+        }
+    }
 }

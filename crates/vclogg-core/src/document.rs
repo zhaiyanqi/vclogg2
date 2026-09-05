@@ -2578,55 +2578,58 @@ fn build_parallel_utf8_file_index_with_integrity(
     let block_count = file_size.div_ceil(APPEND_INTEGRITY_BLOCK_BYTES);
     let blocks = (0..block_count)
         .into_par_iter()
-        .map(|block_ix| -> Result<Option<ParallelIndexedBlock>> {
-            if is_cancelled() {
-                return Ok(None);
-            }
-            let block_start = block_ix.saturating_mul(APPEND_INTEGRITY_BLOCK_BYTES);
-            let block_len = (file_size - block_start).min(APPEND_INTEGRITY_BLOCK_BYTES);
-            let mut bytes = vec![0_u8; block_len];
-            read_file_exact_at(file, &mut bytes, block_start as u64)
-                .with_context(|| format!("建立索引时无法读取日志文件：{}", path.display()))?;
-            if is_cancelled() {
-                return Ok(None);
-            }
+        .map_init(
+            || search.map(|(matcher, _)| matcher.clone()),
+            |matcher, block_ix| -> Result<Option<ParallelIndexedBlock>> {
+                if is_cancelled() {
+                    return Ok(None);
+                }
+                let block_start = block_ix.saturating_mul(APPEND_INTEGRITY_BLOCK_BYTES);
+                let block_len = (file_size - block_start).min(APPEND_INTEGRITY_BLOCK_BYTES);
+                let mut bytes = vec![0_u8; block_len];
+                read_file_exact_at(file, &mut bytes, block_start as u64)
+                    .with_context(|| format!("建立索引时无法读取日志文件：{}", path.display()))?;
+                if is_cancelled() {
+                    return Ok(None);
+                }
 
-            let digest = Sha256::digest(&bytes).into();
-            let mut control_bytes = Vec::new();
-            for offset in memchr3_iter(b'\r', b'\n', b'\t', &bytes[..block_len]) {
-                let kind = match bytes[offset] {
-                    b'\r' => CONTROL_CR,
-                    b'\n' => CONTROL_LF,
-                    b'\t' => CONTROL_TAB,
-                    _ => unreachable!("memchr3 only returns requested control bytes"),
+                let digest = Sha256::digest(&bytes).into();
+                let mut control_bytes = Vec::new();
+                for offset in memchr3_iter(b'\r', b'\n', b'\t', &bytes[..block_len]) {
+                    let kind = match bytes[offset] {
+                        b'\r' => CONTROL_CR,
+                        b'\n' => CONTROL_LF,
+                        b'\t' => CONTROL_TAB,
+                        _ => unreachable!("memchr3 only returns requested control bytes"),
+                    };
+                    let offset = u32::try_from(offset)
+                        .expect("an integrity block offset always fits in u32");
+                    control_bytes.push((offset << CONTROL_KIND_BITS) | kind);
+                }
+                let matched_line_starts = match matcher.as_ref() {
+                    Some(matcher) => match_parallel_utf8_block_lines(
+                        file,
+                        file_size,
+                        block_start,
+                        block_len,
+                        &mut bytes,
+                        encoding,
+                        matcher,
+                        path,
+                        is_cancelled,
+                    )?,
+                    None => Some(Vec::new()),
                 };
-                let offset =
-                    u32::try_from(offset).expect("an integrity block offset always fits in u32");
-                control_bytes.push((offset << CONTROL_KIND_BITS) | kind);
-            }
-            let matched_line_starts = match search {
-                Some((matcher, _)) => match_parallel_utf8_block_lines(
-                    file,
-                    file_size,
-                    block_start,
-                    block_len,
-                    &mut bytes,
-                    encoding,
-                    matcher,
-                    path,
-                    is_cancelled,
-                )?,
-                None => Some(Vec::new()),
-            };
-            let Some(matched_line_starts) = matched_line_starts else {
-                return Ok(None);
-            };
-            Ok((!is_cancelled()).then_some(ParallelIndexedBlock {
-                control_bytes,
-                matched_line_starts,
-                digest,
-            }))
-        })
+                let Some(matched_line_starts) = matched_line_starts else {
+                    return Ok(None);
+                };
+                Ok((!is_cancelled()).then_some(ParallelIndexedBlock {
+                    control_bytes,
+                    matched_line_starts,
+                    digest,
+                }))
+            },
+        )
         .collect::<Result<Vec<_>>>()?;
     if blocks.iter().any(Option::is_none) || is_cancelled() {
         return Ok(None);

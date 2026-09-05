@@ -381,6 +381,10 @@ fn scan_search_chunk(
     progress: Option<&SearchProgress>,
     verify_integrity: bool,
 ) -> SearchChunkRun {
+    // Regex clones share the compiled program but own their execution cache.
+    // Keep one clone for the entire task, including single-chunk files scanned
+    // concurrently by the caller, rather than borrowing a shared cache per row.
+    let matcher = matcher.clone();
     let mut line_indices = RoaringTreemap::new();
     let mut truncated = false;
     let max_results_u64 = max_results.map(|limit| u64::try_from(limit).unwrap_or(u64::MAX));
