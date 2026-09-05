@@ -22,8 +22,8 @@ use gpui::{
     IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     ParentElement as _, PathPromptOptions, Pixels, Point, Render, ScrollHandle, ScrollStrategy,
     ScrollWheelEvent, SharedString, Size, StatefulInteractiveElement as _, Styled as _, StyledText,
-    Subscription, Task, TextStyle, UniformListScrollHandle, WeakEntity, Window, WindowId, canvas,
-    deferred, div, point, prelude::FluentBuilder as _, px, relative, rems, size, svg, uniform_list,
+    Subscription, Task, UniformListScrollHandle, WeakEntity, Window, WindowId, canvas, deferred,
+    div, point, prelude::FluentBuilder as _, px, relative, rems, size, svg, uniform_list,
 };
 use gpui_base::{
     GlobalState, POPUP_PRIORITY, Scrollbar, ScrollbarHandle, ScrollbarMode, TextSelection,
@@ -696,8 +696,6 @@ struct DocumentTab {
     // Document controls must stop notifying the workspace when their tab closes.
     _subscriptions: [Subscription; 3],
     search_revision: u64,
-    log_jump_revision: u64,
-    log_jump_task: Option<Task<()>>,
     result_replace_revision: u64,
     result_replace_task: Option<Task<()>>,
     result_replace_cancellation: Option<Arc<AtomicBool>>,
@@ -812,7 +810,7 @@ enum WrappedRegion {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum LogScrollFrameTarget {
     /// The fixed-height logical coordinate exposed by the scrollbar. Wrapped rows map this
-    /// coordinate to their measured physical height only when the prepared frame is committed.
+    /// coordinate to their measured physical height in the current frame.
     Scrollbar(Point<Pixels>),
     /// The physical viewport coordinate used by wheel and trackpad scrolling.
     Viewport(Point<Pixels>),
@@ -849,12 +847,6 @@ impl PendingLogScrollFrames {
     fn clear(&mut self, key: (u64, WrappedRegion)) {
         self.targets.remove(&key);
     }
-}
-
-#[derive(Clone, Copy)]
-struct WrappedFramePrimeOptions {
-    minimum_viewport_height: Pixels,
-    reset_for_mode_switch: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1032,18 +1024,14 @@ fn snap_to_device_pixels(value: Pixels, scale_factor: f32) -> Pixels {
     px((scaled.abs() - 0.5).ceil().copysign(scaled) / scale_factor)
 }
 
+#[cfg(test)]
 fn wrapped_viewport_measurement_range(
     first_visible: usize,
     viewport_height: Pixels,
     base_height: Pixels,
     count: usize,
 ) -> Range<usize> {
-    let visible_count = (viewport_height / base_height.max(px(1.))).ceil().max(1.) as usize;
-    first_visible.saturating_sub(2).min(count)
-        ..first_visible
-            .saturating_add(visible_count)
-            .saturating_add(2)
-            .min(count)
+    crate::virtual_log_list::viewport_read_range(first_visible, count, viewport_height, base_height)
 }
 
 fn scrollbar_preload_range(
@@ -1052,20 +1040,8 @@ fn scrollbar_preload_range(
     viewport_height: Pixels,
     row_height: Pixels,
 ) -> Range<usize> {
-    if row_count == 0 {
-        return 0..0;
-    }
-    let row_height = row_height.max(px(1.));
-    let max_top = (row_height * row_count as f32 - viewport_height).max(px(0.));
-    let top = (-offset.y).clamp(px(0.), max_top);
-    let first = (top / row_height).floor().max(0.) as usize;
-    let first = first.min(row_count.saturating_sub(1));
-    let visible_count = (viewport_height / row_height).ceil().max(1.) as usize;
-    first.saturating_sub(2)
-        ..first
-            .saturating_add(visible_count)
-            .saturating_add(2)
-            .min(row_count)
+    let first = ((-offset.y).max(px(0.)) / row_height.max(px(1.))).floor() as usize;
+    crate::virtual_log_list::viewport_read_range(first, row_count, viewport_height, row_height)
 }
 
 fn take_pending_log_scroll_target<K: Clone + Ord>(
@@ -1626,12 +1602,7 @@ pub struct Workspace {
     row_drag_bounds: BTreeMap<(u64, WrappedRegion), Bounds<Pixels>>,
     row_drag_selection: Option<RowDragSelection>,
     row_drag_frame_scheduled: bool,
-    visible_line_tasks: BTreeMap<(u64, WrappedRegion), Task<()>>,
     pending_log_scroll_frames: PendingLogScrollFrames,
-    scroll_frame_tasks: BTreeMap<(u64, WrappedRegion), Task<()>>,
-    scroll_frame_cancellations: BTreeMap<(u64, WrappedRegion), Arc<AtomicBool>>,
-    active_scroll_frames: BTreeMap<(u64, WrappedRegion), (u64, LogScrollFrameTarget)>,
-    next_scroll_frame_revision: u64,
     global_group_toggle_task: Option<Task<()>>,
     global_group_toggle_revision: u64,
     global_result_replace_task: Option<Task<()>>,
@@ -2219,12 +2190,7 @@ impl Workspace {
             row_drag_bounds: BTreeMap::new(),
             row_drag_selection: None,
             row_drag_frame_scheduled: false,
-            visible_line_tasks: BTreeMap::new(),
             pending_log_scroll_frames: PendingLogScrollFrames::default(),
-            scroll_frame_tasks: BTreeMap::new(),
-            scroll_frame_cancellations: BTreeMap::new(),
-            active_scroll_frames: BTreeMap::new(),
-            next_scroll_frame_revision: 0,
             global_group_toggle_task: None,
             global_group_toggle_revision: 0,
             global_result_replace_task: None,

@@ -484,158 +484,53 @@ impl Workspace {
         }
         let base_height = self.log_row_height();
         let horizontal_padding = log_cell_horizontal_padding(cx);
-        let text_width = (width - horizontal_padding * 2.).max(px(0.));
         let changed = match region {
             WrappedRegion::Log | WrappedRegion::Results => {
-                let Some(tab_ix) = self.documents.iter().position(|tab| tab.id == document_id)
-                else {
+                let Some(tab) = self.documents.iter().find(|tab| tab.id == document_id) else {
                     return;
                 };
-                let viewport = if region == WrappedRegion::Results {
-                    &self.documents[tab_ix].result_viewport
+                let (table, viewport) = if region == WrappedRegion::Results {
+                    (&tab.result_table, &tab.result_viewport)
                 } else {
-                    &self.documents[tab_ix].log_viewport
+                    (&tab.log_table, &tab.log_viewport)
                 };
                 if !viewport.is_wrapped() {
                     return;
                 }
-                let table = if region == WrappedRegion::Results {
-                    self.documents[tab_ix].result_table.clone()
-                } else {
-                    self.documents[tab_ix].log_table.clone()
-                };
-                let (count, font_size, font_family, key, preferred) = {
-                    let table = table.read(cx);
-                    let delegate = table.delegate();
-                    let font_size = delegate.log_font_size();
-                    let font_family = delegate.resolved_font_family(cx);
-                    (
-                        delegate.row_count(),
-                        font_size,
-                        font_family.clone(),
-                        Self::wrapped_layout_key(
-                            delegate.content_revision(),
-                            width,
-                            font_size,
-                            font_family,
-                            base_height,
-                            window.rem_size(),
-                            horizontal_padding,
-                        ),
-                        table.active_log_row(),
-                    )
-                };
-                let viewport = if region == WrappedRegion::Results {
-                    &self.documents[tab_ix].result_viewport
-                } else {
-                    &self.documents[tab_ix].log_viewport
-                };
-                let changed =
-                    viewport.invalidate_wrapped_layout_preserving_position(key, preferred);
-                viewport.wrapped_sizes(count, base_height);
-                let range = wrapped_viewport_measurement_range(
-                    viewport.wrapped_first_visible_row(),
-                    viewport_height,
-                    base_height,
-                    count,
-                );
-                let unknown_rows = range
-                    .filter(|row_ix| !viewport.has_known_wrapped_row_height(*row_ix))
-                    .collect::<Vec<_>>();
-                let rows = {
-                    let table = table.read(cx);
-                    unknown_rows
-                        .into_iter()
-                        .filter_map(|row_ix| {
-                            table
-                                .delegate()
-                                .wrapped_row(row_ix)
-                                .map(|row| (row_ix, row.text.display().clone()))
-                        })
-                        .collect::<Vec<_>>()
-                };
-                let heights = rows.into_iter().map(|(row_ix, line)| {
-                    (
-                        row_ix,
-                        Self::measure_wrapped_line_height(
-                            line,
-                            text_width,
-                            font_size,
-                            &font_family,
-                            base_height,
-                            window,
-                        ),
-                    )
-                });
-                viewport.prime_wrapped_measured_heights(count, base_height, heights);
-                changed
+                let table = table.read(cx);
+                let delegate = table.delegate();
+                viewport.invalidate_wrapped_layout_preserving_position(
+                    Self::wrapped_layout_key(
+                        delegate.content_revision(),
+                        width,
+                        delegate.log_font_size(),
+                        delegate.resolved_font_family(cx),
+                        base_height,
+                        window.rem_size(),
+                        horizontal_padding,
+                    ),
+                    table.active_log_row(),
+                )
             }
             WrappedRegion::GlobalResults => {
                 if !self.global_viewport.is_wrapped() {
                     return;
                 }
-                let (count, font_size, font_family, key, preferred) = {
-                    let table = self.global_table.read(cx);
-                    let delegate = table.delegate();
-                    let font_size = delegate.log_font_size();
-                    let font_family = delegate.resolved_font_family(cx);
-                    (
-                        delegate.rows_len(),
-                        font_size,
-                        font_family.clone(),
+                let table = self.global_table.read(cx);
+                let delegate = table.delegate();
+                self.global_viewport
+                    .invalidate_wrapped_layout_preserving_position(
                         Self::wrapped_layout_key(
                             delegate.content_revision(),
                             width,
-                            font_size,
-                            font_family,
+                            delegate.log_font_size(),
+                            delegate.resolved_font_family(cx),
                             base_height,
                             window.rem_size(),
                             horizontal_padding,
                         ),
                         table.active_log_row(),
                     )
-                };
-                let changed = self
-                    .global_viewport
-                    .invalidate_wrapped_layout_preserving_position(key, preferred);
-                self.global_viewport.wrapped_sizes(count, base_height);
-                let range = wrapped_viewport_measurement_range(
-                    self.global_viewport.wrapped_first_visible_row(),
-                    viewport_height,
-                    base_height,
-                    count,
-                );
-                let unknown_rows = range
-                    .filter(|row_ix| !self.global_viewport.has_known_wrapped_row_height(*row_ix))
-                    .collect::<Vec<_>>();
-                let rows = {
-                    let table = self.global_table.read(cx);
-                    unknown_rows
-                        .into_iter()
-                        .filter_map(|row_ix| match table.delegate().wrapped_row(row_ix)? {
-                            WrappedGlobalRow::Match { text, .. } => {
-                                Some((row_ix, text.display().clone()))
-                            }
-                            WrappedGlobalRow::Group { .. } => None,
-                        })
-                        .collect::<Vec<_>>()
-                };
-                let heights = rows.into_iter().map(|(row_ix, line)| {
-                    (
-                        row_ix,
-                        Self::measure_wrapped_line_height(
-                            line,
-                            text_width,
-                            font_size,
-                            &font_family,
-                            base_height,
-                            window,
-                        ),
-                    )
-                });
-                self.global_viewport
-                    .prime_wrapped_measured_heights(count, base_height, heights);
-                changed
             }
         };
         if changed && let Some(surface) = self.log_region_surface(document_id, region) {
@@ -768,9 +663,9 @@ impl Workspace {
             self.documents[tab_ix].log_table.clone()
         };
         table.update(cx, |table, _| {
-            table.set_visible_range(visible_range.clone())
+            table.set_visible_range(visible_range.clone());
+            table.delegate().load_visible_rows(visible_range.clone());
         });
-        self.schedule_local_visible_lines(document_id, region, visible_range.clone(), cx);
         let (
             show_line_numbers,
             show_row_separators,
@@ -826,7 +721,7 @@ impl Workspace {
             } else {
                 &self.documents[tab_ix].log_viewport
             };
-            wrapped.retain_wrapped_visible_rows(&visible_range);
+            wrapped.begin_row_layout();
             wrapped.wrapped_row_bounds()
         };
 
@@ -2390,9 +2285,9 @@ impl Workspace {
         let _performance_scope =
             crate::ui_performance::scope("Workspace::render_wrapped_global_rows");
         self.global_table.update(cx, |table, _| {
-            table.set_visible_range(visible_range.clone())
+            table.set_visible_range(visible_range.clone());
+            table.delegate().load_visible_rows(visible_range.clone());
         });
-        self.schedule_global_visible_lines(visible_range.clone(), cx);
         let (
             font_size,
             font_family,
@@ -2427,8 +2322,7 @@ impl Workspace {
         let suppress_text_selection = self.row_drag_selection.is_some_and(|drag| {
             drag.region == WrappedRegion::GlobalResults && drag.mode == RowDragMode::Lines
         });
-        self.global_viewport
-            .retain_wrapped_visible_rows(&visible_range);
+        self.global_viewport.begin_row_layout();
         let rendered_row_bounds = self.global_viewport.wrapped_row_bounds();
 
         visible_range
@@ -2753,47 +2647,14 @@ impl Workspace {
         document_id: u64,
         region: WrappedRegion,
         surface: Entity<LogRegionSurface>,
-        window: &Window,
+        _window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let _performance_scope =
             crate::ui_performance::scope("Workspace::render_log_region_surface");
-        let row_height = self.log_row_height();
+        self.apply_pending_log_scroll_target(document_id, region, self.log_row_height(), cx);
         if region == WrappedRegion::GlobalResults {
-            let key = (0, WrappedRegion::GlobalResults);
-            let target = if let Some(offset) = self.global_viewport.take_pending_scrollbar_offset()
-            {
-                self.pending_log_scroll_frames.clear(key);
-                Some(LogScrollFrameTarget::Scrollbar(offset))
-            } else {
-                self.pending_log_scroll_frames.take(key)
-            };
-            if let Some(target) = target {
-                self.prepare_global_scroll_frame(target, row_height, window, cx);
-            }
             return self.render_wrapped_global_table(surface, cx.weak_entity(), cx);
-        }
-        let Some(tab_ix) = self.documents.iter().position(|tab| tab.id == document_id) else {
-            return div().into_any_element();
-        };
-        let key = (document_id, region);
-        let pending_offset = if region == WrappedRegion::Results {
-            self.documents[tab_ix]
-                .result_viewport
-                .take_pending_scrollbar_offset()
-        } else {
-            self.documents[tab_ix]
-                .log_viewport
-                .take_pending_scrollbar_offset()
-        };
-        let target = if let Some(offset) = pending_offset {
-            self.pending_log_scroll_frames.clear(key);
-            Some(LogScrollFrameTarget::Scrollbar(offset))
-        } else {
-            self.pending_log_scroll_frames.take(key)
-        };
-        if let Some(target) = target {
-            self.prepare_local_scroll_frame(document_id, region, target, row_height, window, cx);
         }
         self.render_wrapped_log_table(document_id, region, surface, cx.weak_entity(), cx)
     }

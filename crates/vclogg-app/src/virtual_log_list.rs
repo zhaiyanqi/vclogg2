@@ -16,23 +16,33 @@ use gpui_base::ScrollbarHandle as _;
 use gpui_component::InteractiveElementExt as _;
 
 const DEFAULT_MEASURED_HEIGHT_LIMIT: usize = 4096;
-const DEFAULT_OVERSCAN_ROWS: usize = 2;
+
+/// At most one unwrapped screen, including a partially clipped row. The last window is
+/// filled backwards so layout can find the real bottom without reading the whole document.
+pub(crate) fn viewport_read_range(
+    first_row: usize,
+    item_count: usize,
+    viewport_height: Pixels,
+    base_height: Pixels,
+) -> Range<usize> {
+    let count = (viewport_height / base_height.max(px(1.))).ceil().max(1.) as usize + 1;
+    let start = first_row.min(item_count.saturating_sub(count));
+    start..start.saturating_add(count).min(item_count)
+}
 
 /// Data contract shared by local logs, projected local results, and global results.
 ///
 /// Rendering stays in the workspace presentation layer because it owns selection, focus, menus,
-/// and navigation. The delegate supplies the stable projection, visible-data request, sizing
-/// inputs, and row model consumed by that renderer.
+/// and navigation. The delegate supplies the stable projection, sizing inputs, and row model.
+/// The renderer synchronously loads its bounded source window before querying those models.
 pub(crate) trait VirtualLogListDelegate {
     type Key: Clone + Ord + 'static;
     type Row;
-    type VisibleRequest;
 
     fn row_count(&self) -> usize;
     fn stable_row_key(&self, row_ix: usize) -> Option<Self::Key>;
     fn minimum_row_height(&self) -> Pixels;
     fn row(&self, row_ix: usize) -> Option<Self::Row>;
-    fn request_visible_rows(&self, range: Range<usize>) -> Option<Self::VisibleRequest>;
     fn unwrapped_content_width(&self, cx: &App) -> Pixels;
 }
 
@@ -66,12 +76,12 @@ struct VirtualLogViewportInner<K> {
     viewport_bounds: Bounds<Pixels>,
     content_width: Pixels,
     horizontal_offset: Pixels,
+    synced_native_offset: Point<Pixels>,
     measured_heights: BTreeMap<K, Pixels>,
     measured_order: VecDeque<K>,
     indexed_heights: BTreeMap<usize, (Option<K>, Pixels)>,
     indexed_order: VecDeque<usize>,
     measured_height_limit: usize,
-    overscan_rows: usize,
 }
 
 impl<K> Default for VirtualLogViewportInner<K> {
@@ -87,12 +97,12 @@ impl<K> Default for VirtualLogViewportInner<K> {
             viewport_bounds: Bounds::default(),
             content_width: px(0.),
             horizontal_offset: px(0.),
+            synced_native_offset: Point::default(),
             measured_heights: BTreeMap::new(),
             measured_order: VecDeque::new(),
             indexed_heights: BTreeMap::new(),
             indexed_order: VecDeque::new(),
             measured_height_limit: DEFAULT_MEASURED_HEIGHT_LIMIT,
-            overscan_rows: DEFAULT_OVERSCAN_ROWS,
         }
     }
 }
@@ -215,6 +225,13 @@ impl<K: 'static> VirtualLogViewport<K> {
             Some(PendingScroll::RowAtViewportY { row_ix, viewport_y });
     }
 
+    pub(crate) fn preserve_row_at_viewport_y(&self, row_ix: usize, viewport_y: Pixels) {
+        self.inner
+            .borrow_mut()
+            .pending_scroll
+            .get_or_insert(PendingScroll::RowAtViewportY { row_ix, viewport_y });
+    }
+
     pub(crate) fn scroll_to_end(&self) {
         self.inner.borrow_mut().pending_scroll = Some(PendingScroll::End);
     }
@@ -236,6 +253,7 @@ impl<K: 'static> VirtualLogViewport<K> {
         indexed_height(&self.inner.borrow(), row_ix)
     }
 
+    #[cfg(test)]
     pub(crate) fn has_measured_height(&self, row_ix: usize) -> bool {
         self.inner.borrow().indexed_heights.contains_key(&row_ix)
     }
@@ -262,7 +280,6 @@ impl<K: 'static> VirtualLogViewport<K> {
             inner.indexed_order.push_back(row_ix);
             inner.indexed_heights.insert(row_ix, (None, height));
             evict_indexed_heights(&mut inner);
-            normalize_position(&mut inner);
         }
     }
 
@@ -303,8 +320,7 @@ impl<K: 'static> VirtualLogViewport<K> {
     }
 
     /// Computes a future logical scrollbar offset without mutating the committed viewport.
-    /// This lets the owner load the destination window off the UI thread and install the rows
-    /// together with the new position.
+    /// Input samples coalesce into the latest target; the next UI frame reads and lays it out.
     pub(crate) fn wheel_scroll_target(
         &self,
         current: Point<Pixels>,
@@ -313,6 +329,13 @@ impl<K: 'static> VirtualLogViewport<K> {
     ) -> Option<Point<Pixels>> {
         let inner = self.inner.borrow();
         if inner.item_count == 0 {
+            return None;
+        }
+        if inner.at_end
+            && current == self.offset()
+            && (pixel_delta.is_some_and(|delta| delta > px(0.))
+                || row_delta.is_some_and(|delta| delta > 0))
+        {
             return None;
         }
         let logical_top = (-current.y).max(px(0.));
@@ -332,6 +355,11 @@ impl<K: 'static> VirtualLogViewport<K> {
             let delta = pixel_delta.filter(|delta| *delta != px(0.))?;
             scroll_position_by_pixels(&inner, &mut position, delta)
         };
+        let bottom = bottom_position(&inner);
+        let at_end = at_end || position_is_after(position, bottom);
+        if at_end {
+            position = bottom;
+        }
         let target = point(
             current.x,
             -logical_top_for_position(&inner, position, at_end),
@@ -407,7 +435,6 @@ impl<K: 'static> VirtualLogViewport<K> {
         evict_indexed_heights(&mut inner);
         inner.visible_range = visible_range;
         inner.viewport_bounds = bounds;
-        normalize_position(&mut inner);
     }
 
     fn update_frame(
@@ -437,6 +464,11 @@ impl<K: 'static> VirtualLogViewport<K> {
         self.inner.borrow_mut().pending_scroll.take()
     }
 
+    pub(crate) fn read_range(&self, viewport_height: Pixels) -> Range<usize> {
+        let pending = self.inner.borrow().pending_scroll;
+        self.candidate_range(pending, viewport_height)
+    }
+
     fn candidate_range(
         &self,
         pending: Option<PendingScroll>,
@@ -449,9 +481,6 @@ impl<K: 'static> VirtualLogViewport<K> {
         let visible_slots = (viewport_height / inner.base_height.max(px(1.)))
             .ceil()
             .max(1.) as usize;
-        let candidate_count = visible_slots
-            .saturating_add(inner.overscan_rows.saturating_mul(2))
-            .max(1);
         let target = match pending {
             Some(PendingScroll::Row { row_ix, .. })
             | Some(PendingScroll::RowAtViewportY { row_ix, .. }) => {
@@ -464,28 +493,44 @@ impl<K: 'static> VirtualLogViewport<K> {
             Some(PendingScroll::Row {
                 strategy: ScrollStrategy::Center,
                 ..
-            }) => target.saturating_sub(candidate_count / 2),
+            }) => target.saturating_sub(visible_slots / 2),
             Some(PendingScroll::Row {
                 strategy: ScrollStrategy::Bottom,
                 ..
             })
-            | Some(PendingScroll::End) => target.saturating_sub(candidate_count - 1),
+            | Some(PendingScroll::End) => target.saturating_sub(visible_slots),
             Some(PendingScroll::RowAtViewportY { viewport_y, .. }) if viewport_y > px(0.) => {
                 let rows_before = (viewport_y / inner.base_height).ceil().max(0.) as usize;
-                target.saturating_sub(rows_before.saturating_add(inner.overscan_rows))
+                target.saturating_sub(rows_before)
             }
-            _ => target.saturating_sub(inner.overscan_rows),
+            _ => target,
         };
-        start..start.saturating_add(candidate_count).min(inner.item_count)
+        viewport_read_range(start, inner.item_count, viewport_height, inner.base_height)
     }
 
     fn sync_native_scroll(&self) {
-        let expected = self.offset();
         let native = self.native_scroll.offset();
-        if (expected.x - native.x).abs() >= px(0.5) || (expected.y - native.y).abs() >= px(0.5) {
-            self.set_offset(native);
+        let (synced, has_pending_scroll) = {
+            let inner = self.inner.borrow();
+            (inner.synced_native_offset, inner.pending_scroll.is_some())
+        };
+        // Geometry changes alter the logical offset without scrolling the native handle.
+        // Only a change since our last write is input, and explicit navigation wins over it.
+        if !has_pending_scroll {
+            if (synced.x - native.x).abs() >= px(0.5) {
+                self.set_horizontal_offset((-native.x).max(px(0.)));
+            }
+            if (synced.y - native.y).abs() >= px(0.5) {
+                self.set_logical_top((-native.y).max(px(0.)));
+            }
         }
-        self.native_scroll.set_offset(self.offset());
+        self.publish_native_scroll();
+    }
+
+    pub(crate) fn publish_native_scroll(&self) {
+        let offset = self.offset();
+        self.native_scroll.set_offset(offset);
+        self.inner.borrow_mut().synced_native_offset = offset;
     }
 
     fn set_logical_top(&self, top: Pixels) {
@@ -507,17 +552,11 @@ fn position_for_logical_top<K>(
     if inner.item_count == 0 {
         return (VirtualLogListPosition::default(), false);
     }
-    let distance = inner.base_height * inner.item_count as f32;
+    let bottom = bottom_position(inner);
+    let distance = logical_top_for_position(inner, bottom, false);
     let top = top.clamp(px(0.), distance.max(px(0.)));
     if top >= distance - px(0.5) {
-        let row_ix = inner.item_count - 1;
-        return (
-            VirtualLogListPosition {
-                row_ix,
-                offset_in_row: indexed_height(inner, row_ix),
-            },
-            true,
-        );
+        return (bottom, true);
     }
     let row_ix = ((top / inner.base_height).floor().max(0.) as usize).min(inner.item_count - 1);
     let fraction = ((top - inner.base_height * row_ix as f32) / inner.base_height).clamp(0., 1.);
@@ -538,9 +577,11 @@ fn logical_top_for_position<K>(
     if inner.item_count == 0 {
         return px(0.);
     }
-    if at_end {
-        return inner.base_height * inner.item_count as f32;
-    }
+    let position = if at_end {
+        bottom_position(inner)
+    } else {
+        position
+    };
     let row_ix = position.row_ix.min(inner.item_count - 1);
     let height = indexed_height(inner, row_ix);
     let fraction = if height > px(0.) {
@@ -549,6 +590,26 @@ fn logical_top_for_position<K>(
         0.
     };
     inner.base_height * row_ix as f32 + inner.base_height * fraction
+}
+
+fn position_is_after(position: VirtualLogListPosition, other: VirtualLogListPosition) -> bool {
+    position.row_ix > other.row_ix
+        || (position.row_ix == other.row_ix && position.offset_in_row >= other.offset_in_row)
+}
+
+fn bottom_position<K>(inner: &VirtualLogViewportInner<K>) -> VirtualLogListPosition {
+    let mut remaining = inner.viewport_bounds.size.height.max(px(0.));
+    for row_ix in (0..inner.item_count).rev() {
+        let height = indexed_height(inner, row_ix);
+        if remaining <= height {
+            return VirtualLogListPosition {
+                row_ix,
+                offset_in_row: height - remaining,
+            };
+        }
+        remaining -= height;
+    }
+    VirtualLogListPosition::default()
 }
 
 fn scroll_position_by_pixels<K>(
@@ -687,7 +748,7 @@ impl<K: 'static> gpui_base::ScrollbarHandle for VirtualLogListScrollHandle<K> {
         size(
             inner.content_width.max(inner.viewport_bounds.size.width),
             inner.viewport_bounds.size.height
-                + inner.base_height.max(px(1.)) * inner.item_count as f32,
+                + logical_top_for_position(&inner, bottom_position(&inner), false),
         )
     }
 }
@@ -943,15 +1004,20 @@ impl<K: Clone + Ord + 'static> Element for VirtualLogList<K> {
         let candidate_range = self
             .viewport
             .candidate_range(pending, content_bounds.size.height);
-        let mut rows = (self.render_rows)(candidate_range.clone(), window, cx);
+        let rows = (self.render_rows)(candidate_range.clone(), window, cx);
         let available_space = size(
             AvailableSpace::Definite(content_bounds.size.width),
             AvailableSpace::MinContent,
         );
-        let mut measured = Vec::with_capacity(rows.len());
-        for mut row in rows.drain(..) {
-            let measured_size = row.element.layout_as_root(available_space, window, cx);
-            measured.push((row.row_ix, row.key, row.element, measured_size));
+        let mut measured = Vec::with_capacity(candidate_range.len());
+        for VirtualLogRow {
+            row_ix,
+            key,
+            mut element,
+        } in rows
+        {
+            let measured_size = element.layout_as_root(available_space, window, cx);
+            measured.push((row_ix, key, element, measured_size));
         }
 
         let (position, at_end) = resolve_position(
@@ -982,8 +1048,8 @@ impl<K: Clone + Ord + 'static> Element for VirtualLogList<K> {
                     {
                         first_visible.get_or_insert(*row_ix);
                         last_visible = row_ix.saturating_add(1);
+                        row.prepaint_at(origin, window, cx);
                     }
-                    row.prepaint_at(origin, window, cx);
                     y += measured_size.height;
                     self.viewport.record_layout(
                         *row_ix,
@@ -998,10 +1064,9 @@ impl<K: Clone + Ord + 'static> Element for VirtualLogList<K> {
 
         let visible_range = first_visible.unwrap_or(candidate_range.start)..last_visible;
         self.viewport
-            .update_frame(position, at_end, visible_range, content_bounds);
-        self.viewport
-            .native_scroll
-            .set_offset(self.viewport.offset());
+            .update_frame(position, at_end, visible_range.clone(), content_bounds);
+        self.viewport.publish_native_scroll();
+        measured.retain(|(row_ix, _, _, _)| visible_range.contains(row_ix));
         frame.rows = measured;
 
         let logical_content_size = self.viewport.content_size();
@@ -1077,13 +1142,13 @@ fn resolve_position<K>(
             .unwrap_or(px(1.))
     };
 
-    let (desired_top, at_end) = match pending {
-        Some(PendingScroll::End) => ((total_height - viewport_height).max(px(0.)), true),
+    let desired_top = match pending {
+        Some(PendingScroll::End) => (total_height - viewport_height).max(px(0.)),
         Some(PendingScroll::Row { row_ix, strategy }) => {
             let row_ix = row_ix.clamp(first_ix, last_ix);
             let top = height_before(row_ix);
             let height = target_height(row_ix);
-            let desired = match strategy {
+            match strategy {
                 ScrollStrategy::Top => top,
                 ScrollStrategy::Center => top + height / 2. - viewport_height / 2.,
                 ScrollStrategy::Bottom => top + height - viewport_height,
@@ -1096,26 +1161,33 @@ fn resolve_position<K>(
                         height_before(current.row_ix) + current.offset_in_row
                     }
                 }
-            };
-            (
-                desired.clamp(px(0.), (total_height - viewport_height).max(px(0.))),
-                false,
-            )
+            }
         }
         Some(PendingScroll::RowAtViewportY { row_ix, viewport_y }) => {
             let row_ix = row_ix.clamp(first_ix, last_ix);
-            let desired = height_before(row_ix) - viewport_y;
-            (
-                desired.clamp(px(0.), (total_height - viewport_height).max(px(0.))),
-                false,
-            )
+            // A collapsed wrapped row may be shorter than its old clipped portion.
+            // Keep that source row at the top instead of skipping to subsequent rows.
+            let viewport_y = if -viewport_y >= target_height(row_ix) {
+                px(0.)
+            } else {
+                viewport_y
+            };
+            height_before(row_ix) - viewport_y
         }
         None => {
             let current_row = current.row_ix.clamp(first_ix, last_ix);
-            (height_before(current_row) + current.offset_in_row, false)
+            height_before(current_row) + current.offset_in_row
         }
     };
-
+    // The read window is not the document. Clamp to its bottom only when it contains EOF.
+    let max_top = (total_height - viewport_height).max(px(0.));
+    let reaches_end = last_ix.saturating_add(1) == item_count;
+    let desired_top = if reaches_end {
+        desired_top.clamp(px(0.), max_top)
+    } else {
+        desired_top.max(px(0.))
+    };
+    let at_end = reaches_end && desired_top >= max_top;
     let mut remaining = desired_top;
     for (row_ix, _, _, size) in rows {
         if remaining < size.height || *row_ix == last_ix {

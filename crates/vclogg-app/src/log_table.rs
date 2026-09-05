@@ -8,9 +8,9 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, AppContext as _, Bounds, Context, Div, HighlightStyle, Hsla, IntoElement,
-    ParentElement as _, Pixels, SharedString, Styled as _, Task, div, linear_color_stop,
-    linear_gradient, prelude::FluentBuilder as _, px,
+    AnyElement, App, Bounds, Context, Div, HighlightStyle, Hsla, IntoElement, ParentElement as _,
+    Pixels, SharedString, Styled as _, div, linear_color_stop, linear_gradient,
+    prelude::FluentBuilder as _, px,
 };
 use gpui_component::{ActiveTheme as _, h_flex, theme::try_parse_color};
 use vclogg_core::{CompressedRows, LinePreviewReader, LogDocument, SearchMatcher};
@@ -235,13 +235,6 @@ pub(crate) trait LogTableCursor {
 
 pub(crate) trait LogTableRows {
     fn reset_visible_log_row_owner(&mut self);
-
-    fn schedule_visible_log_rows(
-        &mut self,
-        visible_range: Range<usize>,
-        cx: &mut Context<VirtualLogListState<Self, LogRowKey>>,
-    ) where
-        Self: Sized + 'static;
 }
 
 pub(crate) trait VirtualLogListStateExt {
@@ -255,7 +248,7 @@ pub(crate) trait VirtualLogListStateExt {
     fn refresh_log_rows(&mut self, cx: &mut Context<Self>)
     where
         Self: Sized;
-    /// Reacquires the unchanged visible window and invalidates its view in the same entity update.
+    /// Invalidates the window; the next list frame synchronously reacquires its visible rows.
     fn reacquire_visible_log_rows(&mut self, cx: &mut Context<Self>)
     where
         Self: Sized;
@@ -287,17 +280,11 @@ where
     }
 
     fn refresh_log_rows(&mut self, cx: &mut Context<Self>) {
-        let visible_range = self.visible_range().rows().clone();
-        self.delegate_mut()
-            .schedule_visible_log_rows(visible_range, cx);
         self.refresh(cx);
     }
 
     fn reacquire_visible_log_rows(&mut self, cx: &mut Context<Self>) {
-        let visible_range = self.visible_range().rows().clone();
-        let delegate = self.delegate_mut();
-        delegate.reset_visible_log_row_owner();
-        delegate.schedule_visible_log_rows(visible_range, cx);
+        self.delegate_mut().reset_visible_log_row_owner();
         self.refresh(cx);
         cx.notify();
     }
@@ -647,7 +634,6 @@ pub struct LogTableDelegate {
     source: LogRowSource,
     presenter: LogRowPresenter,
     interaction: LogInteractionState,
-    visible_line_task: Option<Task<()>>,
 }
 
 struct LogRowSource {
@@ -914,7 +900,6 @@ impl LogTableDelegate {
                 crate::tr!("文件中没有日志行", "The file has no log lines").into(),
             ),
             interaction: LogInteractionState::default(),
-            visible_line_task: None,
         }
     }
 
@@ -933,7 +918,6 @@ impl LogTableDelegate {
                 crate::tr!("没有匹配的日志行", "No log lines match").into(),
             ),
             interaction: LogInteractionState::default(),
-            visible_line_task: None,
         }
     }
 
@@ -991,9 +975,6 @@ impl LogTableDelegate {
             .and_then(|value| try_parse_color(value).ok());
         self.presenter.show_line_number_row_separators = settings.show_line_number_row_separators;
         self.presenter.log_level_rules = resolve_log_level_rules(&settings.log_level_color_rules);
-        self.source
-            .visible_lines
-            .set_overscan(usize::from(settings.viewer_overscan.clamp(4, 40)));
     }
 
     pub fn set_word_boundary_characters(&mut self, characters: impl Into<SharedString>) {
@@ -1236,39 +1217,23 @@ impl LogTableDelegate {
     }
 
     pub(crate) fn reset_visible_line_owner(&mut self) {
-        self.visible_line_task = None;
         self.source.visible_lines.invalidate_window();
     }
 
     pub(crate) fn clear_visible_lines(&mut self) {
-        self.visible_line_task = None;
         self.source.visible_lines.clear();
     }
 
-    fn schedule_visible_rows(
-        &mut self,
-        visible_range: Range<usize>,
-        cx: &mut Context<VirtualLogListState<Self, LogRowKey>>,
-    ) {
+    /// Called by the list during prepaint, on the UI thread, before constructing its rows.
+    pub(crate) fn load_visible_rows(&self, visible_range: Range<usize>) {
         let Some(request) = self.request_visible_rows(visible_range) else {
             return;
         };
         let document = self.visible_document();
-        self.visible_line_task = Some(cx.spawn(async move |table, cx| {
-            let loaded = cx
-                .background_spawn(async move {
-                    let mut reader = LinePreviewReader::default();
-                    request.load(|source_row, max_bytes| {
-                        reader.line_preview(&document, *source_row, max_bytes)
-                    })
-                })
-                .await;
-            _ = table.update(cx, |table, cx| {
-                if table.delegate().install_visible_lines(loaded) {
-                    cx.notify();
-                }
-            });
-        }));
+        let mut reader = LinePreviewReader::for_viewport();
+        let loaded = request
+            .load(|source_row, max_bytes| reader.line_preview(&document, *source_row, max_bytes));
+        self.install_visible_lines(loaded);
     }
 
     fn row_presentation(&self, source_row: usize) -> Option<LogRowPresentation> {
@@ -1472,7 +1437,6 @@ impl LogTableDelegate {
 impl VirtualLogListDelegate for LogTableDelegate {
     type Key = LogRowKey;
     type Row = WrappedLogRow;
-    type VisibleRequest = VisibleLineLoadRequest<usize>;
 
     fn row_count(&self) -> usize {
         LogTableDelegate::row_count(self)
@@ -1491,10 +1455,6 @@ impl VirtualLogListDelegate for LogTableDelegate {
 
     fn row(&self, row_ix: usize) -> Option<Self::Row> {
         self.wrapped_row(row_ix)
-    }
-
-    fn request_visible_rows(&self, range: Range<usize>) -> Option<Self::VisibleRequest> {
-        LogTableDelegate::request_visible_rows(self, range)
     }
 
     fn unwrapped_content_width(&self, cx: &App) -> Pixels {
@@ -1534,14 +1494,6 @@ impl LogTableCursor for LogTableDelegate {
 impl LogTableRows for LogTableDelegate {
     fn reset_visible_log_row_owner(&mut self) {
         self.reset_visible_line_owner();
-    }
-
-    fn schedule_visible_log_rows(
-        &mut self,
-        visible_range: Range<usize>,
-        cx: &mut Context<VirtualLogListState<Self, LogRowKey>>,
-    ) {
-        self.schedule_visible_rows(visible_range, cx);
     }
 }
 

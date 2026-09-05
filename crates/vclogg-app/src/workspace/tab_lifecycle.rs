@@ -34,36 +34,15 @@ impl Workspace {
             })
             .copied();
         let row_height = self.log_row_height();
-        if viewport.is_wrapped() {
-            let viewport_height = viewport
-                .wrapped_viewport_height()
-                .max(bounds.map_or(px(0.), |bounds| bounds.size.height))
-                .max(window.viewport_size().height);
-            return wrapped_viewport_measurement_range(
-                viewport.wrapped_first_visible_row(),
-                viewport_height,
-                row_height,
-                row_count,
-            );
-        }
-
-        let visible_range = table.read(cx).visible_range().rows().clone();
-        let first_visible = viewport.first_visible(row_count, row_height);
-        let viewport_height = bounds
-            .map_or(px(0.), |bounds| bounds.size.height)
-            .max(window.viewport_size().height);
-        let visible_count = (viewport_height / row_height.max(px(1.))).ceil().max(1.) as usize;
-        let visible_start = visible_range.start.min(row_count);
-        let visible_end = visible_range.end.min(row_count);
-        let preload_end = first_visible.saturating_add(visible_count).min(row_count);
-        if visible_start < visible_end
-            && visible_start <= preload_end
-            && first_visible <= visible_end
-        {
-            visible_start.min(first_visible)..visible_end.max(preload_end)
+        let viewport_height = viewport
+            .committed_viewport_height()
+            .max(bounds.map_or(px(0.), |bounds| bounds.size.height));
+        let viewport_height = if viewport_height > px(0.) {
+            viewport_height
         } else {
-            first_visible..preload_end
-        }
+            window.viewport_size().height
+        };
+        viewport.requested_row_range(row_count, viewport_height, row_height)
     }
 
     pub(super) fn commit_workspace_tab_activation(
@@ -173,11 +152,6 @@ impl Workspace {
             self.tab_frame_visible_range(tab_ix, WrappedRegion::Log, window, cx)
         };
         let result_range = self.tab_frame_visible_range(tab_ix, WrappedRegion::Results, window, cx);
-        if log_jump.is_some() {
-            let tab = &mut self.documents[tab_ix];
-            tab.log_jump_revision = tab.log_jump_revision.saturating_add(1);
-            tab.log_jump_task.take();
-        }
         let tab = &self.documents[tab_ix];
         let document_id = tab.id;
         let document = tab.document.clone();
@@ -616,8 +590,6 @@ impl Workspace {
         self.documents.retain(|tab| !document_ids.contains(&tab.id));
         self.row_drag_bounds
             .retain(|(tab_id, _), _| !document_ids.contains(tab_id));
-        self.visible_line_tasks
-            .retain(|(document_id, _), _| *document_id == 0 || !document_ids.contains(document_id));
         for document_id in &document_ids {
             self.invalidate_log_scroll_frame((*document_id, WrappedRegion::Log));
             self.invalidate_log_scroll_frame((*document_id, WrappedRegion::Results));

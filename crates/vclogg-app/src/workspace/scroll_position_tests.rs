@@ -189,11 +189,11 @@ fn hit_testing_uses_the_single_visible_geometry_map() {
 fn scrollbar_preload_is_derived_directly_from_the_logical_row_slot() {
     assert_eq!(
         scrollbar_preload_range(point(px(0.), px(-800.)), 100, px(200.), px(20.)),
-        38..52
+        40..51
     );
     assert_eq!(
         scrollbar_preload_range(point(px(0.), px(-20_000.)), 100, px(200.), px(20.)),
-        88..100
+        89..100
     );
 }
 
@@ -201,11 +201,11 @@ fn scrollbar_preload_is_derived_directly_from_the_logical_row_slot() {
 fn candidate_measurement_range_is_bounded_around_the_anchor() {
     assert_eq!(
         wrapped_viewport_measurement_range(40, px(200.), px(20.), 100),
-        38..52
+        40..51
     );
     assert_eq!(
         wrapped_viewport_measurement_range(8_000_000, px(200.), px(20.), 10_000_000),
-        7_999_998..8_000_012
+        8_000_000..8_000_011
     );
 }
 

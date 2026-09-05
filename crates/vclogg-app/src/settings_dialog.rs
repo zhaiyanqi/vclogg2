@@ -457,7 +457,6 @@ pub struct SettingsDialog {
     dark_log_colors: LogColorDraft,
     scroll_percent: Entity<SliderState>,
     scroll_lines: Entity<SliderState>,
-    viewer_overscan: Entity<SliderState>,
     max_search_results: Entity<InputState>,
     word_boundary_characters: Entity<InputState>,
     open_directory_command: Entity<InputState>,
@@ -723,13 +722,6 @@ impl SettingsDialog {
                 .step(1.)
                 .default_value(settings.mouse_wheel_scroll_lines as f32)
         });
-        let viewer_overscan = cx.new(|_| {
-            SliderState::new()
-                .min(4.)
-                .max(40.)
-                .step(1.)
-                .default_value(settings.viewer_overscan.clamp(4, 40) as f32)
-        });
         let max_search_results = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("0")
@@ -873,9 +865,6 @@ impl SettingsDialog {
         subscriptions.push(cx.subscribe(&scroll_lines, |_, _, _: &SliderEvent, cx| {
             SettingsDialog::draft_changed(cx)
         }));
-        subscriptions.push(cx.subscribe(&viewer_overscan, |_, _, _: &SliderEvent, cx| {
-            SettingsDialog::draft_changed(cx)
-        }));
         subscriptions.push(
             cx.subscribe(&max_search_results, |_, _, _: &InputEvent, cx| {
                 SettingsDialog::draft_changed(cx)
@@ -947,7 +936,6 @@ impl SettingsDialog {
             },
             scroll_percent,
             scroll_lines,
-            viewer_overscan,
             max_search_results,
             word_boundary_characters,
             open_directory_command,
@@ -1048,7 +1036,6 @@ impl SettingsDialog {
             self.scroll_percent.read(cx).value().start().round() as u16;
         settings.mouse_wheel_scroll_lines =
             self.scroll_lines.read(cx).value().start().round() as u16;
-        settings.viewer_overscan = self.viewer_overscan.read(cx).value().start().round() as u16;
         let max_search_results = self.max_search_results.read(cx).value();
         settings.max_search_results = max_search_results.trim().parse::<u32>().map_err(|_| {
             crate::tr!(
@@ -2036,7 +2023,6 @@ impl Render for SettingsDialog {
         };
         let scroll_percent = self.scroll_percent.read(cx).value().start().round() as u16;
         let scroll_lines = self.scroll_lines.read(cx).value().start().round() as u16;
-        let viewer_overscan = self.viewer_overscan.read(cx).value().start().round() as u16;
         let cache_available = self.cache_dir.is_some();
         let cache_summary = self.cache_info.as_ref().map_or_else(
             || {
@@ -3218,41 +3204,6 @@ impl Render for SettingsDialog {
                                     .id("settings-word-boundary-characters")
                                     .w_72()
                                     .child(Input::new(&self.word_boundary_characters).w_full()),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .justify_between()
-                            .gap_4()
-                            .child(
-                                v_flex()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .child(crate::tr!("相邻行预读取", "Adjacent-line read-ahead")),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(
-                                                crate::tr!("可见区域上下额外预读取并解码 4–40 行，组件仍只绘制当前虚拟范围。", "Read and decode 4–40 extra lines above and below the visible area while rendering only the current virtual range."),
-                                            ),
-                                    ),
-                            )
-                            .child(
-                                h_flex()
-                                    .w_56()
-                                    .gap_3()
-                                    .child(Slider::new(&self.viewer_overscan).flex_1())
-                                    .child(
-                                        div()
-                                            .w_10()
-                                            .text_right()
-                                            .text_sm()
-                                            .child(viewer_overscan.to_string()),
-                                    ),
                             ),
                     )
                     .child(

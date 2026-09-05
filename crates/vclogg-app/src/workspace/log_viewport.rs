@@ -139,18 +139,14 @@ impl<K: Clone + Ord> LogViewportState<K> {
         }
     }
 
-    pub(super) fn prospective_wrapped_measurement_range(
+    pub(super) fn requested_row_range(
         &self,
         row_count: usize,
         viewport_height: Pixels,
         row_height: Pixels,
     ) -> Range<usize> {
-        wrapped_viewport_measurement_range(
-            self.first_visible(row_count, row_height),
-            viewport_height,
-            row_height,
-            row_count,
-        )
+        self.viewport.set_item_count(row_count, row_height);
+        self.viewport.read_range(viewport_height)
     }
 
     pub(super) fn row_at_position(&self, position: Point<Pixels>) -> Option<usize> {
@@ -285,16 +281,6 @@ impl<K: Clone + Ord> LogViewportState<K> {
         target.offset()
     }
 
-    pub(super) fn scroll_frame_preload_range(
-        &self,
-        target: LogScrollFrameTarget,
-        row_count: usize,
-        viewport_height: Pixels,
-        row_height: Pixels,
-    ) -> Range<usize> {
-        scrollbar_preload_range(target.offset(), row_count, viewport_height, row_height)
-    }
-
     pub(super) fn commit_scroll_frame_target(
         &self,
         target: LogScrollFrameTarget,
@@ -303,15 +289,14 @@ impl<K: Clone + Ord> LogViewportState<K> {
     ) {
         self.viewport.set_item_count(item_count, slot_height);
         self.viewport.set_offset(target.offset());
-        self.viewport
-            .native_scroll_handle()
-            .set_offset(self.viewport.offset());
+        self.viewport.publish_native_scroll();
     }
 
     pub(super) fn effective_row_height(&self, row_ix: usize, base_height: Pixels) -> Pixels {
         self.viewport.row_height(row_ix).max(base_height)
     }
 
+    #[cfg(test)]
     pub(super) fn has_known_wrapped_row_height(&self, row_ix: usize) -> bool {
         self.viewport.has_measured_height(row_ix)
     }
@@ -362,14 +347,6 @@ impl<K: Clone + Ord> LogViewportState<K> {
         self.row_bounds.borrow_mut().clear();
     }
 
-    pub(super) fn reset_wrapped_scroll_for_mode_switch(&mut self) {
-        self.pending_scrollbar_offset.set(None);
-    }
-
-    pub(super) fn wrapped_layout_width(&self) -> Option<Pixels> {
-        self.layout_key.borrow().as_ref().map(|key| key.width)
-    }
-
     pub(super) fn capture_wrapped_viewport_position(
         &self,
         preferred_row: Option<usize>,
@@ -382,7 +359,13 @@ impl<K: Clone + Ord> LogViewportState<K> {
     }
 
     pub(super) fn ensure_wrapped_measurement_anchor(&self, preferred_row: Option<usize>) {
-        let _ = preferred_row;
+        let Some(position) = self.capture_wrapped_viewport_position(preferred_row) else {
+            return;
+        };
+        if !self.is_at_end() || preferred_row == Some(position.row_ix) {
+            self.viewport
+                .preserve_row_at_viewport_y(position.row_ix, position.viewport_y);
+        }
     }
 
     pub(super) fn invalidate_wrapped_layout_preserving_position(
@@ -390,7 +373,6 @@ impl<K: Clone + Ord> LogViewportState<K> {
         key: WrappedLayoutKey,
         preferred_row: Option<usize>,
     ) -> bool {
-        let _ = preferred_row;
         if key.width <= px(0.)
             || self
                 .layout_key
@@ -400,6 +382,7 @@ impl<K: Clone + Ord> LogViewportState<K> {
         {
             return false;
         }
+        self.ensure_wrapped_measurement_anchor(preferred_row);
         self.layout_key.replace(Some(key));
         self.viewport.invalidate_measurements();
         self.text_selections.borrow_mut().clear();
@@ -407,14 +390,9 @@ impl<K: Clone + Ord> LogViewportState<K> {
         true
     }
 
-    pub(super) fn retain_wrapped_visible_rows(&self, visible_range: &Range<usize>) {
-        self.row_bounds
-            .borrow_mut()
-            .retain(|row_ix, _| visible_range.contains(row_ix));
-    }
-
-    pub(super) fn wrapped_first_visible_row(&self) -> usize {
-        self.viewport.position().row_ix
+    pub(super) fn begin_row_layout(&self) {
+        // Only rows prepainted in this frame may participate in hit testing and anchoring.
+        self.row_bounds.borrow_mut().clear();
     }
 }
 

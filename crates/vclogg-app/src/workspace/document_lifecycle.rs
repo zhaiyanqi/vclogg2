@@ -515,8 +515,6 @@ impl Workspace {
                         this.log_viewer.focus_handle.focus(window, cx);
                     }
                     if let Some(tab) = this.documents.iter_mut().find(|tab| tab.id == document_id) {
-                        tab.log_jump_revision = tab.log_jump_revision.saturating_add(1);
-                        tab.log_jump_task.take();
                         tab.view.pending_restore_row = None;
                         tab.view.selection_table = SelectionTable::Log;
                         if source_row.is_some_and(|row| row + 1 < tab.document.source_line_count())
@@ -541,12 +539,6 @@ impl Workspace {
                             }
                             table.read(cx).delegate().clear_row_selection();
                             table.read(cx).delegate().set_active_log_row(None);
-                            if let Some(tab) =
-                                this.documents.iter_mut().find(|tab| tab.id == document_id)
-                            {
-                                tab.log_jump_revision = tab.log_jump_revision.saturating_add(1);
-                                tab.log_jump_task.take();
-                            }
                             this.schedule_checkpoint(document_id, window, cx);
                             return;
                         }
@@ -700,8 +692,6 @@ impl Workspace {
                     result_mode_subscription,
                 ],
                 search_revision: 0,
-                log_jump_revision: 0,
-                log_jump_task: None,
                 result_replace_revision: 0,
                 result_replace_task: None,
                 result_replace_cancellation: None,
@@ -1589,8 +1579,6 @@ impl Workspace {
         }
         tab.result_replace_task.take();
         tab.result_replace_revision = tab.result_replace_revision.saturating_add(1);
-        tab.log_jump_revision = tab.log_jump_revision.saturating_add(1);
-        tab.log_jump_task.take();
         tab.document = plan.document;
         tab.search_query.text = plan.query.text;
         tab.search_query.max_results = search_result_limit;

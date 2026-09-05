@@ -110,6 +110,7 @@ impl<K> StagedVisibleLineLoadRequest<K> {
         &self.keys
     }
 
+    #[cfg(test)]
     pub(crate) fn requires_source_load(&self) -> bool {
         !self.keys.is_empty()
     }
@@ -215,7 +216,7 @@ impl<K> Default for VisibleLineStore<K> {
             prepared_keys: RefCell::default(),
             prepared_priority: RefCell::default(),
             window: Cell::default(),
-            overscan: Cell::new(12),
+            overscan: Cell::new(0),
             max_line_source_bytes: Cell::new(DEFAULT_MAX_LINE_SOURCE_BYTES),
             max_cache_retained_bytes: Cell::new(DEFAULT_MAX_CACHE_RETAINED_BYTES),
             revision: Cell::new(1),
@@ -308,6 +309,7 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn set_overscan(&self, overscan: usize) {
         if self.overscan.replace(overscan) != overscan {
             self.invalidate_window();

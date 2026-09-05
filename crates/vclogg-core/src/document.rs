@@ -793,10 +793,11 @@ pub struct LineReader {
     verified_blocks: TaskVerifiedBlockReader,
 }
 
-/// Task-local reader for a sequence of visible line previews.
+/// Reader for a bounded sequence of visible line previews.
 ///
-/// It retains at most the current verified source block, so adjacent rows from transient
-/// directory-search snapshots share one positional read without growing document-owned caches.
+/// The default task-local mode retains only the current verified source block. The synchronous
+/// viewport mode also reuses the bounded document cache; transient directory-search snapshots
+/// always share only the current block without growing document-owned caches.
 #[derive(Default)]
 pub struct LinePreviewReader {
     verified_blocks: TaskVerifiedBlockReader,
@@ -806,6 +807,7 @@ pub struct LinePreviewReader {
 struct TaskVerifiedBlockReader {
     content_digest: Option<[u8; 32]>,
     verified_block: Option<(usize, Option<Arc<[u8]>>)>,
+    retain_document_blocks: bool,
 }
 
 enum TaskVerifiedBytes {
@@ -864,6 +866,18 @@ impl LineReader {
 }
 
 impl LinePreviewReader {
+    /// A synchronous viewport reader. Adjacent rows share verified block reads, and subsequent
+    /// frames reuse the document's bounded block cache. Transient directory snapshots continue
+    /// to release their source handles and do not retain document-owned blocks.
+    pub fn for_viewport() -> Self {
+        Self {
+            verified_blocks: TaskVerifiedBlockReader {
+                retain_document_blocks: true,
+                ..Default::default()
+            },
+        }
+    }
+
     pub fn line_preview(
         &mut self,
         document: &LogDocument,
@@ -952,7 +966,10 @@ impl TaskVerifiedBlockReader {
             .as_ref()
             .is_none_or(|(cached_ix, _)| *cached_ix != block_ix)
         {
-            self.verified_block = Some((block_ix, bytes.load_verified_block(block_ix, false)));
+            self.verified_block = Some((
+                block_ix,
+                bytes.load_verified_block(block_ix, self.retain_document_blocks),
+            ));
         }
         self.verified_block.as_ref()?.1.clone()
     }

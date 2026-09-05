@@ -8,8 +8,8 @@ use std::{
 };
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, Hsla, IntoElement, ParentElement as _, Pixels,
-    RenderOnce, SharedString, Styled as _, Task, Window, div, prelude::FluentBuilder as _, px, svg,
+    App, Bounds, Hsla, IntoElement, ParentElement as _, Pixels, RenderOnce, SharedString,
+    Styled as _, Window, div, prelude::FluentBuilder as _, px, svg,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, StyledExt as _, h_flex, theme::try_parse_color,
@@ -29,7 +29,7 @@ use crate::virtual_log_lines::{
     LogRowKey, StagedVisibleLineLoadRequest, StagedVisibleLineLoadResult, VisibleLineLoadRequest,
     VisibleLineLoadResult, VisibleLineSnapshot, VisibleLineStore,
 };
-use crate::virtual_log_list::{VirtualLogListDelegate, VirtualLogListState};
+use crate::virtual_log_list::VirtualLogListDelegate;
 
 #[derive(Clone)]
 pub struct GlobalSearchGroup {
@@ -84,7 +84,6 @@ pub struct GlobalSearchTableDelegate {
     presenter: GlobalRowPresenter,
     visible_lines: VisibleLineStore<(u64, usize)>,
     interaction: GlobalInteractionState,
-    visible_line_task: Option<Task<()>>,
 }
 
 struct GlobalSearchProjectionState {
@@ -462,7 +461,6 @@ impl GlobalSearchTableDelegate {
             presenter: GlobalRowPresenter::default(),
             visible_lines: VisibleLineStore::default(),
             interaction: GlobalInteractionState::default(),
-            visible_line_task: None,
         }
     }
 
@@ -614,8 +612,6 @@ impl GlobalSearchTableDelegate {
         self.presenter.show_line_number_row_separators = settings.show_line_number_row_separators;
         self.presenter.show_row_separators = settings.default_show_row_separators;
         self.presenter.log_level_rules = resolve_log_level_rules(&settings.log_level_color_rules);
-        self.visible_lines
-            .set_overscan(usize::from(settings.viewer_overscan.clamp(4, 40)));
     }
 
     pub fn set_word_boundary_characters(&mut self, characters: impl Into<SharedString>) {
@@ -1212,26 +1208,6 @@ impl GlobalSearchTableDelegate {
             })
     }
 
-    pub(crate) fn stage_visible_rows(
-        &self,
-        visible_range: Range<usize>,
-    ) -> Option<StagedVisibleLineLoadRequest<(u64, usize)>> {
-        self.visible_lines
-            .stage_visible_rows(visible_range, self.projection.rows_len, |row_ix| match self
-                .flat_row(row_ix)
-            {
-                Some(FlatRow::Match {
-                    group_ix,
-                    source_row,
-                }) => self
-                    .projection
-                    .groups
-                    .get(group_ix)
-                    .map(|group| (group.source.document_id, source_row)),
-                _ => None,
-            })
-    }
-
     pub(crate) fn stage_groups_replacement(
         &self,
         replacement: &Self,
@@ -1342,39 +1318,20 @@ impl GlobalSearchTableDelegate {
     }
 
     pub(crate) fn reset_visible_line_owner(&mut self) {
-        self.visible_line_task = None;
         self.visible_lines.invalidate_window();
     }
 
-    fn schedule_visible_rows(
-        &mut self,
-        visible_range: Range<usize>,
-        cx: &mut Context<VirtualLogListState<Self, LogRowKey>>,
-    ) {
+    /// Called by the list during prepaint, on the UI thread, before constructing its rows.
+    pub(crate) fn load_visible_rows(&self, visible_range: Range<usize>) {
         let Some(request) = self.request_visible_rows(visible_range) else {
             return;
         };
         let documents = self.visible_documents(&request);
-        self.visible_line_task = Some(cx.spawn(async move |table, cx| {
-            let loaded = cx
-                .background_spawn(async move {
-                    let mut readers = BTreeMap::<u64, LinePreviewReader>::new();
-                    request.load(|(document_id, source_row), max_bytes| {
-                        let document = documents.get(document_id)?;
-                        readers.entry(*document_id).or_default().line_preview(
-                            document,
-                            *source_row,
-                            max_bytes,
-                        )
-                    })
-                })
-                .await;
-            _ = table.update(cx, |table, cx| {
-                if table.delegate().install_visible_lines(loaded) {
-                    cx.notify();
-                }
-            });
-        }));
+        let mut reader = LinePreviewReader::for_viewport();
+        let loaded = request.load(|(document_id, source_row), max_bytes| {
+            reader.line_preview(documents.get(document_id)?, *source_row, max_bytes)
+        });
+        self.install_visible_lines(loaded);
     }
 
     fn row_presentation(
@@ -1785,7 +1742,6 @@ impl GlobalSearchTableDelegate {
 impl VirtualLogListDelegate for GlobalSearchTableDelegate {
     type Key = LogRowKey;
     type Row = WrappedGlobalRow;
-    type VisibleRequest = VisibleLineLoadRequest<(u64, usize)>;
 
     fn row_count(&self) -> usize {
         self.rows_len()
@@ -1804,10 +1760,6 @@ impl VirtualLogListDelegate for GlobalSearchTableDelegate {
 
     fn row(&self, row_ix: usize) -> Option<Self::Row> {
         self.wrapped_row(row_ix)
-    }
-
-    fn request_visible_rows(&self, range: Range<usize>) -> Option<Self::VisibleRequest> {
-        GlobalSearchTableDelegate::request_visible_rows(self, range)
     }
 
     fn unwrapped_content_width(&self, cx: &App) -> Pixels {
@@ -1843,14 +1795,6 @@ impl LogTableCursor for GlobalSearchTableDelegate {
 impl LogTableRows for GlobalSearchTableDelegate {
     fn reset_visible_log_row_owner(&mut self) {
         self.reset_visible_line_owner();
-    }
-
-    fn schedule_visible_log_rows(
-        &mut self,
-        visible_range: Range<usize>,
-        cx: &mut Context<VirtualLogListState<Self, LogRowKey>>,
-    ) {
-        self.schedule_visible_rows(visible_range, cx);
     }
 }
 
