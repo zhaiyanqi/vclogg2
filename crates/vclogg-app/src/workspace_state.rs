@@ -568,6 +568,8 @@ struct ActiveSearch {
 pub(crate) struct SearchController {
     active: Option<ActiveSearch>,
     task: Option<Task<()>>,
+    feedback_task: Option<Task<()>>,
+    feedback: Option<crate::search_feedback::SearchFeedbackSnapshot>,
 }
 
 impl SearchController {
@@ -632,12 +634,35 @@ impl SearchController {
         self.task = Some(task);
     }
 
+    pub(crate) fn feedback(&self) -> Option<&crate::search_feedback::SearchFeedbackSnapshot> {
+        self.feedback.as_ref()
+    }
+
+    pub(crate) fn set_feedback_task(&mut self, task: Task<()>) {
+        self.feedback_task = Some(task);
+    }
+
+    pub(crate) fn update_feedback(
+        &mut self,
+        target: SearchTarget,
+        revision: u64,
+        snapshot: crate::search_feedback::SearchFeedbackSnapshot,
+    ) -> bool {
+        if !self.is_current(target, revision) || self.feedback.as_ref() == Some(&snapshot) {
+            return false;
+        }
+        self.feedback = Some(snapshot);
+        true
+    }
+
     pub(crate) fn finish(&mut self, target: SearchTarget, revision: u64) -> bool {
         if !self.is_current(target, revision) {
             return false;
         }
         self.active = None;
         self.task = None;
+        self.feedback_task = None;
+        self.feedback = None;
         true
     }
 
@@ -649,6 +674,8 @@ impl SearchController {
             false
         };
         self.task = None;
+        self.feedback_task = None;
+        self.feedback = None;
         was_active
     }
 }
@@ -941,6 +968,31 @@ mod state_controller_tests {
             cfg!(windows).then_some(false)
         );
         assert_eq!(preferences.selected_paths(), [PathBuf::from("logs/b.log")]);
+    }
+
+    #[test]
+    fn feedback_rejects_stale_runs_and_clears_on_cancel_or_completion() {
+        use crate::search_feedback::SearchFeedbackSnapshot;
+        let mut controller = SearchController::default();
+        let target = SearchTarget::Document(7);
+        controller.begin(target, 1, SearchCancellation::default());
+        let snapshot = SearchFeedbackSnapshot {
+            percent: Some(20),
+            matches: 3,
+            previews: vec!["preview".into()],
+        };
+        assert!(controller.update_feedback(target, 1, snapshot.clone()));
+        assert!(!controller.update_feedback(target, 1, snapshot.clone()));
+        controller.begin(target, 2, SearchCancellation::default());
+        assert!(controller.feedback().is_none());
+        assert!(!controller.update_feedback(target, 1, snapshot.clone()));
+        assert!(controller.update_feedback(target, 2, snapshot.clone()));
+        assert!(controller.finish(target, 2));
+        assert!(controller.feedback().is_none());
+        controller.begin(target, 3, SearchCancellation::default());
+        controller.update_feedback(target, 3, snapshot);
+        controller.cancel();
+        assert!(controller.feedback().is_none());
     }
 
     #[test]

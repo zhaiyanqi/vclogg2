@@ -451,3 +451,26 @@ fn query_cache_separates_options_limits_and_evicts_old_entries() {
     cache.remember(&document, &oversized, &crate::SearchResult::default());
     assert!(!cache.has_candidate(document.path(), &oversized));
 }
+
+#[test]
+fn scanning_publishes_bounded_preview_and_completed_counts() {
+    let source = TestSource::new(&b"target\n".repeat(3000));
+    let document = source.open();
+    let progress = crate::SearchProgress::new(document.line_count());
+    let query = SearchQuery {
+        text: "target".into(),
+        ..SearchQuery::default()
+    };
+    let run = crate::search_with_progress(
+        &document,
+        &query,
+        &crate::SearchCancellation::default(),
+        &progress,
+    )
+    .unwrap();
+    assert!(matches!(run, crate::SearchRun::Completed(_)));
+    assert_eq!(progress.snapshot().matched_lines, 3000);
+    assert_eq!(progress.snapshot().scanned_lines, document.line_count());
+    assert_eq!(progress.previews().len(), 3);
+    assert!(progress.previews().iter().all(|row| row.text == "target"));
+}

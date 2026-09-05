@@ -5,8 +5,8 @@ use std::{
 };
 
 use super::{
-    SearchCancellation, SearchMatcher, SearchQuery, SearchResult, SearchRun,
-    search_with_compiled_matcher,
+    SearchCancellation, SearchMatcher, SearchProgress, SearchQuery, SearchResult, SearchRun,
+    search_with_compiled_matcher_inner,
 };
 use crate::LogDocument;
 
@@ -45,6 +45,28 @@ impl SearchResultCache {
         matcher: Option<&SearchMatcher>,
         cancellation: &SearchCancellation,
     ) -> SearchRun {
+        self.search_inner(document, query, matcher, cancellation, None)
+    }
+
+    pub fn search_with_progress(
+        &self,
+        document: &LogDocument,
+        query: &SearchQuery,
+        matcher: Option<&SearchMatcher>,
+        cancellation: &SearchCancellation,
+        progress: &SearchProgress,
+    ) -> SearchRun {
+        self.search_inner(document, query, matcher, cancellation, Some(progress))
+    }
+
+    fn search_inner(
+        &self,
+        document: &LogDocument,
+        query: &SearchQuery,
+        matcher: Option<&SearchMatcher>,
+        cancellation: &SearchCancellation,
+        progress: Option<&SearchProgress>,
+    ) -> SearchRun {
         if cancellation.is_cancelled() {
             return SearchRun::Cancelled;
         }
@@ -60,12 +82,24 @@ impl SearchResultCache {
         });
         if let Some(result) = cached {
             return match document.verify_cached_search(cancellation) {
-                Some(true) => SearchRun::Completed(result),
+                Some(true) => {
+                    if let Some(progress) = progress {
+                        progress.update(document.line_count(), result.len());
+                    }
+                    SearchRun::Completed(result)
+                }
                 Some(false) => SearchRun::SourceChanged,
                 None => SearchRun::Cancelled,
             };
         }
-        let run = search_with_compiled_matcher(document, matcher, query.max_results, cancellation);
+        let run = search_with_compiled_matcher_inner(
+            document,
+            matcher,
+            query.max_results,
+            cancellation,
+            progress,
+            false,
+        );
         if let SearchRun::Completed(result) = &run {
             self.remember(document, query, result);
         }

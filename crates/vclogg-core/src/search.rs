@@ -4,7 +4,7 @@ pub use cache::SearchResultCache;
 use std::{
     ops::Range,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
 };
@@ -79,6 +79,13 @@ impl SearchProgressSnapshot {
     }
 }
 
+/// Bounded representative match observed during a scan, not a committed result.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SearchPreview {
+    pub source_row: usize,
+    pub text: String,
+}
+
 /// Shared progress counters written by the blocking scanner and sampled by the UI.
 #[derive(Clone, Debug)]
 pub struct SearchProgress {
@@ -90,6 +97,8 @@ struct SearchProgressCounters {
     scanned_lines: AtomicUsize,
     matched_lines: AtomicUsize,
     total_lines: usize,
+    preview_count: AtomicUsize,
+    previews: Mutex<Vec<SearchPreview>>,
 }
 
 impl SearchProgress {
@@ -99,6 +108,8 @@ impl SearchProgress {
                 scanned_lines: AtomicUsize::new(0),
                 matched_lines: AtomicUsize::new(0),
                 total_lines,
+                preview_count: AtomicUsize::new(0),
+                previews: Mutex::new(Vec::new()),
             }),
         }
     }
@@ -118,7 +129,40 @@ impl SearchProgress {
         }
     }
 
+    pub fn previews(&self) -> Vec<SearchPreview> {
+        self.counters
+            .previews
+            .lock()
+            .map(|rows| rows.clone())
+            .unwrap_or_default()
+    }
+
+    fn record_preview(&self, source_row: usize, bytes: &[u8]) {
+        if self.counters.preview_count.load(Ordering::Relaxed) >= 3 {
+            return;
+        }
+        if let Ok(mut previews) = self.counters.previews.lock() {
+            if previews.len() >= 3 {
+                return;
+            }
+            let text = String::from_utf8_lossy(&bytes[..bytes.len().min(512)])
+                .chars()
+                .take(160)
+                .collect();
+            previews.push(SearchPreview { source_row, text });
+            self.counters
+                .preview_count
+                .store(previews.len(), Ordering::Relaxed);
+        }
+    }
+
     fn update(&self, scanned_lines: usize, matched_lines: usize) {
+        if scanned_lines == 0 && matched_lines == 0 {
+            if let Ok(mut previews) = self.counters.previews.lock() {
+                previews.clear();
+            }
+            self.counters.preview_count.store(0, Ordering::Relaxed);
+        }
         self.counters.scanned_lines.store(
             scanned_lines.min(self.counters.total_lines),
             Ordering::Relaxed,
@@ -423,6 +467,9 @@ fn scan_search_chunk(
         };
         if let Ok(source_row) = u64::try_from(source_row) {
             line_indices.insert(source_row);
+            if let Some(progress) = progress {
+                progress.record_preview(source_row as usize, &line);
+            }
             pending_matched_lines += 1;
         }
     }
@@ -731,6 +778,22 @@ mod performance_tests {
             projection.position_ranges_for_subset(&dense),
             [(0, 1), (3, 5)]
         );
+    }
+
+    #[test]
+    fn live_preview_is_bounded_before_search_completion_and_resets_on_retry() {
+        let progress = SearchProgress::new(1_000_000);
+        for row in 0..10 {
+            progress.record_preview(row, "中文".repeat(1000).as_bytes());
+        }
+        let previews = progress.previews();
+        assert_eq!(previews.len(), 3);
+        assert!(previews.iter().all(|row| row.text.chars().count() <= 160));
+        assert_eq!(progress.snapshot().scanned_lines, 0);
+        progress.update(0, 0);
+        assert!(progress.previews().is_empty());
+        progress.record_preview(20, b"new");
+        assert_eq!(progress.previews()[0].source_row, 20);
     }
 
     #[test]
