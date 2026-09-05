@@ -68,8 +68,8 @@ impl Workspace {
                         Self::apply_theme_preference(&settings, window, cx);
                     }
                 });
-            workspace.subscriptions.push(activation_subscription);
-            workspace.subscriptions.push(appearance_subscription);
+            workspace._subscriptions.push(activation_subscription);
+            workspace._subscriptions.push(appearance_subscription);
             // 新窗口打开后不会再收到一次激活通知，跟随轮询要在这里起头。
             workspace.start_file_watch(window, cx);
         });

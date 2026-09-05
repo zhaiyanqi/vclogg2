@@ -491,7 +491,7 @@ impl Workspace {
                 )
             });
 
-            self.subscriptions.push(cx.subscribe_in(
+            let log_subscription = cx.subscribe_in(
                 &log_table,
                 window,
                 move |this, table, event: &VirtualLogListEvent, window, cx| {
@@ -527,8 +527,8 @@ impl Workspace {
                     this.schedule_checkpoint(document_id, window, cx);
                     cx.notify();
                 },
-            ));
-            self.subscriptions.push(cx.subscribe_in(
+            );
+            let result_subscription = cx.subscribe_in(
                 &result_table,
                 window,
                 move |this, table, event: &VirtualLogListEvent, window, cx| {
@@ -582,8 +582,8 @@ impl Workspace {
                     this.schedule_checkpoint(document_id, window, cx);
                     cx.notify();
                 },
-            ));
-            self.subscriptions.push(cx.subscribe_in(
+            );
+            let result_mode_subscription = cx.subscribe_in(
                 &result_mode_select,
                 window,
                 move |this, _, event: &SelectEvent<Vec<ResultMode>>, window, cx| {
@@ -613,7 +613,7 @@ impl Workspace {
                     this.schedule_checkpoint(document_id, window, cx);
                     cx.notify();
                 },
-            ));
+            );
 
             let results_visible = restored_results_visible(
                 session.resume.current_search.results_visible,
@@ -694,6 +694,11 @@ impl Workspace {
                 search_matcher: prepared.search_matcher,
                 result_mode,
                 result_mode_select,
+                _subscriptions: [
+                    log_subscription,
+                    result_subscription,
+                    result_mode_subscription,
+                ],
                 search_revision: 0,
                 log_jump_revision: 0,
                 log_jump_task: None,

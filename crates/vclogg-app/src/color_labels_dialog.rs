@@ -23,6 +23,7 @@ struct LogLevelDraft {
     keyword: Entity<InputState>,
     text_color: Entity<ColorPickerState>,
     background_color: Entity<ColorPickerState>,
+    _subscriptions: [Subscription; 3],
 }
 
 struct ColorLabelDraft {
@@ -30,6 +31,7 @@ struct ColorLabelDraft {
     name: Entity<InputState>,
     text_color: Entity<ColorPickerState>,
     background_color: Entity<ColorPickerState>,
+    _subscriptions: [Subscription; 3],
 }
 
 pub struct LogColoringConfig {
@@ -52,7 +54,6 @@ pub struct ColorLabelsDialog {
     label_rows: Vec<ColorLabelDraft>,
     next_log_level_id: u64,
     next_custom_label_id: u64,
-    _subscriptions: Vec<Subscription>,
 }
 
 impl ColorLabelsDialog {
@@ -70,7 +71,6 @@ impl ColorLabelsDialog {
             label_rows: Vec::with_capacity(labels.len()),
             next_log_level_id: 1,
             next_custom_label_id: 1,
-            _subscriptions: Vec::new(),
         };
         for rule in log_level_rules {
             this.push_log_level_rule(rule, window, cx);
@@ -179,14 +179,17 @@ impl ColorLabelsDialog {
         let text_color = color_picker(rule.text_color, rule.text_alpha, window, cx);
         let background_color =
             color_picker(rule.background_color, rule.background_alpha, window, cx);
-        self.subscribe_input(&keyword, cx);
-        self.subscribe_color(&text_color, window, cx);
-        self.subscribe_color(&background_color, window, cx);
+        let subscriptions = [
+            Self::subscribe_input(&keyword, cx),
+            Self::subscribe_color(&text_color, window, cx),
+            Self::subscribe_color(&background_color, window, cx),
+        ];
         self.log_level_rows.push(LogLevelDraft {
             id: rule.id,
             keyword,
             text_color,
             background_color,
+            _subscriptions: subscriptions,
         });
     }
 
@@ -199,36 +202,41 @@ impl ColorLabelsDialog {
         let text_color = color_picker(label.text_color, label.text_alpha, window, cx);
         let background_color =
             color_picker(label.background_color, label.background_alpha, window, cx);
-        self.subscribe_input(&name, cx);
-        self.subscribe_color(&text_color, window, cx);
-        self.subscribe_color(&background_color, window, cx);
+        let subscriptions = [
+            Self::subscribe_input(&name, cx),
+            Self::subscribe_color(&text_color, window, cx),
+            Self::subscribe_color(&background_color, window, cx),
+        ];
         self.label_rows.push(ColorLabelDraft {
             id: label.id,
             name,
             text_color,
             background_color,
+            _subscriptions: subscriptions,
         });
     }
 
-    fn subscribe_input(&mut self, input: &Entity<InputState>, cx: &mut Context<Self>) {
-        self._subscriptions
-            .push(cx.subscribe(input, |_, _, _: &InputEvent, cx| cx.notify()));
+    fn subscribe_input(input: &Entity<InputState>, cx: &mut Context<Self>) -> Subscription {
+        cx.subscribe(input, |_, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        })
     }
 
     fn subscribe_color(
-        &mut self,
         color: &Entity<ColorPickerState>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        self._subscriptions.push(cx.subscribe_in(
+    ) -> Subscription {
+        cx.subscribe_in(
             color,
             window,
             |_, picker, _: &ColorPickerEvent, window, cx| {
                 crate::dialog_focus::restore_color_picker_trigger(picker, window, cx);
                 cx.notify();
             },
-        ));
+        )
     }
 
     fn add_log_level_rule(&mut self, window: &mut Window, cx: &mut Context<Self>) {

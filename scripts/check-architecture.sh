@@ -27,7 +27,11 @@ require_file() {
 forbid_manifest_dependency() {
   local manifest="$1"
   local dependency="$2"
-  if search_quiet "^[[:space:]]*${dependency}[[:space:]]*=" "$manifest"; then
+  # Cover inline/dotted dependencies, dependency tables and renamed packages.
+  local declaration="^[[:space:]]*${dependency}([.][[:alnum:]_-]+)?[[:space:]]*="
+  local table="^[[:space:]]*\\[.*dependencies\\.${dependency}\\]"
+  local package="package[[:space:]]*=[[:space:]]*[\"']${dependency}[\"']"
+  if search_quiet "${declaration}|${table}|${package}" "$manifest"; then
     fail "$manifest must not depend on $dependency"
   fi
 }
@@ -76,17 +80,21 @@ for layer in core data app; do
   fi
 done
 
-for dependency in gpui gpui-base gpui-component rusqlite vclogg-data vclogg-app; do
+gpui_dependencies=(gpui gpui-kit gpui-base gpui-component gpui-component-assets gpui_platform)
+for layer in core data; do
+  for dependency in "${gpui_dependencies[@]}"; do
+    forbid_manifest_dependency "crates/vclogg-${layer}/Cargo.toml" "$dependency"
+  done
+done
+
+for dependency in rusqlite vclogg-data vclogg-app; do
   forbid_manifest_dependency crates/vclogg-core/Cargo.toml "$dependency"
 done
 
-for dependency in gpui gpui-base gpui-component vclogg-app; do
-  forbid_manifest_dependency crates/vclogg-data/Cargo.toml "$dependency"
-done
-
+forbid_manifest_dependency crates/vclogg-data/Cargo.toml vclogg-app
 forbid_manifest_dependency crates/vclogg-app/Cargo.toml rusqlite
 
-if search_quiet '(^|::)gpui(_base|_component)?\b' crates/vclogg-core/src crates/vclogg-data/src; then
+if search_quiet '(^|::)gpui(_base|_component(_assets)?|_kit|_platform)?\b' crates/vclogg-core/src crates/vclogg-data/src; then
   fail "core and data source must not import GPUI"
 fi
 

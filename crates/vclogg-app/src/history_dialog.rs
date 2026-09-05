@@ -2,9 +2,10 @@ use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use chrono::{DateTime, Local};
 use gpui::{
-    AppContext as _, Context, EventEmitter, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, ScrollHandle, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Task, Window, div, prelude::FluentBuilder as _, rems, svg,
+    AnyElement, AppContext as _, Context, ElementId, EventEmitter, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, UniformListScrollHandle,
+    Window, div, prelude::FluentBuilder as _, rems, svg, uniform_list,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, StyledExt as _,
@@ -13,7 +14,7 @@ use gpui_component::{
     dialog::DialogFooter,
     h_flex,
     input::{Input, InputEvent, InputState},
-    scroll::{Scrollbar, ScrollbarMode},
+    scroll::{Scrollbar, ScrollbarHandle, ScrollbarMode},
     v_flex,
 };
 
@@ -30,7 +31,10 @@ const HISTORY_FILE_NAME_WIDTH_REMS: f32 = 17.;
 const HISTORY_FILE_TIME_WIDTH_REMS: f32 = 7.;
 const HISTORY_FILE_ACTIONS_WIDTH_REMS: f32 = 10.5;
 
-fn persistent_list_scrollbar(id: &'static str, scroll_handle: &ScrollHandle) -> impl IntoElement {
+fn persistent_list_scrollbar(
+    id: &'static str,
+    scroll_handle: &(impl ScrollbarHandle + Clone),
+) -> impl IntoElement {
     div()
         .relative()
         .h_full()
@@ -51,6 +55,12 @@ enum HistoryCategory {
     TemporaryResults,
 }
 
+// The operation and its task have one lifetime across both history categories.
+enum HistoryDeletion {
+    Session { id: i64, _task: Task<()> },
+    TemporaryResults { _task: Task<()> },
+}
+
 #[derive(Clone)]
 pub enum HistoryDialogEvent {
     Open(PathBuf),
@@ -64,18 +74,20 @@ pub enum HistoryDialogEvent {
 
 pub struct HistoryDialog {
     filter: gpui::Entity<InputState>,
-    session_scroll: ScrollHandle,
+    session_scroll: UniformListScrollHandle,
     temporary_result_scroll: ScrollHandle,
     category: HistoryCategory,
     sessions: Vec<HistorySession>,
     database_info: DatabaseInfo,
     temporary_results: Vec<TemporaryResultFile>,
+    // Positional projections are rebuilt with their sources, never used as element identity.
+    visible_sessions: Vec<usize>,
+    visible_temporary_results: Vec<usize>,
+    deletable_temporary_count: usize,
     open_paths: HashSet<PathBuf>,
     store: Arc<StateStore>,
     confirming_delete_id: Option<i64>,
-    deleting_id: Option<i64>,
-    delete_task: Option<Task<()>>,
-    deleting_temporary_results: bool,
+    deletion: Option<HistoryDeletion>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -95,24 +107,71 @@ impl HistoryDialog {
                 "Filter by file name, path, or query"
             ))
         });
-        let subscriptions =
-            vec![cx.subscribe_in(&filter, window, |_, _, _: &InputEvent, _, cx| cx.notify())];
-        Self {
+        let subscriptions = vec![cx.subscribe(&filter, |this, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                this.refresh_visible_entries(cx);
+                cx.notify();
+            }
+        })];
+        let mut this = Self {
             filter,
-            session_scroll: ScrollHandle::new(),
+            session_scroll: UniformListScrollHandle::new(),
             temporary_result_scroll: ScrollHandle::new(),
             category: HistoryCategory::Files,
             sessions,
             database_info,
             temporary_results,
+            visible_sessions: Vec::new(),
+            visible_temporary_results: Vec::new(),
+            deletable_temporary_count: 0,
             open_paths: open_paths.into_iter().collect(),
             store,
             confirming_delete_id: None,
-            deleting_id: None,
-            delete_task: None,
-            deleting_temporary_results: false,
+            deletion: None,
             _subscriptions: subscriptions,
-        }
+        };
+        this.refresh_visible_entries(cx);
+        this
+    }
+
+    // The input and source-install paths own projection invalidation. Hover, focus and
+    // delete-confirmation redraws only consume the installed projection.
+    fn refresh_visible_entries(&mut self, cx: &Context<Self>) {
+        let filter = self.filter.read(cx).value().to_lowercase();
+        self.visible_sessions = self
+            .sessions
+            .iter()
+            .enumerate()
+            .filter(|(_, session)| {
+                filter.is_empty()
+                    || session
+                        .path
+                        .to_string_lossy()
+                        .to_lowercase()
+                        .contains(&filter)
+                    || session.query_text.to_lowercase().contains(&filter)
+            })
+            .map(|(ix, _)| ix)
+            .collect();
+        self.visible_temporary_results = self
+            .temporary_results
+            .iter()
+            .enumerate()
+            .filter(|(_, result)| {
+                filter.is_empty()
+                    || result
+                        .path
+                        .to_string_lossy()
+                        .to_lowercase()
+                        .contains(&filter)
+            })
+            .map(|(ix, _)| ix)
+            .collect();
+        self.deletable_temporary_count = self
+            .temporary_results
+            .iter()
+            .filter(|result| !self.open_paths.contains(&result.path))
+            .count();
     }
 
     fn protection_reason(&self, session: &HistorySession) -> Option<&'static str> {
@@ -128,7 +187,7 @@ impl HistoryDialog {
     }
 
     fn begin_delete(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
-        if self.deleting_id.is_some() {
+        if self.deletion.is_some() {
             return;
         }
         let Some(session) = self.sessions.iter().find(|session| session.id == id) else {
@@ -150,9 +209,7 @@ impl HistoryDialog {
         let store = self.store.clone();
         let open_paths = self.open_paths.iter().cloned().collect::<Vec<_>>();
         self.confirming_delete_id = None;
-        self.deleting_id = Some(id);
-        cx.notify();
-        self.delete_task = Some(cx.spawn_in(window, async move |this, cx| {
+        let task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
                     let removed = store.delete_history_session(id, &open_paths)?;
@@ -167,11 +224,11 @@ impl HistoryDialog {
                 .await;
 
             _ = this.update_in(cx, |this, window, cx| {
-                this.deleting_id = None;
-                this.delete_task = None;
+                this.deletion = None;
                 match result {
                     Ok((true, sessions, recent_files, pinned_files, last_workspace_files)) => {
                         this.sessions = sessions;
+                        this.refresh_visible_entries(cx);
                         cx.emit(HistoryDialogEvent::HistoryChanged {
                             recent_files,
                             pinned_files,
@@ -206,7 +263,9 @@ impl HistoryDialog {
                 }
                 cx.notify();
             });
-        }));
+        });
+        self.deletion = Some(HistoryDeletion::Session { id, _task: task });
+        cx.notify();
     }
 
     fn confirm_delete_temporary_results(
@@ -219,7 +278,7 @@ impl HistoryDialog {
             .into_iter()
             .filter(|path| is_temporary_result_path(path) && !self.open_paths.contains(path))
             .collect::<Vec<_>>();
-        if paths.is_empty() || self.deleting_temporary_results {
+        if paths.is_empty() || self.deletion.is_some() {
             return;
         }
         let count = paths.len();
@@ -266,12 +325,10 @@ impl HistoryDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.deleting_temporary_results {
+        if self.deletion.is_some() {
             return;
         }
-        self.deleting_temporary_results = true;
-        cx.notify();
-        self.delete_task = Some(cx.spawn_in(window, async move |this, cx| {
+        let task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
                     let mut moved = 0_usize;
@@ -290,11 +347,11 @@ impl HistoryDialog {
                 })
                 .await;
             _ = this.update_in(cx, |this, window, cx| {
-                this.deleting_temporary_results = false;
-                this.delete_task = None;
+                this.deletion = None;
                 match result {
                     Ok((moved, failures, files)) => {
                         this.temporary_results = files;
+                        this.refresh_visible_entries(cx);
                         if failures.is_empty() {
                             window.push_notification(
                                 format!("已将 {moved} 个临时搜索结果移入回收站"),
@@ -321,19 +378,22 @@ impl HistoryDialog {
                 }
                 cx.notify();
             });
-        }));
+        });
+        self.deletion = Some(HistoryDeletion::TemporaryResults { _task: task });
+        cx.notify();
     }
 
     fn render_temporary_result(
         &self,
         result: &TemporaryResultFile,
-        index: usize,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let path = result.path.clone();
+        // Preserve native path bytes; lossy display text is not a unique file identity.
+        let row_id = ElementId::from((ElementId::Path(path.clone().into()), "temporary-result"));
         let open = self.open_paths.contains(&path);
         v_flex()
-            .id(("temporary-result", index))
+            .id(row_id.clone())
             .w_full()
             .gap_2()
             .p_3()
@@ -376,11 +436,11 @@ impl HistoryDialog {
                             ),
                     )
                     .child(
-                        Button::new(("delete-temporary-result", index))
+                        Button::new((row_id, "delete"))
                             .small()
                             .danger()
                             .label(crate::tr!("移入回收站", "Move to Trash"))
-                            .disabled(open || self.deleting_temporary_results)
+                            .disabled(open || self.deletion.is_some())
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.confirm_delete_temporary_results(
                                     vec![path.clone()],
@@ -390,6 +450,50 @@ impl HistoryDialog {
                             })),
                     ),
             )
+    }
+
+    fn render_session_list(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.visible_sessions.is_empty() {
+            return v_flex()
+                .id("history-session-list-viewport")
+                .h_full()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .overflow_y_scroll()
+                .track_scroll(&self.session_scroll.0.borrow().base_handle)
+                .items_center()
+                .justify_center()
+                .child(crate::tr!(
+                    "没有符合筛选条件的历史记录",
+                    "No history entries match the filter"
+                ))
+                .into_any_element();
+        }
+
+        let dialog = cx.weak_entity();
+        uniform_list(
+            "history-session-list-viewport",
+            self.visible_sessions.len(),
+            move |range, _, cx| {
+                dialog
+                    .update(cx, |this, cx| {
+                        range
+                            .map(|row_ix| {
+                                let session = &this.sessions[this.visible_sessions[row_ix]];
+                                this.render_session(session, cx).into_any_element()
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            },
+        )
+        .h_full()
+        .flex_1()
+        .min_w_0()
+        .min_h_0()
+        .track_scroll(&self.session_scroll)
+        .into_any_element()
     }
 
     fn render_session(&self, session: &HistorySession, cx: &mut Context<Self>) -> impl IntoElement {
@@ -402,7 +506,10 @@ impl HistoryDialog {
             .unwrap_or_default();
         let protected_reason = self.protection_reason(session);
         let confirming = self.confirming_delete_id == Some(id);
-        let deleting = self.deleting_id == Some(id);
+        let deleting = matches!(
+            &self.deletion,
+            Some(HistoryDeletion::Session { id: deleting_id, .. }) if *deleting_id == id
+        );
         let query = if session.query_text.is_empty() {
             crate::tr!("无保存查询", "No saved query").to_string()
         } else {
@@ -512,6 +619,7 @@ impl HistoryDialog {
                                     .xsmall()
                                     .danger()
                                     .label(crate::tr!("删除", "Delete"))
+                                    .disabled(self.deletion.is_some())
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.begin_delete(id, window, cx);
                                     })),
@@ -525,7 +633,7 @@ impl HistoryDialog {
                                 .danger()
                                 .label(crate::tr!("删除记录", "Delete entry"))
                                 .loading(deleting)
-                                .disabled(protected_reason.is_some() || self.deleting_id.is_some())
+                                .disabled(protected_reason.is_some() || self.deletion.is_some())
                                 .tooltip(
                                     protected_reason
                                         .map(|reason| {
@@ -557,40 +665,8 @@ impl EventEmitter<HistoryDialogEvent> for HistoryDialog {}
 impl Render for HistoryDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _performance_scope = crate::ui_performance::scope("HistoryDialog::render");
-        let filter = self.filter.read(cx).value().to_lowercase();
-        let visible_sessions = self
-            .sessions
-            .iter()
-            .filter(|session| {
-                filter.is_empty()
-                    || session
-                        .path
-                        .to_string_lossy()
-                        .to_lowercase()
-                        .contains(&filter)
-                    || session.query_text.to_lowercase().contains(&filter)
-            })
-            .collect::<Vec<_>>();
-        let visible_count = visible_sessions.len();
-        let visible_temporary_results = self
-            .temporary_results
-            .iter()
-            .filter(|result| {
-                filter.is_empty()
-                    || result
-                        .path
-                        .to_string_lossy()
-                        .to_lowercase()
-                        .contains(&filter)
-            })
-            .collect::<Vec<_>>();
-        let visible_temporary_count = visible_temporary_results.len();
-        let deletable_temporary_paths = self
-            .temporary_results
-            .iter()
-            .filter(|result| !self.open_paths.contains(&result.path))
-            .map(|result| result.path.clone())
-            .collect::<Vec<_>>();
+        let visible_count = self.visible_sessions.len();
+        let visible_temporary_count = self.visible_temporary_results.len();
 
         v_flex()
             .id("history-dialog-content")
@@ -671,9 +747,13 @@ impl Render for HistoryDialog {
                                             .small()
                                             .ghost()
                                             .label(crate::tr!("清除历史…", "Clear history…"))
-                                            .disabled(self.sessions.is_empty())
-                                            .on_click(cx.listener(|_, _, _, cx| {
-                                                cx.emit(HistoryDialogEvent::ClearHistory);
+                                            .disabled(
+                                                self.sessions.is_empty() || self.deletion.is_some(),
+                                            )
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                if this.deletion.is_none() {
+                                                    cx.emit(HistoryDialogEvent::ClearHistory);
+                                                }
                                             })),
                                     ),
                             ),
@@ -689,25 +769,7 @@ impl Render for HistoryDialog {
                             .border_color(cx.theme().border)
                             .bg(cx.theme().group_box)
                             .overflow_hidden()
-                            .child(
-                                v_flex()
-                                    .id("history-session-list-viewport")
-                                    .h_full()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .min_h_0()
-                                    .overflow_y_scroll()
-                                    .track_scroll(&self.session_scroll)
-                                    .when(visible_sessions.is_empty(), |list| {
-                                        list.items_center().justify_center().child(crate::tr!(
-                                            "没有符合筛选条件的历史记录",
-                                            "No history entries match the filter"
-                                        ))
-                                    })
-                                    .children(visible_sessions.into_iter().map(|session| {
-                                        self.render_session(session, cx).into_any_element()
-                                    })),
-                            )
+                            .child(self.render_session_list(cx))
                             .child(persistent_list_scrollbar(
                                 "history-session-list-scrollbar",
                                 &self.session_scroll,
@@ -717,7 +779,6 @@ impl Render for HistoryDialog {
             .when(
                 self.category == HistoryCategory::TemporaryResults,
                 |dialog| {
-                    let paths = deletable_temporary_paths.clone();
                     dialog
                         .child(
                             h_flex()
@@ -736,18 +797,26 @@ impl Render for HistoryDialog {
                                         .label(crate::tr_args!(
                                             "清理全部 ({})",
                                             "Clean all ({})",
-                                            paths.len()
+                                            self.deletable_temporary_count
                                         ))
-                                        .loading(self.deleting_temporary_results)
+                                        .loading(matches!(
+                                            &self.deletion,
+                                            Some(HistoryDeletion::TemporaryResults { .. })
+                                        ))
                                         .disabled(
-                                            paths.is_empty() || self.deleting_temporary_results,
+                                            self.deletable_temporary_count == 0
+                                                || self.deletion.is_some(),
                                         )
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.confirm_delete_temporary_results(
-                                                paths.clone(),
-                                                window,
-                                                cx,
-                                            )
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            let paths = this
+                                                .temporary_results
+                                                .iter()
+                                                .filter(|result| {
+                                                    !this.open_paths.contains(&result.path)
+                                                })
+                                                .map(|result| result.path.clone())
+                                                .collect();
+                                            this.confirm_delete_temporary_results(paths, window, cx)
                                         })),
                                 ),
                         )
@@ -768,20 +837,21 @@ impl Render for HistoryDialog {
                                         .gap_2()
                                         .overflow_y_scroll()
                                         .track_scroll(&self.temporary_result_scroll)
-                                        .when(visible_temporary_results.is_empty(), |list| {
+                                        .when(self.visible_temporary_results.is_empty(), |list| {
                                             list.items_center().justify_center().child(crate::tr!(
                                                 "没有符合筛选条件的临时搜索结果",
                                                 "No temporary search results match the filter"
                                             ))
                                         })
-                                        .children(
-                                            visible_temporary_results.into_iter().enumerate().map(
-                                                |(index, result)| {
-                                                    self.render_temporary_result(result, index, cx)
-                                                        .into_any_element()
-                                                },
-                                            ),
-                                        ),
+                                        .children(self.visible_temporary_results.iter().map(
+                                            |&ix| {
+                                                self.render_temporary_result(
+                                                    &self.temporary_results[ix],
+                                                    cx,
+                                                )
+                                                .into_any_element()
+                                            },
+                                        )),
                                 )
                                 .child(persistent_list_scrollbar(
                                     "history-temporary-result-list-scrollbar",

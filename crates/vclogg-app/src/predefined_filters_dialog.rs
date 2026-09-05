@@ -232,6 +232,8 @@ struct FilterDraft {
     name: Entity<InputState>,
     value: Entity<InputState>,
     note: Entity<InputState>,
+    // Import and cloud replacement release the old row's observers with its inputs.
+    _subscriptions: [Subscription; 3],
 }
 
 pub struct PredefinedFiltersDialog {
@@ -499,10 +501,8 @@ impl PredefinedFiltersDialog {
                 .placeholder(crate::tr!("备注（可选）", "Note (optional)"))
                 .default_value(filter.note.clone())
         });
-        for input in [&name, &value, &note] {
-            self.subscriptions
-                .push(cx.subscribe(input, |_, _, _: &InputEvent, cx| cx.notify()));
-        }
+        let subscriptions = [&name, &value, &note]
+            .map(|input| cx.subscribe(input, |_, _, _: &InputEvent, cx| cx.notify()));
         self.rows.push(FilterDraft {
             filter,
             focus: cx.focus_handle().tab_stop(true),
@@ -510,6 +510,7 @@ impl PredefinedFiltersDialog {
             name,
             value,
             note,
+            _subscriptions: subscriptions,
         });
     }
 

@@ -1,12 +1,42 @@
 use gpui::{
-    App, Entity, Focusable as _, InteractiveElement as _, IntoElement, ParentElement as _, Window,
-    div,
+    Action, App, ElementId, Entity, Focusable as _, InteractiveElement as _, IntoElement,
+    ParentElement as _, RenderOnce, Window, div,
 };
 use gpui_component::{
     button::Button,
     color_picker::ColorPickerState,
     dialog::{Cancel, Confirm},
 };
+
+#[derive(IntoElement)]
+struct DialogActionButton {
+    id: &'static str,
+    button: Button,
+    action: Box<dyn Action>,
+    enabled: bool,
+}
+
+impl RenderOnce for DialogActionButton {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        // Match GPUI Base's button lifecycle: retain focus while this keyed control
+        // remains mounted. The child namespace keeps focus state separate from the div.
+        let action_focus = window
+            .use_keyed_state((ElementId::from(self.id), "action-focus"), cx, |_, cx| {
+                cx.focus_handle()
+            })
+            .read(cx)
+            .clone();
+        let dispatch_focus = action_focus.clone();
+        let action = self.action;
+        let enabled = self.enabled;
+        let button = self.button.on_click(move |_, window, cx| {
+            if enabled {
+                dispatch_focus.dispatch_action(action.as_ref(), window, cx);
+            }
+        });
+        div().id(self.id).track_focus(&action_focus).child(button)
+    }
+}
 
 /// Wraps a dialog button in a stable focus node and dispatches Confirm from that node.
 ///
@@ -27,29 +57,28 @@ pub(crate) fn dialog_confirm_action_when(
     id: &'static str,
     button: Button,
     enabled: bool,
-    cx: &mut App,
+    _cx: &mut App,
 ) -> impl IntoElement {
-    let action_focus = cx.focus_handle();
-    let dispatch_focus = action_focus.clone();
-    let button = button.on_click(move |_, window, cx| {
-        if enabled {
-            dispatch_focus.dispatch_action(&Confirm { secondary: false }, window, cx)
-        }
-    });
-    div().id(id).track_focus(&action_focus).child(button)
+    DialogActionButton {
+        id,
+        button,
+        action: Box::new(Confirm { secondary: false }),
+        enabled,
+    }
 }
 
 /// Wraps a dialog button in a stable focus node and dispatches Cancel from that node.
 pub(crate) fn dialog_cancel_action(
     id: &'static str,
     button: Button,
-    cx: &mut App,
+    _cx: &mut App,
 ) -> impl IntoElement {
-    let action_focus = cx.focus_handle();
-    let dispatch_focus = action_focus.clone();
-    let button =
-        button.on_click(move |_, window, cx| dispatch_focus.dispatch_action(&Cancel, window, cx));
-    div().id(id).track_focus(&action_focus).child(button)
+    DialogActionButton {
+        id,
+        button,
+        action: Box::new(Cancel),
+        enabled: true,
+    }
 }
 
 /// Restores the parent surface's focus path after a committed color closes its popup.
