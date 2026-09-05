@@ -2673,6 +2673,7 @@ impl Render for Workspace {
 }
 
 mod document_tasks;
+mod index_cache_writer;
 use document_tasks::*;
 
 #[cfg(test)]

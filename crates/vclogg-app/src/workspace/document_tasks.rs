@@ -53,7 +53,7 @@ fn search_path_snapshot(
             if !cancellation.is_cancelled()
                 && let Some(cache_write) = pending_index_cache
             {
-                _ = cache_write.persist();
+                super::index_cache_writer::enqueue(cache_write, cancellation.clone());
             }
             Ok(Some((document, search_result)))
         }
@@ -520,24 +520,26 @@ where
         .unwrap_or(1)
         .min(MAX_DOCUMENT_PREPARE_WORKERS)
         .min(paths.len());
-    let mut worker_paths = (0..worker_count).map(|_| Vec::new()).collect::<Vec<_>>();
-    for (path_ix, path) in paths.into_iter().enumerate() {
-        worker_paths[path_ix % worker_count].push((path_ix, path));
-    }
+    let next_path = std::sync::atomic::AtomicUsize::new(0);
     std::thread::scope(|scope| {
         let operation = &operation;
         let should_continue = &should_continue;
-        let handles = worker_paths
-            .into_iter()
-            .map(|worker_paths| {
+        let paths = &paths;
+        let next_path = &next_path;
+        let handles = (0..worker_count)
+            .map(|_| {
                 scope.spawn(move || {
                     let mut prepared = Vec::new();
-                    for (path_ix, path) in worker_paths {
+                    while should_continue() {
+                        let path_ix = next_path.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(path) = paths.get(path_ix) else {
+                            break;
+                        };
                         if !should_continue() {
                             break;
                         }
-                        let result = operation(&path);
-                        prepared.push((path_ix, path, result));
+                        let result = operation(path);
+                        prepared.push((path_ix, path.clone(), result));
                     }
                     prepared
                 })

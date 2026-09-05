@@ -194,3 +194,38 @@ fn benchmark_parallel_document_prepare() {
         "准备 {FILE_COUNT} 个 16 MiB 文件：串行 {sequential_elapsed:?}；最多 4 路并行 {parallel_elapsed:?}"
     );
 }
+
+#[test]
+fn idle_workers_take_paths_behind_a_blocked_large_file() {
+    use std::sync::{Mutex, mpsc};
+    use std::time::Duration;
+    let workers = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .min(super::MAX_DOCUMENT_PREPARE_WORKERS);
+    if workers < 2 {
+        return;
+    }
+    let (release, receiver) = mpsc::channel();
+    let receiver = Mutex::new(receiver);
+    let paths = (0..workers * 3)
+        .map(|i| PathBuf::from(i.to_string()))
+        .collect::<Vec<_>>();
+    let result = prepare_paths_bounded(paths.clone(), |path| {
+        let index = path.to_str().unwrap().parse::<usize>().unwrap();
+        if index == 0 {
+            receiver
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(5))
+                .expect("idle workers should claim the next file despite a blocked first file");
+        } else if index == workers {
+            release.send(()).unwrap();
+        }
+        index
+    });
+    assert_eq!(
+        result.iter().map(|(_, i)| *i).collect::<Vec<_>>(),
+        (0..paths.len()).collect::<Vec<_>>()
+    );
+}
