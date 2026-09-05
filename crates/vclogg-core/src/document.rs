@@ -34,6 +34,9 @@ use crate::{CancellationToken, CompressedRows, SearchMatcher, SearchResult, Sear
 mod index_cache;
 
 #[cfg(test)]
+mod search_tests;
+
+#[cfg(test)]
 use index_cache::index_cache_source_identity;
 use index_cache::{
     index_cache_path, read_index_cache, read_index_cache_while, system_time_millis,
@@ -237,6 +240,8 @@ struct VerifiedFileBytes {
     transient_source_handles: AtomicBool,
     file: RwLock<Option<Arc<File>>>,
     state: Mutex<VerifiedFileState>,
+    #[cfg(test)]
+    source_block_reads: std::sync::atomic::AtomicUsize,
 }
 
 struct VerifiedFileState {
@@ -301,6 +306,8 @@ impl DocumentBytes {
                     block_order: VecDeque::new(),
                     cached_bytes: 0,
                 }),
+                #[cfg(test)]
+                source_block_reads: std::sync::atomic::AtomicUsize::new(0),
             }))
         }
     }
@@ -433,6 +440,8 @@ impl VerifiedFileBytes {
     }
 
     fn read_source_block(&self, block_ix: usize) -> Result<Vec<u8>, VerifiedSourceUnavailable> {
+        #[cfg(test)]
+        self.source_block_reads.fetch_add(1, Ordering::Relaxed);
         let block_start = block_ix
             .checked_mul(APPEND_INTEGRITY_BLOCK_BYTES)
             .ok_or(VerifiedSourceUnavailable::InvalidSnapshot)?;
@@ -1063,11 +1072,7 @@ impl DocumentSearchLines<'_> {
                 if first_block != last_block {
                     let mut joined = Vec::with_capacity(range.len());
                     for block_ix in first_block..=last_block {
-                        let block = if self.verify_integrity {
-                            bytes.load_verified_block(block_ix, false)?
-                        } else {
-                            bytes.load_source_block(block_ix)?
-                        };
+                        let block = self.load_block(bytes, block_ix)?;
                         let block_start = block_ix.saturating_mul(APPEND_INTEGRITY_BLOCK_BYTES);
                         let start = range.start.saturating_sub(block_start).min(block.len());
                         let end = range.end.saturating_sub(block_start).min(block.len());
@@ -1079,19 +1084,7 @@ impl DocumentSearchLines<'_> {
                         document.encoding.decode_for_search(&joined).into_owned(),
                     ));
                 }
-                if self
-                    .verified_block
-                    .as_ref()
-                    .is_none_or(|(block_ix, _)| *block_ix != first_block)
-                {
-                    let block = if self.verify_integrity {
-                        bytes.load_verified_block(first_block, false)
-                    } else {
-                        bytes.load_source_block(first_block)
-                    };
-                    self.verified_block = Some((first_block, block));
-                }
-                let block = self.verified_block.as_ref()?.1.as_ref()?;
+                let block = self.load_block(bytes, first_block)?;
                 let block_start = first_block.saturating_mul(APPEND_INTEGRITY_BLOCK_BYTES);
                 let line = block.get(range.start - block_start..range.end - block_start)?;
                 Some(
@@ -1101,6 +1094,24 @@ impl DocumentSearchLines<'_> {
                 )
             }
         }
+    }
+
+    fn load_block(&mut self, bytes: &VerifiedFileBytes, block_ix: usize) -> Option<&[u8]> {
+        if self
+            .verified_block
+            .as_ref()
+            .is_none_or(|(current, _)| *current != block_ix)
+        {
+            let block = if self.verify_integrity {
+                bytes.load_verified_block(block_ix, false)
+            } else {
+                bytes.load_source_block(block_ix)
+            };
+            // Cross-block lines use the same cursor as ordinary lines, retaining
+            // their final block for the next row without populating the shared cache.
+            self.verified_block = Some((block_ix, block));
+        }
+        self.verified_block.as_ref()?.1.as_deref()
     }
 }
 
