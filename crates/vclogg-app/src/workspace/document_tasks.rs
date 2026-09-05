@@ -89,7 +89,6 @@ pub(super) fn run_directory_search(
     query: SearchQuery,
     open_document_paths: BTreeSet<PathMatchKey>,
     cancellation: SearchCancellation,
-    feedback: &crate::search_feedback::SearchFeedback,
 ) -> Result<DirectorySearchRun> {
     let matcher = SearchMatcher::new(&query)?;
     let Some(enumeration) = enumerate_directory_search_paths(&options, &cancellation)? else {
@@ -106,26 +105,17 @@ pub(super) fn run_directory_search(
     let unreadable_directory_count = enumeration.unreadable_directory_count;
     let scan_paths =
         directory_search_scan_paths(enumeration.paths, matcher.is_some(), &open_document_paths);
-    feedback.set_file_total(scan_paths.len());
     let outcomes = prepare_paths_bounded_while(
         scan_paths,
         || !cancellation.is_cancelled(),
         |path| {
-            let result = search_path_snapshot(
+            search_path_snapshot(
                 path,
                 &query,
                 matcher.as_ref(),
                 query.max_results,
                 &cancellation,
-            );
-            feedback.file_finished(
-                result
-                    .as_ref()
-                    .ok()
-                    .and_then(|result| result.as_ref())
-                    .map(|(document, result)| (document.as_ref(), result)),
-            );
-            result
+            )
         },
     );
     if cancellation.is_cancelled() {

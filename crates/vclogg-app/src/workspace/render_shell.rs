@@ -2316,9 +2316,6 @@ impl Workspace {
                         )
                     }),
             )
-            .when(searching_current_scope, |view| {
-                view.child(self.render_search_feedback(cx))
-            })
     }
 
     pub(super) fn render_pinned_files(

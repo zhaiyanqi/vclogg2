@@ -1798,7 +1798,6 @@ impl Workspace {
                                 query_for_search,
                                 open_document_paths,
                                 cancellation,
-                                &crate::search_feedback::SearchFeedback::default(),
                             )?;
                             (run.cancelled, run.results, run.matcher)
                         }
@@ -2383,11 +2382,6 @@ impl Workspace {
         let document = tab.document.clone();
         let target = SearchTarget::Document(document_id);
         self.searches.begin(target, revision, cancellation.clone());
-        let feedback = Arc::new(crate::search_feedback::SearchFeedback::for_documents([(
-            document.path().to_path_buf(),
-            document.line_count(),
-        )]));
-        self.track_search_feedback(target, revision, feedback.clone(), window, cx);
         self.activity = Activity::Searching;
         cx.notify();
 
@@ -2396,12 +2390,11 @@ impl Workspace {
             let result = cx
                 .background_spawn(async move {
                     let matcher = SearchMatcher::new(&query_for_search)?;
-                    let run = search_result_cache().search_with_progress(
+                    let run = search_result_cache().search(
                         &document,
                         &query_for_search,
                         matcher.as_ref(),
                         &cancellation,
-                        feedback.progress(0),
                     );
                     Ok::<_, anyhow::Error>((run, matcher))
                 })
@@ -2616,12 +2609,6 @@ impl Workspace {
             .collect::<Vec<_>>();
         let target = SearchTarget::AllOpenFiles;
         self.searches.begin(target, revision, cancellation.clone());
-        let feedback = Arc::new(crate::search_feedback::SearchFeedback::for_documents(
-            targets
-                .iter()
-                .map(|target| (target.3.path().to_path_buf(), target.3.line_count())),
-        ));
-        self.track_search_feedback(target, revision, feedback.clone(), window, cx);
         self.global_search.results_visible = true;
         self.activity = Activity::Searching;
         cx.notify();
@@ -2632,17 +2619,13 @@ impl Workspace {
                     let matcher = SearchMatcher::new(&query_for_search)?;
                     let matcher_for_search = matcher.as_ref();
                     let outcomes = targets
-                        .into_iter()
-                        .enumerate()
-                        .collect::<Vec<_>>()
                         .into_par_iter()
-                        .map(|(index, target)| {
-                            let run = search_result_cache().search_with_progress(
+                        .map(|target| {
+                            let run = search_result_cache().search(
                                 &target.3,
                                 &query_for_search,
                                 matcher_for_search,
                                 &cancellation,
-                                feedback.progress(index),
                             );
                             (target, Ok::<_, anyhow::Error>(run))
                         })
@@ -2775,8 +2758,6 @@ impl Workspace {
         let cancellation = SearchCancellation::default();
         let target = SearchTarget::Directory;
         self.searches.begin(target, revision, cancellation.clone());
-        let feedback = Arc::new(crate::search_feedback::SearchFeedback::default());
-        self.track_search_feedback(target, revision, feedback.clone(), window, cx);
         self.global_search.results_visible = true;
         self.activity = Activity::Searching;
         cx.notify();
@@ -2784,7 +2765,7 @@ impl Workspace {
         let task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
-                    run_directory_search(options, query_for_search, open_document_paths, cancellation, &feedback)
+                    run_directory_search(options, query_for_search, open_document_paths, cancellation)
                 })
                 .await;
 

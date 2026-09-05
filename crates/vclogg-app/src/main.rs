@@ -28,7 +28,6 @@ mod rename_tab_dialog;
 mod result_export;
 mod search_autocomplete;
 mod search_context;
-mod search_feedback;
 mod selectable_log_text;
 mod selection_style;
 mod selection_style_section;

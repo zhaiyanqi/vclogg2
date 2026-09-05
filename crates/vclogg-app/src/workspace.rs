@@ -2674,7 +2674,6 @@ impl Render for Workspace {
 
 mod document_tasks;
 mod index_cache_writer;
-mod search_feedback_view;
 use document_tasks::*;
 
 #[cfg(test)]
