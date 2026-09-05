@@ -231,6 +231,7 @@ pub struct AppSettings {
     pub dark_log_background_color: Option<String>,
     pub highlight_log_levels: bool,
     pub log_level_color_rules: Vec<LogLevelColorRule>,
+    pub(crate) selection_styles: crate::selection_style::SelectionStyles,
     pub log_font_size: u16,
     pub log_line_spacing: u16,
     pub log_font_family: LogFontFamily,
@@ -271,6 +272,7 @@ impl Default for AppSettings {
             dark_log_background_color: None,
             highlight_log_levels: false,
             log_level_color_rules: default_log_level_rules(),
+            selection_styles: Default::default(),
             log_font_size: 13,
             log_line_spacing: 6,
             log_font_family: LogFontFamily::Consolas,
@@ -372,6 +374,26 @@ impl StateStore {
         self.repository
             .load_app_settings()
             .map(|settings| settings.map(app_settings_from_record).unwrap_or_default())
+    }
+
+    pub(crate) fn save_highlight_settings(
+        &self,
+        settings: AppSettings,
+        labels: &[ColorLabel],
+    ) -> Result<()> {
+        let labels = labels
+            .iter()
+            .map(|label| ColorLabelRecord {
+                id: label.id.clone(),
+                name: label.name.clone(),
+                text_color: label.text_color,
+                text_alpha: label.text_alpha,
+                background_color: label.background_color,
+                background_alpha: label.background_alpha,
+            })
+            .collect::<Vec<_>>();
+        self.repository
+            .save_highlight_settings(&app_settings_to_record(settings), &labels)
     }
 
     pub fn save_app_settings(&self, settings: AppSettings) -> Result<()> {
@@ -509,21 +531,6 @@ impl StateStore {
         })
     }
 
-    pub fn save_color_labels(&self, labels: &[ColorLabel]) -> Result<()> {
-        let labels = labels
-            .iter()
-            .map(|label| ColorLabelRecord {
-                id: label.id.clone(),
-                name: label.name.clone(),
-                text_color: label.text_color,
-                text_alpha: label.text_alpha,
-                background_color: label.background_color,
-                background_alpha: label.background_alpha,
-            })
-            .collect::<Vec<_>>();
-        self.repository.save_color_labels(&labels)
-    }
-
     pub fn recent_files(&self, limit: usize) -> Result<Vec<RecentFile>> {
         self.repository.recent_files(limit)
     }
@@ -625,6 +632,7 @@ fn app_settings_from_record(record: AppSettingsRecord) -> AppSettings {
         dark_log_text_color: normalize_optional_hex_color(record.dark_log_text_color),
         dark_log_background_color: normalize_optional_hex_color(record.dark_log_background_color),
         highlight_log_levels: record.highlight_log_levels,
+        selection_styles: serde_json::from_str(&record.selection_styles).unwrap_or_default(),
         log_level_color_rules: if record.log_level_color_rules.trim().is_empty() {
             default_log_level_rules()
         } else {
@@ -672,6 +680,7 @@ fn app_settings_to_record(settings: AppSettings) -> AppSettingsRecord {
         default_show_line_numbers: settings.default_show_line_numbers,
         default_show_row_separators: settings.default_show_row_separators,
         highlight_log_levels: settings.highlight_log_levels,
+        selection_styles: serde_json::to_string(&settings.selection_styles).unwrap_or_default(),
         log_level_color_rules: serde_json::to_string(&settings.log_level_color_rules)
             .unwrap_or_else(|_| "[]".to_string()),
         log_font_size: i64::from(settings.log_font_size),

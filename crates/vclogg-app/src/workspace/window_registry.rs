@@ -57,6 +57,7 @@ impl Workspace {
                         workspace.end_all_row_drag_selection(window, cx);
                         workspace.release_input_focus(window, cx);
                         workspace.file_watch_task = None;
+                        cx.notify();
                     }
                 });
             let appearance_subscription =

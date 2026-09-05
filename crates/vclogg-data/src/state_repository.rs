@@ -20,7 +20,7 @@ use crate::{
 };
 
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
-pub const STATE_SCHEMA_VERSION: u32 = 6;
+pub const STATE_SCHEMA_VERSION: u32 = 7;
 
 /// Owns SQLite access for durable file-history and workspace records.
 pub struct StateRepository {
@@ -407,6 +407,19 @@ impl StateRepository {
             .with_context(|| format!("无法读取界面状态：{key}"))
     }
 
+    /// Commit all three highlight tabs together, preserving unrelated settings.
+    pub fn save_highlight_settings(
+        &self,
+        settings: &AppSettingsRecord,
+        labels: &[ColorLabelRecord],
+    ) -> Result<()> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction().context("无法开始高亮配置事务")?;
+        Self::write_app_settings(&transaction, settings, true)?;
+        Self::write_color_labels(&transaction, labels)?;
+        transaction.commit().context("无法提交高亮配置事务")
+    }
+
     pub fn load_app_settings(&self) -> Result<Option<AppSettingsRecord>> {
         let connection = self.lock()?;
         connection
@@ -426,7 +439,7 @@ impl StateRepository {
                         line_number_text_color, line_number_background_color,
                         theme_preference, open_directory_command, viewer_overscan, language,
                         app_log_level, light_log_text_color, light_log_background_color,
-                        dark_log_text_color, dark_log_background_color, log_level_color_rules
+                        dark_log_text_color, dark_log_background_color, log_level_color_rules, selection_styles
                  FROM app_settings WHERE id = 1",
                 [],
                 |row| {
@@ -472,6 +485,7 @@ impl StateRepository {
                         dark_log_text_color: row.get(38)?,
                         dark_log_background_color: row.get(39)?,
                         log_level_color_rules: row.get(40)?,
+                        selection_styles: row.get(41)?,
                     })
                 },
             )
@@ -481,28 +495,22 @@ impl StateRepository {
 
     pub fn save_app_settings(&self, settings: &AppSettingsRecord) -> Result<()> {
         let connection = self.lock()?;
-        connection
-            .execute(
-                "INSERT INTO app_settings(
-                     id, default_show_line_numbers, default_show_row_separators,
-                     highlight_log_levels, log_font_size, log_line_spacing, log_font_family,
-                     shortcut_open_file, shortcut_focus_search, shortcut_quick_find,
-                     shortcut_close_tab, shortcut_open_settings,
-                     shortcut_toggle_case_sensitive, shortcut_jump_to_bottom,
-                     shortcut_cycle_color_label, shortcut_toggle_word_wrap,
-                     mouse_wheel_scroll_percent, scroll_by_line,
-                     mouse_wheel_scroll_lines, scroll_by_line_when_word_wrap,
-                     reduce_motion, confirm_close_tab, show_full_path,
-                     max_search_results, highlight_matches, word_boundary_characters,
-                     default_case_sensitive, default_use_regex,
-                     show_line_number_row_separators, line_number_width,
-                     line_number_text_color, line_number_background_color,
-                     theme_preference, open_directory_command, viewer_overscan, language,
-                     app_log_level, light_log_text_color, light_log_background_color,
-                     dark_log_text_color, dark_log_background_color, log_level_color_rules
-                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41)
-                 ON CONFLICT(id) DO UPDATE SET
-                     default_show_line_numbers = excluded.default_show_line_numbers,
+        Self::write_app_settings(&connection, settings, false)
+    }
+
+    fn write_app_settings(
+        connection: &Connection,
+        settings: &AppSettingsRecord,
+        highlight_only: bool,
+    ) -> Result<()> {
+        // Both paths initialize an absent row from the caller's real defaults. Existing rows
+        // update the requested scope without overwriting unrelated fields.
+        let update = if highlight_only {
+            "selection_styles = excluded.selection_styles,
+             highlight_log_levels = excluded.highlight_log_levels,
+             log_level_color_rules = excluded.log_level_color_rules"
+        } else {
+            "default_show_line_numbers = excluded.default_show_line_numbers,
                      default_show_row_separators = excluded.default_show_row_separators,
                      highlight_log_levels = excluded.highlight_log_levels,
                      log_font_size = excluded.log_font_size,
@@ -542,7 +550,30 @@ impl StateRepository {
                      light_log_background_color = excluded.light_log_background_color,
                      dark_log_text_color = excluded.dark_log_text_color,
                      dark_log_background_color = excluded.dark_log_background_color,
-                     log_level_color_rules = excluded.log_level_color_rules",
+                     log_level_color_rules = excluded.log_level_color_rules"
+        };
+        let sql = format!("INSERT INTO app_settings(
+                     id, default_show_line_numbers, default_show_row_separators,
+                     highlight_log_levels, log_font_size, log_line_spacing, log_font_family,
+                     shortcut_open_file, shortcut_focus_search, shortcut_quick_find,
+                     shortcut_close_tab, shortcut_open_settings,
+                     shortcut_toggle_case_sensitive, shortcut_jump_to_bottom,
+                     shortcut_cycle_color_label, shortcut_toggle_word_wrap,
+                     mouse_wheel_scroll_percent, scroll_by_line,
+                     mouse_wheel_scroll_lines, scroll_by_line_when_word_wrap,
+                     reduce_motion, confirm_close_tab, show_full_path,
+                     max_search_results, highlight_matches, word_boundary_characters,
+                     default_case_sensitive, default_use_regex,
+                     show_line_number_row_separators, line_number_width,
+                     line_number_text_color, line_number_background_color,
+                     theme_preference, open_directory_command, viewer_overscan, language,
+                     app_log_level, light_log_text_color, light_log_background_color,
+                     dark_log_text_color, dark_log_background_color, log_level_color_rules, selection_styles
+                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42)
+                 ON CONFLICT(id) DO UPDATE SET {update}");
+        connection
+            .execute(
+                &sql,
                 params![
                     settings.default_show_line_numbers,
                     settings.default_show_row_separators,
@@ -585,6 +616,7 @@ impl StateRepository {
                     settings.dark_log_text_color,
                     settings.dark_log_background_color,
                     settings.log_level_color_rules,
+                    settings.selection_styles,
                 ],
             )
             .context("无法保存应用设置")?;
@@ -784,11 +816,16 @@ impl StateRepository {
     pub fn save_color_labels(&self, labels: &[ColorLabelRecord]) -> Result<()> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction().context("无法开始颜色标签事务")?;
-        transaction
+        Self::write_color_labels(&transaction, labels)?;
+        transaction.commit().context("无法提交颜色标签事务")
+    }
+
+    fn write_color_labels(connection: &Connection, labels: &[ColorLabelRecord]) -> Result<()> {
+        connection
             .execute("DELETE FROM color_labels", [])
             .context("无法重置颜色标签")?;
         for (position, label) in labels.iter().enumerate() {
-            transaction
+            connection
                 .execute(
                     "INSERT INTO color_labels(
                          position, label_id, name, text_color, text_alpha, color, alpha
@@ -805,14 +842,14 @@ impl StateRepository {
                 )
                 .with_context(|| format!("无法保存颜色标签：{}", label.name))?;
         }
-        transaction
+        connection
             .execute(
                 "INSERT INTO color_label_settings(id, initialized) VALUES (1, 1)
                  ON CONFLICT(id) DO UPDATE SET initialized = 1",
                 [],
             )
             .context("无法保存颜色标签初始化状态")?;
-        transaction.commit().context("无法提交颜色标签事务")
+        Ok(())
     }
 
     pub fn database_info(&self) -> Result<DatabaseInfo> {
@@ -1058,6 +1095,7 @@ fn initialize_schema(connection: &Connection, defaults: &StateMigrationDefaults)
                  default_show_row_separators INTEGER NOT NULL DEFAULT 0,
                  highlight_log_levels INTEGER NOT NULL DEFAULT 0,
                  log_level_color_rules TEXT NOT NULL DEFAULT '',
+                 selection_styles TEXT NOT NULL DEFAULT '',
                  log_font_size INTEGER NOT NULL DEFAULT 13,
                  log_line_spacing INTEGER NOT NULL DEFAULT 6,
                  log_font_family TEXT NOT NULL DEFAULT 'consolas',
@@ -1203,9 +1241,10 @@ fn ensure_color_label_columns(
 }
 
 fn ensure_app_settings_columns(connection: &Connection, default_log_level: &str) -> Result<()> {
-    const COLUMNS: [(&str, &str); 38] = [
+    const COLUMNS: [(&str, &str); 39] = [
         ("highlight_log_levels", "INTEGER NOT NULL DEFAULT 0"),
         ("log_level_color_rules", "TEXT NOT NULL DEFAULT ''"),
+        ("selection_styles", "TEXT NOT NULL DEFAULT ''"),
         ("log_font_size", "INTEGER NOT NULL DEFAULT 13"),
         ("log_line_spacing", "INTEGER NOT NULL DEFAULT 6"),
         ("log_font_family", "TEXT NOT NULL DEFAULT 'consolas'"),

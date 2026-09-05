@@ -85,9 +85,8 @@ use crate::{
     log_table::{
         LogTableCursor, LogTableDelegate, TextHighlight, VirtualLogListStateExt, line_marker,
         line_marker_column_width, log_cell_horizontal_padding, log_fixed_column_divider_overlay,
-        log_level_accent_overlay, log_line_height, log_line_number_cell, log_row_selection_color,
-        log_row_selection_overlay, log_row_separator_overlay, message_column_width,
-        text_highlight_style,
+        log_level_accent_overlay, log_line_height, log_line_number_cell, log_row_separator_overlay,
+        message_column_width, text_highlight_style,
     },
     path_identity::{
         PathMatchKey, decode_persisted_path, deduplicate_paths, encode_persisted_path,
@@ -409,6 +408,7 @@ struct WorkspaceWindowRegistry {
     predefined_filters: Option<Vec<PredefinedFilter>>,
     cross_window_tab_drag: Option<CrossWindowTabDrag>,
     search_options: Option<(bool, bool)>,
+    highlight_settings_save_completion: Option<async_channel::Receiver<()>>,
     last_settings_category: SettingsCategory,
     last_settings_category_loaded: bool,
 }
@@ -1664,6 +1664,7 @@ impl Workspace {}
 mod document_commands;
 mod document_lifecycle;
 mod document_opening;
+mod highlight_preferences;
 mod log_presentation;
 mod log_viewport;
 mod preferences;
@@ -1739,6 +1740,10 @@ impl Workspace {
             },
         )
         .detach();
+        for focus in [&log_focus_handle, &search_results_focus_handle] {
+            cx.on_focus_out(focus, window, |_: &mut Workspace, _, _, cx| cx.notify())
+                .detach();
+        }
         let log_viewer = SharedDisplayState {
             surface: log_surface,
             focus_handle: log_focus_handle,

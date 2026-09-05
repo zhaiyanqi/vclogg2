@@ -715,6 +715,15 @@ impl Workspace {
                 && drag.region == region
                 && drag.mode == RowDragMode::Lines
         });
+        let selection_focus = if region == WrappedRegion::Log {
+            &self.log_viewer.focus_handle
+        } else {
+            &self.search_results_viewer.focus_handle
+        };
+        let selection_style = self.app_settings.selection_styles.resolve(
+            window.is_window_active() && selection_focus.contains_focused(window, cx),
+            cx,
+        );
         let rendered_row_bounds = {
             let wrapped = if region == WrappedRegion::Results {
                 &self.documents[tab_ix].result_viewport
@@ -755,6 +764,14 @@ impl Workspace {
                     row.text,
                     styled_text,
                     ui_theme::text_selection_highlight(cx),
+                )
+                .selection_style(
+                    selection_style.text,
+                    if selection_style.text.legacy_overlay {
+                        Vec::new()
+                    } else {
+                        Self::highlight_styles(&row.highlights, cx)
+                    },
                 )
                 .suppress_selection(suppress_text_selection)
                 .word_boundary_characters(self.app_settings.word_boundary_characters.clone());
@@ -848,13 +865,11 @@ impl Workspace {
                                     cell.text_color(cx.theme().danger)
                                 })
                                 .when(row.selected, |cell| {
-                                    cell.bg(log_row_selection_color(cx)).child(
-                                        log_row_selection_overlay(
-                                            !selected_above,
-                                            !selected_below,
-                                            cx,
-                                        ),
-                                    )
+                                    cell.child(selection_style.row_overlay(
+                                        !selected_above,
+                                        !selected_below,
+                                        cx,
+                                    ))
                                 })
                                 .when(show_row_separators && !row.selected, |cell| {
                                     cell.child(log_row_separator_overlay(false, cx))
@@ -2323,6 +2338,14 @@ impl Workspace {
             drag.region == WrappedRegion::GlobalResults && drag.mode == RowDragMode::Lines
         });
         self.global_viewport.begin_row_layout();
+        let selection_style = self.app_settings.selection_styles.resolve(
+            window.is_window_active()
+                && self
+                    .search_results_viewer
+                    .focus_handle
+                    .contains_focused(window, cx),
+            cx,
+        );
         let rendered_row_bounds = self.global_viewport.wrapped_row_bounds();
 
         visible_range
@@ -2424,6 +2447,14 @@ impl Workspace {
                         .word_boundary_characters(
                             self.app_settings.word_boundary_characters.clone(),
                         )
+                        .selection_style(
+                            selection_style.text,
+                            if selection_style.text.legacy_overlay {
+                                Vec::new()
+                            } else {
+                                Self::highlight_styles(&highlights, cx)
+                            },
+                        )
                         .suppress_selection(suppress_text_selection);
                         Some(VirtualLogRow::new(
                             row_ix,
@@ -2500,13 +2531,11 @@ impl Workspace {
                                             cell.text_color(cx.theme().danger)
                                         })
                                         .when(selected, |cell| {
-                                            cell.bg(log_row_selection_color(cx)).child(
-                                                log_row_selection_overlay(
-                                                    !selected_above,
-                                                    !selected_below,
-                                                    cx,
-                                                ),
-                                            )
+                                            cell.child(selection_style.row_overlay(
+                                                !selected_above,
+                                                !selected_below,
+                                                cx,
+                                            ))
                                         })
                                         .when(show_row_separators && !selected, |cell| {
                                             cell.child(log_row_separator_overlay(false, cx))

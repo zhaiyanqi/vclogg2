@@ -532,6 +532,9 @@ pub struct SelectableLogText {
     styled_text: StyledText,
     document_order: u64,
     selection_color: gpui::Hsla,
+    selection_style: Option<crate::selection_style::ResolvedTextSelectionStyle>,
+    highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
+    preview_range: Option<Range<usize>>,
     suppress_selection: bool,
     word_boundary_characters: SharedString,
 }
@@ -550,9 +553,29 @@ impl SelectableLogText {
             styled_text,
             document_order,
             selection_color,
+            selection_style: None,
+            highlights: Vec::new(),
+            preview_range: None,
             suppress_selection: false,
             word_boundary_characters: SharedString::default(),
         }
+    }
+
+    pub(crate) fn selection_style(
+        mut self,
+        style: crate::selection_style::ResolvedTextSelectionStyle,
+        highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
+    ) -> Self {
+        self.selection_color = style.background;
+        self.selection_style = Some(style);
+        self.highlights = highlights;
+        self
+    }
+
+    /// A passive sample shares the real painter without registering in the window selection scope.
+    pub(crate) fn preview_range(mut self, range: Range<usize>) -> Self {
+        self.preview_range = Some(range);
+        self
     }
 
     pub fn suppress_selection(mut self, suppress: bool) -> Self {
@@ -592,6 +615,212 @@ impl SelectableLogText {
             Point::new(end.x, end.y + line_height),
         ));
         quads
+    }
+
+    fn paint_custom_selection(
+        &mut self,
+        layout: &gpui::TextLayout,
+        range: &Range<usize>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let Some(style) = self.selection_style.filter(|style| !style.legacy_overlay) else {
+            return false;
+        };
+        if range.is_empty() || range.end > self.text.display().len() {
+            return false;
+        }
+        let (Some(start), Some(end)) = (
+            layout.position_for_index(range.start),
+            layout.position_for_index(range.end),
+        ) else {
+            return false;
+        };
+        let mask = window.content_mask().bounds;
+        let rectangles = Self::selection_bounds(start, end, layout.bounds(), layout.line_height())
+            .into_iter()
+            .map(|bounds| bounds.intersect(&mask))
+            .filter(|bounds| bounds.size.width > gpui::px(0.) && bounds.size.height > gpui::px(0.))
+            .collect::<Vec<_>>();
+        if rectangles.is_empty() {
+            return false;
+        }
+
+        // Paint the original StyledText through complementary masks. Selected glyphs must not
+        // be painted twice: translucent colors would otherwise reveal the old foreground.
+        let mut top = mask.top();
+        for selected in &rectangles {
+            for outside in [
+                Bounds::from_corners(
+                    gpui::point(mask.left(), top),
+                    gpui::point(mask.right(), selected.top()),
+                ),
+                Bounds::from_corners(
+                    gpui::point(mask.left(), selected.top()),
+                    gpui::point(selected.left(), selected.bottom()),
+                ),
+                Bounds::from_corners(
+                    gpui::point(selected.right(), selected.top()),
+                    gpui::point(mask.right(), selected.bottom()),
+                ),
+            ] {
+                self.paint_original_in_mask(outside, layout, window, cx);
+            }
+            top = selected.bottom();
+        }
+        self.paint_original_in_mask(
+            Bounds::from_corners(gpui::point(mask.left(), top), mask.bottom_right()),
+            layout,
+            window,
+            cx,
+        );
+        for selected in &rectangles {
+            window.paint_quad(gpui::fill(*selected, style.background));
+        }
+
+        // Reuse the exact shaped glyph IDs, offsets and wrap boundaries. Re-shaping with extra
+        // decoration runs can split ligatures even when font/size are unchanged.
+        let base_color = window.text_style().color;
+        let mut line_origin = layout.bounds().origin;
+        let mut line_start = 0;
+        let mut highlight_ix = 0;
+        for wrapped in layout.line_layouts() {
+            let line = &wrapped.unwrapped_layout;
+            let baseline = (layout.line_height() - line.ascent - line.descent) / 2. + line.ascent;
+            let mut wraps = wrapped.wrap_boundaries.iter().peekable();
+            let mut wrap_x = gpui::px(0.);
+            let mut y = line_origin.y;
+            for (run_ix, run) in line.runs.iter().enumerate() {
+                let max_glyph_size = cx
+                    .text_system()
+                    .bounding_box(run.font_id, line.font_size)
+                    .size;
+                for (glyph_ix, glyph) in run.glyphs.iter().enumerate() {
+                    if wraps.peek().is_some_and(|boundary| {
+                        boundary.run_ix == run_ix && boundary.glyph_ix == glyph_ix
+                    }) {
+                        wraps.next();
+                        wrap_x = glyph.position.x;
+                        y += layout.line_height();
+                    }
+                    let Some(selected) = rectangles.iter().find(|selected| {
+                        selected.top() < y + layout.line_height() && selected.bottom() > y
+                    }) else {
+                        continue;
+                    };
+                    let glyph_origin = gpui::point(line_origin.x + glyph.position.x - wrap_x, y);
+                    if !(Bounds {
+                        origin: glyph_origin,
+                        size: max_glyph_size,
+                    })
+                    .intersects(selected)
+                    {
+                        continue;
+                    }
+                    let index = line_start + glyph.index;
+                    while self
+                        .highlights
+                        .get(highlight_ix)
+                        .is_some_and(|(span, _)| span.end <= index)
+                    {
+                        highlight_ix += 1;
+                    }
+                    let original_color = self
+                        .highlights
+                        .get(highlight_ix)
+                        .filter(|(span, _)| span.contains(&index))
+                        .and_then(|(_, highlight)| highlight.color)
+                        .unwrap_or(base_color);
+                    let color = style
+                        .foreground
+                        .map_or(original_color, |color| color.opacity(style.opacity));
+                    let origin = gpui::point(glyph_origin.x, y + baseline + glyph.position.y);
+                    // Clip both vertically and horizontally, including a partially selected ligature.
+                    let result = window.with_content_mask(
+                        Some(gpui::ContentMask { bounds: *selected }),
+                        |window| {
+                            if glyph.is_emoji {
+                                window.paint_emoji(origin, run.font_id, glyph.id, line.font_size)
+                            } else {
+                                window.paint_glyph(
+                                    origin,
+                                    run.font_id,
+                                    glyph.id,
+                                    line.font_size,
+                                    color,
+                                )
+                            }
+                        },
+                    );
+                    if let Err(error) = result {
+                        log::warn!("Could not paint selected glyph: {error}");
+                    }
+                }
+            }
+            if style.underline {
+                let mut visual_start_x = gpui::px(0.);
+                for visual_line in 0..=wrapped.wrap_boundaries.len() {
+                    let visual_end_x = wrapped
+                        .wrap_boundaries
+                        .get(visual_line)
+                        .map(|boundary| {
+                            line.runs[boundary.run_ix].glyphs[boundary.glyph_ix]
+                                .position
+                                .x
+                        })
+                        .unwrap_or(line.width);
+                    let y = line_origin.y + layout.line_height() * visual_line;
+                    if let Some(selected) = rectangles.iter().find(|selected| {
+                        selected.top() < y + layout.line_height() && selected.bottom() > y
+                    }) {
+                        let left = selected.left().max(line_origin.x);
+                        let right = selected
+                            .right()
+                            .min(line_origin.x + visual_end_x - visual_start_x);
+                        if right > left {
+                            window.with_content_mask(
+                                Some(gpui::ContentMask { bounds: *selected }),
+                                |window| {
+                                    window.paint_underline(
+                                        gpui::point(left, y + baseline + line.descent * 0.618),
+                                        right - left,
+                                        &gpui::UnderlineStyle {
+                                            thickness: gpui::px(1.),
+                                            color: Some(
+                                                style
+                                                    .foreground
+                                                    .unwrap_or(base_color)
+                                                    .opacity(style.opacity),
+                                            ),
+                                            wavy: false,
+                                        },
+                                    );
+                                },
+                            );
+                        }
+                    }
+                    visual_start_x = visual_end_x;
+                }
+            }
+            line_origin.y += wrapped.size(layout.line_height()).height;
+            line_start += wrapped.len() + 1;
+        }
+        true
+    }
+
+    fn paint_original_in_mask(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        layout: &gpui::TextLayout,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if bounds.size.width > gpui::px(0.) && bounds.size.height > gpui::px(0.) {
+            window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+                self.styled_text
+                    .paint(None, None, layout.bounds(), &mut (), &mut (), window, cx);
+            });
+        }
     }
 
     fn paint_selection(&self, layout: &gpui::TextLayout, range: Range<usize>, window: &mut Window) {
@@ -733,6 +962,9 @@ impl Element for SelectableLogText {
         // 每个可见日志行都注册，会形成 O(可见行数²) 的重复遍历；仅保留鼠标所在行
         // 作为拖选起点，跨行选择激活后再恢复全部可见行。多击选词/整行属于参与者本地选择，
         // 它没有几何快照，必须单独保持当前行注册，否则鼠标离开后帧清理会清掉词选区。
+        if self.preview_range.is_some() {
+            return hitbox;
+        }
         if self.selection.activity.is_active()
             || self.selection.handle.has_local_selection(cx)
             || bounds.contains(&window.mouse_position())
@@ -762,6 +994,14 @@ impl Element for SelectableLogText {
     ) {
         let _performance_scope = crate::ui_performance::scope("SelectableLogText::paint");
         let layout = self.styled_text.layout().clone();
+        if let Some(range) = self.preview_range.clone() {
+            if !self.paint_custom_selection(&layout, &range, window, cx) {
+                self.styled_text
+                    .paint(id, inspector_id, bounds, &mut (), &mut (), window, cx);
+                self.paint_selection(&layout, range, window);
+            }
+            return;
+        }
         let selection = self.selection.clone();
         let selection_state = selection.state.clone();
         let event_layout = layout.clone();
@@ -839,8 +1079,6 @@ impl Element for SelectableLogText {
             }
             state.projected_range = projection.ranges().first().and_then(Clone::clone);
         }
-        self.styled_text
-            .paint(id, inspector_id, bounds, &mut (), &mut (), window, cx);
         let painted_range = self
             .selection
             .state
@@ -850,9 +1088,15 @@ impl Element for SelectableLogText {
             .map(LogTextLocalSelection::range)
             .cloned()
             .or_else(|| projection.ranges().first().and_then(Clone::clone));
-        if !self.suppress_selection
-            && let Some(range) = painted_range
+        let painted_range = painted_range.filter(|_| !self.suppress_selection);
+        if let Some(range) = &painted_range
+            && self.paint_custom_selection(&layout, range, window, cx)
         {
+            return;
+        }
+        self.styled_text
+            .paint(id, inspector_id, bounds, &mut (), &mut (), window, cx);
+        if let Some(range) = painted_range {
             self.paint_selection(&layout, range, window);
         }
     }

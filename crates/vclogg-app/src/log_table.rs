@@ -44,10 +44,6 @@ pub(crate) fn line_number_font_size(log_font_size: u16) -> Pixels {
     px(log_font_size.saturating_sub(2).clamp(8, 18) as f32)
 }
 
-pub(crate) fn log_row_selection_color(cx: &App) -> Hsla {
-    cx.theme().table_active
-}
-
 /// 分隔线使用行内绝对定位的 1px 覆盖层，不参与布局。自动换行时不会把内容撑高，
 /// 固定行高和自动换行也可以复用完全相同的单元格绘制规则。
 pub(crate) fn log_row_separator_overlay(at_top: bool, cx: &App) -> Div {
@@ -99,19 +95,6 @@ pub(crate) fn log_fixed_column_divider_overlay(fixed_columns_width: Pixels, cx: 
         .left(fixed_columns_width - px(1.))
         .w(px(1.))
         .bg(cx.theme().border)
-}
-
-pub(crate) fn log_row_selection_overlay(
-    show_top_border: bool,
-    show_bottom_border: bool,
-    cx: &App,
-) -> Div {
-    div()
-        .absolute()
-        .inset_0()
-        .when(show_top_border, |overlay| overlay.border_t_1())
-        .when(show_bottom_border, |overlay| overlay.border_b_1())
-        .border_color(cx.theme().table_active_border)
 }
 
 /// 级别色条使用不占布局的绝对定位覆盖层，挂在标记列上即可贴住行的左缘。

@@ -819,139 +819,6 @@ impl Workspace {
         self.refresh_active_log_search_presentation(cx);
     }
 
-    pub(super) fn open_color_labels_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.color_labels_saving {
-            return;
-        }
-        let labels = cx.new(|cx| {
-            ColorLabelsDialog::new(
-                self.app_settings.highlight_log_levels,
-                self.app_settings.log_level_color_rules.clone(),
-                self.color_labels.clone(),
-                window,
-                cx,
-            )
-        });
-        let workspace = cx.entity();
-        let (color_labels_dialog_size, color_labels_dialog_margin_top) =
-            management_dialog_geometry(window);
-        window.open_dialog(cx, move |dialog, _, cx| {
-            let labels = labels.clone();
-            let content_labels = labels.clone();
-            let workspace = workspace.clone();
-            dialog
-                .w(color_labels_dialog_size.width)
-                .h(color_labels_dialog_size.height)
-                .margin_top(color_labels_dialog_margin_top)
-                .title(crate::tr!("高亮配置", "Highlight settings"))
-                .close_button(false)
-                .content(move |content, _, _| {
-                    content
-                        .min_h_0()
-                        .overflow_hidden()
-                        .child(content_labels.clone())
-                })
-                .footer(
-                    DialogFooter::new()
-                        .child(crate::dialog_focus::dialog_cancel_action(
-                            "color-label-dialog-cancel-action",
-                            Button::new("color-label-dialog-cancel")
-                                .label(crate::tr!("取消", "Cancel")),
-                            cx,
-                        ))
-                        .child(crate::dialog_focus::dialog_confirm_action(
-                            "color-label-dialog-save-action",
-                            Button::new("color-label-dialog-save")
-                                .primary()
-                                .label(crate::tr!("保存", "Save")),
-                            cx,
-                        )),
-                )
-                .on_ok(move |_, window, cx| {
-                    let draft = match labels.read(cx).config(cx) {
-                        Ok(draft) => draft,
-                        Err(error) => {
-                            window.push_notification(error, cx);
-                            return false;
-                        }
-                    };
-                    workspace.update(cx, |this, cx| {
-                        let log_level_rules = draft.log_level_rules;
-                        let highlight_log_levels = draft.highlight_log_levels;
-                        this.update_app_setting(
-                            move |settings| {
-                                settings.highlight_log_levels = highlight_log_levels;
-                                settings.log_level_color_rules = log_level_rules;
-                            },
-                            window,
-                            cx,
-                        );
-                        this.save_color_labels(draft.labels, window, cx);
-                    });
-                    true
-                })
-        });
-    }
-
-    pub(super) fn save_color_labels(
-        &mut self,
-        labels: Vec<ColorLabel>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(store) = self.persistence.store.clone() else {
-            window.push_notification(
-                crate::tr!(
-                    "状态库尚未就绪，颜色标签未保存",
-                    "State storage is not ready; color labels weren’t saved"
-                ),
-                cx,
-            );
-            return;
-        };
-        self.apply_color_labels(labels.clone(), cx);
-        let source_window = window.window_handle();
-        let other_workspaces = cx
-            .global::<WorkspaceWindowRegistry>()
-            .windows
-            .iter()
-            .filter(|entry| entry.window != source_window)
-            .map(|entry| entry.workspace.clone())
-            .collect::<Vec<_>>();
-        for workspace in other_workspaces {
-            let shared_labels = labels.clone();
-            workspace.update(cx, |workspace, cx| {
-                workspace.apply_color_labels(shared_labels, cx)
-            });
-        }
-        self.color_labels_saving = true;
-        cx.notify();
-        self.persistence
-            .state_tasks
-            .push(cx.spawn_in(window, async move |this, cx| {
-                let result = cx
-                    .background_spawn(async move { store.save_color_labels(&labels) })
-                    .await;
-                _ = this.update_in(cx, |this, window, cx| {
-                    this.color_labels_saving = false;
-                    match result {
-                        Ok(()) => window.push_notification(
-                            crate::tr!("颜色标签已保存", "Color labels saved"),
-                            cx,
-                        ),
-                        Err(error) => window.push_notification(
-                            crate::tr_args!(
-                                "颜色标签未能保存：{error}",
-                                "Couldn’t save color labels: {error}"
-                            ),
-                            cx,
-                        ),
-                    }
-                    cx.notify();
-                });
-            }));
-    }
-
     pub(super) fn open_predefined_filters_dialog(
         &mut self,
         window: &mut Window,
@@ -1293,11 +1160,13 @@ impl Workspace {
 
     pub(super) fn apply_app_settings_inner(
         &mut self,
-        settings: AppSettings,
+        mut settings: AppSettings,
         commit_defaults: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // General settings drafts do not own the independently committed selection appearance.
+        settings.selection_styles = self.app_settings.selection_styles.clone();
         if self.app_settings.search_result_limit() != settings.search_result_limit() {
             self.cancel_search();
         }

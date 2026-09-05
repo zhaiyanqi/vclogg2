@@ -28,6 +28,8 @@ mod result_export;
 mod search_autocomplete;
 mod search_context;
 mod selectable_log_text;
+mod selection_style;
+mod selection_style_section;
 mod settings_dialog;
 mod single_instance;
 mod state_store;
