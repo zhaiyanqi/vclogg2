@@ -51,9 +51,9 @@ use gpui_component::{
 };
 use rayon::prelude::{IntoParallelIterator as _, ParallelIterator as _};
 use vclogg_core::{
-    CompressedRows, LinePreviewReader, LineReader, LogDocument, PendingIndexCacheWrite,
-    SearchCancellation, SearchMatcher, SearchQuery, SearchResult, SearchRun,
-    search_with_compiled_matcher,
+    CompressedRows, DocumentRefreshKind, LinePreviewReader, LineReader, LogDocument,
+    PendingIndexCacheWrite, SearchCancellation, SearchMatcher, SearchQuery, SearchResult,
+    SearchRun, search_appended_with_compiled_matcher, search_with_compiled_matcher,
 };
 
 use crate::{
@@ -143,7 +143,6 @@ const SEARCH_BAR_VERTICAL_INSET: Pixels = px(6.);
 const EMPTY_WORKSPACE_CARD_HEADER_HEIGHT_REMS: f32 = 3.25;
 const EMPTY_WORKSPACE_FILE_ROW_HEIGHT_REMS: f32 = 3.2;
 const TRANSIENT_SURFACE_ENTER_DURATION: Duration = Duration::from_millis(160);
-const FILE_WATCH_INTERVAL: Duration = Duration::from_millis(750);
 static INDEX_CACHE_CLEANUP_SCHEDULED: AtomicBool = AtomicBool::new(false);
 static PREDEFINED_FILTERS_SAVE_REVISION: AtomicU64 = AtomicU64::new(0);
 static PREDEFINED_FILTERS_SAVE_LOCK: Mutex<()> = Mutex::new(());
@@ -756,8 +755,18 @@ struct PreparedGlobalResultReplacement {
     restore_context: Option<SearchSessionState>,
 }
 
+struct ReloadGlobalSearch {
+    completed: bool,
+    query: SearchQuery,
+    document: Arc<LogDocument>,
+    result: SearchResult,
+    matcher: Option<SearchMatcher>,
+}
+
 struct ReloadReplacementInput {
     document_id: u64,
+    global_revision: u64,
+    global_search: Option<ReloadGlobalSearch>,
     revision: u64,
     previous_document: Arc<LogDocument>,
     document: Arc<LogDocument>,
@@ -765,12 +774,13 @@ struct ReloadReplacementInput {
     query: SearchQuery,
     search_matcher: Option<SearchMatcher>,
     results_visible: bool,
-    follow_end: bool,
     selected_source_row: Option<usize>,
 }
 
 struct ReloadReplacementPlan {
     document_id: u64,
+    global_revision: u64,
+    global_search: Option<ReloadGlobalSearch>,
     revision: u64,
     previous_document: Arc<LogDocument>,
     document: Arc<LogDocument>,
@@ -782,13 +792,10 @@ struct ReloadReplacementPlan {
     results_visible: bool,
     follow_end: bool,
     selected_source_row: Option<usize>,
-    selected_result_row: Option<usize>,
     log_request: Option<StagedVisibleLineLoadRequest<usize>>,
     result_request: Option<StagedVisibleLineLoadRequest<usize>>,
     log_anchor: Option<ViewportAnchor<LogRowKey>>,
     result_anchor: Option<ViewportAnchor<LogRowKey>>,
-    log_measured_heights: BTreeMap<LogRowKey, Pixels>,
-    result_measured_heights: BTreeMap<LogRowKey, Pixels>,
     row_height: Pixels,
     log_word_wrap: bool,
     result_word_wrap: bool,
@@ -1611,6 +1618,7 @@ pub struct Workspace {
     tab_activation_task: Option<Task<()>>,
     tab_activation_revision: u64,
     open_task: Option<Task<()>>,
+    file_refresh_task: Option<Task<()>>,
     pending_external_paths: Vec<PathBuf>,
     searches: SearchController,
     result_export_task: Option<Task<()>>,
@@ -1634,6 +1642,9 @@ pub struct Workspace {
     search_panel_resize_gesture: Option<SearchPanelResizeGesture>,
     search_panel_resize_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     file_watch_task: Option<Task<()>>,
+    file_watch: Option<crate::file_watch::FileWatch>,
+    file_watch_window_active: bool,
+    file_watch_document_id: Option<u64>,
     deactivated_input_focus: Option<FocusHandle>,
     _cloud_client_bootstrap_task: Task<()>,
     persistence: PersistenceController,
@@ -2202,6 +2213,7 @@ impl Workspace {
             tab_activation_task: None,
             tab_activation_revision: 0,
             open_task: None,
+            file_refresh_task: None,
             pending_external_paths: Vec::new(),
             searches: SearchController::default(),
             result_export_task: None,
@@ -2225,6 +2237,9 @@ impl Workspace {
             search_panel_resize_gesture: None,
             search_panel_resize_bounds: Rc::new(Cell::new(None)),
             file_watch_task: None,
+            file_watch: None,
+            file_watch_window_active: false,
+            file_watch_document_id: None,
             deactivated_input_focus: None,
             _cloud_client_bootstrap_task: cloud_client_bootstrap_task,
             persistence,

@@ -34,6 +34,8 @@ VCLogg2 面向大文件浏览、持续追加日志、多范围检索和分析型
 
 长时间搜索会显示扫描行数、匹配数和进度，并可取消。新的搜索、重新加载或关闭文档会使旧扫描失效，迟到结果不会覆盖当前视图。
 
+仅在窗口处于前台时监测当前查看的日志，通过系统通知刷新正文、当前文件搜索及已有全局搜索中该文件的结果；切到后台停止监听和轮询，回到前台或切换标签立即检查一次。连续通知按 400 ms 合并，每 30 秒只复核当前文件。“末尾跟随”仅控制正文是否滚到最新一行。持续追加、半行续写、截断和轮转的处理方式及刷新延迟边界见[动态日志文件](doc/dynamic-log-files.md)。
+
 ## 快速开始
 
 ### Windows
@@ -129,6 +131,14 @@ Release 可执行文件位于 Windows 的 `target\release\vclogg2.exe` 或 macOS
 ```bash
 python3 scripts/generate-test-data.py
 ```
+
+使用 Python 3 持续追加随机日志，观察文件增长时的行为：
+
+```bash
+python3 scripts/generate-live-log.py --output target/test-data/live.log --min-lines 5 --max-lines 30 --interval 1
+```
+
+默认每秒追加 1～20 行到 `target/test-data/live.log`，每批写入后刷新，按 Ctrl+C 停止。文件不存在时自动创建，已存在时保留内容并追加。可加 `--total-lines 1000` 在本次追加 1000 行后退出；`--seed 42` 固定随机内容和批次行数，时间戳仍为当前 UTC 时间。日志中的 `line` 从本次运行的 1 开始计数。使用 `--help` 查看全部参数。
 
 Debug 构建默认记录超过 16 ms 的已标记 UI 渲染作用域。需要隔离应用数据、缓存和构建产物时，在 Windows 使用：
 

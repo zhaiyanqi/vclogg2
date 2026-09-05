@@ -13,6 +13,7 @@ mod color_labels_dialog;
 mod crash_report;
 mod dialog_focus;
 mod directory_search_dialog;
+mod file_watch;
 mod global_search_files_dialog;
 mod global_search_table;
 mod history_dialog;

@@ -182,6 +182,7 @@ pub fn search_with_progress(
         query.max_results,
         cancellation,
         Some(progress),
+        false,
     ))
 }
 
@@ -196,7 +197,7 @@ pub fn search_with_compiled_matcher(
     max_results: Option<usize>,
     cancellation: &SearchCancellation,
 ) -> SearchRun {
-    search_with_compiled_matcher_inner(document, matcher, max_results, cancellation, None)
+    search_with_compiled_matcher_inner(document, matcher, max_results, cancellation, None, false)
 }
 
 fn search_with_compiled_matcher_inner(
@@ -205,6 +206,7 @@ fn search_with_compiled_matcher_inner(
     max_results: Option<usize>,
     cancellation: &SearchCancellation,
     progress: Option<&SearchProgress>,
+    force_verify_integrity: bool,
 ) -> SearchRun {
     if cancellation.is_cancelled() {
         return SearchRun::Cancelled;
@@ -219,10 +221,9 @@ fn search_with_compiled_matcher_inner(
     if let Some(progress) = progress {
         progress.update(0, 0);
     }
-    let verify_integrity = !document.has_strong_source_change_token();
-    if !verify_integrity && !document.source_identity_matches() {
-        return SearchRun::SourceChanged;
-    }
+    let verify_integrity = force_verify_integrity
+        || !document.has_strong_source_change_token()
+        || !document.source_identity_matches();
     let line_count = document.line_count();
     let chunk_count = search_chunk_count(document);
     let chunk_size = line_count.div_ceil(chunk_count);
@@ -268,7 +269,16 @@ fn search_with_compiled_matcher_inner(
         return SearchRun::SourceChanged;
     }
     if !verify_integrity && !document.source_identity_matches() {
-        return SearchRun::SourceChanged;
+        // A changed token may be a harmless append. Retry once against the indexed
+        // block digests instead of requiring the writer to become idle.
+        return search_with_compiled_matcher_inner(
+            document,
+            Some(matcher),
+            max_results,
+            cancellation,
+            progress,
+            true,
+        );
     }
 
     let mut line_indices = RoaringTreemap::new();
@@ -305,6 +315,54 @@ fn search_with_compiled_matcher_inner(
         },
         truncated,
     })
+}
+
+/// Update a completed search after a verified `DocumentRefreshKind::Appended` refresh.
+/// The matcher and result limit must be the same as for `previous`. The old final
+/// rows are rescanned because a partial line or CRLF can continue in the new bytes.
+pub fn search_appended_with_compiled_matcher(
+    document: &LogDocument,
+    previous_line_count: usize,
+    previous: &SearchResult,
+    matcher: Option<&SearchMatcher>,
+    max_results: Option<usize>,
+    cancellation: &SearchCancellation,
+) -> SearchRun {
+    if cancellation.is_cancelled() {
+        return SearchRun::Cancelled;
+    }
+    let Some(matcher) = matcher else {
+        return SearchRun::Completed(SearchResult::default());
+    };
+    if previous.truncated || previous_line_count > document.line_count() {
+        return search_with_compiled_matcher(document, Some(matcher), max_results, cancellation);
+    }
+    let start = previous_line_count.saturating_sub(2);
+    let mut retained = previous.line_indices.clone();
+    retained.retain_below(start);
+    let remaining = max_results.map(|limit| limit.saturating_sub(retained.len()));
+    match scan_search_chunk(
+        document,
+        matcher,
+        start..document.line_count(),
+        remaining,
+        cancellation,
+        None,
+        true,
+    ) {
+        SearchChunkRun::Completed(tail) => {
+            let mut rows = retained.rows.as_ref().clone();
+            rows |= tail.line_indices;
+            SearchRun::Completed(SearchResult {
+                line_indices: CompressedRows {
+                    rows: Arc::new(rows),
+                },
+                truncated: tail.truncated,
+            })
+        }
+        SearchChunkRun::Cancelled => SearchRun::Cancelled,
+        SearchChunkRun::SourceChanged => SearchRun::SourceChanged,
+    }
 }
 
 fn search_chunk_count(document: &LogDocument) -> usize {

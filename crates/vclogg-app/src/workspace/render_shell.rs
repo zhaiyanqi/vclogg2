@@ -329,7 +329,7 @@ impl Workspace {
                         .on_click(toggle_full_path),
                 )
                 .item(
-                    PopupMenuItem::new(crate::tr!("跟随末尾", "Follow end"))
+                    PopupMenuItem::new(crate::tr!("末尾跟随", "Follow end"))
                         .checked(auto_follow)
                         .disabled(!has_document)
                         .on_click(toggle_auto_follow),
@@ -678,11 +678,12 @@ impl Workspace {
         } else {
             crate::tr!("打开日志…（Ctrl+O）", "Open log… (Ctrl+O)")
         };
-        let jump_to_end_tooltip = if cfg!(target_os = "macos") {
-            crate::tr!("跳到文件末尾（Cmd+End）", "Jump to end of file (Cmd+End)")
-        } else {
-            crate::tr!("跳到文件末尾（Ctrl+End）", "Jump to end of file (Ctrl+End)")
-        };
+        let auto_follow = self
+            .active_document()
+            .is_some_and(|tab| tab.view.auto_follow);
+        let follow_available = self
+            .active_document()
+            .is_some_and(|tab| tab.load_state == DocumentLoadState::Ready);
         let workspace = cx.entity();
         let has_document = self.active_document().is_some();
         let active_file_is_pinned = self.active_file_is_pinned();
@@ -786,12 +787,17 @@ impl Workspace {
                             })),
                     ))
                     .child(toolbar_icon_button(
-                        Button::new("jump-to-end")
+                        Button::new("toggle-auto-follow")
                             .icon(IconName::ArrowDown)
-                            .tooltip(jump_to_end_tooltip)
-                            .disabled(!has_document)
+                            .selected(auto_follow)
+                            .tooltip(if auto_follow {
+                                crate::tr!("关闭末尾跟随", "Disable follow end")
+                            } else {
+                                crate::tr!("开启末尾跟随", "Enable follow end")
+                            })
+                            .disabled(!follow_available)
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.jump_to_end(&JumpToEnd, window, cx);
+                                this.toggle_auto_follow(window, cx);
                             })),
                     )),
             )

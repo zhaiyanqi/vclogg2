@@ -1698,7 +1698,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.searches.is_active() || self.open_task.is_some() {
+        if self.searches.is_active() || self.open_task.is_some() || self.file_refresh_task.is_some()
+        {
             return;
         }
         let scope = next_persisted_search_restore_scope(
@@ -2464,7 +2465,6 @@ impl Workspace {
                 if reload_after_source_change {
                     let reload_started = this.reload_document(
                         document_id,
-                        false,
                         ReloadStrategy::Full,
                         window,
                         cx,
@@ -2909,23 +2909,60 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(super) fn invalidate_all_open_results_for_reload(
+    pub(super) fn all_open_result_for_reload(
+        &self,
+        document_id: u64,
+    ) -> Option<ReloadGlobalSearch> {
+        let (query, matcher, results) =
+            if self.global_search.result_scope == Some(SearchScope::AllOpenFiles) {
+                (
+                    &self.global_search.query,
+                    &self.global_search.matcher,
+                    &self.global_search.results,
+                )
+            } else {
+                let retained = &self.global_search.all_open_context;
+                (&retained.query, &retained.matcher, &retained.results)
+            };
+        let previous = results.get(&document_id)?;
+        Some(ReloadGlobalSearch {
+            completed: previous.failure.is_none(),
+            query: query.clone(),
+            document: previous.document.clone(),
+            result: previous.search_result.clone(),
+            matcher: matcher.clone(),
+        })
+    }
+
+    pub(super) fn install_reloaded_all_open_result(
         &mut self,
         document_id: u64,
-    ) -> Option<bool> {
-        let installed = self.global_search.result_scope == Some(SearchScope::AllOpenFiles)
-            && self.global_search.results.get(&document_id).is_some();
-        let retained = self
-            .global_search
-            .all_open_context
-            .results
-            .get(&document_id)
-            .is_some();
-        if !installed && !retained {
-            return None;
+        replacement: ReloadGlobalSearch,
+    ) {
+        let replace = |results: &GlobalSearchResults| {
+            results
+                .iter()
+                .map(|(id, previous)| {
+                    let mut result = previous.clone();
+                    if *id == document_id {
+                        result.document = replacement.document.clone();
+                        result.search_result = replacement.result.clone();
+                        result.failure = None;
+                    }
+                    (*id, result)
+                })
+                .collect()
+        };
+        if self.global_search.result_scope == Some(SearchScope::AllOpenFiles)
+            && self.global_search.query == replacement.query
+        {
+            self.global_search.results = replace(&self.global_search.results);
         }
-
-        self.invalidate_all_open_results()
+        let retained = &mut self.global_search.all_open_context;
+        if retained.query == replacement.query {
+            retained.results = replace(&retained.results);
+            retained.visible_lines = None;
+        }
     }
 
     pub(super) fn invalidate_all_open_results(&mut self) -> Option<bool> {

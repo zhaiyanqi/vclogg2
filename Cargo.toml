@@ -27,6 +27,7 @@ gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", 
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "runtime_shaders"] }
 keyring = "4.1"
 log = "0.4"
+notify = "7.0"
 reqwest = { version = "0.12", default-features = false, features = [
     "blocking",
     "json",

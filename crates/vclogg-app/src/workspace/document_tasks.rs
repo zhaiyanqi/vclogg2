@@ -608,7 +608,7 @@ pub(super) fn prepare_document(
         let result = if query.text.is_empty() {
             SearchResult::default()
         } else {
-            search_document_with_matcher(&document, &query, matcher.as_ref())
+            search_document_with_matcher(&document, &query, matcher.as_ref())?
         };
         Ok::<_, anyhow::Error>((result, matcher))
     })();
@@ -713,16 +713,50 @@ pub(super) fn prepare_document_shell(
     }
 }
 
+pub(super) fn search_reloaded_document(
+    document: &LogDocument,
+    previous_document: &LogDocument,
+    kind: DocumentRefreshKind,
+    previous_result: &SearchResult,
+    query: &SearchQuery,
+    matcher: Option<&SearchMatcher>,
+) -> Result<SearchResult> {
+    let cancellation = SearchCancellation::default();
+    let run = match kind {
+        DocumentRefreshKind::Appended => search_appended_with_compiled_matcher(
+            document,
+            previous_document.line_count(),
+            previous_result,
+            matcher,
+            query.max_results,
+            &cancellation,
+        ),
+        DocumentRefreshKind::Rebuilt => {
+            search_with_compiled_matcher(document, matcher, query.max_results, &cancellation)
+        }
+    };
+    match run {
+        SearchRun::Completed(result) => Ok(result),
+        SearchRun::SourceChanged => {
+            anyhow::bail!("搜索期间文件内容已改变：{}", document.path().display())
+        }
+        SearchRun::Cancelled => anyhow::bail!("搜索已取消"),
+    }
+}
+
 pub(super) fn search_document_with_matcher(
     document: &LogDocument,
     query: &SearchQuery,
     matcher: Option<&SearchMatcher>,
-) -> SearchResult {
-    let cancellation = SearchCancellation::default();
-    match search_with_compiled_matcher(document, matcher, query.max_results, &cancellation) {
-        SearchRun::Completed(result) => result,
-        SearchRun::SourceChanged | SearchRun::Cancelled => SearchResult::default(),
-    }
+) -> Result<SearchResult> {
+    search_reloaded_document(
+        document,
+        document,
+        DocumentRefreshKind::Rebuilt,
+        &SearchResult::default(),
+        query,
+        matcher,
+    )
 }
 
 pub(super) fn prepare_document_preview(

@@ -1378,33 +1378,6 @@ impl Workspace {
         prepared_frame_installed
     }
 
-    pub(super) fn auto_follow_candidate(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) -> Option<(u64, PathBuf, u64, Option<SystemTime>)> {
-        if self.open_task.is_some() {
-            return None;
-        }
-        let tab = self.documents.get_mut(self.active_ix?)?;
-        if tab.load_state != DocumentLoadState::Ready || !tab.view.auto_follow {
-            return None;
-        }
-
-        let visible_rows = tab.log_table.read(cx).visible_range().rows().clone();
-        if visible_rows.end > 0 && visible_rows.end < tab.document.line_count() {
-            tab.view.auto_follow = false;
-            cx.notify();
-            return None;
-        }
-
-        Some((
-            tab.id,
-            tab.document.path().to_path_buf(),
-            tab.document.metadata().file_size,
-            tab.document.metadata().modified,
-        ))
-    }
-
     pub(super) fn reload_active(
         &mut self,
         _: &ReloadActive,
@@ -1415,7 +1388,7 @@ impl Workspace {
             return;
         };
         let document_id = self.documents[active_ix].id;
-        self.reload_document(document_id, false, ReloadStrategy::Full, window, cx);
+        self.reload_document(document_id, ReloadStrategy::Full, window, cx);
     }
 
     fn prepare_reload_replacement(
@@ -1426,6 +1399,8 @@ impl Workspace {
     ) -> Option<ReloadReplacementPlan> {
         let ReloadReplacementInput {
             document_id,
+            global_revision,
+            global_search,
             revision,
             previous_document,
             document,
@@ -1433,7 +1408,6 @@ impl Workspace {
             query,
             search_matcher,
             results_visible,
-            follow_end,
             selected_source_row,
         } = input;
         let tab_ix = self
@@ -1441,7 +1415,11 @@ impl Workspace {
             .iter()
             .position(|tab| tab.id == document_id)?;
         let tab = &self.documents[tab_ix];
-        if tab.search_revision != revision || !Arc::ptr_eq(&tab.document, &previous_document) {
+        if tab.search_revision != revision
+            || !Arc::ptr_eq(&tab.document, &previous_document)
+            || self.global_search.revision != global_revision
+            || self.searches.is_active()
+        {
             return None;
         }
         let mut marked_rows = tab.file.marked_rows.clone();
@@ -1451,24 +1429,14 @@ impl Workspace {
         let row_height = self.log_row_height();
         let log_word_wrap = tab.log_viewport.is_wrapped();
         let result_word_wrap = tab.result_viewport.is_wrapped();
-        let log_anchor =
+        let follow_end = tab.view.auto_follow;
+        let mut log_anchor =
             Self::capture_local_viewport_anchor(tab, WrappedRegion::Log, row_height, cx);
+        if !follow_end && let Some(anchor) = log_anchor.as_mut() {
+            anchor.at_end = false;
+        }
         let result_anchor =
             Self::capture_local_viewport_anchor(tab, WrappedRegion::Results, row_height, cx);
-        let log_measured_heights = if log_word_wrap {
-            let table = tab.log_table.read(cx);
-            tab.log_viewport
-                .wrapped_measured_heights_by_key(|row_ix| table.delegate().row_key(row_ix))
-        } else {
-            BTreeMap::new()
-        };
-        let result_measured_heights = if result_word_wrap {
-            let table = tab.result_table.read(cx);
-            tab.result_viewport
-                .wrapped_measured_heights_by_key(|row_ix| table.delegate().row_key(row_ix))
-        } else {
-            BTreeMap::new()
-        };
         let window_visible_rows = (window.viewport_size().height / row_height.max(px(1.)))
             .ceil()
             .max(1.) as usize;
@@ -1518,12 +1486,10 @@ impl Workspace {
             .read(cx)
             .delegate()
             .stage_document_replacement(&document, Some(&result_rows), result_range);
-        let selected_result_row = (!follow_end)
-            .then(|| selected_source_row.and_then(|row| result_rows.position(row)))
-            .flatten();
-
         Some(ReloadReplacementPlan {
             document_id,
+            global_revision,
+            global_search,
             revision,
             previous_document,
             document,
@@ -1535,22 +1501,32 @@ impl Workspace {
             results_visible,
             follow_end,
             selected_source_row,
-            selected_result_row,
             log_request: Some(log_request),
             result_request: Some(result_request),
             log_anchor,
             result_anchor,
-            log_measured_heights,
-            result_measured_heights,
             row_height,
             log_word_wrap,
             result_word_wrap,
         })
     }
 
+    fn finish_reload(&mut self, strategy: ReloadStrategy) {
+        match strategy {
+            ReloadStrategy::Full => {
+                self.open_task = None;
+                if matches!(self.activity, Activity::Opening) {
+                    self.activity = Activity::Ready;
+                }
+            }
+            ReloadStrategy::ExtendAppend => self.file_refresh_task = None,
+        }
+    }
+
     fn commit_reload_replacement(
         &mut self,
         prepared: PreparedReloadReplacement,
+        strategy: ReloadStrategy,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1560,19 +1536,28 @@ impl Workspace {
             .iter()
             .position(|tab| tab.id == plan.document_id)
         else {
-            self.open_task = None;
+            self.finish_reload(strategy);
             self.open_queued_external_paths_if_idle(window, cx);
+            cx.notify();
             return;
         };
         if self.documents[tab_ix].search_revision != plan.revision
+            || (matches!(strategy, ReloadStrategy::ExtendAppend)
+                && (!window.is_window_active()
+                    || self.active_tab_id != WorkspaceTabId::Document(plan.document_id)))
+            || self.global_search.revision != plan.global_revision
+            || self.searches.is_active()
+            || plan.follow_end != self.documents[tab_ix].view.auto_follow
+            || prepared.log_lines.has_unavailable_lines()
+            || prepared.result_lines.has_unavailable_lines()
             || !Arc::ptr_eq(&self.documents[tab_ix].document, &plan.previous_document)
         {
-            self.open_task = None;
+            self.finish_reload(strategy);
             self.open_queued_external_paths_if_idle(window, cx);
+            cx.notify();
             return;
         }
         let highlight_matches = self.app_settings.highlight_matches;
-        let search_result_limit = self.app_settings.search_result_limit();
         let tab = &mut self.documents[tab_ix];
         if let Some(cancellation) = tab.result_replace_cancellation.take() {
             cancellation.store(true, Ordering::Release);
@@ -1580,8 +1565,7 @@ impl Workspace {
         tab.result_replace_task.take();
         tab.result_replace_revision = tab.result_replace_revision.saturating_add(1);
         tab.document = plan.document;
-        tab.search_query.text = plan.query.text;
-        tab.search_query.max_results = search_result_limit;
+        tab.search_query = plan.query;
         tab.search_result = plan.search_result;
         tab.search_matcher = plan.search_matcher;
         tab.file.pending_restore_marked_rows = CompressedRows::default();
@@ -1603,7 +1587,9 @@ impl Workspace {
                     .then(|| tab.search_matcher.clone())
                     .flatten(),
             );
-            if tab.document.line_count() > 0 {
+            if tab.document.line_count() > 0
+                && (plan.follow_end || table.active_log_row().is_none())
+            {
                 let row = if plan.follow_end {
                     tab.document.line_count() - 1
                 } else {
@@ -1611,9 +1597,11 @@ impl Workspace {
                         .unwrap_or_default()
                         .min(tab.document.line_count() - 1)
                 };
-                table.set_active_log_row(row, cx);
-            } else {
-                table.clear_selection(cx);
+                table.delegate().set_active_log_row(Some(row));
+                table.delegate().settle_table_selection(row);
+            } else if tab.document.line_count() == 0 {
+                table.delegate().set_active_log_row(None);
+                table.delegate().clear_row_selection();
             }
             table.refresh(cx);
             cx.notify();
@@ -1635,11 +1623,7 @@ impl Workspace {
                     .then(|| tab.search_matcher.clone())
                     .flatten(),
             );
-            if let Some(row_ix) = plan.selected_result_row {
-                table.set_active_log_row(row_ix, cx);
-            } else {
-                table.clear_selection(cx);
-            }
+            // Source replacement already preserves result selection by source row.
             table.refresh(cx);
             cx.notify();
         });
@@ -1648,7 +1632,7 @@ impl Workspace {
             tab.log_viewport.reset_wrapped_with_remapped_heights(
                 table.delegate().row_count(),
                 plan.row_height,
-                plan.log_measured_heights,
+                BTreeMap::new(),
                 |key| table.delegate().row_ix_for_key(*key),
             );
         } else {
@@ -1659,7 +1643,7 @@ impl Workspace {
             tab.result_viewport.reset_wrapped_with_remapped_heights(
                 table.delegate().row_count(),
                 plan.row_height,
-                plan.result_measured_heights,
+                BTreeMap::new(),
                 |key| table.delegate().row_ix_for_key(*key),
             );
         } else {
@@ -1686,28 +1670,20 @@ impl Workspace {
         tab.results_visible = plan.results_visible;
         tab.load_state = DocumentLoadState::Ready;
         tab.view.pending_restore_row = None;
-        self.activity = Activity::Ready;
         if self
             .active_document()
             .is_some_and(|tab| tab.id == plan.document_id)
         {
+            self.selected_source_row = self.documents[tab_ix].log_table.read(cx).active_log_row();
             self.refresh_prepared_active_document_surfaces_atomically(window, cx);
         }
-        let invalidated = self.invalidate_all_open_results_for_reload(plan.document_id);
-        self.refresh_global_result_rows(window, cx);
-        if let Some(visible_results_invalidated) = invalidated {
-            if visible_results_invalidated {
-                window.push_notification(
-                    crate::tr!(
-                        "文件已更新，请重新执行全部打开文件搜索",
-                        "The file changed. Run the all-open-files search again."
-                    ),
-                    cx,
-                );
-            }
+        if let Some(global) = plan.global_search {
+            self.install_reloaded_all_open_result(plan.document_id, global);
             self.schedule_workspace_search_state_save(window, cx);
         }
-        self.open_task = None;
+        self.refresh_global_result_rows(window, cx);
+        self.refresh_active_log_search_presentation(cx);
+        self.finish_reload(strategy);
         self.open_queued_external_paths_if_idle(window, cx);
         cx.notify();
     }
@@ -1715,7 +1691,6 @@ impl Workspace {
     pub(super) fn reload_document(
         &mut self,
         document_id: u64,
-        follow_end: bool,
         strategy: ReloadStrategy,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1723,16 +1698,29 @@ impl Workspace {
         if self.open_task.is_some() {
             return false;
         }
+        if matches!(strategy, ReloadStrategy::ExtendAppend)
+            && (self.file_refresh_task.is_some()
+                || self.searches.is_active()
+                || !window.is_window_active()
+                || self.active_tab_id != WorkspaceTabId::Document(document_id))
+        {
+            return false;
+        }
         let Some(document_ix) = self.documents.iter().position(|tab| tab.id == document_id) else {
             return false;
         };
+        // Dropping the automatic task prevents it from publishing over a manual reload.
+        self.file_refresh_task.take();
         self.cancel_search_for(document_id);
+        let global_revision = self.global_search.revision;
+        let global_search = self.all_open_result_for_reload(document_id);
         let tab = &mut self.documents[document_ix];
-        let follow_end = follow_end || tab.view.auto_follow;
         tab.search_revision += 1;
         let revision = tab.search_revision;
         let previous_document = tab.document.clone();
         let query = tab.search_query.clone();
+        let previous_result = tab.search_result.clone();
+        let previous_search_complete = query.text.is_empty() || tab.search_matcher.is_some();
         let results_visible = tab.results_visible;
         let selected_source_row = {
             let table = tab.log_table.read(cx);
@@ -1740,40 +1728,78 @@ impl Workspace {
                 .active_log_row()
                 .and_then(|row_ix| table.delegate().source_row(row_ix))
         };
-        self.activity = Activity::Opening;
-        cx.notify();
+        if matches!(strategy, ReloadStrategy::Full) {
+            self.activity = Activity::Opening;
+            cx.notify();
+        }
 
-        self.open_task = Some(cx.spawn_in(window, async move |this, cx| {
+        let task = cx.spawn_in(window, async move |this, cx| {
             let reload_source = previous_document.clone();
             let result = cx
                 .background_spawn(async move {
-                    let document = Arc::new(match strategy {
-                        ReloadStrategy::Full => LogDocument::open(reload_source.path())?,
-                        ReloadStrategy::ExtendAppend => reload_source.refresh()?.0,
-                    });
-                    let search_matcher = SearchMatcher::new(&query)?;
-                    let search_result = if query.text.is_empty() {
-                        SearchResult::default()
-                    } else {
-                        search_document_with_matcher(&document, &query, search_matcher.as_ref())
+                    let (document, refresh_kind) = match strategy {
+                        ReloadStrategy::Full => (
+                            LogDocument::open(reload_source.path())?,
+                            DocumentRefreshKind::Rebuilt,
+                        ),
+                        ReloadStrategy::ExtendAppend => reload_source.refresh()?,
                     };
-                    Ok::<_, anyhow::Error>((document, search_result, query, search_matcher))
+                    let document = Arc::new(document);
+                    let search_matcher = SearchMatcher::new(&query)?;
+                    let search_result = search_reloaded_document(
+                        &document,
+                        &reload_source,
+                        if previous_search_complete {
+                            refresh_kind
+                        } else {
+                            DocumentRefreshKind::Rebuilt
+                        },
+                        &previous_result,
+                        &query,
+                        search_matcher.as_ref(),
+                    )?;
+                    let global_search = global_search
+                        .map(|mut global| -> Result<_> {
+                            let kind = if global.completed
+                                && global.document.same_source_snapshot(&reload_source)
+                            {
+                                refresh_kind
+                            } else {
+                                DocumentRefreshKind::Rebuilt
+                            };
+                            global.result = search_reloaded_document(
+                                &document,
+                                &global.document,
+                                kind,
+                                &global.result,
+                                &global.query,
+                                global.matcher.as_ref(),
+                            )?;
+                            global.document = document.clone();
+                            Ok(global)
+                        })
+                        .transpose()?;
+                    Ok::<_, anyhow::Error>((
+                        document,
+                        search_result,
+                        query,
+                        search_matcher,
+                        global_search,
+                    ))
                 })
                 .await;
-            let (document, search_result, query, search_matcher) = match result {
+            let (document, search_result, query, search_matcher, global_search) = match result {
                 Ok(prepared) => prepared,
                 Err(error) => {
                     _ = this.update_in(cx, |this, window, cx| {
-                        if let Some(tab) =
-                            this.documents.iter_mut().find(|tab| tab.id == document_id)
-                            && follow_end
-                        {
-                            tab.view.auto_follow = false;
+                        // A rotation can temporarily remove/lock the path. Keep the last
+                        // frame and follow preference; monitoring retries on the next round.
+                        if matches!(strategy, ReloadStrategy::Full) {
+                            let message: SharedString = error.to_string().into();
+                            window.push_notification(message, cx);
+                            this.activity = Activity::Error;
                         }
-                        let message: SharedString = error.to_string().into();
-                        window.push_notification(message, cx);
-                        this.activity = Activity::Error;
-                        this.open_task = None;
+                        this.finish_reload(strategy);
                         this.open_queued_external_paths_if_idle(window, cx);
                         cx.notify();
                     });
@@ -1783,9 +1809,17 @@ impl Workspace {
 
             let plan = this
                 .update_in(cx, |this, window, cx| {
+                    if matches!(strategy, ReloadStrategy::ExtendAppend)
+                        && (!window.is_window_active()
+                            || this.active_tab_id != WorkspaceTabId::Document(document_id))
+                    {
+                        return None;
+                    }
                     this.prepare_reload_replacement(
                         ReloadReplacementInput {
                             document_id,
+                            global_revision,
+                            global_search,
                             revision,
                             previous_document,
                             document,
@@ -1793,7 +1827,6 @@ impl Workspace {
                             query,
                             search_matcher,
                             results_visible,
-                            follow_end,
                             selected_source_row,
                         },
                         window,
@@ -1804,8 +1837,9 @@ impl Workspace {
                 .flatten();
             let Some(mut plan) = plan else {
                 _ = this.update_in(cx, |this, window, cx| {
-                    this.open_task = None;
+                    this.finish_reload(strategy);
                     this.open_queued_external_paths_if_idle(window, cx);
+                    cx.notify();
                 });
                 return;
             };
@@ -1837,11 +1871,16 @@ impl Workspace {
                         log_lines,
                         result_lines,
                     },
+                    strategy,
                     window,
                     cx,
                 );
             });
-        }));
+        });
+        match strategy {
+            ReloadStrategy::Full => self.open_task = Some(task),
+            ReloadStrategy::ExtendAppend => self.file_refresh_task = Some(task),
+        }
         true
     }
 }

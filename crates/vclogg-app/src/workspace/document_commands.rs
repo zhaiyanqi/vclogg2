@@ -243,7 +243,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.reload_document(document_id, false, ReloadStrategy::Full, window, cx);
+        self.reload_document(document_id, ReloadStrategy::Full, window, cx);
     }
 
     pub(super) fn build_encoding_menu(
@@ -713,16 +713,28 @@ impl Workspace {
             return;
         }
         tab.view.auto_follow = !tab.view.auto_follow;
-        if tab.view.auto_follow && tab.document.line_count() > 0 {
-            let last_row = tab.document.line_count() - 1;
-            tab.log_table
-                .update(cx, |table, cx| table.set_active_log_row(last_row, cx));
-            self.selected_source_row = Some(last_row);
+        if tab.view.auto_follow {
+            if let Some(last_row) = tab.document.line_count().checked_sub(1) {
+                // Programmatic follow does not act like a user row click or steal focus.
+                tab.log_table.update(cx, |table, cx| {
+                    table.delegate().set_active_log_row(Some(last_row));
+                    table.delegate().settle_table_selection(last_row);
+                    cx.notify();
+                });
+                self.selected_source_row = Some(last_row);
+            }
+            tab.log_viewport.scroll_to_end();
             window.push_notification(crate::tr!("已开启末尾跟随", "Follow end enabled"), cx);
-        } else if !tab.view.auto_follow {
+        } else {
+            // Cancel a queued end jump when the toggle is switched off before layout.
+            let position = tab.log_viewport.viewport().position();
+            tab.log_viewport
+                .viewport()
+                .scroll_row_to_viewport_y(position.row_ix, -position.offset_in_row);
             window.push_notification(crate::tr!("已关闭末尾跟随", "Follow end disabled"), cx);
         }
         let document_id = tab.id;
+        Self::refresh_log_surfaces_atomically([self.log_viewer.surface.clone()], window, cx);
         self.schedule_checkpoint(document_id, window, cx);
         cx.notify();
     }

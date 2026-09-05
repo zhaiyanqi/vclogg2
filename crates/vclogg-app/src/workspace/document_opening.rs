@@ -11,6 +11,8 @@ impl Workspace {
         if self.open_task.is_some() {
             return;
         }
+        // Explicit file actions take priority over automatic refresh publication.
+        self.file_refresh_task.take();
 
         let prompt = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -217,6 +219,7 @@ impl Workspace {
         if paths.is_empty() || self.open_task.is_some() {
             return;
         }
+        self.file_refresh_task.take();
         for path in &paths {
             if path_buf_map_get(&overrides.sessions, path).is_none()
                 && let Some(session) =

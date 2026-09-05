@@ -163,6 +163,12 @@ pub(crate) struct StagedVisibleLineLoadResult<K> {
     lines: Vec<(K, Option<LinePreview>, usize)>,
 }
 
+impl<K> StagedVisibleLineLoadResult<K> {
+    pub(crate) fn has_unavailable_lines(&self) -> bool {
+        self.lines.iter().any(|(_, preview, _)| preview.is_none())
+    }
+}
+
 impl CachedLogLine {
     fn from_preview(preview: Option<LinePreview>, retained_limit: usize) -> Option<Self> {
         let (text, truncated, source_unavailable) = match preview {

@@ -364,12 +364,12 @@ impl VerifiedFileBytes {
             .map_err(|_| VerifiedSourceUnavailable::Transient)?;
         let expected_len =
             u64::try_from(self.len).map_err(|_| VerifiedSourceUnavailable::InvalidSnapshot)?;
-        if metadata.len() != expected_len {
+        if metadata.len() < expected_len {
             return Err(VerifiedSourceUnavailable::InvalidSnapshot);
         }
         if let Some(expected) = &self.identity {
             match try_read_file_identity(&file) {
-                Ok(current) if &current == expected => {}
+                Ok(current) if same_file_identity(&current, expected) => {}
                 Ok(_) => return Err(VerifiedSourceUnavailable::InvalidSnapshot),
                 Err(_) => return Err(VerifiedSourceUnavailable::Transient),
             }
@@ -1358,13 +1358,17 @@ impl LogDocument {
                 else {
                     return Ok(None);
                 };
-                validate_indexed_file_snapshot(
+                if !validate_indexed_file_snapshot(
                     &file,
                     file_size,
                     modified,
                     identity.as_ref(),
+                    &integrity_blocks,
                     &path,
-                )?;
+                    &|| cancellation.is_cancelled(),
+                )? {
+                    return Ok(None);
+                }
                 (indexed_lines, integrity_blocks, search_result)
             }
             None => {
@@ -1644,6 +1648,21 @@ impl LogDocument {
         Self::open(self.path()).map(|document| (document, DocumentRefreshKind::Rebuilt))
     }
 
+    /// Inspect the path for growth, rewrites, truncation or replacement. Call from
+    /// a background worker; this does not read the log contents.
+    pub fn source_changed(&self) -> Result<bool> {
+        let file = File::open(self.path())?;
+        let metadata = file.metadata()?;
+        if metadata.len() != self.metadata.file_size
+            || metadata.modified().ok() != self.metadata.modified
+        {
+            return Ok(true);
+        }
+        Ok(matches!(self.bytes.as_ref(), DocumentBytes::Verified(bytes)
+            if bytes.identity.as_ref().is_some_and(|expected|
+                read_file_identity(&file).as_ref() != Some(expected))))
+    }
+
     pub fn metadata(&self) -> &DocumentMetadata {
         &self.metadata
     }
@@ -1864,6 +1883,14 @@ impl LogDocument {
         let file_metadata = file
             .metadata()
             .with_context(|| format!("无法读取文件信息：{}", path.display()))?;
+        if let DocumentBytes::Verified(previous) = self.bytes.as_ref()
+            && let Some(expected) = &previous.identity
+            && read_file_identity(&file)
+                .as_ref()
+                .is_none_or(|current| !same_file_identity(current, expected))
+        {
+            return Ok(None);
+        }
         let new_size = file_metadata.len();
         let old_size = self.metadata.file_size;
         if old_size == 0 || new_size <= old_size {
@@ -2345,13 +2372,17 @@ fn build_file_index_with_integrity_while(
         else {
             return Ok(None);
         };
-        validate_indexed_file_snapshot(
+        if !validate_indexed_file_snapshot(
             file,
             file_size,
             expected_modified,
             expected_identity.as_ref(),
+            &snapshot.1,
             path,
-        )?;
+            is_cancelled,
+        )? {
+            return Ok(None);
+        }
         return Ok(Some(snapshot));
     }
     let mut indexer = (!matches!(encoding, FileEncoding::Binary))
@@ -2383,13 +2414,17 @@ fn build_file_index_with_integrity_while(
     if is_cancelled() {
         return Ok(None);
     }
-    validate_indexed_file_snapshot(
+    if !validate_indexed_file_snapshot(
         file,
         file_size,
         expected_modified,
         expected_identity.as_ref(),
+        &integrity_blocks,
         path,
-    )?;
+        is_cancelled,
+    )? {
+        return Ok(None);
+    }
 
     let indexed_lines = match indexer {
         Some(indexer) => indexer.finish(file_size_usize),
@@ -2705,24 +2740,66 @@ fn extend_bytes_through_next_line_break(
     Ok(())
 }
 
+// File identity and a content-change token are different: appends change ctime/USN.
+fn same_file_identity(left: &FileIdentity, right: &FileIdentity) -> bool {
+    #[cfg(unix)]
+    let same_id = left.file_id[..8] == right.file_id[..8];
+    #[cfg(not(unix))]
+    let same_id = left.file_id == right.file_id;
+    left.volume_serial == right.volume_serial && same_id
+}
+
 fn validate_indexed_file_snapshot(
     file: &File,
     file_size: u64,
     expected_modified: Option<SystemTime>,
     expected_identity: Option<&FileIdentity>,
+    integrity_blocks: &[[u8; 32]],
     path: &Path,
-) -> Result<()> {
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<bool> {
     let current_metadata = file
         .metadata()
         .with_context(|| format!("建立索引后无法读取文件信息：{}", path.display()))?;
-    if current_metadata.len() != file_size
-        || current_metadata.modified().ok() != expected_modified
-        || expected_identity
-            .is_some_and(|expected| read_file_identity(file).as_ref() != Some(expected))
+    let current_identity = read_file_identity(file);
+    if current_metadata.len() == file_size
+        && current_metadata.modified().ok() == expected_modified
+        && expected_identity.is_none_or(|expected| current_identity.as_ref() == Some(expected))
+    {
+        return Ok(!is_cancelled());
+    }
+    if current_metadata.len() <= file_size
+        || expected_identity.is_some_and(|expected| {
+            current_identity
+                .as_ref()
+                .is_none_or(|current| !same_file_identity(current, expected))
+        })
     {
         anyhow::bail!("日志文件在建立索引时发生了变化：{}", path.display());
     }
-    Ok(())
+
+    // A live writer need not stop for an index to finish. Verify only the captured
+    // prefix, including its short final block; later appends belong to the next poll.
+    let mut block = vec![0_u8; APPEND_INTEGRITY_BLOCK_BYTES.min(file_size as usize)];
+    for (block_ix, expected) in integrity_blocks.iter().enumerate() {
+        if is_cancelled() {
+            return Ok(false);
+        }
+        let start = block_ix as u64 * APPEND_INTEGRITY_BLOCK_BYTES as u64;
+        block.resize(
+            (file_size - start).min(APPEND_INTEGRITY_BLOCK_BYTES as u64) as usize,
+            0,
+        );
+        read_file_exact_at(file, &mut block, start)
+            .with_context(|| format!("校验日志快照时无法读取文件：{}", path.display()))?;
+        if <[u8; 32]>::from(Sha256::digest(&block)) != *expected {
+            anyhow::bail!("日志文件在建立索引时发生了变化：{}", path.display());
+        }
+    }
+    if file.metadata()?.len() < file_size {
+        anyhow::bail!("日志文件在建立索引时发生了变化：{}", path.display());
+    }
+    Ok(!is_cancelled())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2777,17 +2854,15 @@ fn build_appended_file_index_with_integrity(
         block_start = block_end;
     }
 
-    let current_metadata = file
-        .metadata()
-        .with_context(|| format!("校验追加后无法读取文件信息：{}", path.display()))?;
-    if current_metadata.len() != new_size as u64
-        || current_metadata.modified().ok() != expected_modified
-        || expected_identity
-            .as_ref()
-            .is_some_and(|expected| read_file_identity(file).as_ref() != Some(expected))
-    {
-        anyhow::bail!("日志文件在校验追加时发生了变化：{}", path.display());
-    }
+    validate_indexed_file_snapshot(
+        file,
+        new_size as u64,
+        expected_modified,
+        expected_identity.as_ref(),
+        &integrity_blocks,
+        path,
+        &|| false,
+    )?;
 
     Ok(Some((indexer.finish(new_size), integrity_blocks.into())))
 }

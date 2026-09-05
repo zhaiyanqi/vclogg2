@@ -44,19 +44,19 @@ impl Workspace {
         workspace.update(cx, |workspace, cx| {
             let activation_subscription =
                 cx.observe_window_activation(window, |workspace, window, cx| {
+                    workspace.file_watch_window_active = window.is_window_active();
+                    workspace.sync_file_watch(window.window_handle(), cx);
                     if window.is_window_active() {
                         let window_handle = window.window_handle();
                         cx.update_global::<WorkspaceWindowRegistry, _>(|registry, _| {
                             registry.mark_focused(window_handle)
                         });
                         workspace.restore_input_focus(window, cx);
-                        workspace.start_file_watch(window, cx);
                         cx.notify();
                     } else {
                         TextSelection::end(window, cx);
                         workspace.end_all_row_drag_selection(window, cx);
                         workspace.release_input_focus(window, cx);
-                        workspace.file_watch_task = None;
                         cx.notify();
                     }
                 });
@@ -71,54 +71,160 @@ impl Workspace {
                 });
             workspace._subscriptions.push(activation_subscription);
             workspace._subscriptions.push(appearance_subscription);
-            // 新窗口打开后不会再收到一次激活通知，跟随轮询要在这里起头。
+            // Initialize from the actual window state, including initially inactive windows.
             workspace.start_file_watch(window, cx);
         });
     }
 
-    /// 自动跟随只在窗口激活期间轮询：后台窗口看不到新内容，而定时唤醒会让进程一直占用 CPU。
+    /// Install lifecycle observation once. Each foreground document owns its monitoring task.
     fn start_file_watch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.file_watch_task.is_some() {
-            return;
-        }
-        self.file_watch_task = Some(cx.spawn_in(window, async move |this, cx| {
-            loop {
-                Self::poll_auto_follow(&this, cx).await;
-                cx.background_executor().timer(FILE_WATCH_INTERVAL).await;
-            }
-        }));
+        self.file_watch_window_active = window.is_window_active();
+        let window_handle = window.window_handle();
+        let subscription = cx.observe_self(move |this, cx| this.sync_file_watch(window_handle, cx));
+        self._subscriptions.push(subscription);
+        self.sync_file_watch(window_handle, cx);
     }
 
-    async fn poll_auto_follow(this: &WeakEntity<Self>, cx: &mut AsyncWindowContext) {
-        let candidate = this
-            .update_in(cx, |this, _, cx| this.auto_follow_candidate(cx))
+    pub(super) fn sync_file_watch(
+        &mut self,
+        window_handle: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
+        let target = self
+            .active_document()
+            .filter(|tab| {
+                self.file_watch_window_active && tab.load_state == DocumentLoadState::Ready
+            })
+            .map(|tab| (tab.id, tab.document.path().to_path_buf()));
+        let document_id = target.as_ref().map(|(id, _)| *id);
+        if self.file_watch_document_id != document_id {
+            // Dropping the scope cancels its timers and pending publication. The native
+            // worker releases its watches in the background; no inactive scope keeps polling.
+            self.file_watch_task = None;
+            self.file_watch = None;
+            self.file_refresh_task = None;
+            self.file_watch_document_id = document_id;
+            if let Some(document_id) = document_id {
+                self.file_watch = match crate::file_watch::FileWatch::new() {
+                    Ok(watcher) => Some(watcher),
+                    Err(error) => {
+                        log::warn!("Could not start file watcher; using slow checks: {error}");
+                        None
+                    }
+                };
+                let receiver = self.file_watch.as_ref().map(|watcher| watcher.receiver());
+                self.file_watch_task = Some(cx.spawn(async move |this, cx| {
+                    // Activation and tab switches check once without waiting for an OS event.
+                    Self::refresh_watched_file(&this, document_id, window_handle, true, cx).await;
+                    loop {
+                        if let Some(receiver) = receiver.as_ref() {
+                            if receiver.recv().await.is_err() {
+                                break;
+                            }
+                            // A busy writer cannot postpone publication indefinitely.
+                            cx.background_executor()
+                                .timer(crate::file_watch::REFRESH_INTERVAL)
+                                .await;
+                            _ = receiver.try_recv();
+                        } else {
+                            cx.background_executor()
+                                .timer(crate::file_watch::RECHECK_INTERVAL)
+                                .await;
+                        }
+                        Self::refresh_watched_file(&this, document_id, window_handle, false, cx)
+                            .await;
+                    }
+                }));
+            }
+        }
+        if let Some(watcher) = self.file_watch.as_ref() {
+            watcher.sync(
+                target.into_iter().collect(),
+                self.open_task.is_some()
+                    || self.file_refresh_task.is_some()
+                    || self.searches.is_active(),
+            );
+        }
+    }
+
+    async fn refresh_watched_file(
+        this: &WeakEntity<Self>,
+        document_id: u64,
+        window_handle: AnyWindowHandle,
+        initial_check: bool,
+        cx: &mut gpui::AsyncApp,
+    ) {
+        let document = window_handle
+            .update(cx, |_, window, cx| {
+                this.update(cx, |this, _| {
+                    if !window.is_window_active()
+                        || this.file_watch_document_id != Some(document_id)
+                        || this.active_tab_id != WorkspaceTabId::Document(document_id)
+                        || this.open_task.is_some()
+                        || this.file_refresh_task.is_some()
+                        || this.searches.is_active()
+                    {
+                        return None;
+                    }
+                    if let Some(watcher) = this.file_watch.as_ref() {
+                        let dirty = watcher.take_dirty();
+                        if !initial_check && !dirty.contains(&document_id) {
+                            return None;
+                        }
+                    }
+                    this.active_document()
+                        .filter(|tab| tab.load_state == DocumentLoadState::Ready)
+                        .map(|tab| tab.document.clone())
+                })
+                .ok()
+                .flatten()
+            })
             .ok()
             .flatten();
-        let Some((document_id, path, indexed_size, indexed_modified)) = candidate else {
+        let Some(document) = document else {
             return;
         };
-        let metadata = cx
-            .background_spawn(async move {
-                std::fs::metadata(path).map(|metadata| (metadata.len(), metadata.modified().ok()))
-            })
+        let source = document.clone();
+        let changed = cx
+            .background_spawn(async move { source.source_changed() })
             .await;
-        let Ok((current_size, current_modified)) = metadata else {
-            return;
-        };
-        if current_size == indexed_size && current_modified == indexed_modified {
-            return;
-        }
-
-        _ = this.update_in(cx, |this, window, cx| {
-            let remains_stale = this.documents.iter().any(|tab| {
-                tab.id == document_id
-                    && tab.view.auto_follow
-                    && (tab.document.metadata().file_size != current_size
-                        || tab.document.metadata().modified != current_modified)
-            });
-            if remains_stale {
-                this.reload_document(document_id, true, ReloadStrategy::ExtendAppend, window, cx);
-            }
+        _ = window_handle.update(cx, |_, window, cx| {
+            this.update(cx, |this, cx| {
+                if !window.is_window_active()
+                    || this.file_watch_document_id != Some(document_id)
+                    || this.active_tab_id != WorkspaceTabId::Document(document_id)
+                    || this
+                        .active_document()
+                        .is_none_or(|tab| !Arc::ptr_eq(&tab.document, &document))
+                {
+                    return;
+                }
+                match changed {
+                    Ok(false) => {}
+                    Err(_) => {
+                        if let Some(watcher) = this.file_watch.as_ref() {
+                            watcher.retry([document_id]);
+                        }
+                    }
+                    Ok(true) => {
+                        let started = !this.searches.is_active()
+                            && this.reload_document(
+                                document_id,
+                                ReloadStrategy::ExtendAppend,
+                                window,
+                                cx,
+                            );
+                        this.sync_file_watch(window_handle, cx);
+                        if let Some(watcher) = this.file_watch.as_ref() {
+                            if started {
+                                watcher.retry([document_id]);
+                            } else {
+                                watcher.restore_dirty([document_id]);
+                            }
+                        }
+                    }
+                }
+            })
         });
     }
 
@@ -188,7 +294,14 @@ impl Workspace {
         let Some(workspace) = workspace else {
             return;
         };
-        let snapshot = workspace.update(cx, |workspace, cx| workspace.take_quit_snapshot(cx));
+        let snapshot = workspace.update(cx, |workspace, cx| {
+            workspace.file_watch_window_active = false;
+            workspace.file_watch_document_id = None;
+            workspace.file_watch_task = None;
+            workspace.file_watch = None;
+            workspace.file_refresh_task = None;
+            workspace.take_quit_snapshot(cx)
+        });
         let background_executor = cx.background_executor().clone();
         let task = cx.spawn(async move |_| {
             for task in snapshot.state_tasks {

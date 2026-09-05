@@ -421,6 +421,8 @@ impl Workspace {
                 .update(cx, |state, cx| state.set_value(query, window, cx));
         }
         self.selected_source_row = selected_row;
+        self.file_watch_window_active = window.is_window_active();
+        self.sync_file_watch(window.window_handle(), cx);
     }
 
     pub(super) fn close_active_tab(
