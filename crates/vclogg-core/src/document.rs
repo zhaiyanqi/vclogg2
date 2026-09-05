@@ -25,7 +25,10 @@ use anyhow::{Context as _, Result};
 use chardetng::EncodingDetector;
 use encoding_rs::{CoderResult, Decoder, Encoding, UTF_8, UTF_16BE, UTF_16LE};
 use memchr::{memchr2, memchr3_iter};
-use rayon::prelude::{IntoParallelIterator as _, ParallelIterator as _};
+use rayon::prelude::{
+    IndexedParallelIterator as _, IntoParallelIterator as _, IntoParallelRefIterator as _,
+    ParallelIterator as _,
+};
 use roaring::RoaringTreemap;
 use sha2::{Digest as _, Sha256};
 
@@ -1990,6 +1993,44 @@ impl LogDocument {
             // the content blocks on these platforms.
             false
         }
+    }
+
+    pub(crate) fn search_cache_identity(&self) -> Option<([u8; 32], u64, String)> {
+        (self.has_complete_line_index() && self.prefix_fully_verified).then_some((
+            self.content_digest,
+            self.metadata.file_size,
+            self.encoding.name(),
+        ))
+    }
+
+    /// Cached results must not use the visible block cache as evidence of current bytes.
+    pub(crate) fn verify_cached_search(&self, cancellation: &CancellationToken) -> Option<bool> {
+        if cancellation.is_cancelled() {
+            return None;
+        }
+        let file_backed = matches!(self.bytes.as_ref(), DocumentBytes::Verified(_));
+        if file_backed && self.source_changed().unwrap_or(true) {
+            return Some(false);
+        }
+        if self.has_strong_source_change_token() && self.source_identity_matches() {
+            return Some(true);
+        }
+        let matches =
+            match self.bytes.as_ref() {
+                DocumentBytes::Empty | DocumentBytes::Owned(_) => true,
+                DocumentBytes::Verified(bytes) => bytes
+                    .integrity_blocks
+                    .par_iter()
+                    .enumerate()
+                    .all(|(index, expected)| {
+                        !cancellation.is_cancelled()
+                            && bytes.read_source_block(index).is_ok_and(|block| {
+                                <[u8; 32]>::from(Sha256::digest(&block)) == *expected
+                            })
+                    }),
+            };
+        let unchanged = !file_backed || !self.source_changed().unwrap_or(true);
+        (!cancellation.is_cancelled()).then_some(matches && unchanged)
     }
 
     /// Recheck the platform change token around a search that bypasses per-block hashing.

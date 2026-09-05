@@ -7,8 +7,14 @@ pub(super) struct SearchPreparationOptions {
     pub(super) max_results: Option<usize>,
 }
 
+pub(super) fn search_result_cache() -> &'static vclogg_core::SearchResultCache {
+    static CACHE: std::sync::OnceLock<vclogg_core::SearchResultCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(vclogg_core::SearchResultCache::default)
+}
+
 fn search_path_snapshot(
     path: &Path,
+    query: &SearchQuery,
     matcher: Option<&SearchMatcher>,
     max_results: Option<usize>,
     cancellation: &SearchCancellation,
@@ -16,7 +22,19 @@ fn search_path_snapshot(
     if cancellation.is_cancelled() {
         return Ok(None);
     }
-    let opened = if let Some(matcher) = matcher {
+    let cached_open = if search_result_cache().has_candidate(path, query) {
+        if let Some(cache_dir) = crate::app_paths::index_cache_dir() {
+            LogDocument::open_with_index_cache_cancellable(path, cache_dir, cancellation)?
+        } else {
+            LogDocument::open_cancellable(path, cancellation)?.map(|document| (document, None))
+        }
+    } else {
+        None
+    };
+    let opened = if let Some((document, pending)) = cached_open {
+        let run = search_result_cache().search(&document, query, matcher, cancellation);
+        Some((document, pending, run))
+    } else if let Some(matcher) = matcher {
         if let Some(cache_dir) = crate::app_paths::index_cache_dir() {
             LogDocument::open_with_index_cache_and_search_cancellable(
                 path,
@@ -48,6 +66,7 @@ fn search_path_snapshot(
     let document = Arc::new(document);
     match run {
         SearchRun::Completed(search_result) => {
+            search_result_cache().remember(&document, query, &search_result);
             let document = Arc::new(document.project_source_rows(&search_result.line_indices));
             document.release_source_handle();
             if !cancellation.is_cancelled()
@@ -89,7 +108,15 @@ pub(super) fn run_directory_search(
     let outcomes = prepare_paths_bounded_while(
         scan_paths,
         || !cancellation.is_cancelled(),
-        |path| search_path_snapshot(path, matcher.as_ref(), query.max_results, &cancellation),
+        |path| {
+            search_path_snapshot(
+                path,
+                &query,
+                matcher.as_ref(),
+                query.max_results,
+                &cancellation,
+            )
+        },
     );
     if cancellation.is_cancelled() {
         return Ok(DirectorySearchRun {
@@ -147,7 +174,15 @@ pub(super) fn run_persisted_all_open_search(
     let outcomes = prepare_paths_bounded_while(
         deduplicate_paths(paths),
         || !cancellation.is_cancelled(),
-        |path| search_path_snapshot(path, matcher.as_ref(), query.max_results, &cancellation),
+        |path| {
+            search_path_snapshot(
+                path,
+                &query,
+                matcher.as_ref(),
+                query.max_results,
+                &cancellation,
+            )
+        },
     );
     if cancellation.is_cancelled() {
         return Ok((true, Vec::new(), matcher));

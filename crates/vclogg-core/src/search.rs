@@ -1,3 +1,6 @@
+mod cache;
+pub use cache::SearchResultCache;
+
 use std::{
     ops::Range,
     sync::{

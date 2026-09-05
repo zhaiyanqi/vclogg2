@@ -356,3 +356,98 @@ fn combined_search_handles_line_breaks_at_block_edges_without_tail_reads() {
         );
     }
 }
+
+#[test]
+fn repeated_queries_reuse_results_but_reject_changed_source_snapshots() {
+    use crate::{SearchCancellation, SearchMatcher, SearchResultCache, SearchRun};
+    let source = TestSource::new(b"target\nother\ntarget\n");
+    let document = source.open();
+    let cache = SearchResultCache::default();
+    let query = SearchQuery {
+        text: "target".into(),
+        ..SearchQuery::default()
+    };
+    let matcher = SearchMatcher::new(&query).unwrap();
+    let cancel = SearchCancellation::default();
+    let SearchRun::Completed(first) = cache.search(&document, &query, matcher.as_ref(), &cancel)
+    else {
+        panic!("completed")
+    };
+    let reopened = source.open();
+    let SearchRun::Completed(second) = cache.search(&reopened, &query, matcher.as_ref(), &cancel)
+    else {
+        panic!("cached")
+    };
+    assert!(std::sync::Arc::ptr_eq(
+        &first.line_indices.rows,
+        &second.line_indices.rows
+    ));
+    assert_eq!(document.line(0).as_deref(), Some("target")); // warm the visible cache
+    fs::write(&source.0, b"absent\nother\nabsent\n").unwrap();
+    assert!(matches!(
+        cache.search(&document, &query, matcher.as_ref(), &cancel),
+        SearchRun::SourceChanged
+    ));
+    let changed = source.open();
+    let SearchRun::Completed(result) = cache.search(&changed, &query, matcher.as_ref(), &cancel)
+    else {
+        panic!("new snapshot")
+    };
+    assert!(result.is_empty());
+    cancel.cancel();
+    assert!(matches!(
+        cache.search(&changed, &query, matcher.as_ref(), &cancel),
+        SearchRun::Cancelled
+    ));
+}
+
+#[test]
+fn query_cache_separates_options_limits_and_evicts_old_entries() {
+    use crate::{SearchCancellation, SearchMatcher, SearchResultCache, SearchRun};
+    let source = TestSource::new(b"Target\ntarget\ntarget\n");
+    let document = source.open();
+    let cache = SearchResultCache::default();
+    let cancel = SearchCancellation::default();
+    for case_sensitive in [false, true] {
+        for regex in [false, true] {
+            for max_results in [None, Some(0), Some(1), Some(3)] {
+                let query = SearchQuery {
+                    text: "target".into(),
+                    case_sensitive,
+                    regex,
+                    max_results,
+                };
+                let matcher = SearchMatcher::new(&query).unwrap();
+                let expected = search(&document, &query).unwrap();
+                for _ in 0..2 {
+                    let SearchRun::Completed(result) =
+                        cache.search(&document, &query, matcher.as_ref(), &cancel)
+                    else {
+                        panic!("completed")
+                    };
+                    assert_eq!(result.line_indices, expected.line_indices);
+                    assert_eq!(result.truncated, expected.truncated);
+                }
+            }
+        }
+    }
+    let first = SearchQuery {
+        text: "oldest".into(),
+        ..SearchQuery::default()
+    };
+    cache.remember(&document, &first, &crate::SearchResult::default());
+    for i in 0..16 {
+        let query = SearchQuery {
+            text: format!("query-{i}"),
+            ..SearchQuery::default()
+        };
+        cache.remember(&document, &query, &crate::SearchResult::default());
+    }
+    assert!(!cache.has_candidate(document.path(), &first));
+    let oversized = SearchQuery {
+        text: "x".repeat(8 * 1024 * 1024 + 1),
+        ..SearchQuery::default()
+    };
+    cache.remember(&document, &oversized, &crate::SearchResult::default());
+    assert!(!cache.has_candidate(document.path(), &oversized));
+}

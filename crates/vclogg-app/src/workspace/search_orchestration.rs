@@ -2390,10 +2390,10 @@ impl Workspace {
             let result = cx
                 .background_spawn(async move {
                     let matcher = SearchMatcher::new(&query_for_search)?;
-                    let run = search_with_compiled_matcher(
+                    let run = search_result_cache().search(
                         &document,
+                        &query_for_search,
                         matcher.as_ref(),
-                        query_for_search.max_results,
                         &cancellation,
                     );
                     Ok::<_, anyhow::Error>((run, matcher))
@@ -2617,15 +2617,14 @@ impl Workspace {
             let result = cx
                 .background_spawn(async move {
                     let matcher = SearchMatcher::new(&query_for_search)?;
-                    let max_results = query_for_search.max_results;
                     let matcher_for_search = matcher.as_ref();
                     let outcomes = targets
                         .into_par_iter()
                         .map(|target| {
-                            let run = search_with_compiled_matcher(
+                            let run = search_result_cache().search(
                                 &target.3,
+                                &query_for_search,
                                 matcher_for_search,
-                                max_results,
                                 &cancellation,
                             );
                             (target, Ok::<_, anyhow::Error>(run))
