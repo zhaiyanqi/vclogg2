@@ -474,3 +474,63 @@ fn scanning_publishes_bounded_preview_and_completed_counts() {
     assert_eq!(progress.previews().len(), 3);
     assert!(progress.previews().iter().all(|row| row.text == "target"));
 }
+
+#[test]
+fn utf16_batches_reuse_output_and_preserve_line_decoding_and_projection_gaps() {
+    let text = "中文😀 target\r\nsecond\nthird\r".repeat(1000);
+    for little_endian in [true, false] {
+        let mut bytes = if little_endian {
+            vec![0xff, 0xfe]
+        } else {
+            vec![0xfe, 0xff]
+        };
+        for unit in text.encode_utf16().chain([0xd800]) {
+            bytes.extend_from_slice(&if little_endian {
+                unit.to_le_bytes()
+            } else {
+                unit.to_be_bytes()
+            });
+        }
+        bytes.push(0x80); // malformed final unit must preserve replacement behavior
+        let source = TestSource::new(&bytes);
+        let document = source.open();
+        let mut reader = document.search_lines(true);
+        for row in 0..document.line_count() {
+            let expected = document.line(row).unwrap();
+            let line = reader.bytes_at_local_row(row).unwrap();
+            assert!(matches!(line, std::borrow::Cow::Borrowed(_)));
+            assert_eq!(line.as_ref(), expected.as_bytes());
+        }
+        assert!(reader.decoded.ranges.len() <= 256);
+        let projected = document.project_source_rows(&[0, 2, 4, 6, 8].into_iter().collect());
+        let mut reader = projected.search_lines(true);
+        for row in 0..projected.line_count() {
+            assert_eq!(
+                reader.bytes_at_local_row(row).unwrap().as_ref(),
+                document
+                    .line(projected.source_row(row).unwrap())
+                    .unwrap()
+                    .as_bytes()
+            );
+        }
+    }
+}
+
+#[test]
+fn legacy_batches_preserve_per_line_decoder_state_and_reuse_output() {
+    for encoding in [encoding_rs::GBK, encoding_rs::ISO_2022_JP] {
+        let text = "日本語 target\r\n東京\n".repeat(1000);
+        let (bytes, _, _) = encoding.encode(&text);
+        let source = TestSource::new(&bytes);
+        let mut document = source.open();
+        document.encoding = super::FileEncoding::Legacy(encoding);
+        let mut reader = document.search_lines(true);
+        for row in 0..document.line_count() {
+            let expected = document.line(row).unwrap();
+            let line = reader.bytes_at_local_row(row).unwrap();
+            assert!(matches!(line, std::borrow::Cow::Borrowed(_)));
+            assert_eq!(line.as_ref(), expected.as_bytes());
+        }
+        assert!(reader.decoded.ranges.len() <= 256);
+    }
+}

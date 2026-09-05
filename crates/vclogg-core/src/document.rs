@@ -153,11 +153,37 @@ impl FileEncoding {
         }
     }
 
-    fn decode_for_search(self, bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
-        match self {
-            Self::Utf8 | Self::Utf8Bom => std::borrow::Cow::Borrowed(bytes),
-            Self::Utf16Le | Self::Utf16Be | Self::Legacy(_) | Self::Binary => {
-                std::borrow::Cow::Owned(self.decode(bytes).into_bytes())
+    fn decode_into(self, bytes: &[u8], output: &mut String) {
+        let encoding = match self {
+            Self::Utf16Le => UTF_16LE,
+            Self::Utf16Be => UTF_16BE,
+            Self::Legacy(encoding) => encoding,
+            Self::Utf8 | Self::Utf8Bom => {
+                output.push_str(&String::from_utf8_lossy(bytes));
+                return;
+            }
+            Self::Binary => {
+                for (index, byte) in bytes.iter().enumerate() {
+                    if index > 0 {
+                        output.push(' ');
+                    }
+                    write!(output, "{byte:02x}").expect("writing to String cannot fail");
+                }
+                return;
+            }
+        };
+        let mut decoder = encoding.new_decoder_without_bom_handling();
+        let mut read = 0;
+        loop {
+            output.reserve(
+                decoder
+                    .max_utf8_buffer_length(bytes.len() - read)
+                    .unwrap_or(bytes.len()),
+            );
+            let (result, consumed, _) = decoder.decode_to_string(&bytes[read..], output, true);
+            read += consumed;
+            if result == CoderResult::InputEmpty {
+                break;
             }
         }
     }
@@ -1058,6 +1084,14 @@ pub(crate) struct DocumentSearchLines<'a> {
     document: &'a LogDocument,
     verify_integrity: bool,
     verified_block: Option<(usize, Option<Arc<[u8]>>)>,
+    decoded: DecodedSearchBatch,
+}
+
+#[derive(Default)]
+struct DecodedSearchBatch {
+    start_row: usize,
+    text: String,
+    ranges: Vec<std::ops::Range<usize>>,
 }
 
 impl DocumentSearchLines<'_> {
@@ -1065,18 +1099,101 @@ impl DocumentSearchLines<'_> {
         &mut self,
         row_ix: usize,
     ) -> Option<std::borrow::Cow<'_, [u8]>> {
+        let encoding = self.document.encoding;
+        if matches!(encoding, FileEncoding::Utf8 | FileEncoding::Utf8Bom) {
+            let range = self.document.line_byte_range_at_local_row(row_ix)?;
+            return self.bytes_in_range(range).map(|bytes| match bytes {
+                std::borrow::Cow::Borrowed(bytes) => {
+                    std::borrow::Cow::Borrowed(encoding.trim_line_bytes(bytes))
+                }
+                std::borrow::Cow::Owned(mut bytes) => {
+                    bytes.truncate(encoding.trim_line_bytes(&bytes).len());
+                    std::borrow::Cow::Owned(bytes)
+                }
+            });
+        }
+        let cached = row_ix
+            .checked_sub(self.decoded.start_row)
+            .is_some_and(|row| row < self.decoded.ranges.len());
+        if !cached {
+            self.decode_batch(row_ix)?;
+        }
+        let range = self
+            .decoded
+            .ranges
+            .get(row_ix - self.decoded.start_row)?
+            .clone();
+        Some(std::borrow::Cow::Borrowed(
+            &self.decoded.text.as_bytes()[range],
+        ))
+    }
+
+    fn decode_batch(&mut self, row_ix: usize) -> Option<()> {
+        const BATCH_BYTES: usize = 64 * 1024;
+        const BATCH_ROWS: usize = 256;
         let document = self.document;
-        let range = document.line_byte_range_at_local_row(row_ix)?;
-        match document.bytes.as_ref() {
-            DocumentBytes::Empty => range.is_empty().then_some(std::borrow::Cow::Borrowed(&[])),
-            DocumentBytes::Owned(bytes) => {
-                let bytes = bytes.get(range)?;
-                Some(
-                    document
-                        .encoding
-                        .decode_for_search(document.encoding.trim_line_bytes(bytes)),
-                )
+        let encoding = document.encoding;
+        let mut batch = std::mem::take(&mut self.decoded);
+        batch.start_row = row_ix;
+        batch.ranges.clear();
+        batch.text.clear();
+        if batch.text.capacity() > BATCH_BYTES * 4 {
+            batch.text = String::new();
+        }
+        let first = document.line_byte_range_at_local_row(row_ix)?;
+        if matches!(encoding, FileEncoding::Utf16Le | FileEncoding::Utf16Be) {
+            // Decode adjacent complete UTF-16 lines together. A projection gap
+            // ends the batch so hidden source rows cannot enter search results.
+            let mut end = first.end;
+            let mut count = 1;
+            for row in row_ix + 1..document.line_count().min(row_ix.saturating_add(BATCH_ROWS)) {
+                let next = document.line_byte_range_at_local_row(row)?;
+                if next.start != end || next.end - first.start > BATCH_BYTES {
+                    break;
+                }
+                end = next.end;
+                count += 1;
             }
+            let bytes = self.bytes_in_range(first.start..end)?;
+            encoding.decode_into(&bytes, &mut batch.text);
+            let decoded = batch.text.as_bytes();
+            let mut start = 0;
+            for _ in 0..count {
+                let end = memchr2(b'\r', b'\n', &decoded[start..])
+                    .map_or(decoded.len(), |offset| start + offset);
+                batch.ranges.push(start..end);
+                let delimiter = usize::from(
+                    decoded.get(end) == Some(&b'\r') && decoded.get(end + 1) == Some(&b'\n'),
+                ) + 1;
+                start = end.saturating_add(delimiter).min(decoded.len());
+            }
+        } else {
+            // Legacy encodings may be stateful. Preserve the existing decoder
+            // reset at each row, while reusing one output allocation for a batch.
+            let mut bytes_read: usize = 0;
+            for row in row_ix..document.line_count().min(row_ix.saturating_add(BATCH_ROWS)) {
+                let range = document.line_byte_range_at_local_row(row)?;
+                if row != row_ix && bytes_read.saturating_add(range.len()) > BATCH_BYTES {
+                    break;
+                }
+                bytes_read = bytes_read.saturating_add(range.len());
+                let bytes = self.bytes_in_range(range)?;
+                let start = batch.text.len();
+                encoding.decode_into(encoding.trim_line_bytes(&bytes), &mut batch.text);
+                batch.ranges.push(start..batch.text.len());
+            }
+        }
+        self.decoded = batch;
+        Some(())
+    }
+
+    fn bytes_in_range(
+        &mut self,
+        range: std::ops::Range<usize>,
+    ) -> Option<std::borrow::Cow<'_, [u8]>> {
+        match self.document.bytes.as_ref() {
+            DocumentBytes::Empty => range.is_empty().then_some(std::borrow::Cow::Borrowed(&[])),
+            DocumentBytes::Owned(bytes) => Some(std::borrow::Cow::Borrowed(bytes.get(range)?)),
             DocumentBytes::Verified(bytes) => {
                 if range.is_empty() {
                     return Some(std::borrow::Cow::Borrowed(&[]));
@@ -1092,20 +1209,13 @@ impl DocumentSearchLines<'_> {
                         let end = range.end.saturating_sub(block_start).min(block.len());
                         joined.extend_from_slice(block.get(start..end)?);
                     }
-                    let trimmed_len = document.encoding.trim_line_bytes(&joined).len();
-                    joined.truncate(trimmed_len);
-                    return Some(std::borrow::Cow::Owned(
-                        document.encoding.decode_for_search(&joined).into_owned(),
-                    ));
+                    return Some(std::borrow::Cow::Owned(joined));
                 }
                 let block = self.load_block(bytes, first_block)?;
                 let block_start = first_block.saturating_mul(APPEND_INTEGRITY_BLOCK_BYTES);
-                let line = block.get(range.start - block_start..range.end - block_start)?;
-                Some(
-                    document
-                        .encoding
-                        .decode_for_search(document.encoding.trim_line_bytes(line)),
-                )
+                Some(std::borrow::Cow::Borrowed(
+                    block.get(range.start - block_start..range.end - block_start)?,
+                ))
             }
         }
     }
@@ -1974,6 +2084,7 @@ impl LogDocument {
             document: self,
             verify_integrity,
             verified_block: None,
+            decoded: DecodedSearchBatch::default(),
         }
     }
 
