@@ -8,7 +8,7 @@ mod search;
 pub use cancellation::CancellationToken;
 pub use document::{
     DocumentMetadata, DocumentRefreshKind, LinePreview, LinePreviewReader, LineReader, LogDocument,
-    PendingIndexCacheWrite,
+    PendingIndexCacheWrite, RefreshValidation,
 };
 pub use result_set::CompressedRows;
 pub use search::{

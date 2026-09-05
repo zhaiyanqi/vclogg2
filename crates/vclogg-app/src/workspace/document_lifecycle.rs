@@ -1733,16 +1733,26 @@ impl Workspace {
             cx.notify();
         }
 
+        let cancellation = SearchCancellation::default();
+        let task_cancellation = cancellation.clone();
         let task = cx.spawn_in(window, async move |this, cx| {
             let reload_source = previous_document.clone();
+            let background_cancellation = task_cancellation.clone();
             let result = cx
                 .background_spawn(async move {
-                    let (document, refresh_kind) = match strategy {
-                        ReloadStrategy::Full => (
-                            LogDocument::open(reload_source.path())?,
-                            DocumentRefreshKind::Rebuilt,
-                        ),
-                        ReloadStrategy::ExtendAppend => reload_source.refresh()?,
+                    let refreshed = match strategy {
+                        ReloadStrategy::Full => LogDocument::open_cancellable(
+                            reload_source.path(),
+                            &background_cancellation,
+                        )?
+                        .map(|document| (document, DocumentRefreshKind::Rebuilt)),
+                        ReloadStrategy::ExtendAppend => reload_source.refresh_cancellable(
+                            RefreshValidation::HeadAndTail,
+                            &background_cancellation,
+                        )?,
+                    };
+                    let Some((document, refresh_kind)) = refreshed else {
+                        return Ok(None);
                     };
                     let document = Arc::new(document);
                     let search_matcher = SearchMatcher::new(&query)?;
@@ -1757,6 +1767,7 @@ impl Workspace {
                         &previous_result,
                         &query,
                         search_matcher.as_ref(),
+                        &background_cancellation,
                     )?;
                     let global_search = global_search
                         .map(|mut global| -> Result<_> {
@@ -1774,22 +1785,32 @@ impl Workspace {
                                 &global.result,
                                 &global.query,
                                 global.matcher.as_ref(),
+                                &background_cancellation,
                             )?;
                             global.document = document.clone();
                             Ok(global)
                         })
                         .transpose()?;
-                    Ok::<_, anyhow::Error>((
+                    Ok::<_, anyhow::Error>(Some((
                         document,
                         search_result,
                         query,
                         search_matcher,
                         global_search,
-                    ))
+                    )))
                 })
                 .await;
+            if task_cancellation.is_cancelled() || matches!(&result, Ok(None)) {
+                _ = this.update_in(cx, |this, window, cx| {
+                    this.finish_reload(strategy);
+                    this.open_queued_external_paths_if_idle(window, cx);
+                    cx.notify();
+                });
+                return;
+            }
             let (document, search_result, query, search_matcher, global_search) = match result {
-                Ok(prepared) => prepared,
+                Ok(Some(prepared)) => prepared,
+                Ok(None) => unreachable!("cancelled refresh was handled above"),
                 Err(error) => {
                     _ = this.update_in(cx, |this, window, cx| {
                         // A rotation can temporarily remove/lock the path. Keep the last
@@ -1852,19 +1873,32 @@ impl Workspace {
                 .result_request
                 .take()
                 .expect("a reload plan has a result frame request");
+            let frame_cancellation = task_cancellation.clone();
             let (log_lines, result_lines) = cx
                 .background_spawn(async move {
                     let mut reader = LinePreviewReader::default();
                     let log_lines = log_request.load(|source_row, max_bytes| {
+                        if frame_cancellation.is_cancelled() {
+                            return None;
+                        }
                         reader.line_preview(&document, *source_row, max_bytes)
                     });
                     let result_lines = result_request.load(|source_row, max_bytes| {
+                        if frame_cancellation.is_cancelled() {
+                            return None;
+                        }
                         reader.line_preview(&document, *source_row, max_bytes)
                     });
                     (log_lines, result_lines)
                 })
                 .await;
             _ = this.update_in(cx, |this, window, cx| {
+                if task_cancellation.is_cancelled() {
+                    this.finish_reload(strategy);
+                    this.open_queued_external_paths_if_idle(window, cx);
+                    cx.notify();
+                    return;
+                }
                 this.commit_reload_replacement(
                     PreparedReloadReplacement {
                         plan,
@@ -1879,7 +1913,12 @@ impl Workspace {
         });
         match strategy {
             ReloadStrategy::Full => self.open_task = Some(task),
-            ReloadStrategy::ExtendAppend => self.file_refresh_task = Some(task),
+            ReloadStrategy::ExtendAppend => {
+                self.file_refresh_task = Some(FileRefreshTask {
+                    _task: task,
+                    cancellation,
+                });
+            }
         }
         true
     }

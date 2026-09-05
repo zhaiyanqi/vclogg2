@@ -720,8 +720,8 @@ pub(super) fn search_reloaded_document(
     previous_result: &SearchResult,
     query: &SearchQuery,
     matcher: Option<&SearchMatcher>,
+    cancellation: &SearchCancellation,
 ) -> Result<SearchResult> {
-    let cancellation = SearchCancellation::default();
     let run = match kind {
         DocumentRefreshKind::Appended => search_appended_with_compiled_matcher(
             document,
@@ -729,10 +729,10 @@ pub(super) fn search_reloaded_document(
             previous_result,
             matcher,
             query.max_results,
-            &cancellation,
+            cancellation,
         ),
         DocumentRefreshKind::Rebuilt => {
-            search_with_compiled_matcher(document, matcher, query.max_results, &cancellation)
+            search_with_compiled_matcher(document, matcher, query.max_results, cancellation)
         }
     };
     match run {
@@ -756,6 +756,7 @@ pub(super) fn search_document_with_matcher(
         &SearchResult::default(),
         query,
         matcher,
+        &SearchCancellation::default(),
     )
 }
 

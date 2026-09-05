@@ -52,8 +52,8 @@ use gpui_component::{
 use rayon::prelude::{IntoParallelIterator as _, ParallelIterator as _};
 use vclogg_core::{
     CompressedRows, DocumentRefreshKind, LinePreviewReader, LineReader, LogDocument,
-    PendingIndexCacheWrite, SearchCancellation, SearchMatcher, SearchQuery, SearchResult,
-    SearchRun, search_appended_with_compiled_matcher, search_with_compiled_matcher,
+    PendingIndexCacheWrite, RefreshValidation, SearchCancellation, SearchMatcher, SearchQuery,
+    SearchResult, SearchRun, search_appended_with_compiled_matcher, search_with_compiled_matcher,
 };
 
 use crate::{
@@ -753,6 +753,19 @@ struct PreparedGlobalResultReplacement {
     row_height: Pixels,
     word_wrap: bool,
     restore_context: Option<SearchSessionState>,
+}
+
+/// Dropping any automatic refresh owner signals synchronous core work before
+/// cancelling its foreground task, including workspace destruction and manual opens.
+struct FileRefreshTask {
+    _task: Task<()>,
+    cancellation: SearchCancellation,
+}
+
+impl Drop for FileRefreshTask {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+    }
 }
 
 struct ReloadGlobalSearch {
@@ -1618,7 +1631,7 @@ pub struct Workspace {
     tab_activation_task: Option<Task<()>>,
     tab_activation_revision: u64,
     open_task: Option<Task<()>>,
-    file_refresh_task: Option<Task<()>>,
+    file_refresh_task: Option<FileRefreshTask>,
     pending_external_paths: Vec<PathBuf>,
     searches: SearchController,
     result_export_task: Option<Task<()>>,

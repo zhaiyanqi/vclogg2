@@ -215,6 +215,14 @@ pub enum DocumentRefreshKind {
     Rebuilt,
 }
 
+/// How much of the previous snapshot is revalidated before reusing its index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefreshValidation {
+    FullPrefix,
+    /// Optimized for append-only writers; unsampled middle rewrites can be missed.
+    HeadAndTail,
+}
+
 enum DocumentBytes {
     Empty,
     Owned(Box<[u8]>),
@@ -1019,6 +1027,7 @@ pub struct LogDocument {
     longest_completed_line_columns: usize,
     append_fingerprint: AppendFingerprint,
     content_digest: [u8; 32],
+    prefix_fully_verified: bool,
     encoding: FileEncoding,
 }
 
@@ -1641,11 +1650,34 @@ impl LogDocument {
     /// of the existing source prefix still matches the digests captured during open.
     /// All other changes fall back to a complete rebuild.
     pub fn refresh(&self) -> Result<(Self, DocumentRefreshKind)> {
-        if let Some(document) = self.try_refresh_appended()? {
-            return Ok((document, DocumentRefreshKind::Appended));
+        Ok(self
+            .refresh_cancellable(RefreshValidation::FullPrefix, &CancellationToken::default())?
+            .expect("a fresh cancellation token cannot cancel document refresh"))
+    }
+
+    /// Refresh with an explicit validation policy. `Ok(None)` means cancellation.
+    pub fn refresh_cancellable(
+        &self,
+        validation: RefreshValidation,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<(Self, DocumentRefreshKind)>> {
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
+        let appended = self.try_refresh_appended(validation, cancellation);
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
+        let appended = appended?;
+        if let Some(document) = appended {
+            return Ok(Some((document, DocumentRefreshKind::Appended)));
         }
 
-        Self::open(self.path()).map(|document| (document, DocumentRefreshKind::Rebuilt))
+        let rebuilt = Self::open_cancellable(self.path(), cancellation);
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
+        rebuilt.map(|document| document.map(|document| (document, DocumentRefreshKind::Rebuilt)))
     }
 
     /// Inspect the path for growth, rewrites, truncation or replacement. Call from
@@ -1741,6 +1773,9 @@ impl LogDocument {
         if !self.contains_complete_source() || !other.contains_complete_source() {
             return false;
         }
+        if !self.prefix_fully_verified || !other.prefix_fully_verified {
+            return false;
+        }
         self.metadata.file_size == other.metadata.file_size
             && self.metadata.encoding_name == other.metadata.encoding_name
             && self.content_digest == other.content_digest
@@ -1792,6 +1827,7 @@ impl LogDocument {
             longest_completed_line_columns: self.longest_completed_line_columns,
             append_fingerprint: self.append_fingerprint.clone(),
             content_digest: self.content_digest,
+            prefix_fully_verified: self.prefix_fully_verified,
             encoding: self.encoding,
         }
     }
@@ -1847,6 +1883,9 @@ impl LogDocument {
     }
 
     pub(crate) fn has_strong_source_change_token(&self) -> bool {
+        if !self.prefix_fully_verified {
+            return false;
+        }
         #[cfg(windows)]
         {
             matches!(self.bytes.as_ref(), DocumentBytes::Verified(bytes) if bytes.identity.is_some())
@@ -1870,7 +1909,14 @@ impl LogDocument {
         }
     }
 
-    fn try_refresh_appended(&self) -> Result<Option<Self>> {
+    fn try_refresh_appended(
+        &self,
+        validation: RefreshValidation,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<Self>> {
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
         if !self.has_complete_line_index() {
             return Ok(None);
         }
@@ -1883,9 +1929,17 @@ impl LogDocument {
         let file_metadata = file
             .metadata()
             .with_context(|| format!("无法读取文件信息：{}", path.display()))?;
+        let identity = read_file_identity(&file);
+        if validation == RefreshValidation::HeadAndTail
+            && !matches!(self.bytes.as_ref(), DocumentBytes::Verified(previous)
+                if previous.identity.as_ref().zip(identity.as_ref())
+                    .is_some_and(|(previous, current)| same_file_identity(previous, current)))
+        {
+            return Ok(None);
+        }
         if let DocumentBytes::Verified(previous) = self.bytes.as_ref()
             && let Some(expected) = &previous.identity
-            && read_file_identity(&file)
+            && identity
                 .as_ref()
                 .is_none_or(|current| !same_file_identity(current, expected))
         {
@@ -1901,6 +1955,9 @@ impl LogDocument {
             .with_context(|| format!("日志文件过大，无法建立索引：{}", path.display()))?;
         let old_size_usize = usize::try_from(old_size)
             .with_context(|| format!("日志文件过大，无法校验追加：{}", path.display()))?;
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
         let mut line_starts = MutableLineStarts::from_immutable(&self.line_starts);
         if line_starts.last() == Some(old_size_usize) {
             line_starts.truncate(line_starts.len().saturating_sub(1));
@@ -1916,11 +1973,13 @@ impl LogDocument {
             &file,
             new_size_usize,
             file_metadata.modified().ok(),
-            read_file_identity(&file),
+            identity,
             old_size_usize,
             self.append_fingerprint.integrity_blocks.as_ref(),
             indexer,
             path,
+            validation,
+            cancellation,
         )?
         else {
             return Ok(None);
@@ -1932,7 +1991,10 @@ impl LogDocument {
             integrity_blocks.clone(),
         );
 
-        Ok(Some(Self::from_parts(
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
+        let mut document = Self::from_parts(
             path.to_path_buf(),
             bytes,
             indexed_lines,
@@ -1940,7 +2002,9 @@ impl LogDocument {
             new_size,
             self.encoding,
             Some(integrity_blocks),
-        )))
+        );
+        document.prefix_fully_verified = validation == RefreshValidation::FullPrefix;
+        Ok(Some(document))
     }
 
     fn from_parts(
@@ -2008,6 +2072,7 @@ impl LogDocument {
             longest_completed_line_columns: indexed_lines.longest_completed_line_columns,
             append_fingerprint,
             content_digest,
+            prefix_fully_verified: true,
             encoding,
         }
     }
@@ -2399,6 +2464,9 @@ fn build_file_index_with_integrity_while(
         block.resize(block_len, 0);
         read_file_exact_at(file, &mut block, block_start as u64)
             .with_context(|| format!("建立索引时无法读取日志文件：{}", path.display()))?;
+        if is_cancelled() {
+            return Ok(None);
+        }
         integrity_blocks.push(Sha256::digest(&block).into());
         if let Some(indexer) = indexer.as_mut() {
             let final_block = block_start.saturating_add(block_len) == file_size_usize;
@@ -2792,6 +2860,9 @@ fn validate_indexed_file_snapshot(
         );
         read_file_exact_at(file, &mut block, start)
             .with_context(|| format!("校验日志快照时无法读取文件：{}", path.display()))?;
+        if is_cancelled() {
+            return Ok(false);
+        }
         if <[u8; 32]>::from(Sha256::digest(&block)) != *expected {
             anyhow::bail!("日志文件在建立索引时发生了变化：{}", path.display());
         }
@@ -2812,59 +2883,177 @@ fn build_appended_file_index_with_integrity(
     old_integrity_blocks: &[[u8; 32]],
     mut indexer: StreamingLineIndexer,
     path: &Path,
+    validation: RefreshValidation,
+    cancellation: &CancellationToken,
 ) -> Result<Option<IndexedFileSnapshot>> {
-    if old_size >= new_size
+    if cancellation.is_cancelled()
+        || old_size == 0
+        || old_size >= new_size
         || old_integrity_blocks.len() != old_size.div_ceil(APPEND_INTEGRITY_BLOCK_BYTES)
     {
         return Ok(None);
     }
     let rescan_start = indexer.current_start;
+    let first_scan_block = match validation {
+        RefreshValidation::FullPrefix => 0,
+        RefreshValidation::HeadAndTail => ((old_size - 1) / APPEND_INTEGRITY_BLOCK_BYTES)
+            .min(rescan_start / APPEND_INTEGRITY_BLOCK_BYTES),
+    };
     let mut integrity_blocks = Vec::with_capacity(new_size.div_ceil(APPEND_INTEGRITY_BLOCK_BYTES));
-    let mut block_start = 0usize;
+    integrity_blocks.extend_from_slice(&old_integrity_blocks[..first_scan_block]);
+    let mut block_start = first_scan_block * APPEND_INTEGRITY_BLOCK_BYTES;
     let mut block = vec![0_u8; new_size.min(APPEND_INTEGRITY_BLOCK_BYTES)];
+    if first_scan_block > 0 {
+        // The head is outside the tail scan. Compare it once, using the saved full block.
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
+        read_file_exact_at(file, &mut block, 0)?;
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
+        if <[u8; 32]>::from(Sha256::digest(&block)) != old_integrity_blocks[0] {
+            return Ok(None);
+        }
+    }
     while block_start < new_size {
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
         let block_len = (new_size - block_start).min(APPEND_INTEGRITY_BLOCK_BYTES);
         block.resize(block_len, 0);
         read_file_exact_at(file, &mut block, block_start as u64)
             .with_context(|| format!("校验追加内容时无法读取日志文件：{}", path.display()))?;
 
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
+        let digest: [u8; 32] = Sha256::digest(&block).into();
+
         if block_start < old_size {
             let old_block_len = (old_size - block_start).min(APPEND_INTEGRITY_BLOCK_BYTES);
             let block_ix = block_start / APPEND_INTEGRITY_BLOCK_BYTES;
-            let old_digest: [u8; 32] = Sha256::digest(&block[..old_block_len]).into();
+            let old_digest = if old_block_len == block_len {
+                digest
+            } else {
+                if cancellation.is_cancelled() {
+                    return Ok(None);
+                }
+                Sha256::digest(&block[..old_block_len]).into()
+            };
             if old_integrity_blocks.get(block_ix) != Some(&old_digest) {
                 return Ok(None);
             }
         }
-        integrity_blocks.push(Sha256::digest(&block).into());
+        integrity_blocks.push(digest);
 
         let block_end = block_start.saturating_add(block_len);
         let scan_start = block_start.max(rescan_start);
         if scan_start < block_end {
             let slice_start = scan_start - block_start;
-            indexer
+            if indexer
                 .feed(
                     scan_start,
                     &block[slice_start..],
                     block_end == new_size,
-                    &|| false,
+                    &|| cancellation.is_cancelled(),
                 )
-                .expect("a non-cancelling append scan must complete");
+                .is_none()
+            {
+                return Ok(None);
+            }
         }
         block_start = block_end;
     }
 
-    validate_indexed_file_snapshot(
-        file,
-        new_size as u64,
-        expected_modified,
-        expected_identity.as_ref(),
-        &integrity_blocks,
-        path,
-        &|| false,
-    )?;
+    let valid = match validation {
+        RefreshValidation::FullPrefix => validate_indexed_file_snapshot(
+            file,
+            new_size as u64,
+            expected_modified,
+            expected_identity.as_ref(),
+            &integrity_blocks,
+            path,
+            &|| cancellation.is_cancelled(),
+        )?,
+        RefreshValidation::HeadAndTail => validate_appended_file_snapshot(
+            file,
+            new_size,
+            expected_identity.as_ref(),
+            &integrity_blocks,
+            first_scan_block,
+            path,
+            cancellation,
+        )?,
+    };
+    if !valid || cancellation.is_cancelled() {
+        return Ok(None);
+    }
 
     Ok(Some((indexer.finish(new_size), integrity_blocks.into())))
+}
+
+/// Recheck only the head and scanned tail, including all newly indexed bytes. The
+/// captured EOF never moves while validating a live writer; unscanned middle blocks
+/// are explicitly trusted under HeadAndTail rather than claimed to be reverified.
+fn validate_appended_file_snapshot(
+    file: &File,
+    file_size: usize,
+    expected_identity: Option<&FileIdentity>,
+    integrity_blocks: &[[u8; 32]],
+    first_scan_block: usize,
+    path: &Path,
+    cancellation: &CancellationToken,
+) -> Result<bool> {
+    if cancellation.is_cancelled()
+        || !refreshed_path_matches(file, path, file_size as u64, expected_identity)?
+    {
+        return Ok(false);
+    }
+    let head = (first_scan_block > 0).then_some(0);
+    let mut block = vec![0_u8; APPEND_INTEGRITY_BLOCK_BYTES.min(file_size)];
+    for block_ix in head
+        .into_iter()
+        .chain(first_scan_block..integrity_blocks.len())
+    {
+        if cancellation.is_cancelled() {
+            return Ok(false);
+        }
+        let start = block_ix * APPEND_INTEGRITY_BLOCK_BYTES;
+        block.resize((file_size - start).min(APPEND_INTEGRITY_BLOCK_BYTES), 0);
+        read_file_exact_at(file, &mut block, start as u64)
+            .with_context(|| format!("校验追加快照时无法读取日志文件：{}", path.display()))?;
+        if cancellation.is_cancelled() {
+            return Ok(false);
+        }
+        if <[u8; 32]>::from(Sha256::digest(&block)) != integrity_blocks[block_ix] {
+            return Ok(false);
+        }
+    }
+    if cancellation.is_cancelled() {
+        return Ok(false);
+    }
+    refreshed_path_matches(file, path, file_size as u64, expected_identity)
+}
+
+fn refreshed_path_matches(
+    file: &File,
+    path: &Path,
+    file_size: u64,
+    expected_identity: Option<&FileIdentity>,
+) -> Result<bool> {
+    let Some(expected) = expected_identity else {
+        return Ok(false);
+    };
+    let current = File::open(path)?;
+    Ok(file.metadata()?.len() >= file_size
+        && current.metadata()?.len() >= file_size
+        && read_file_identity(file)
+            .as_ref()
+            .is_some_and(|identity| same_file_identity(identity, expected))
+        && read_file_identity(&current)
+            .as_ref()
+            .is_some_and(|identity| same_file_identity(identity, expected)))
 }
 
 fn build_binary_line_index(
