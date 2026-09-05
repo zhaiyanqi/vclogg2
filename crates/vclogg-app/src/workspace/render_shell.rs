@@ -1385,7 +1385,6 @@ impl Workspace {
         label: &'static str,
         icon: IconName,
         selected: bool,
-        trailing: Option<AnyElement>,
         cx: &mut App,
     ) -> AnyElement {
         const POPUP_MENU_ITEM_HORIZONTAL_INSET: Pixels = px(8.);
@@ -1422,7 +1421,6 @@ impl Workspace {
                     .child(Icon::new(icon).xsmall())
                     .child(div().min_w_0().flex_1().child(label)),
             )
-            .when_some(trailing, |row, trailing| row.child(trailing))
             .into_any_element()
     }
 
@@ -1496,8 +1494,6 @@ impl Workspace {
                 let current_workspace = menu_workspace.clone();
                 let multi_workspace = menu_workspace.clone();
                 let directory_workspace = menu_workspace.clone();
-                let multi_options_workspace = menu_workspace.clone();
-                let directory_options_workspace = menu_workspace.clone();
 
                 menu.min_w(window.rem_size() * 10.)
                     .item(
@@ -1506,7 +1502,6 @@ impl Workspace {
                                 crate::tr!("当前文件", "Current file"),
                                 IconName::Search,
                                 selected_scope == SearchScope::CurrentFile,
-                                None,
                                 cx,
                             )
                         })
@@ -1519,32 +1514,10 @@ impl Workspace {
                     )
                     .item(
                         PopupMenuItem::element(move |_, cx| {
-                            let workspace = multi_options_workspace.clone();
-                            let trailing = Button::new("search-scope-multi-options")
-                                .relative()
-                                .xsmall()
-                                .ghost()
-                                .icon(IconName::Settings2)
-                                .tooltip(crate::tr!(
-                                    "选择参与搜索的标签…",
-                                    "Select tabs to search…"
-                                ))
-                                .on_click(move |_, window, cx| {
-                                    workspace.update(cx, |this, cx| {
-                                        this.set_search_scope(
-                                            SearchScope::AllOpenFiles,
-                                            window,
-                                            cx,
-                                        );
-                                        this.open_global_search_files_dialog(window, cx);
-                                    });
-                                })
-                                .into_any_element();
                             Self::render_search_scope_menu_row(
                                 crate::tr!("全局搜索", "Global search"),
                                 IconName::File,
                                 selected_scope == SearchScope::AllOpenFiles,
-                                Some(trailing),
                                 cx,
                             )
                         })
@@ -1557,28 +1530,10 @@ impl Workspace {
                     )
                     .item(
                         PopupMenuItem::element(move |_, cx| {
-                            let workspace = directory_options_workspace.clone();
-                            let trailing = Button::new("search-scope-directory-options")
-                                .relative()
-                                .xsmall()
-                                .ghost()
-                                .icon(IconName::Settings2)
-                                .tooltip(crate::tr!(
-                                    "设置目录搜索范围…",
-                                    "Set directory search scope…"
-                                ))
-                                .on_click(move |_, window, cx| {
-                                    workspace.update(cx, |this, cx| {
-                                        this.set_search_scope(SearchScope::Directory, window, cx);
-                                        this.open_directory_search_dialog(window, cx);
-                                    });
-                                })
-                                .into_any_element();
                             Self::render_search_scope_menu_row(
                                 crate::tr!("目录搜索", "Directory search"),
                                 IconName::FolderOpen,
                                 selected_scope == SearchScope::Directory,
-                                Some(trailing),
                                 cx,
                             )
                         })
