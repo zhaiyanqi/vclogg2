@@ -2110,7 +2110,7 @@ impl Workspace {
                 h_flex()
                     .relative()
                     .w_full()
-                    .min_h(px(50.))
+                    .min_h(SEARCH_CONTROL_HEIGHT + SEARCH_BAR_VERTICAL_INSET * 2.)
                     .items_center()
                     .gap(px(6.))
                     .px(px(12.))
@@ -2119,19 +2119,23 @@ impl Workspace {
                     .child(ui_theme::glass_sheen_layer(&colors))
                     .when_some(result_mode_select, |controls, result_mode_select| {
                         controls.child(
-                            div().w(px(110.)).h(px(34.)).flex_none().child(
-                                Select::new(&result_mode_select)
-                                    .small()
-                                    .h(px(34.))
-                                    .focus_ring(false),
-                            ),
+                            div()
+                                .w(px(110.))
+                                .h(SEARCH_CONTROL_HEIGHT)
+                                .flex_none()
+                                .child(
+                                    Select::new(&result_mode_select)
+                                        .small()
+                                        .h(SEARCH_CONTROL_HEIGHT)
+                                        .focus_ring(false),
+                                ),
                         )
                     })
                     .child(
                         Button::new("case-sensitive")
                             .small()
                             .w(px(34.))
-                            .h(px(34.))
+                            .h(SEARCH_CONTROL_HEIGHT)
                             .p_0()
                             .rounded(px(10.))
                             .font_weight(FontWeight(700.))
@@ -2149,7 +2153,7 @@ impl Workspace {
                         Button::new("regular-expression")
                             .small()
                             .w(px(34.))
-                            .h(px(34.))
+                            .h(SEARCH_CONTROL_HEIGHT)
                             .p_0()
                             .rounded(px(10.))
                             .font_weight(FontWeight(700.))
@@ -2169,7 +2173,7 @@ impl Workspace {
                         div()
                             .flex_1()
                             .min_w(px(180.))
-                            .h(px(34.))
+                            .h(SEARCH_CONTROL_HEIGHT)
                             .relative()
                             .capture_key_down(cx.listener(
                                 |this, event: &KeyDownEvent, window, cx| {
@@ -2208,6 +2212,7 @@ impl Workspace {
                             ))
                             .child(
                                 Input::new(&self.query)
+                                    .small()
                                     .size_full()
                                     .cleanable(true)
                                     .prefix(div().child(Icon::new(IconName::Search).small()))
@@ -2245,7 +2250,7 @@ impl Workspace {
                             .icon(IconName::Search)
                             .label(crate::tr!("搜索", "Search"))
                             .min_w(px(88.))
-                            .h(px(34.))
+                            .h(SEARCH_CONTROL_HEIGHT)
                             .rounded(px(10.))
                             .loading(searching_current_scope)
                             .disabled(search_disabled)
@@ -2259,7 +2264,7 @@ impl Workspace {
                             .ghost()
                             .icon(IconName::Close)
                             .w(px(34.))
-                            .h(px(34.))
+                            .h(SEARCH_CONTROL_HEIGHT)
                             .rounded(px(10.))
                             .disabled(clear_disabled)
                             .tooltip(crate::tr!("清除搜索结果", "Clear search results"))
