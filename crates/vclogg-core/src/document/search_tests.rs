@@ -260,3 +260,99 @@ fn dense_projection_shares_offsets_and_compressed_rows_without_expansion() {
     assert_eq!(nested.line_count(), 2);
     assert_eq!(nested.line(8000).as_deref(), Some("target"));
 }
+
+#[test]
+fn combined_search_only_extends_the_block_owning_a_long_line() {
+    let block = APPEND_INTEGRITY_BLOCK_BYTES;
+    let mut bytes = vec![b'x'; block * 5 + 13];
+    bytes.extend_from_slice(b"target\r\ntail");
+    let source = TestSource::new(&bytes);
+    let file = fs::File::open(&source.0).unwrap();
+    let query = SearchQuery {
+        text: "target|tail".into(),
+        ..SearchQuery::default()
+    };
+    let matcher = crate::SearchMatcher::new(&query).unwrap().unwrap();
+    for index in 1..5 {
+        let mut contents = bytes[index * block..(index + 1) * block].to_vec();
+        let result = super::match_parallel_utf8_block_lines(
+            &file,
+            bytes.len(),
+            index * block,
+            block,
+            &mut contents,
+            super::FileEncoding::Utf8,
+            &matcher,
+            &source.0,
+            &|| false,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(result.is_empty());
+        assert_eq!(
+            contents.len(),
+            block,
+            "middle blocks must not copy the long suffix"
+        );
+    }
+    let (_, combined) = super::build_parallel_utf8_file_index_with_integrity(
+        &file,
+        bytes.len(),
+        super::FileEncoding::Utf8,
+        &source.0,
+        Some((&matcher, None)),
+        &|| false,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        combined.unwrap().line_indices.iter().collect::<Vec<_>>(),
+        [0, 1]
+    );
+}
+
+#[test]
+fn combined_search_handles_line_breaks_at_block_edges_without_tail_reads() {
+    let block = APPEND_INTEGRITY_BLOCK_BYTES;
+    for delimiter in [b"\n".as_slice(), b"\r", b"\r\n"] {
+        let mut bytes = vec![b'x'; block - 1];
+        bytes.extend_from_slice(delimiter);
+        bytes.extend_from_slice(b"target\n");
+        let source = TestSource::new(&bytes);
+        let file = fs::File::open(&source.0).unwrap();
+        let query = SearchQuery {
+            text: "^x+$|target|^$".into(),
+            regex: true,
+            ..SearchQuery::default()
+        };
+        let matcher = crate::SearchMatcher::new(&query).unwrap().unwrap();
+        let mut first = bytes[..block].to_vec();
+        super::match_parallel_utf8_block_lines(
+            &file,
+            bytes.len(),
+            0,
+            block,
+            &mut first,
+            super::FileEncoding::Utf8,
+            &matcher,
+            &source.0,
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(first.len(), block);
+        let (_, combined) = super::build_parallel_utf8_file_index_with_integrity(
+            &file,
+            bytes.len(),
+            super::FileEncoding::Utf8,
+            &source.0,
+            Some((&matcher, None)),
+            &|| false,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            combined.unwrap().line_indices,
+            search(&source.open(), &query).unwrap().line_indices
+        );
+    }
+}

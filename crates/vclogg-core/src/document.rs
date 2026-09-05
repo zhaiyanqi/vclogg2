@@ -2740,7 +2740,7 @@ fn build_parallel_utf8_file_index_with_integrity(
 
     current_columns = current_columns.saturating_add(file_size.saturating_sub(content_cursor));
     let trailing_line_bytes = file_size.saturating_sub(current_start);
-    let search_result = search.map(|(_, max_results)| {
+    let search_result = search.map(|(matcher, max_results)| {
         let mut matched_starts = blocks
             .iter()
             .flat_map(|block| block.matched_line_starts.iter().copied())
@@ -2752,10 +2752,10 @@ fn build_parallel_utf8_file_index_with_integrity(
                 .next_if(|matched| *matched < line_start)
                 .is_some()
             {}
-            if matched_starts
-                .next_if(|matched| *matched == line_start)
-                .is_none()
-            {
+            let matched = matched_starts.next_if(|matched| *matched == line_start).is_some()
+                // The trailing empty row has no owning byte block.
+                || (line_start == file_size && matcher.is_match(b""));
+            if !matched {
                 continue;
             }
             if max_results.is_some_and(|limit| rows.len() >= limit as u64) {
@@ -2799,16 +2799,6 @@ fn match_parallel_utf8_block_lines(
     is_cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<Option<Vec<usize>>> {
     let block_end = block_start.saturating_add(block_len);
-    if block_end < file_size {
-        extend_bytes_through_next_line_break(
-            file,
-            file_size,
-            block_end,
-            bytes,
-            path,
-            is_cancelled,
-        )?;
-    }
     if is_cancelled() {
         return Ok(None);
     }
@@ -2827,6 +2817,21 @@ fn match_parallel_utf8_block_lines(
             next_single_byte_line_start(bytes, 0).unwrap_or(bytes.len())
         }
     };
+    // A middle block of a long line owns no row. Decide this before reading
+    // any suffix, otherwise every block copies the same potentially huge tail.
+    if line_start >= block_len {
+        return Ok(Some(Vec::new()));
+    }
+    if block_end < file_size && !matches!(bytes.last(), Some(b'\r' | b'\n')) {
+        extend_bytes_through_next_line_break(
+            file,
+            file_size,
+            block_end,
+            bytes,
+            path,
+            is_cancelled,
+        )?;
+    }
     let mut matched_line_starts = Vec::new();
     let mut scanned_lines = 0_usize;
     while block_start.saturating_add(line_start) < block_end && line_start <= bytes.len() {
