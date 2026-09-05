@@ -6,6 +6,7 @@ use std::{
 };
 
 use super::{APPEND_INTEGRITY_BLOCK_BYTES, DocumentBytes, LogDocument};
+use crate::{SearchQuery, search};
 
 static SOURCE_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
@@ -106,4 +107,122 @@ fn cross_block_search_rejects_changes_in_the_next_block() {
     bytes[APPEND_INTEGRITY_BLOCK_BYTES] = b'y';
     fs::write(&source.0, bytes).unwrap();
     assert!(reader.bytes_at_local_row(1).is_none());
+}
+
+#[test]
+fn parallel_search_does_not_duplicate_reads_within_one_source_block() {
+    let source = TestSource::new(&b"target message\n".repeat(150_000));
+    let document = source.open();
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .build()
+        .unwrap();
+    let result = pool
+        .install(|| {
+            search(
+                &document,
+                &SearchQuery {
+                    text: "target".into(),
+                    case_sensitive: true,
+                    ..SearchQuery::default()
+                },
+            )
+        })
+        .unwrap();
+
+    assert_eq!(result.len(), 150_000);
+    assert_eq!(block_reads(&document), 1);
+}
+
+#[test]
+fn parallel_search_balances_bytes_when_line_lengths_differ() {
+    let short = format!("{:<31}\n", "target");
+    let long = format!("{:<1023}\n", "target");
+    let short_count = APPEND_INTEGRITY_BLOCK_BYTES / short.len();
+    let long_count = 3 * APPEND_INTEGRITY_BLOCK_BYTES / long.len();
+    let bytes = format!("{}{}", short.repeat(short_count), long.repeat(long_count));
+    let source = TestSource::new(bytes.as_bytes());
+    let document = source.open();
+    let ranges = document.search_row_ranges(4);
+    assert_eq!(ranges.len(), 4);
+    assert!(ranges[0].len() > ranges[1].len() * 8);
+    for rows in &ranges {
+        let start = document
+            .line_byte_range_at_local_row(rows.start)
+            .unwrap()
+            .start;
+        let end = document
+            .line_byte_range_at_local_row(rows.end - 1)
+            .unwrap()
+            .end;
+        assert_eq!(end - start, APPEND_INTEGRITY_BLOCK_BYTES);
+    }
+
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap();
+    let result = pool
+        .install(|| {
+            search(
+                &document,
+                &SearchQuery {
+                    text: "target".into(),
+                    case_sensitive: true,
+                    ..SearchQuery::default()
+                },
+            )
+        })
+        .unwrap();
+    assert_eq!(result.len(), short_count + long_count);
+    assert_eq!(result.line_indices.first(), Some(0));
+    assert_eq!(
+        result.line_indices.get(result.len() - 1),
+        Some(short_count + long_count - 1)
+    );
+    assert_eq!(block_reads(&document), 4);
+}
+
+#[test]
+fn byte_partitioned_search_preserves_long_lines_and_sparse_source_rows() {
+    let mut bytes = b"head\n".to_vec();
+    bytes.resize(3 * APPEND_INTEGRITY_BLOCK_BYTES + 1, b'x');
+    bytes.extend_from_slice(b"target\r\ntail\n");
+    let source = TestSource::new(&bytes);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .build()
+        .unwrap();
+    for sparse in [false, true] {
+        let document = source.open();
+        let document = if sparse {
+            document.project_source_rows(&[0, 2, 3].into_iter().collect())
+        } else {
+            document
+        };
+        for limit in [None, Some(1)] {
+            let result = pool
+                .install(|| {
+                    search(
+                        &document,
+                        &SearchQuery {
+                            text: "head|target|tail".into(),
+                            case_sensitive: true,
+                            max_results: limit,
+                            ..SearchQuery::default()
+                        },
+                    )
+                })
+                .unwrap();
+            let expected = if sparse { vec![0, 2] } else { vec![0, 1, 2] };
+            assert_eq!(
+                result.line_indices.iter().collect::<Vec<_>>(),
+                expected
+                    .into_iter()
+                    .take(limit.unwrap_or(usize::MAX))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(result.truncated, limit.is_some());
+        }
+    }
 }

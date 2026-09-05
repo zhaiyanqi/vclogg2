@@ -629,6 +629,15 @@ impl LineStarts {
         }
     }
 
+    fn lower_bound(&self, byte_offset: usize) -> usize {
+        match self {
+            Self::Compact(starts) => {
+                starts.partition_point(|start| (*start as usize) < byte_offset)
+            }
+            Self::Wide(starts) => starts.partition_point(|start| *start < byte_offset),
+        }
+    }
+
     fn iter(&self) -> LineStartsIter<'_> {
         match self {
             Self::Compact(starts) => LineStartsIter::Compact(starts.iter()),
@@ -1883,6 +1892,43 @@ impl LogDocument {
             start = start.saturating_add(self.encoding.bom_len()).min(end);
         }
         Some(start..end)
+    }
+
+    /// Partition local rows by source byte blocks, keeping each logical line whole.
+    /// A line crossing a task boundary may share its final block with the next task;
+    /// tasks never split the rows within a single source block just to fill the pool.
+    pub(crate) fn search_row_ranges(&self, max_chunks: usize) -> Vec<std::ops::Range<usize>> {
+        let line_count = self.line_count();
+        let first_block =
+            self.line_starts.get(0).unwrap_or_default() / APPEND_INTEGRITY_BLOCK_BYTES;
+        let end_byte = self
+            .line_ends
+            .as_ref()
+            .and_then(|ends| ends.get(line_count.saturating_sub(1)))
+            .unwrap_or(self.bytes.len());
+        let block_count = end_byte
+            .div_ceil(APPEND_INTEGRITY_BLOCK_BYTES)
+            .saturating_sub(first_block);
+        let chunk_count = max_chunks
+            .max(1)
+            .min(block_count.max(1))
+            .min(line_count.max(1));
+        let mut ranges = Vec::with_capacity(chunk_count);
+        let mut start_row = 0;
+        for chunk_ix in 1..chunk_count {
+            let block_offset =
+                chunk_ix * (block_count / chunk_count) + chunk_ix.min(block_count % chunk_count);
+            let byte_offset = (first_block + block_offset) * APPEND_INTEGRITY_BLOCK_BYTES;
+            let end_row = self.line_starts.lower_bound(byte_offset);
+            // Very long lines or sparse projections can cover several proposed
+            // boundaries. Collapse those empty tasks instead of rescanning a row.
+            if end_row > start_row && end_row < line_count {
+                ranges.push(start_row..end_row);
+                start_row = end_row;
+            }
+        }
+        ranges.push(start_row..line_count);
+        ranges
     }
 
     pub(crate) fn search_lines(&self, verify_integrity: bool) -> DocumentSearchLines<'_> {

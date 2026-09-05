@@ -14,7 +14,6 @@ use roaring::RoaringTreemap;
 
 use crate::{CancellationToken, CompressedRows, LogDocument};
 
-const PARALLEL_SEARCH_MIN_BYTES: u64 = 1024 * 1024;
 const SEARCH_PROGRESS_BATCH_LINES: usize = 1024;
 
 /// Search options owned by the feature layer and passed to the core as one snapshot.
@@ -225,9 +224,8 @@ fn search_with_compiled_matcher_inner(
         || !document.has_strong_source_change_token()
         || !document.source_identity_matches();
     let line_count = document.line_count();
-    let chunk_count = search_chunk_count(document);
-    let chunk_size = line_count.div_ceil(chunk_count);
-    let chunks = if chunk_count == 1 {
+    let row_ranges = document.search_row_ranges(rayon::current_num_threads());
+    let chunks = if row_ranges.len() == 1 {
         vec![scan_search_chunk(
             document,
             matcher,
@@ -238,15 +236,13 @@ fn search_with_compiled_matcher_inner(
             verify_integrity,
         )]
     } else {
-        (0..chunk_count)
+        row_ranges
             .into_par_iter()
-            .map(|chunk_ix| {
-                let start = chunk_ix.saturating_mul(chunk_size).min(line_count);
-                let end = start.saturating_add(chunk_size).min(line_count);
+            .map(|rows| {
                 scan_search_chunk(
                     document,
                     matcher,
-                    start..end,
+                    rows,
                     max_results,
                     cancellation,
                     progress,
@@ -363,19 +359,6 @@ pub fn search_appended_with_compiled_matcher(
         SearchChunkRun::Cancelled => SearchRun::Cancelled,
         SearchChunkRun::SourceChanged => SearchRun::SourceChanged,
     }
-}
-
-fn search_chunk_count(document: &LogDocument) -> usize {
-    let line_count = document.line_count();
-    if line_count < 2 || document.metadata().file_size < PARALLEL_SEARCH_MIN_BYTES {
-        return 1;
-    }
-    let thread_count = rayon::current_num_threads().max(1);
-    if thread_count == 1 || line_count < thread_count.saturating_mul(2) {
-        return 1;
-    }
-
-    thread_count.min(line_count).max(1)
 }
 
 struct SearchChunkResult {

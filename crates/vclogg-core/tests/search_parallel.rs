@@ -12,7 +12,7 @@ use vclogg_core::{
     search_with_progress,
 };
 
-const LINE_COUNT: usize = 60_000;
+const LINE_COUNT: usize = 240_000;
 const MATCH_INTERVAL: usize = 137;
 static TEMPORARY_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -58,7 +58,7 @@ fn large_document() -> (TemporaryDirectory, LogDocument) {
     }
     writer.flush().expect("应能刷新搜索测试日志");
     let document = LogDocument::open(&path).expect("应能打开搜索测试日志");
-    assert!(document.metadata().file_size > 1024 * 1024);
+    assert!(document.metadata().file_size > 3 * 4 * 1024 * 1024);
     (temporary, document)
 }
 
