@@ -1347,13 +1347,6 @@ impl GlobalSearchTableDelegate {
         self.visible_lines.install_loaded(loaded)
     }
 
-    pub(crate) fn install_staged_visible_lines(
-        &self,
-        loaded: StagedVisibleLineLoadResult<(u64, usize)>,
-    ) {
-        self.visible_lines.install_staged(loaded);
-    }
-
     pub(crate) fn install_groups_replacement(
         &mut self,
         groups: Vec<GlobalSearchGroup>,

@@ -1426,6 +1426,7 @@ impl Workspace {
                         return;
                     }
                     workspace.update(cx, |workspace, cx| {
+                        workspace.cancel_tag_drag(window, cx);
                         if event.modifiers.secondary() {
                             workspace.adjust_log_font_size_from_wheel(event, window, cx);
                         } else {

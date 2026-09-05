@@ -685,6 +685,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_tag_drag(window, cx);
         let toggles_from_global_results = self.active_log_region == LogRegion::GlobalResults
             && self.global_search.results_visible
             && self.global_search.scope.owns_global_word_wrap();

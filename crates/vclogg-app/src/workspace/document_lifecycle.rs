@@ -87,6 +87,7 @@ impl Workspace {
             && left.query_text == right.query_text
             && left.result_mode == right.result_mode
             && left.marked_rows == right.marked_rows
+            && left.row_tags == right.row_tags
             && left.show_line_numbers == right.show_line_numbers
             && left.show_row_separators == right.show_row_separators
             && left.word_wrap == right.word_wrap
@@ -140,6 +141,8 @@ impl Workspace {
             query_text: tab.search_query.text.clone(),
             result_mode: tab.result_mode.database_value(),
             marked_rows,
+            row_tags: tab.file.row_tags.clone(),
+            row_tags_base: tab.session_base.row_tags.clone(),
             show_line_numbers: tab.view.show_line_numbers,
             show_row_separators: tab.view.show_row_separators,
             word_wrap: tab.view.word_wrap,
@@ -651,6 +654,7 @@ impl Workspace {
                     title,
                     custom_title,
                     marked_rows,
+                    row_tags: session.row_tags.clone(),
                     pending_restore_marked_rows: if prepared.load_state != DocumentLoadState::Ready
                     {
                         restored_marked_rows
@@ -1190,6 +1194,7 @@ impl Workspace {
                 );
             });
             tab.file.pending_restore_marked_rows = session.marked_rows.clone();
+            tab.file.row_tags = session.row_tags.clone();
             // Opening from a workspace-search result is an explicit foreground navigation.
             // Its selected result row outranks the file session's last closed row from the first
             // restored frame onward; ordinary opens still fall back to the persisted row.
@@ -1700,6 +1705,7 @@ impl Workspace {
         }
         if matches!(strategy, ReloadStrategy::ExtendAppend)
             && (self.file_refresh_task.is_some()
+                || self.row_tag_interaction_active()
                 || self.searches.is_active()
                 || !window.is_window_active()
                 || self.active_tab_id != WorkspaceTabId::Document(document_id))
@@ -1709,6 +1715,7 @@ impl Workspace {
         let Some(document_ix) = self.documents.iter().position(|tab| tab.id == document_id) else {
             return false;
         };
+        self.cancel_tag_drag(window, cx);
         // Dropping the automatic task prevents it from publishing over a manual reload.
         self.file_refresh_task.take();
         self.cancel_search_for(document_id);

@@ -18,6 +18,7 @@ pub struct HistorySession {
     pub selected_row: Option<usize>,
     pub query_text: String,
     pub marked_rows_count: usize,
+    pub has_row_tags: bool,
     pub pinned: bool,
 }
 
@@ -50,6 +51,10 @@ pub struct FileSessionRecord {
     pub query_text: String,
     pub result_mode: i64,
     pub marked_rows: String,
+    /// Stable tag IDs mapped to opaque, application-owned annotation payloads.
+    pub row_tags: BTreeMap<String, String>,
+    /// Baseline for applying tag edits from a bulk window/quit snapshot. Not a SQL column.
+    pub row_tags_base: BTreeMap<String, String>,
     pub show_line_numbers: bool,
     pub show_row_separators: bool,
     pub word_wrap: bool,

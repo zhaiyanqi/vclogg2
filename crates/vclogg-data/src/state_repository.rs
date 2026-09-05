@@ -20,7 +20,7 @@ use crate::{
 };
 
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
-pub const STATE_SCHEMA_VERSION: u32 = 9;
+pub const STATE_SCHEMA_VERSION: u32 = 11;
 
 /// Owns SQLite access for durable file-history and workspace records.
 pub struct StateRepository {
@@ -128,7 +128,8 @@ impl StateRepository {
         let mut statement = connection
             .prepare(
                 "SELECT id, path, last_opened_at, revision, selected_row,
-                        query_text, marked_rows, pinned
+                        query_text, marked_rows, pinned,
+                        EXISTS(SELECT 1 FROM file_row_tags WHERE file_session_id = file_sessions.id)
                  FROM file_sessions
                  ORDER BY pinned DESC, last_opened_at DESC, id DESC",
             )
@@ -146,6 +147,7 @@ impl StateRepository {
                     selected_row,
                     query_text: row.get(5)?,
                     marked_rows_count: count_marked_rows(&row.get::<_, String>(6)?),
+                    has_row_tags: row.get(8)?,
                     pinned: row.get::<_, i64>(7)? != 0,
                 })
             })
@@ -191,7 +193,9 @@ impl StateRepository {
                 .prepare(
                     "SELECT id, path
                      FROM file_sessions
-                     WHERE pinned = 0 AND marked_rows = ''",
+                     WHERE pinned = 0 AND marked_rows = ''
+                       AND NOT EXISTS (SELECT 1 FROM file_row_tags
+                                       WHERE file_session_id = file_sessions.id)",
                 )
                 .context("无法准备历史清理查询")?;
             let rows = statement
@@ -237,7 +241,12 @@ impl StateRepository {
         let Some((path, pinned, marked_rows)) = session else {
             return Ok(false);
         };
-        if pinned || !marked_rows.is_empty() || protected_paths.contains(&path) {
+        let has_tags = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM file_row_tags WHERE file_session_id = ?1)",
+            [id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if pinned || !marked_rows.is_empty() || has_tags || protected_paths.contains(&path) {
             return Ok(false);
         }
         let removed = transaction
@@ -274,8 +283,11 @@ impl StateRepository {
     }
 
     pub fn load_session(&self, path: &Path) -> Result<Option<FileSessionRecord>> {
-        let connection = self.lock()?;
-        load_session_row(&connection, path)
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction()?;
+        let session = load_session_row(&transaction, path)?;
+        transaction.commit()?;
+        Ok(session)
     }
 
     pub fn load_sessions(&self, paths: &[PathBuf]) -> Result<FileSessionRecords> {
@@ -290,7 +302,8 @@ impl StateRepository {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        let connection = self.lock()?;
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction()?;
         let mut sessions = BTreeMap::new();
         for batch in database_paths.chunks(BATCH_SIZE) {
             let placeholders = std::iter::repeat_n("?", batch.len())
@@ -304,7 +317,7 @@ impl StateRepository {
                  FROM file_sessions
                  WHERE path IN ({placeholders})"
             );
-            let mut statement = connection
+            let mut statement = transaction
                 .prepare(&sql)
                 .context("无法准备批量文件会话查询")?;
             let rows = statement
@@ -316,10 +329,13 @@ impl StateRepository {
                 })
                 .context("无法批量查询文件会话")?;
             for row in rows {
-                let (path, session) = row.context("无法解析批量文件会话")?;
+                let (path, mut session) = row.context("无法解析批量文件会话")?;
+                session.row_tags = load_row_tags(&transaction, &path)?;
+                session.row_tags_base = session.row_tags.clone();
                 sessions.insert(path, session);
             }
         }
+        transaction.commit()?;
         Ok(sessions)
     }
 
@@ -335,6 +351,14 @@ impl StateRepository {
             .context("无法开始文件会话保存事务")?;
         let current = load_session_row(&transaction, path)?;
         let current_revision = current.as_ref().map_or(0, |current| current.revision);
+        let row_tags = merge_row_tag_changes(
+            &base.row_tags,
+            &desired.row_tags,
+            current
+                .as_ref()
+                .map(|record| record.row_tags.clone())
+                .unwrap_or_default(),
+        );
         let conflict_resolved = current
             .as_ref()
             .is_some_and(|current| current.revision != base.revision);
@@ -343,6 +367,7 @@ impl StateRepository {
             Some(_) | None => desired.clone(),
         };
         candidate.revision = current_revision.saturating_add(1);
+        candidate.row_tags = row_tags;
         save_session_row(&transaction, path, &candidate)?;
         transaction.commit().context("无法提交文件会话保存事务")?;
         Ok(SessionRecordSaveResult {
@@ -355,7 +380,7 @@ impl StateRepository {
         let mut connection = self.lock()?;
         let transaction = connection.transaction().context("无法开始窗口会话事务")?;
         for (path, state) in sessions {
-            save_session_row(&transaction, path, state)?;
+            save_session_snapshot(&transaction, path, state)?;
         }
         transaction.commit().context("无法提交窗口会话事务")
     }
@@ -369,7 +394,7 @@ impl StateRepository {
         let mut connection = self.lock()?;
         let transaction = connection.transaction().context("无法开始退出状态事务")?;
         for (path, state) in sessions {
-            save_session_row(&transaction, path, state)?;
+            save_session_snapshot(&transaction, path, state)?;
         }
         transaction
             .execute("DELETE FROM last_workspace_files", [])
@@ -405,6 +430,37 @@ impl StateRepository {
             })
             .optional()
             .with_context(|| format!("无法读取界面状态：{key}"))
+    }
+
+    pub fn load_row_tag_presets(&self) -> Result<Vec<String>> {
+        let connection = self.lock()?;
+        let mut statement = connection
+            .prepare("SELECT payload FROM row_tag_presets ORDER BY used_order DESC, id")?;
+        let mut presets = statement
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        // Earlier versions stored annotations without a reusable-library record.
+        let mut legacy =
+            connection.prepare("SELECT payload FROM file_row_tags ORDER BY rowid DESC")?;
+        presets.extend(
+            legacy
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+        );
+        Ok(presets)
+    }
+
+    pub fn remember_row_tag_preset(&self, id: &str, payload: &str) -> Result<()> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute(
+            "INSERT INTO row_tag_presets(id, payload, used_order)
+             VALUES (?1, ?2, (SELECT COALESCE(MAX(used_order), 0) + 1 FROM row_tag_presets))
+             ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, used_order = excluded.used_order",
+            params![id, payload],
+        )?;
+        transaction.commit()?;
+        Ok(())
     }
 
     /// Commit all three highlight tabs together, preserving unrelated settings.
@@ -900,7 +956,7 @@ impl StateRepository {
 }
 
 fn load_session_row(connection: &Connection, path: &Path) -> Result<Option<FileSessionRecord>> {
-    connection
+    let mut session = connection
         .query_row(
             "SELECT revision, custom_title, selected_row, query_text, result_mode,
                     marked_rows, show_line_numbers, show_row_separators,
@@ -911,7 +967,12 @@ fn load_session_row(connection: &Connection, path: &Path) -> Result<Option<FileS
             |row| file_session_from_row(row, 0),
         )
         .optional()
-        .with_context(|| format!("无法读取文件会话：{}", path.display()))
+        .with_context(|| format!("无法读取文件会话：{}", path.display()))?;
+    if let Some(session) = &mut session {
+        session.row_tags = load_row_tags(connection, path)?;
+        session.row_tags_base = session.row_tags.clone();
+    }
+    Ok(session)
 }
 
 fn file_session_from_row(
@@ -927,6 +988,8 @@ fn file_session_from_row(
         query_text: row.get(offset + 3)?,
         result_mode: row.get(offset + 4)?,
         marked_rows: row.get(offset + 5)?,
+        row_tags: BTreeMap::new(),
+        row_tags_base: BTreeMap::new(),
         show_line_numbers: row.get::<_, i64>(offset + 6)? != 0,
         show_row_separators: row.get::<_, i64>(offset + 7)? != 0,
         keyword_color_rules: row.get(offset + 8)?,
@@ -975,6 +1038,38 @@ fn merge_session_changes(
     latest
 }
 
+fn merge_row_tag_changes(
+    base: &BTreeMap<String, String>,
+    desired: &BTreeMap<String, String>,
+    mut latest: BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    // An unchanged stale snapshot cannot overwrite edits or resurrect deletions.
+    for id in base.keys().chain(desired.keys()) {
+        if base.get(id) != desired.get(id) {
+            if let Some(payload) = desired.get(id) {
+                latest.insert(id.clone(), payload.clone());
+            } else {
+                latest.remove(id);
+            }
+        }
+    }
+    latest
+}
+
+fn save_session_snapshot(
+    connection: &Connection,
+    path: &Path,
+    state: &FileSessionRecord,
+) -> Result<()> {
+    let mut snapshot = state.clone();
+    snapshot.row_tags = merge_row_tag_changes(
+        &state.row_tags_base,
+        &state.row_tags,
+        load_row_tags(connection, path)?,
+    );
+    save_session_row(connection, path, &snapshot)
+}
+
 fn save_session_row(connection: &Connection, path: &Path, state: &FileSessionRecord) -> Result<()> {
     let selected_row = state.selected_row.and_then(|row| i64::try_from(row).ok());
     connection
@@ -1013,6 +1108,48 @@ fn save_session_row(connection: &Connection, path: &Path, state: &FileSessionRec
             ],
         )
         .with_context(|| format!("无法保存文件会话：{}", path.display()))?;
+    save_row_tags(connection, path, &state.row_tags)?;
+    Ok(())
+}
+
+fn load_row_tags(connection: &Connection, path: &Path) -> Result<BTreeMap<String, String>> {
+    let mut statement = connection.prepare(
+        "SELECT tag_id, payload FROM file_row_tags
+         WHERE file_session_id = (SELECT id FROM file_sessions WHERE path = ?1)
+         ORDER BY tag_id",
+    )?;
+    let rows = statement.query_map([encode_persisted_path(path)], |row| {
+        Ok((row.get(0)?, row.get(1)?))
+    })?;
+    rows.collect::<rusqlite::Result<BTreeMap<_, _>>>()
+        .context("无法读取日志标签")
+}
+
+fn save_row_tags(
+    connection: &Connection,
+    path: &Path,
+    tags: &BTreeMap<String, String>,
+) -> Result<()> {
+    let previous = load_row_tags(connection, path)?;
+    let path = encode_persisted_path(path);
+    for id in previous.keys().filter(|id| !tags.contains_key(*id)) {
+        connection.execute(
+            "DELETE FROM file_row_tags WHERE tag_id = ?1
+             AND file_session_id = (SELECT id FROM file_sessions WHERE path = ?2)",
+            params![id, path],
+        )?;
+    }
+    for (id, payload) in tags {
+        if previous.get(id) == Some(payload) {
+            continue;
+        }
+        connection.execute(
+            "INSERT INTO file_row_tags(file_session_id, tag_id, payload)
+             SELECT id, ?2, ?3 FROM file_sessions WHERE path = ?1
+             ON CONFLICT(file_session_id, tag_id) DO UPDATE SET payload = excluded.payload",
+            params![path, id, payload],
+        )?;
+    }
     Ok(())
 }
 
@@ -1099,6 +1236,17 @@ fn initialize_schema(connection: &Connection, defaults: &StateMigrationDefaults)
              );
              CREATE INDEX IF NOT EXISTS idx_file_sessions_recent
                  ON file_sessions(last_opened_at DESC);
+             CREATE TABLE IF NOT EXISTS file_row_tags (
+                 file_session_id INTEGER NOT NULL REFERENCES file_sessions(id) ON DELETE CASCADE,
+                 tag_id TEXT NOT NULL,
+                 payload TEXT NOT NULL,
+                 PRIMARY KEY(file_session_id, tag_id)
+             );
+             CREATE TABLE IF NOT EXISTS row_tag_presets (
+                 id TEXT PRIMARY KEY,
+                 payload TEXT NOT NULL,
+                 used_order INTEGER NOT NULL
+             );
              CREATE TABLE IF NOT EXISTS last_workspace_files (
                  position INTEGER PRIMARY KEY,
                  file_session_id INTEGER NOT NULL UNIQUE

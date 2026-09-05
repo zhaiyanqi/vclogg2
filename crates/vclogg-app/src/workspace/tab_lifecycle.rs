@@ -99,6 +99,7 @@ impl Workspace {
         if !self.tabs.contains(&tab_id) {
             return;
         }
+        self.cancel_tag_drag(window, cx);
         self.cancel_pending_tab_activation();
         if self.active_tab_id == tab_id {
             if let Some(log_jump) = log_jump {
@@ -554,6 +555,7 @@ impl Workspace {
         if ids.is_empty() {
             return;
         }
+        self.cancel_tag_drag(window, cx);
         self.cancel_pending_tab_activation();
         let previous_active_id = self.active_tab_id;
         let previous_active_ix = self.active_workspace_tab_ix().unwrap_or_default();

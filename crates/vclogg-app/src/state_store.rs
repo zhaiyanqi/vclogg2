@@ -47,6 +47,8 @@ pub struct FileSessionState {
     pub query_text: String,
     pub result_mode: i64,
     pub marked_rows: CompressedRows,
+    pub(crate) row_tags: crate::log_tags::RowTags,
+    pub(crate) row_tags_base: crate::log_tags::RowTags,
     pub show_line_numbers: bool,
     pub show_row_separators: bool,
     pub word_wrap: bool,
@@ -360,6 +362,8 @@ impl Default for FileSessionState {
             query_text: String::new(),
             result_mode: 0,
             marked_rows: CompressedRows::default(),
+            row_tags: crate::log_tags::RowTags::default(),
+            row_tags_base: crate::log_tags::RowTags::default(),
             show_line_numbers: true,
             show_row_separators: false,
             word_wrap: false,
@@ -489,6 +493,25 @@ impl StateStore {
         self.repository
             .load_search_history()
             .map(normalize_search_history)
+    }
+
+    pub(crate) fn load_row_tag_presets(&self) -> Result<Vec<crate::log_tags::TagPreset>> {
+        let mut seen = std::collections::HashSet::new();
+        Ok(self
+            .repository
+            .load_row_tag_presets()?
+            .into_iter()
+            .filter_map(|payload| serde_json::from_str::<crate::log_tags::TagPreset>(&payload).ok())
+            .filter(|preset| preset.is_valid() && seen.insert(preset.id()))
+            .collect())
+    }
+
+    pub(crate) fn remember_row_tag_preset(
+        &self,
+        preset: &crate::log_tags::TagPreset,
+    ) -> Result<()> {
+        self.repository
+            .remember_row_tag_preset(&preset.id(), &serde_json::to_string(preset)?)
     }
 
     pub fn save_search_history(&self, history: &[String]) -> Result<()> {
@@ -621,8 +644,13 @@ impl StateStore {
             &file_session_to_record(base)?,
             &file_session_to_record(state)?,
         )?;
+        let mut saved = file_session_from_record(result.record);
+        // Keep the tag baseline tied to what this window actually displayed.
+        // Other windows' unseen tags must not turn into local deletion intent.
+        saved.row_tags = state.row_tags.clone();
+        saved.row_tags_base = state.row_tags.clone();
         Ok(SessionSaveResult {
-            state: file_session_from_record(result.record),
+            state: saved,
             conflict_resolved: result.conflict_resolved,
         })
     }
@@ -788,6 +816,7 @@ fn bounded_u16(value: i64, minimum: u16, maximum: u16) -> u16 {
 }
 
 fn file_session_from_record(record: FileSessionRecord) -> FileSessionState {
+    let row_tags = crate::log_tags::RowTags::from_records(record.row_tags);
     let marked_rows = decode_marked_rows(&record.marked_rows);
     let legacy_results_visible =
         !record.query_text.is_empty() || (record.result_mode != 1 && !marked_rows.is_empty());
@@ -804,6 +833,8 @@ fn file_session_from_record(record: FileSessionRecord) -> FileSessionState {
         query_text: record.query_text,
         result_mode: record.result_mode,
         marked_rows,
+        row_tags_base: row_tags.clone(),
+        row_tags,
         show_line_numbers: record.show_line_numbers,
         show_row_separators: record.show_row_separators,
         keyword_color_rules: decode_rules(&record.keyword_color_rules),
@@ -820,6 +851,8 @@ fn file_session_to_record(state: &FileSessionState) -> Result<FileSessionRecord>
         query_text: state.query_text.clone(),
         result_mode: state.result_mode,
         marked_rows: encode_marked_rows(&state.marked_rows),
+        row_tags: state.row_tags.to_records()?,
+        row_tags_base: state.row_tags_base.to_records()?,
         show_line_numbers: state.show_line_numbers,
         show_row_separators: state.show_row_separators,
         word_wrap: state.word_wrap,

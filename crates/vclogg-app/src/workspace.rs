@@ -407,6 +407,8 @@ struct WorkspaceWindowRegistry {
     next_focus_order: u64,
     closed_flush_tasks: Vec<Task<()>>,
     predefined_filters: Option<Vec<PredefinedFilter>>,
+    row_tag_presets: Option<Vec<crate::log_tags::TagPreset>>,
+    row_tag_preset_save_completion: Option<async_channel::Receiver<()>>,
     cross_window_tab_drag: Option<CrossWindowTabDrag>,
     search_options: Option<(bool, bool)>,
     highlight_settings_save_completion: Option<async_channel::Receiver<()>>,
@@ -1598,6 +1600,7 @@ pub struct Workspace {
     search_suggestion_scroll: UniformListScrollHandle,
     quick_find: QuickFindState,
     view_state: WorkspaceViewState,
+    row_tags: row_tags::TagInteractionState,
     global_search: GlobalSearchState,
     global_table: Entity<VirtualLogListState<GlobalSearchTableDelegate, LogRowKey>>,
     log_viewer: SharedDisplayState,
@@ -1698,6 +1701,7 @@ mod preferences;
 mod quick_find;
 mod render_shell;
 mod result_export_flow;
+mod row_tags;
 mod search_orchestration;
 mod tab_lifecycle;
 mod view_state;
@@ -1985,6 +1989,7 @@ impl Workspace {
                     let global_search_preferences = store.global_search_preferences()?;
                     let search_history = store.load_search_history()?;
                     let predefined_filters = store.load_predefined_filters()?;
+                    let row_tag_presets = store.load_row_tag_presets()?;
                     let cloud_settings = store.load_cloud_settings()?;
                     Ok::<_, anyhow::Error>((
                         store,
@@ -1999,6 +2004,7 @@ impl Workspace {
                         global_search_preferences,
                         search_history,
                         predefined_filters,
+                        row_tag_presets,
                         cloud_settings,
                     ))
                 })
@@ -2019,6 +2025,7 @@ impl Workspace {
                         global_search_preferences,
                         search_history,
                         predefined_filters,
+                        row_tag_presets,
                         cloud_settings,
                     )) => {
                         let mut app_settings = app_settings;
@@ -2044,6 +2051,7 @@ impl Workspace {
                         let pending_workspace_search_save =
                             this.persistence.pending_workspace_search_save.take();
                         cx.update_global::<WorkspaceWindowRegistry, _>(|registry, _| {
+                            registry.row_tag_presets.get_or_insert(row_tag_presets);
                             if !registry.last_settings_category_loaded {
                                 registry.last_settings_category = last_settings_category
                                     .as_deref()
@@ -2188,6 +2196,7 @@ impl Workspace {
             search_suggestion_scroll: UniformListScrollHandle::new(),
             quick_find: QuickFindState::new(quick_find_query),
             view_state: WorkspaceViewState::default(),
+            row_tags: row_tags::TagInteractionState::default(),
             global_search: GlobalSearchState::new(global_result_mode_select),
             global_table,
             log_viewer,
@@ -2486,6 +2495,8 @@ impl Render for Workspace {
             .relative()
             .key_context(WORKSPACE_CONTEXT)
             .track_focus(&self.focus_handle)
+            .capture_key_down(cx.listener(Self::cancel_tag_gesture))
+            .child(self.render_tag_gesture_observer(cx))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {

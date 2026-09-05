@@ -17,6 +17,7 @@ pub(super) struct FileState {
     pub(super) title: SharedString,
     pub(super) custom_title: Option<String>,
     pub(super) marked_rows: CompressedRows,
+    pub(super) row_tags: crate::log_tags::RowTags,
     pub(super) pending_restore_marked_rows: CompressedRows,
     pub(super) keyword_color_rules: Vec<KeywordColorRule>,
     pub(super) resolved_color_rules: Arc<ResolvedColorRules>,

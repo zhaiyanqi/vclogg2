@@ -54,6 +54,7 @@ impl Workspace {
                         workspace.restore_input_focus(window, cx);
                         cx.notify();
                     } else {
+                        workspace.cancel_tag_drag(window, cx);
                         TextSelection::end(window, cx);
                         workspace.end_all_row_drag_selection(window, cx);
                         workspace.release_input_focus(window, cx);
@@ -142,6 +143,7 @@ impl Workspace {
                 target.into_iter().collect(),
                 self.open_task.is_some()
                     || self.file_refresh_task.is_some()
+                    || self.row_tag_interaction_active()
                     || self.searches.is_active(),
             );
         }
@@ -162,6 +164,7 @@ impl Workspace {
                         || this.active_tab_id != WorkspaceTabId::Document(document_id)
                         || this.open_task.is_some()
                         || this.file_refresh_task.is_some()
+                        || this.row_tag_interaction_active()
                         || this.searches.is_active()
                     {
                         return None;
@@ -599,7 +602,7 @@ impl Workspace {
             }
             let mut store = None;
             let mut sessions = Vec::new();
-            let mut session_paths = BTreeSet::new();
+            let mut session_paths = BTreeMap::new();
             let mut open_paths = Vec::new();
             let mut open_path_set = BTreeSet::new();
             let mut active_path = None;
@@ -615,9 +618,15 @@ impl Workspace {
                 }
                 store = store.or(snapshot.store.take());
                 for (path, state) in snapshot.sessions {
-                    if session_paths.insert(path.clone()) {
-                        sessions.push((path, state));
-                    }
+                    // Keep the established first-window policy for ordinary session
+                    // fields, but apply every window's independent tag edits.
+                    let first = session_paths
+                        .entry(path.clone())
+                        .or_insert_with(|| state.clone());
+                    let mut combined = first.clone();
+                    combined.row_tags = state.row_tags;
+                    combined.row_tags_base = state.row_tags_base;
+                    sessions.push((path, combined));
                 }
                 for path in snapshot.open_paths {
                     if open_path_set.insert(path.clone()) {

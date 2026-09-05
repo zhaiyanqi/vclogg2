@@ -179,6 +179,8 @@ impl HistoryDialog {
             Some(crate::tr!("当前已打开", "Currently open"))
         } else if session.pinned {
             Some(crate::tr!("已收藏", "Favorited"))
+        } else if session.has_row_tags {
+            Some(crate::tr!("包含日志标签", "Contains log tags"))
         } else if session.marked_rows_count > 0 {
             Some(crate::tr!("包含行标记", "Contains marked lines"))
         } else {

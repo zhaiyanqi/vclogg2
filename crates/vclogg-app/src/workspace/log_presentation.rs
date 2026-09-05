@@ -115,6 +115,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.row_tag_drag_active() {
+            return;
+        }
         let document_id = if region == WrappedRegion::GlobalResults {
             0
         } else {
@@ -767,6 +770,18 @@ impl Workspace {
                     .then_some(row.log_level_style)
                     .flatten();
                 let row_bounds = rendered_row_bounds.clone();
+                let content_bounds = Rc::new(Cell::new(None));
+                let tag_context = self.tag_row_context(
+                    document_id,
+                    source_row,
+                    region,
+                    &row.text,
+                    source_unavailable,
+                    content_bounds.clone(),
+                );
+                let tags = tag_context
+                    .as_ref()
+                    .and_then(|context| self.render_row_tags(context, font_size, base_height, cx));
                 let line = SelectableLogText::new(
                     selection,
                     source_row as u64,
@@ -820,7 +835,7 @@ impl Workspace {
                         )
                         .on_mouse_down(
                             MouseButton::Right,
-                            cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                                 this.prepare_wrapped_log_context(
                                     document_id,
                                     region,
@@ -828,6 +843,7 @@ impl Workspace {
                                     window,
                                     cx,
                                 );
+                                this.prepare_tag_context(tag_context.clone(), event.position);
                             }),
                         )
                         .child(
@@ -886,10 +902,18 @@ impl Workspace {
                                 .child(
                                     div()
                                         .relative()
-                                        .when(!word_wrap, |content| {
-                                            content.left(-horizontal_offset).w(message_width)
+                                        .min_h(base_height)
+                                        .on_prepaint(move |bounds, _, _| {
+                                            content_bounds.set(Some(bounds))
                                         })
-                                        .child(line),
+                                        .when(!word_wrap, |content| {
+                                            content
+                                                .left(-horizontal_offset)
+                                                .w(message_width)
+                                                .min_w_full()
+                                        })
+                                        .child(line)
+                                        .children(tags),
                                 ),
                         )
                         .child(log_fixed_column_divider_overlay(fixed_columns_width, cx)),
@@ -1682,6 +1706,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
+        let tag_target = workspace.read(cx).row_tags.menu_target.clone();
+        if let Some(target) = tag_target {
+            return Self::render_row_tag_menu(menu, workspace, target, window, cx);
+        }
         let selected_text =
             (!context.selected_text.trim().is_empty()).then_some(context.selected_text);
         let has_row_selection = match workspace.read(cx).active_log_region {
@@ -1818,6 +1846,7 @@ impl Workspace {
                     this.toggle_marked_row(&ToggleMarkedRow, window, cx);
                 },
             )));
+        menu = Self::append_add_tag_menu(menu, workspace.clone(), window, cx);
         if context.include_results {
             menu = menu.separator().item(
                 PopupMenuItem::new(crate::tr!("在新标签页打开", "Open in new tab"))
@@ -2291,6 +2320,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.prepare_tag_context(None, window.mouse_position());
         self.search_results_viewer.focus_handle.focus(window, cx);
         self.remember_user_log_region(LogRegion::GlobalResults);
         self.global_table.update(cx, |table, cx| {
@@ -2464,6 +2494,18 @@ impl Workspace {
                         let log_level_style =
                             (!source_unavailable).then_some(log_level_style).flatten();
                         let row_bounds = rendered_row_bounds.clone();
+                        let content_bounds = Rc::new(Cell::new(None));
+                        let tag_context = self.tag_row_context(
+                            document_id,
+                            source_row,
+                            WrappedRegion::GlobalResults,
+                            &text,
+                            source_unavailable,
+                            content_bounds.clone(),
+                        );
+                        let tags = tag_context.as_ref().and_then(|context| {
+                            self.render_row_tags(context, font_size, base_height, cx)
+                        });
                         let selectable = SelectableLogText::new(
                             selection,
                             document_id.rotate_left(32) ^ source_row as u64,
@@ -2512,8 +2554,12 @@ impl Workspace {
                                 )
                                 .on_mouse_down(
                                     MouseButton::Right,
-                                    cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                                         this.prepare_wrapped_global_context(row_ix, window, cx);
+                                        this.prepare_tag_context(
+                                            tag_context.clone(),
+                                            event.position,
+                                        );
                                     }),
                                 )
                                 .child(
@@ -2570,12 +2616,18 @@ impl Workspace {
                                         .child(
                                             div()
                                                 .relative()
+                                                .min_h(base_height)
+                                                .on_prepaint(move |bounds, _, _| {
+                                                    content_bounds.set(Some(bounds))
+                                                })
                                                 .when(!word_wrap, |content| {
                                                     content
                                                         .left(-horizontal_offset)
                                                         .w(message_width)
+                                                        .min_w_full()
                                                 })
-                                                .child(selectable),
+                                                .child(selectable)
+                                                .children(tags),
                                         ),
                                 )
                                 .child(log_fixed_column_divider_overlay(fixed_columns_width, cx)),
