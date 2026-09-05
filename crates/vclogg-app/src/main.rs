@@ -197,6 +197,7 @@ fn main() {
         ui_performance::init_ui_thread();
         ui_performance::start_framework_monitor(cx);
         gpui_component::init(cx);
+        cx.set_cursor_hide_mode(CursorHideMode::Never);
         ui_theme::apply_product_theme(ThemeMode::Light, cx);
         actions::init(cx);
         Workspace::init_window_registry(cx);
