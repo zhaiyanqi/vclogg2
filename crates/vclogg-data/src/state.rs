@@ -91,6 +91,8 @@ pub struct AppSettingsRecord {
     pub log_font_size: i64,
     pub search_toolbar_height: i64,
     pub search_toolbar_font_size: i64,
+    pub search_input_height: i64,
+    pub search_input_font_size: i64,
     pub log_line_spacing: i64,
     pub log_font_family: String,
     pub shortcut_open_file: String,

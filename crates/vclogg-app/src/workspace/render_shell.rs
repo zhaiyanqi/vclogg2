@@ -1973,6 +1973,9 @@ impl Workspace {
         let control_height = px(f32::from(self.app_settings.search_toolbar_control_height()));
         let font_size = px(f32::from(self.app_settings.search_toolbar_font_size));
         let font_scale = f32::from(self.app_settings.search_toolbar_font_size) / 13.;
+        // These pixel values are independent user preferences, like the toolbar size above.
+        let input_height = px(f32::from(self.app_settings.search_input_control_height()));
+        let input_font_size = px(f32::from(self.app_settings.search_input_font_size));
         let search_history_empty = self.search_history.is_empty();
         let has_document = self.active_document().is_some();
         let predefined_filters = self.render_predefined_filters_popover(has_document, cx);
@@ -2119,7 +2122,7 @@ impl Workspace {
                 h_flex()
                     .relative()
                     .w_full()
-                    .min_h(control_height + SEARCH_BAR_VERTICAL_INSET * 2.)
+                    .min_h(control_height.max(input_height) + SEARCH_BAR_VERTICAL_INSET * 2.)
                     .items_center()
                     .gap(px(6.))
                     .px(px(12.))
@@ -2184,7 +2187,7 @@ impl Workspace {
                         div()
                             .flex_1()
                             .min_w(px(180.))
-                            .h(control_height)
+                            .h(input_height)
                             .relative()
                             .capture_key_down(cx.listener(
                                 |this, event: &KeyDownEvent, window, cx| {
@@ -2224,7 +2227,7 @@ impl Workspace {
                             .child(
                                 Input::new(&self.query)
                                     .small()
-                                    .text_size(font_size)
+                                    .text_size(input_font_size)
                                     .line_height(relative(1.25))
                                     .size_full()
                                     .cleanable(true)

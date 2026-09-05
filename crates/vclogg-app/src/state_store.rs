@@ -237,6 +237,8 @@ pub struct AppSettings {
     pub log_font_size: u16,
     pub search_toolbar_height: u16,
     pub search_toolbar_font_size: u16,
+    pub search_input_height: u16,
+    pub search_input_font_size: u16,
     pub log_line_spacing: u16,
     pub log_font_family: LogFontFamily,
     pub mouse_wheel_scroll_percent: u16,
@@ -280,6 +282,8 @@ impl Default for AppSettings {
             log_font_size: 13,
             search_toolbar_height: 28,
             search_toolbar_font_size: 13,
+            search_input_height: 28,
+            search_input_font_size: 13,
             log_line_spacing: 6,
             log_font_family: LogFontFamily::Consolas,
             mouse_wheel_scroll_percent: 100,
@@ -303,12 +307,20 @@ impl Default for AppSettings {
 
 impl AppSettings {
     pub(crate) fn search_toolbar_control_height(&self) -> u16 {
-        let font_size = self.search_toolbar_font_size.clamp(
+        Self::search_control_height(self.search_toolbar_height, self.search_toolbar_font_size)
+    }
+
+    pub(crate) fn search_input_control_height(&self) -> u16 {
+        Self::search_control_height(self.search_input_height, self.search_input_font_size)
+    }
+
+    fn search_control_height(height: u16, font_size: u16) -> u16 {
+        let font_size = font_size.clamp(
             *SEARCH_TOOLBAR_FONT_SIZE_RANGE.start(),
             *SEARCH_TOOLBAR_FONT_SIZE_RANGE.end(),
         );
         // One line at 1.25 times the font size, plus padding and borders.
-        self.search_toolbar_height
+        height
             .clamp(
                 *SEARCH_TOOLBAR_HEIGHT_RANGE.start(),
                 *SEARCH_TOOLBAR_HEIGHT_RANGE.end(),
@@ -670,6 +682,16 @@ fn app_settings_from_record(record: AppSettingsRecord) -> AppSettings {
             *SEARCH_TOOLBAR_FONT_SIZE_RANGE.start(),
             *SEARCH_TOOLBAR_FONT_SIZE_RANGE.end(),
         ),
+        search_input_height: bounded_u16(
+            record.search_input_height,
+            *SEARCH_TOOLBAR_HEIGHT_RANGE.start(),
+            *SEARCH_TOOLBAR_HEIGHT_RANGE.end(),
+        ),
+        search_input_font_size: bounded_u16(
+            record.search_input_font_size,
+            *SEARCH_TOOLBAR_FONT_SIZE_RANGE.start(),
+            *SEARCH_TOOLBAR_FONT_SIZE_RANGE.end(),
+        ),
         log_line_spacing: bounded_u16(record.log_line_spacing, 1, 40),
         log_font_family: LogFontFamily::from_database(&record.log_font_family),
         mouse_wheel_scroll_percent: bounded_u16(record.mouse_wheel_scroll_percent, 1, 400),
@@ -716,6 +738,8 @@ fn app_settings_to_record(settings: AppSettings) -> AppSettingsRecord {
         log_font_size: i64::from(settings.log_font_size),
         search_toolbar_height: i64::from(settings.search_toolbar_control_height()),
         search_toolbar_font_size: i64::from(settings.search_toolbar_font_size),
+        search_input_height: i64::from(settings.search_input_control_height()),
+        search_input_font_size: i64::from(settings.search_input_font_size),
         log_line_spacing: i64::from(settings.log_line_spacing),
         log_font_family: settings.log_font_family.database_value().into(),
         shortcut_open_file: settings.shortcuts.open_file,
