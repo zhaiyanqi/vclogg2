@@ -70,6 +70,17 @@ impl SearchResultCache {
         if cancellation.is_cancelled() {
             return SearchRun::Cancelled;
         }
+        // Empty syntax has no scan or source-dependent result to reuse.
+        if matcher.is_none() {
+            return search_with_compiled_matcher_inner(
+                document,
+                None,
+                query.max_results,
+                cancellation,
+                progress,
+                false,
+            );
+        }
         let cached = document.search_cache_identity().and_then(|identity| {
             let mut entries = self.entries.lock().ok()?;
             let index = entries.iter().position(|entry| {

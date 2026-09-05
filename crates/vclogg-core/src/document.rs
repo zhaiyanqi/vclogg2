@@ -2079,6 +2079,23 @@ impl LogDocument {
         ranges
     }
 
+    pub(crate) fn search_prefix_end(&self, max_rows: usize, max_bytes: usize) -> usize {
+        let start = self
+            .line_byte_range_at_local_row(0)
+            .map_or(0, |range| range.start);
+        let mut end = 0;
+        for row in 0..self.line_count().min(max_rows) {
+            let Some(range) = self.line_byte_range_at_local_row(row) else {
+                break;
+            };
+            if row > 0 && range.end.saturating_sub(start) > max_bytes {
+                break;
+            }
+            end = row + 1;
+        }
+        end
+    }
+
     pub(crate) fn search_lines(&self, verify_integrity: bool) -> DocumentSearchLines<'_> {
         DocumentSearchLines {
             document: self,
@@ -2119,7 +2136,7 @@ impl LogDocument {
         if cancellation.is_cancelled() {
             return None;
         }
-        let file_backed = matches!(self.bytes.as_ref(), DocumentBytes::Verified(_));
+        let file_backed = !matches!(self.bytes.as_ref(), DocumentBytes::Owned(_));
         if file_backed && self.source_changed().unwrap_or(true) {
             return Some(false);
         }
@@ -2764,6 +2781,9 @@ fn build_parallel_utf8_file_index_with_integrity(
         FileEncoding::Utf8 | FileEncoding::Utf8Bom
     ));
     let block_count = file_size.div_ceil(APPEND_INTEGRITY_BLOCK_BYTES);
+    let ordered_limit = search
+        .and_then(|(_, limit)| limit)
+        .map(|limit| crate::search::OrderedSearchLimit::new(block_count, limit));
     let blocks = (0..block_count)
         .into_par_iter()
         .map_init(
@@ -2805,12 +2825,16 @@ fn build_parallel_utf8_file_index_with_integrity(
                         matcher,
                         path,
                         is_cancelled,
+                        ordered_limit.as_ref().map(|limit| (limit, block_ix)),
                     )?,
                     None => Some(Vec::new()),
                 };
                 let Some(matched_line_starts) = matched_line_starts else {
                     return Ok(None);
                 };
+                if let Some(limit) = &ordered_limit {
+                    limit.finish(block_ix, matched_line_starts.len());
+                }
                 Ok((!is_cancelled()).then_some(ParallelIndexedBlock {
                     control_bytes,
                     matched_line_starts,
@@ -2949,6 +2973,7 @@ fn match_parallel_utf8_block_lines(
     matcher: &SearchMatcher,
     path: &Path,
     is_cancelled: &(dyn Fn() -> bool + Sync),
+    ordered_limit: Option<(&crate::search::OrderedSearchLimit, usize)>,
 ) -> Result<Option<Vec<usize>>> {
     let block_end = block_start.saturating_add(block_len);
     if is_cancelled() {
@@ -2971,7 +2996,9 @@ fn match_parallel_utf8_block_lines(
     };
     // A middle block of a long line owns no row. Decide this before reading
     // any suffix, otherwise every block copies the same potentially huge tail.
-    if line_start >= block_len {
+    if line_start >= block_len
+        || ordered_limit.is_some_and(|(limit, index)| limit.should_skip(index))
+    {
         return Ok(Some(Vec::new()));
     }
     if block_end < file_size && !matches!(bytes.last(), Some(b'\r' | b'\n')) {
@@ -2989,6 +3016,11 @@ fn match_parallel_utf8_block_lines(
     while block_start.saturating_add(line_start) < block_end && line_start <= bytes.len() {
         if scanned_lines.is_multiple_of(INDEX_CANCELLATION_BATCH_LINES) && is_cancelled() {
             return Ok(None);
+        }
+        if ordered_limit.is_some_and(|(limit, index)| {
+            limit.should_skip(index) || matched_line_starts.len() >= limit.max_matches()
+        }) {
+            break;
         }
         let delimiter = memchr2(b'\r', b'\n', &bytes[line_start..])
             .map(|relative| line_start.saturating_add(relative));

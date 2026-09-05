@@ -285,6 +285,7 @@ fn combined_search_only_extends_the_block_owning_a_long_line() {
             &matcher,
             &source.0,
             &|| false,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -337,6 +338,7 @@ fn combined_search_handles_line_breaks_at_block_edges_without_tail_reads() {
             &matcher,
             &source.0,
             &|| false,
+            None,
         )
         .unwrap();
         assert_eq!(first.len(), block);
@@ -533,4 +535,141 @@ fn legacy_batches_preserve_per_line_decoder_state_and_reuse_output() {
         }
         assert!(reader.decoded.ranges.len() <= 256);
     }
+}
+
+#[test]
+fn small_result_limit_reads_only_the_satisfied_prefix() {
+    let source = TestSource::new(&b"target message\n".repeat(1_200_000));
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap();
+    for limit in [0, 1, 17, 4096] {
+        let document = source.open();
+        let query = SearchQuery {
+            text: "target".into(),
+            max_results: Some(limit),
+            ..SearchQuery::default()
+        };
+        let result = pool.install(|| search(&document, &query)).unwrap();
+        assert_eq!(
+            result.line_indices.iter().collect::<Vec<_>>(),
+            (0..limit).collect::<Vec<_>>()
+        );
+        assert!(result.truncated);
+        if limit < 4096 {
+            assert_eq!(block_reads(&document), 1);
+        }
+    }
+}
+
+#[test]
+fn combined_search_caps_matches_and_skips_only_completed_suffixes() {
+    let block = APPEND_INTEGRITY_BLOCK_BYTES;
+    let source = TestSource::new(&b"target\n".repeat(block / 7 * 3));
+    let bytes = fs::read(&source.0).unwrap();
+    let file = fs::File::open(&source.0).unwrap();
+    let matcher = crate::SearchMatcher::new(&SearchQuery {
+        text: "target".into(),
+        ..SearchQuery::default()
+    })
+    .unwrap()
+    .unwrap();
+    let limit = crate::search::OrderedSearchLimit::new(3, 17);
+    let mut first = bytes[..block].to_vec();
+    let found = super::match_parallel_utf8_block_lines(
+        &file,
+        bytes.len(),
+        0,
+        block,
+        &mut first,
+        super::FileEncoding::Utf8,
+        &matcher,
+        &source.0,
+        &|| false,
+        Some((&limit, 0)),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        found.len(),
+        18,
+        "only one extra match is needed to prove truncation"
+    );
+    limit.finish(0, found.len());
+    let mut next = bytes[block..block * 2].to_vec();
+    let found = super::match_parallel_utf8_block_lines(
+        &file,
+        bytes.len(),
+        block,
+        block,
+        &mut next,
+        super::FileEncoding::Utf8,
+        &matcher,
+        &source.0,
+        &|| false,
+        Some((&limit, 1)),
+    )
+    .unwrap()
+    .unwrap();
+    assert!(found.is_empty());
+    assert_eq!(next.len(), block);
+}
+
+#[test]
+fn limited_parallel_search_matches_full_results_across_prefix_and_chunk_boundaries() {
+    let mut bytes = Vec::new();
+    for row in 0..160_000 {
+        let message = if row % 97 == 0 { "target" } else { "ordinary" };
+        bytes.extend_from_slice(format!("{row:06} {message:<56}\n").as_bytes());
+    }
+    let source = TestSource::new(&bytes);
+    let document = source.open();
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap();
+    let mut query = SearchQuery {
+        text: "target".into(),
+        ..SearchQuery::default()
+    };
+    let all = pool.install(|| search(&document, &query)).unwrap();
+    for limit in [0, 1, 17, 43, 4096, all.len() - 1, all.len(), all.len() + 1] {
+        query.max_results = Some(limit);
+        let result = pool.install(|| search(&document, &query)).unwrap();
+        assert_eq!(
+            result.line_indices.iter().collect::<Vec<_>>(),
+            all.line_indices.iter().take(limit).collect::<Vec<_>>()
+        );
+        assert_eq!(result.truncated, limit < all.len());
+    }
+}
+
+#[test]
+fn cached_empty_search_stays_io_free_and_empty_files_reject_growth() {
+    use crate::{SearchCancellation, SearchMatcher, SearchResultCache, SearchRun};
+    let cache = SearchResultCache::default();
+    let cancellation = SearchCancellation::default();
+    let source = TestSource::new(b"target\n");
+    let document = source.open();
+    let query = SearchQuery::default();
+    cache.remember(&document, &query, &crate::SearchResult::default());
+    assert!(matches!(
+        cache.search(&document, &query, None, &cancellation),
+        SearchRun::Completed(_)
+    ));
+    assert_eq!(block_reads(&document), 0);
+    let source = TestSource::new(b"");
+    let document = source.open();
+    let query = SearchQuery {
+        text: "target".into(),
+        ..SearchQuery::default()
+    };
+    let matcher = SearchMatcher::new(&query).unwrap();
+    cache.search(&document, &query, matcher.as_ref(), &cancellation);
+    fs::write(&source.0, b"target\n").unwrap();
+    assert!(matches!(
+        cache.search(&document, &query, matcher.as_ref(), &cancellation),
+        SearchRun::SourceChanged
+    ));
 }

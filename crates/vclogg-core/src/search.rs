@@ -96,6 +96,7 @@ pub struct SearchProgress {
 struct SearchProgressCounters {
     scanned_lines: AtomicUsize,
     matched_lines: AtomicUsize,
+    result_limit: AtomicUsize,
     total_lines: usize,
     preview_count: AtomicUsize,
     previews: Mutex<Vec<SearchPreview>>,
@@ -107,6 +108,7 @@ impl SearchProgress {
             counters: Arc::new(SearchProgressCounters {
                 scanned_lines: AtomicUsize::new(0),
                 matched_lines: AtomicUsize::new(0),
+                result_limit: AtomicUsize::new(usize::MAX),
                 total_lines,
                 preview_count: AtomicUsize::new(0),
                 previews: Mutex::new(Vec::new()),
@@ -172,7 +174,7 @@ impl SearchProgress {
             .store(matched_lines, Ordering::Relaxed);
     }
 
-    fn advance(&self, scanned_lines: usize, matched_lines: usize, max_results: Option<usize>) {
+    fn advance(&self, scanned_lines: usize, matched_lines: usize) {
         _ = self.counters.scanned_lines.fetch_update(
             Ordering::Relaxed,
             Ordering::Relaxed,
@@ -183,7 +185,7 @@ impl SearchProgress {
             Ordering::Relaxed,
             |current| {
                 let next = current.saturating_add(matched_lines);
-                Some(max_results.map_or(next, |limit| next.min(limit)))
+                Some(next.min(self.counters.result_limit.load(Ordering::Relaxed)))
             },
         );
     }
@@ -266,38 +268,83 @@ fn search_with_compiled_matcher_inner(
 
     if let Some(progress) = progress {
         progress.update(0, 0);
+        progress
+            .counters
+            .result_limit
+            .store(max_results.unwrap_or(usize::MAX), Ordering::Relaxed);
     }
     let verify_integrity = force_verify_integrity
         || !document.has_strong_source_change_token()
         || !document.source_identity_matches();
     let line_count = document.line_count();
-    let row_ranges = document.search_row_ranges(rayon::current_num_threads());
-    let chunks = if row_ranges.len() == 1 {
-        vec![scan_search_chunk(
+    let mut row_ranges = document.search_row_ranges(rayon::current_num_threads());
+    let mut chunks = Vec::new();
+    let mut prefix_matches: usize = 0;
+    // A bounded prefix avoids waking every scanner when a small requested limit
+    // is already satisfied near the start. Sparse queries retain parallel scanning.
+    if row_ranges.len() > 1 && max_results.is_some_and(|limit| limit <= 4096) {
+        let end = document.search_prefix_end(4096, 256 * 1024);
+        let prefix = scan_search_chunk(
             document,
             matcher,
-            0..line_count,
+            0..end,
             max_results,
             cancellation,
             progress,
             verify_integrity,
-        )]
-    } else {
-        row_ranges
-            .into_par_iter()
-            .map(|rows| {
-                scan_search_chunk(
-                    document,
-                    matcher,
-                    rows,
-                    max_results,
-                    cancellation,
-                    progress,
-                    verify_integrity,
-                )
-            })
-            .collect::<Vec<_>>()
+            None,
+        );
+        match &prefix {
+            SearchChunkRun::Completed(result) => {
+                prefix_matches = result.line_indices.len() as usize;
+                if result.truncated {
+                    row_ranges.clear();
+                } else {
+                    for rows in &mut row_ranges {
+                        rows.start = rows.start.max(end);
+                    }
+                    row_ranges.retain(|rows| rows.start < rows.end);
+                }
+            }
+            SearchChunkRun::Cancelled => return SearchRun::Cancelled,
+            SearchChunkRun::SourceChanged => return SearchRun::SourceChanged,
+        }
+        chunks.push(prefix);
+    }
+    let remaining = max_results.map(|limit| limit.saturating_sub(prefix_matches));
+    let ordered_limit = remaining.map(|limit| OrderedSearchLimit::new(row_ranges.len(), limit));
+    let scan = |(index, rows)| {
+        let chunk = scan_search_chunk(
+            document,
+            matcher,
+            rows,
+            remaining,
+            cancellation,
+            progress,
+            verify_integrity,
+            ordered_limit.as_ref().map(|limit| (limit, index)),
+        );
+        if let (Some(limit), SearchChunkRun::Completed(result)) = (&ordered_limit, &chunk) {
+            limit.finish(
+                index,
+                (result.line_indices.len() as usize).saturating_add(usize::from(result.truncated)),
+            );
+        }
+        chunk
     };
+    if row_ranges.len() == 1 {
+        chunks.push(scan((0, row_ranges.remove(0))));
+    } else {
+        chunks.extend(
+            row_ranges
+                .into_iter()
+                .enumerate()
+                .collect::<Vec<_>>()
+                .into_par_iter()
+                .map(scan)
+                .collect::<Vec<_>>(),
+        );
+    }
 
     if chunks
         .iter()
@@ -392,6 +439,7 @@ pub fn search_appended_with_compiled_matcher(
         cancellation,
         None,
         true,
+        None,
     ) {
         SearchChunkRun::Completed(tail) => {
             let mut rows = retained.rows.as_ref().clone();
@@ -408,6 +456,58 @@ pub fn search_appended_with_compiled_matcher(
     }
 }
 
+/// Stop only chunks after a completed source-order prefix containing N + 1 matches.
+/// Finishing later chunks first must never consume an earlier chunk's result budget.
+pub(crate) struct OrderedSearchLimit {
+    limit: usize,
+    stop_after: AtomicUsize,
+    counts: Mutex<OrderedSearchCounts>,
+}
+
+struct OrderedSearchCounts {
+    chunks: Vec<Option<usize>>,
+    next: usize,
+    matches: usize,
+}
+
+impl OrderedSearchLimit {
+    pub(crate) fn new(chunks: usize, limit: usize) -> Self {
+        Self {
+            limit,
+            stop_after: AtomicUsize::new(usize::MAX),
+            counts: Mutex::new(OrderedSearchCounts {
+                chunks: vec![None; chunks],
+                next: 0,
+                matches: 0,
+            }),
+        }
+    }
+
+    pub(crate) fn should_skip(&self, index: usize) -> bool {
+        index > self.stop_after.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn max_matches(&self) -> usize {
+        self.limit.saturating_add(1)
+    }
+
+    pub(crate) fn finish(&self, index: usize, matches: usize) {
+        let Ok(mut counts) = self.counts.lock() else {
+            return;
+        };
+        counts.chunks[index] = Some(matches);
+        while let Some(Some(matches)) = counts.chunks.get(counts.next).copied() {
+            counts.matches = counts.matches.saturating_add(matches);
+            if counts.matches > self.limit {
+                self.stop_after.fetch_min(counts.next, Ordering::Release);
+                counts.next += 1;
+                break;
+            }
+            counts.next += 1;
+        }
+    }
+}
+
 struct SearchChunkResult {
     line_indices: RoaringTreemap,
     truncated: bool,
@@ -419,6 +519,7 @@ enum SearchChunkRun {
     Cancelled,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn scan_search_chunk(
     document: &LogDocument,
     matcher: &SearchMatcher,
@@ -427,6 +528,7 @@ fn scan_search_chunk(
     cancellation: &SearchCancellation,
     progress: Option<&SearchProgress>,
     verify_integrity: bool,
+    ordered_limit: Option<(&OrderedSearchLimit, usize)>,
 ) -> SearchChunkRun {
     // Regex clones share the compiled program but own their execution cache.
     // Keep one clone for the entire task, including single-chunk files scanned
@@ -440,9 +542,14 @@ fn scan_search_chunk(
     let mut search_lines = document.search_lines(verify_integrity);
 
     for row_ix in rows {
+        if (pending_scanned_lines == 0 || pending_scanned_lines == SEARCH_PROGRESS_BATCH_LINES)
+            && ordered_limit.is_some_and(|(limit, index)| limit.should_skip(index))
+        {
+            break;
+        }
         if pending_scanned_lines == SEARCH_PROGRESS_BATCH_LINES {
             if let Some(progress) = progress {
-                progress.advance(pending_scanned_lines, pending_matched_lines, max_results);
+                progress.advance(pending_scanned_lines, pending_matched_lines);
             }
             pending_scanned_lines = 0;
             pending_matched_lines = 0;
@@ -475,7 +582,7 @@ fn scan_search_chunk(
     }
 
     if let Some(progress) = progress {
-        progress.advance(pending_scanned_lines, pending_matched_lines, max_results);
+        progress.advance(pending_scanned_lines, pending_matched_lines);
     }
     if cancellation.is_cancelled() {
         SearchChunkRun::Cancelled
@@ -778,6 +885,20 @@ mod performance_tests {
             projection.position_ranges_for_subset(&dense),
             [(0, 1), (3, 5)]
         );
+    }
+
+    #[test]
+    fn ordered_limit_waits_for_earlier_chunks_and_requires_an_extra_match() {
+        let limit = super::OrderedSearchLimit::new(4, 3);
+        limit.finish(3, 4);
+        assert!(!limit.should_skip(0));
+        assert!(!limit.should_skip(2));
+        limit.finish(0, 1);
+        limit.finish(1, 2);
+        assert!(!limit.should_skip(2), "exactly N cannot prove truncation");
+        limit.finish(2, 1);
+        assert!(limit.should_skip(3));
+        assert!(!limit.should_skip(2));
     }
 
     #[test]
