@@ -837,14 +837,20 @@ impl Workspace {
             management_dialog_geometry(window);
         window.open_dialog(cx, move |dialog, _, cx| {
             let labels = labels.clone();
+            let content_labels = labels.clone();
             let workspace = workspace.clone();
             dialog
                 .w(color_labels_dialog_size.width)
                 .h(color_labels_dialog_size.height)
                 .margin_top(color_labels_dialog_margin_top)
-                .title(crate::tr!("日志着色", "Log coloring"))
+                .title(crate::tr!("高亮配置", "Highlight settings"))
                 .close_button(false)
-                .child(labels.clone())
+                .content(move |content, _, _| {
+                    content
+                        .min_h_0()
+                        .overflow_hidden()
+                        .child(content_labels.clone())
+                })
                 .footer(
                     DialogFooter::new()
                         .child(crate::dialog_focus::dialog_cancel_action(

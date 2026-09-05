@@ -1,7 +1,7 @@
 use gpui::{
     AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, Rgba, StatefulInteractiveElement as _, Styled as _, Subscription,
-    Window, div, prelude::FluentBuilder as _, rgb,
+    ParentElement as _, Render, Rgba, ScrollHandle, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Window, div, prelude::FluentBuilder as _, rgb,
 };
 use gpui_component::{
     ActiveTheme as _, IconName, Sizable as _,
@@ -9,6 +9,7 @@ use gpui_component::{
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     h_flex,
     input::{Input, InputEvent, InputState},
+    scroll::{Scrollbar, ScrollbarMode},
     switch::Switch,
     tab::{Tab, TabBar},
     v_flex,
@@ -52,6 +53,8 @@ pub struct ColorLabelsDialog {
     highlight_log_levels: bool,
     log_level_rows: Vec<LogLevelDraft>,
     label_rows: Vec<ColorLabelDraft>,
+    log_level_scroll: ScrollHandle,
+    label_scroll: ScrollHandle,
     next_log_level_id: u64,
     next_custom_label_id: u64,
 }
@@ -69,6 +72,8 @@ impl ColorLabelsDialog {
             highlight_log_levels,
             log_level_rows: Vec::with_capacity(log_level_rules.len()),
             label_rows: Vec::with_capacity(labels.len()),
+            log_level_scroll: ScrollHandle::new(),
+            label_scroll: ScrollHandle::new(),
             next_log_level_id: 1,
             next_custom_label_id: 1,
         };
@@ -291,7 +296,7 @@ impl ColorLabelsDialog {
             })
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(Tab::new().label(crate::tr!("日志级别", "Log levels")))
+            .child(Tab::new().label(crate::tr!("日志着色", "Log coloring")))
             .child(Tab::new().label(crate::tr!("颜色标签", "Color labels")))
             .on_click(cx.listener(|this, index: &usize, _, cx| {
                 this.active_section = if *index == 0 {
@@ -306,11 +311,14 @@ impl ColorLabelsDialog {
     fn render_log_levels(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let dialog = cx.entity();
         v_flex()
-            .size_full()
+            .w_full()
+            .flex_1()
             .min_h_0()
+            .overflow_hidden()
             .gap_3()
             .child(
                 h_flex()
+                    .flex_none()
                     .justify_between()
                     .gap_4()
                     .child(
@@ -369,6 +377,7 @@ impl ColorLabelsDialog {
                     .child(
                         h_flex()
                             .flex_none()
+                            .mr(Scrollbar::width())
                             .gap_3()
                             .px_3()
                             .py_2()
@@ -407,9 +416,12 @@ impl ColorLabelsDialog {
                     .child(
                         v_flex()
                             .id("log-level-rules-scroll")
+                            .h_full()
                             .flex_1()
+                            .min_w_0()
                             .min_h_0()
                             .overflow_y_scroll()
+                            .track_scroll(&self.log_level_scroll)
                             .when(self.log_level_rows.is_empty(), |this| {
                                 this.child(
                                     v_flex()
@@ -444,6 +456,7 @@ impl ColorLabelsDialog {
                                     .unwrap_or_else(|| rgb(0).into());
                                 h_flex()
                                     .id(format!("log-level-color-row-{row_id}"))
+                                    .flex_none()
                                     .gap_3()
                                     .px_3()
                                     .py_2()
@@ -503,7 +516,14 @@ impl ColorLabelsDialog {
                                                 }),
                                         ),
                                     )
-                            })),
+                            }))
+                            .map(|list| {
+                                color_rule_list(
+                                    list,
+                                    "log-level-rules-scroll-scrollbar",
+                                    &self.log_level_scroll,
+                                )
+                            }),
                     ),
             )
     }
@@ -511,11 +531,14 @@ impl ColorLabelsDialog {
     fn render_color_labels(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let dialog = cx.entity();
         v_flex()
-            .size_full()
+            .w_full()
+            .flex_1()
             .min_h_0()
+            .overflow_hidden()
             .gap_3()
             .child(
                 h_flex()
+                    .flex_none()
                     .justify_between()
                     .gap_4()
                     .child(
@@ -560,6 +583,7 @@ impl ColorLabelsDialog {
                     .child(
                         h_flex()
                             .flex_none()
+                            .mr(Scrollbar::width())
                             .gap_3()
                             .px_3()
                             .py_2()
@@ -598,9 +622,12 @@ impl ColorLabelsDialog {
                     .child(
                         v_flex()
                             .id("color-labels-scroll")
+                            .h_full()
                             .flex_1()
+                            .min_w_0()
                             .min_h_0()
                             .overflow_y_scroll()
+                            .track_scroll(&self.label_scroll)
                             .when(self.label_rows.is_empty(), |this| {
                                 this.child(
                                     v_flex()
@@ -637,6 +664,7 @@ impl ColorLabelsDialog {
                                     .unwrap_or_else(|| rgb(0).into());
                                 h_flex()
                                     .id(format!("color-label-row-{row_id}"))
+                                    .flex_none()
                                     .gap_3()
                                     .px_3()
                                     .py_2()
@@ -700,10 +728,39 @@ impl ColorLabelsDialog {
                                                 }),
                                         ),
                                     )
-                            })),
+                            }))
+                            .map(|list| {
+                                color_rule_list(list, "color-labels-scroll-scrollbar", &self.label_scroll)
+                            }),
                     ),
             )
     }
+}
+
+fn color_rule_list(
+    viewport: impl IntoElement,
+    scrollbar_id: &'static str,
+    scroll_handle: &ScrollHandle,
+) -> impl IntoElement {
+    h_flex()
+        .w_full()
+        .flex_1()
+        .min_h_0()
+        .overflow_hidden()
+        .child(viewport)
+        .child(
+            div()
+                .relative()
+                .h_full()
+                .w(Scrollbar::width())
+                .flex_none()
+                .child(
+                    Scrollbar::vertical(scroll_handle)
+                        .id(scrollbar_id)
+                        .mode(ScrollbarMode::Always)
+                        .viewport_from_layout(),
+                ),
+        )
 }
 
 fn color_picker(

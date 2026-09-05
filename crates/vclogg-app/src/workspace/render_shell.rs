@@ -79,6 +79,7 @@ impl Workspace {
             self.active_document().is_some_and(|tab| tab.view.word_wrap)
         };
         let show_full_path = self.app_settings.show_full_path;
+        let highlight_log_levels = self.app_settings.highlight_log_levels;
         let highlight_matches = self.app_settings.highlight_matches;
         let case_sensitive = self.case_sensitive;
         let regex = self.regex;
@@ -419,6 +420,16 @@ impl Workspace {
                         window.listener_for(&highlight_workspace, |this, _, window, cx| {
                             this.cycle_color_label(&CycleColorLabel, window, cx);
                         });
+                    let toggle_levels =
+                        window.listener_for(&highlight_workspace, |this, _, window, cx| {
+                            this.update_app_setting(
+                                |settings| {
+                                    settings.highlight_log_levels = !settings.highlight_log_levels
+                                },
+                                window,
+                                cx,
+                            );
+                        });
                     let toggle_match_highlight =
                         window.listener_for(&highlight_workspace, |this, _, window, cx| {
                             this.update_app_setting(
@@ -440,12 +451,9 @@ impl Workspace {
                             this.clear_search(window, cx);
                         });
                     menu.item(
-                        PopupMenuItem::new(crate::tr!("日志着色…", "Log coloring…"))
-                            .icon(IconName::Settings2)
-                            .disabled(highlight_workspace.read_with(cx, |this, _| {
-                                this.history_loading || this.color_labels_saving
-                            }))
-                            .on_click(manage_labels),
+                        PopupMenuItem::new(crate::tr!("日志级别着色", "Log-level coloring"))
+                            .checked(highlight_log_levels)
+                            .on_click(toggle_levels),
                     )
                     .item(
                         PopupMenuItem::new(crate::tr!("高亮搜索匹配", "Highlight search matches"))
@@ -464,6 +472,14 @@ impl Workspace {
                             .action(Box::new(CycleColorLabel))
                             .disabled(!has_document || !has_selected_log_rows)
                             .on_click(cycle_color),
+                    )
+                    .item(
+                        PopupMenuItem::new(crate::tr!("高亮配置…", "Highlight settings…"))
+                            .icon(IconName::Settings2)
+                            .disabled(highlight_workspace.read_with(cx, |this, _| {
+                                this.history_loading || this.color_labels_saving
+                            }))
+                            .on_click(manage_labels),
                     )
                     .separator()
                     .item(
