@@ -1816,33 +1816,31 @@ impl Workspace {
                     return;
                 };
                 let keep_quick_find_focus = this.quick_find_input_has_focus(window, cx);
-                let word_wrap = this.global_viewport.is_wrapped();
                 let Some(row) = table.read(cx).delegate().row(*row_ix) else {
                     return;
                 };
-                let wrapped_group_state = if word_wrap {
-                    match row {
-                        GlobalSearchRow::Group { document_id } => {
-                            let anchor = this
-                                .global_viewport
-                                .capture_wrapped_viewport_position(Some(*row_ix))
-                                .map(|position| RowViewportAnchor {
-                                    key: LogRowKey::FileGroup { document_id },
-                                    viewport_y: position.viewport_y,
-                                    fallback_ix: position.row_ix,
-                                });
-                            let table = table.read(cx);
-                            let measured_heights = this
-                                .global_viewport
+                let group_state = match row {
+                    GlobalSearchRow::Group { document_id } => {
+                        let anchor = this
+                            .global_viewport
+                            .capture_wrapped_viewport_position(Some(*row_ix))
+                            .map(|position| RowViewportAnchor {
+                                key: LogRowKey::FileGroup { document_id },
+                                viewport_y: position.viewport_y,
+                                fallback_ix: position.row_ix,
+                            });
+                        let table = table.read(cx);
+                        let measured_heights = if this.global_viewport.is_wrapped() {
+                            this.global_viewport
                                 .wrapped_measured_heights_by_key(|row_ix| {
                                     table.delegate().row_key(row_ix)
-                                });
-                            Some((anchor, measured_heights))
-                        }
-                        GlobalSearchRow::Match { .. } => None,
+                                })
+                        } else {
+                            BTreeMap::new()
+                        };
+                        Some((anchor, measured_heights))
                     }
-                } else {
-                    None
+                    GlobalSearchRow::Match { .. } => None,
                 };
                 match row {
                     GlobalSearchRow::Group { .. } => {
@@ -1858,7 +1856,7 @@ impl Workspace {
                     GlobalSearchRow::Group { document_id } => {
                         if table.read(cx).delegate().group_has_results(document_id) {
                             let (anchor, measured_heights) =
-                                wrapped_group_state.unwrap_or_else(|| (None, BTreeMap::new()));
+                                group_state.unwrap_or_else(|| (None, BTreeMap::new()));
                             this.prepare_global_group_toggle(
                                 document_id,
                                 anchor,

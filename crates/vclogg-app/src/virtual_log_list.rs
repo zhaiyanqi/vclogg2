@@ -194,7 +194,8 @@ impl<K: 'static> VirtualLogViewport<K> {
                 .retain(|row_ix, _| *row_ix < item_count);
             inner.indexed_order.retain(|row_ix| *row_ix < item_count);
             if inner.at_end && item_count > previous_count {
-                inner.pending_scroll = Some(PendingScroll::End);
+                // Growing content must not replace an explicit row or anchor restoration.
+                inner.pending_scroll.get_or_insert(PendingScroll::End);
             }
         }
     }

@@ -512,6 +512,9 @@ impl Workspace {
                 prepared.row_height,
                 cx,
             );
+        } else {
+            self.global_viewport.invalidate_wrapped();
+            self.position_global_row_viewport_anchor(prepared.anchor, prepared.row_height, cx);
         }
         Self::refresh_log_surfaces_atomically(
             [self.search_results_viewer.surface.clone()],

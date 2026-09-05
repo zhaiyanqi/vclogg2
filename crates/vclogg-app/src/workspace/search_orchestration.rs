@@ -603,6 +603,12 @@ impl Workspace {
                 preserve_viewport
                     .then(|| self.capture_global_viewport_anchor(row_height, cx))
                     .flatten()
+                    .map(|mut anchor| {
+                        // Search replaces the projection; keep the row, not the old bottom.
+                        // Explicit session restoration retains its saved end position above.
+                        anchor.at_end = false;
+                        anchor
+                    })
             });
         let measured_heights = {
             let table = self.global_table.read(cx);
