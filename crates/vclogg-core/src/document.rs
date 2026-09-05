@@ -1039,6 +1039,8 @@ pub struct LogDocument {
     line_starts: LineStarts,
     line_ends: Option<LineStarts>,
     source_rows: Option<CompressedRows>,
+    // Dense projections select rows from the shared complete source index.
+    shared_line_index: bool,
     segment_start_row: usize,
     metadata: DocumentMetadata,
     longest_completed_line_bytes: usize,
@@ -1731,7 +1733,9 @@ impl LogDocument {
     }
 
     pub fn line_count(&self) -> usize {
-        self.line_starts.len()
+        self.source_rows
+            .as_ref()
+            .map_or_else(|| self.line_starts.len(), CompressedRows::len)
     }
 
     /// Number of logical lines in the complete source snapshot. During a
@@ -1810,37 +1814,50 @@ impl LogDocument {
         self.bytes.release_source_handle();
     }
 
-    /// Create a byte-snapshot view that retains offsets only for requested source rows.
+    /// Create a byte-snapshot view that keeps sparse offsets or shares a dense source index.
     ///
     /// Directory-search results use this so files with millions of lines and a handful of
     /// matches do not retain complete line-offset tables. The source bytes and content identity
     /// remain shared, and retained lines keep their original source row coordinates.
     pub fn project_source_rows(&self, rows: &CompressedRows) -> Self {
-        let capacity = rows.len().min(self.line_count());
-        let max_offset = u64::try_from(self.bytes.len()).unwrap_or(u64::MAX);
-        let mut selected_rows = Vec::with_capacity(capacity);
-        let mut starts = MutableLineStarts::with_capacity(max_offset, capacity);
-        let mut ends = MutableLineStarts::with_capacity(max_offset, capacity);
-        for source_row in rows.iter() {
-            let Some(local_row) = self.local_row(source_row) else {
-                continue;
-            };
-            let Some(mut range) = self.line_byte_range_at_local_row(local_row) else {
-                continue;
-            };
-            if source_row == 0 {
-                range.start = range.start.saturating_sub(self.encoding.bom_len());
+        let mut selected_rows = rows.clone();
+        let shared_line_index = if self.has_complete_line_index() {
+            selected_rows.retain_below(self.line_count());
+            selected_rows.len() > self.line_count() / 2
+        } else {
+            false
+        };
+        let (starts, ends) = if shared_line_index {
+            (self.line_starts.clone(), self.line_ends.clone())
+        } else {
+            let capacity = rows.len().min(self.line_count());
+            let max_offset = u64::try_from(self.bytes.len()).unwrap_or(u64::MAX);
+            selected_rows = CompressedRows::default();
+            let mut starts = MutableLineStarts::with_capacity(max_offset, capacity);
+            let mut ends = MutableLineStarts::with_capacity(max_offset, capacity);
+            for source_row in rows.iter() {
+                let Some(local_row) = self.local_row(source_row) else {
+                    continue;
+                };
+                let Some(mut range) = self.line_byte_range_at_local_row(local_row) else {
+                    continue;
+                };
+                if source_row == 0 {
+                    range.start = range.start.saturating_sub(self.encoding.bom_len());
+                }
+                selected_rows.insert(source_row);
+                starts.push(range.start);
+                ends.push(range.end);
             }
-            selected_rows.push(source_row);
-            starts.push(range.start);
-            ends.push(range.end);
-        }
+            (starts.into_immutable(), Some(ends.into_immutable()))
+        };
 
         Self {
             bytes: self.bytes.clone(),
-            line_starts: starts.into_immutable(),
-            line_ends: Some(ends.into_immutable()),
-            source_rows: Some(selected_rows.into_iter().collect()),
+            line_starts: starts,
+            line_ends: ends,
+            source_rows: Some(selected_rows),
+            shared_line_index,
             segment_start_row: 0,
             metadata: self.metadata.clone(),
             longest_completed_line_bytes: self.longest_completed_line_bytes,
@@ -1881,12 +1898,17 @@ impl LogDocument {
     }
 
     fn line_byte_range_at_local_row(&self, row_ix: usize) -> Option<std::ops::Range<usize>> {
-        let mut start = self.line_starts.get(row_ix)?;
+        let index_row = if self.shared_line_index {
+            self.source_row(row_ix)?
+        } else {
+            row_ix
+        };
+        let mut start = self.line_starts.get(index_row)?;
         let end = self
             .line_ends
             .as_ref()
-            .and_then(|ends| ends.get(row_ix))
-            .or_else(|| self.line_starts.get(row_ix + 1))
+            .and_then(|ends| ends.get(index_row))
+            .or_else(|| self.line_starts.get(index_row + 1))
             .unwrap_or(self.bytes.len());
         if self.source_row(row_ix) == Some(0) {
             start = start.saturating_add(self.encoding.bom_len()).min(end);
@@ -1899,13 +1921,13 @@ impl LogDocument {
     /// tasks never split the rows within a single source block just to fill the pool.
     pub(crate) fn search_row_ranges(&self, max_chunks: usize) -> Vec<std::ops::Range<usize>> {
         let line_count = self.line_count();
-        let first_block =
-            self.line_starts.get(0).unwrap_or_default() / APPEND_INTEGRITY_BLOCK_BYTES;
+        let first_block = self
+            .line_byte_range_at_local_row(0)
+            .map_or(0, |range| range.start)
+            / APPEND_INTEGRITY_BLOCK_BYTES;
         let end_byte = self
-            .line_ends
-            .as_ref()
-            .and_then(|ends| ends.get(line_count.saturating_sub(1)))
-            .unwrap_or(self.bytes.len());
+            .line_byte_range_at_local_row(line_count.saturating_sub(1))
+            .map_or(self.bytes.len(), |range| range.end);
         let block_count = end_byte
             .div_ceil(APPEND_INTEGRITY_BLOCK_BYTES)
             .saturating_sub(first_block);
@@ -1919,7 +1941,20 @@ impl LogDocument {
             let block_offset =
                 chunk_ix * (block_count / chunk_count) + chunk_ix.min(block_count % chunk_count);
             let byte_offset = (first_block + block_offset) * APPEND_INTEGRITY_BLOCK_BYTES;
-            let end_row = self.line_starts.lower_bound(byte_offset);
+            let index_row = self.line_starts.lower_bound(byte_offset);
+            let end_row = if self.shared_line_index {
+                if index_row == 0 {
+                    0
+                } else {
+                    self.source_rows
+                        .as_ref()
+                        .expect("shared index has selected rows")
+                        .rows
+                        .rank((index_row - 1) as u64) as usize
+                }
+            } else {
+                index_row
+            };
             // Very long lines or sparse projections can cover several proposed
             // boundaries. Collapse those empty tasks instead of rescanning a row.
             if end_row > start_row && end_row < line_count {
@@ -2123,6 +2158,7 @@ impl LogDocument {
             line_starts: indexed_lines.starts.into_immutable(),
             line_ends: None,
             source_rows: None,
+            shared_line_index: false,
             segment_start_row: source_rows.start,
             metadata,
             longest_completed_line_bytes: indexed_lines.longest_completed_line_bytes,

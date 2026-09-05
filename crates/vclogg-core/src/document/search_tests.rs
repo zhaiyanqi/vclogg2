@@ -226,3 +226,37 @@ fn byte_partitioned_search_preserves_long_lines_and_sparse_source_rows() {
         }
     }
 }
+
+#[test]
+fn dense_projection_shares_offsets_and_compressed_rows_without_expansion() {
+    let source = TestSource::new(&b"target\r\n".repeat(10_000));
+    let document = source.open();
+    let rows = crate::CompressedRows::from_inclusive_ranges([(0, 5999), (8000, 10_000)]);
+    let projected = document.project_source_rows(&rows);
+    assert!(projected.shared_line_index);
+    assert!(projected.line_ends.is_none());
+    let (super::LineStarts::Compact(original), super::LineStarts::Compact(selected)) =
+        (&document.line_starts, &projected.line_starts)
+    else {
+        panic!("compact index expected")
+    };
+    assert!(std::sync::Arc::ptr_eq(original, selected));
+    assert!(std::sync::Arc::ptr_eq(
+        &rows.rows,
+        &projected.source_rows.as_ref().unwrap().rows
+    ));
+    assert_eq!(projected.line_count(), 8001);
+    assert_eq!(projected.source_row(6000), Some(8000));
+    assert_eq!(projected.line(7999), None);
+    assert_eq!(projected.line(8000).as_deref(), Some("target"));
+    assert_eq!(projected.line(10_000).as_deref(), Some(""));
+    let query = SearchQuery {
+        text: "target".into(),
+        ..SearchQuery::default()
+    };
+    let result = search(&projected, &query).unwrap();
+    assert_eq!(result.len(), 8000);
+    let nested = projected.project_source_rows(&[0, 7000, 8000, usize::MAX].into_iter().collect());
+    assert_eq!(nested.line_count(), 2);
+    assert_eq!(nested.line(8000).as_deref(), Some("target"));
+}
