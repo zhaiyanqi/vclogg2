@@ -16,14 +16,14 @@ use anyhow::Result;
 use chrono::{DateTime, Local};
 use gpui::{
     Animation, AnimationExt as _, AnyElement, AnyWindowHandle, App, AppContext as _,
-    AsyncWindowContext, BorrowAppContext as _, Bounds, ClickEvent, ClipboardItem, Context,
-    DisplayId, DragMoveEvent, ElementId, Entity, ExternalPaths, FileDropEvent, FocusHandle,
-    Focusable, FontWeight, Global, HighlightStyle, HitboxBehavior, InteractiveElement as _,
-    IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement as _, PathPromptOptions, Pixels, Point, Render, ScrollHandle, ScrollStrategy,
-    ScrollWheelEvent, SharedString, Size, StatefulInteractiveElement as _, Styled as _, StyledText,
-    Subscription, Task, UniformListScrollHandle, WeakEntity, Window, WindowId, canvas, deferred,
-    div, point, prelude::FluentBuilder as _, px, relative, rems, size, svg, uniform_list,
+    BorrowAppContext as _, Bounds, ClickEvent, ClipboardItem, Context, DisplayId, DragMoveEvent,
+    ElementId, Entity, ExternalPaths, FileDropEvent, FocusHandle, Focusable, FontWeight, Global,
+    HighlightStyle, HitboxBehavior, InteractiveElement as _, IntoElement, KeyDownEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
+    PathPromptOptions, Pixels, Point, Render, ScrollHandle, ScrollStrategy, ScrollWheelEvent,
+    SharedString, Size, StatefulInteractiveElement as _, Styled as _, StyledText, Subscription,
+    Task, UniformListScrollHandle, WeakEntity, Window, WindowId, canvas, deferred, div, point,
+    prelude::FluentBuilder as _, px, relative, rems, size, svg, uniform_list,
 };
 use gpui_base::{
     GlobalState, POPUP_PRIORITY, Scrollbar, ScrollbarHandle, ScrollbarMode, TextSelection,

@@ -4,6 +4,19 @@ use super::*;
 const WORKSPACE_OVERLAY_PRIORITY: usize = 1;
 const _: () = assert!(WORKSPACE_OVERLAY_PRIORITY < POPUP_PRIORITY);
 
+// Component Button already owns a stable ID, but does not expose GPUI's
+// StatefulInteractiveElement methods. Borrow its existing interactivity so the
+// accessible name stays on the button without adding another rendered node.
+struct ButtonAccessibility<'a>(&'a mut Button);
+
+impl gpui::InteractiveElement for ButtonAccessibility<'_> {
+    fn interactivity(&mut self) -> &mut gpui::Interactivity {
+        self.0.interactivity()
+    }
+}
+
+impl gpui::StatefulInteractiveElement for ButtonAccessibility<'_> {}
+
 pub(super) fn deferred_workspace_overlay(child: impl IntoElement) -> impl IntoElement {
     deferred(child).with_priority(WORKSPACE_OVERLAY_PRIORITY)
 }
@@ -1237,11 +1250,12 @@ impl Workspace {
 
     fn search_toolbar_button_label(
         &self,
-        button: Button,
+        mut button: Button,
         label: impl Into<SharedString>,
     ) -> Button {
         let label = label.into();
-        button.aria_label(label.clone()).child(
+        ButtonAccessibility(&mut button).aria_label(label.clone());
+        button.child(
             div()
                 .min_w_0()
                 .truncate()
