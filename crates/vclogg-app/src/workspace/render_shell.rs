@@ -592,7 +592,10 @@ impl Workspace {
                         .disabled(settings_saving)
                         .on_click(shortcuts),
                 )
-                .item(PopupMenuItem::new(crate::tr!("更新", "Updates")).on_click(open_releases))
+                .item(
+                    PopupMenuItem::new(crate::tr!("检查更新", "Check for updates"))
+                        .on_click(open_releases),
+                )
                 .separator()
                 .item(
                     PopupMenuItem::new(format!(

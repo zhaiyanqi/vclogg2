@@ -60,7 +60,7 @@ AppShell [A001] - Root
 │  │  │  └─ 清空收藏 [A420] - PopupMenuItem
 │  │  └─ 帮助菜单 [A354] - TitleBarMenuButton
 │  │     ├─ 键盘快捷键 [A421] - PopupMenuItem
-│  │     ├─ 更新 [A355] - PopupMenuItem
+│  │     ├─ 检查更新 [A355] - PopupMenuItem
 │  │     └─ 关于 ver.<当前版本> [A403] - PopupMenuItem
 │  └─ 应用标题 [A003] - Div
 ├─ FileToolbar [A011] - Div
@@ -492,7 +492,7 @@ AppShell [A001] - Root
 - [A420] 清空收藏：复用 A078 的清空链路；无收藏时禁用
 - [A354] 帮助菜单：提供快捷键设置、发行页面与当前版本信息入口
 - [A421] 键盘快捷键：打开设置对话框并直接定位“快捷键”分类
-- [A355] 更新：在系统浏览器中打开项目 GitHub Releases 页面
+- [A355] 检查更新：在系统浏览器中打开项目 GitHub Releases 页面
 - [A403] 关于 ver.<当前版本>：紧跟当前构建版本号，并打开设置对话框的“关于”分类
 - [A003] 应用标题：居中显示 VCLogg2
 - [A011] FileToolbar：菜单栏下方的紧凑文件信息带；顶部不绘制分隔线，与菜单栏连续衔接；只保留高频快捷入口与活动文件必要信息
