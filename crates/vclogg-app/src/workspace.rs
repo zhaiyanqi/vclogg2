@@ -1866,14 +1866,9 @@ impl Workspace {
                     }
                     GlobalSearchRow::Match { .. } => None,
                 };
-                match row {
-                    GlobalSearchRow::Group { .. } => {
-                        table.read(cx).delegate().clear_row_selection();
-                    }
-                    GlobalSearchRow::Match { .. } => {
-                        table.read(cx).delegate().settle_table_selection(*row_ix);
-                        this.active_log_region = LogRegion::GlobalResults;
-                    }
+                if let GlobalSearchRow::Match { .. } = row {
+                    table.read(cx).delegate().settle_table_selection(*row_ix);
+                    this.active_log_region = LogRegion::GlobalResults;
                 }
                 let mut save_search_state_immediately = true;
                 match row {

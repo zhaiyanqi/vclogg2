@@ -1,0 +1,74 @@
+[package]
+description = "Behavior, interaction, and infrastructure foundations for GPUI applications."
+keywords = ["desktop", "gpui", "ui", "foundation"]
+license = "Apache-2.0"
+name = "gpui-base"
+repository = "https://github.com/longbridge/gpui-component"
+homepage = "https://longbridge.github.io/gpui-component"
+documentation = "https://docs.rs/gpui-base"
+version = "0.5.2"
+publish = false
+edition = "2024"
+
+[lib]
+doctest = false
+
+[features]
+inspector = ["gpui_macros/inspector", "gpui/inspector"]
+
+[dependencies]
+anyhow = "1"
+aho-corasick = "1.1.3"
+chrono = "0.4.38"
+gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed", features = ["profiler"] }
+gpui_macros = { version = "0.1.0", git = "https://github.com/zed-industries/zed" }
+instant = { version = "0.1", features = ["wasm-bindgen"] }
+lsp-types = { version = "0.97.0", features = ["proposed"] }
+ropey = { version = "=2.0.0-beta.1", features = ["metric_chars", "metric_lines_lf", "metric_utf16"] }
+regex = "1"
+schemars = "1"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1"
+smallvec = "1"
+sum-tree = { version = "0.2.0", package = "zed-sum-tree" }
+tracing = "0.1.41"
+unicode-segmentation = "1.12.0"
+web-time = "1"
+syntect = { version = "5.3.0", default-features = false, features = ["parsing", "default-syntaxes", "regex-fancy"] }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+smol = "2"
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+async-channel = "2.3.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+raw-window-handle = "0.6.2"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow"] }
+objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSString"] }
+
+[dev-dependencies]
+gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed", features = ["profiler", "test-support"] }
+indoc = "2"
+
+[lints.clippy]
+almost_complete_range = "allow"
+arc_with_non_send_sync = "allow"
+borrowed_box = "allow"
+dbg_macro = "deny"
+let_underscore_future = "allow"
+manual_is_multiple_of = "allow"
+map_entry = "allow"
+module_inception = "allow"
+non_canonical_partial_ord_impl = "allow"
+reversed_empty_ranges = "allow"
+single_range_in_vec_init = "allow"
+style = { level = "allow", priority = -1 }
+todo = "deny"
+type_complexity = "allow"
+useless_conversion = "allow"
+
+# Keep the vendored dependency outside the application workspace.
+[workspace]

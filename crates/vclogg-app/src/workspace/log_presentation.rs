@@ -730,7 +730,16 @@ impl Workspace {
             } else {
                 &self.documents[tab_ix].log_viewport
             };
-            wrapped.begin_row_layout();
+            wrapped.begin_row_layout(|source_row| {
+                table
+                    .read(cx)
+                    .delegate()
+                    .row_ix_for_key(LogRowKey::Row {
+                        document_id,
+                        source_row: *source_row,
+                    })
+                    .is_some()
+            });
             wrapped.wrapped_row_bounds()
         };
 
@@ -2337,7 +2346,17 @@ impl Workspace {
         let suppress_text_selection = self.row_drag_selection.is_some_and(|drag| {
             drag.region == WrappedRegion::GlobalResults && drag.mode == RowDragMode::Lines
         });
-        self.global_viewport.begin_row_layout();
+        self.global_viewport
+            .begin_row_layout(|(document_id, source_row)| {
+                self.global_table
+                    .read(cx)
+                    .delegate()
+                    .row_ix_for_key(LogRowKey::Row {
+                        document_id: *document_id,
+                        source_row: *source_row,
+                    })
+                    .is_some()
+            });
         let selection_style = self.app_settings.selection_styles.resolve(
             window.is_window_active()
                 && self

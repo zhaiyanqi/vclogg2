@@ -1,0 +1,54 @@
+--- a/src/input/base/element.rs
++++ b/src/input/base/element.rs
+@@ -535,7 +535,7 @@
+ 
+                 // Vertical cursor-follow is suppressed while auto-scroll manages the y axis,
+                 // to prevent fighting the background scroll task.
+-                if !auto_scrolling {
++                if !state.is_single_line() && !auto_scrolling {
+                     // If we change the scroll_offset.y, GPUI will render and trigger the next run loop.
+                     // So, here we just adjust offset by `line_height` for move smooth.
+                     scroll_offset.y = if scroll_offset.y + cursor_pos.y
+@@ -606,12 +606,18 @@
+         if let Some(deferred_scroll_offset) = state.deferred_scroll_offset {
+             scroll_offset = deferred_scroll_offset;
+         }
+-        scroll_offset.y = clamp_auto_grow_vertical_scroll_offset(
+-            &state.mode,
+-            scroll_offset.y,
+-            scroll_size.height,
+-            bounds.size.height,
+-        );
++        // Enforce the single-line invariant before text, placeholder, selection,
++        // and cursor geometry consume any retained or deferred scroll offset.
++        scroll_offset.y = if state.is_single_line() {
++            px(0.)
++        } else {
++            clamp_auto_grow_vertical_scroll_offset(
++                &state.mode,
++                scroll_offset.y,
++                scroll_size.height,
++                bounds.size.height,
++            )
++        };
+ 
+         bounds.origin = bounds.origin + scroll_offset;
+ 
+--- a/src/input/base/state.rs
++++ b/src/input/base/state.rs
+@@ -1926,7 +1926,14 @@
+         // over-scrolled frame before the post-paint clamp pulls it back.
+         let safe_y_min = (-self.scroll_size.height + self.input_bounds.size.height).min(px(0.));
+         scroll_offset.x = scroll_offset.x.min(px(0.));
+-        scroll_offset.y = scroll_offset.y.clamp(safe_y_min, px(0.));
++        // Single-line fields may have a pixel-snapped viewport slightly shorter
++        // than their fractional line height. Never publish a vertical target:
++        // resetting it only after paint would show a one-frame text jump.
++        scroll_offset.y = if self.is_single_line() {
++            px(0.)
++        } else {
++            scroll_offset.y.clamp(safe_y_min, px(0.))
++        };
+         self.deferred_scroll_offset = Some(scroll_offset);
+         cx.notify();
+     }

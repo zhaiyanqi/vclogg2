@@ -343,7 +343,7 @@ impl<K: Clone + Ord> LogViewportState<K> {
 
     pub(super) fn invalidate_wrapped(&mut self) {
         self.viewport.invalidate_measurements();
-        self.text_selections.borrow_mut().clear();
+        // Geometry invalidation does not invalidate a source-row text selection.
         self.row_bounds.borrow_mut().clear();
     }
 
@@ -385,12 +385,14 @@ impl<K: Clone + Ord> LogViewportState<K> {
         self.ensure_wrapped_measurement_anchor(preferred_row);
         self.layout_key.replace(Some(key));
         self.viewport.invalidate_measurements();
-        self.text_selections.borrow_mut().clear();
         self.row_bounds.borrow_mut().clear();
         true
     }
 
-    pub(super) fn begin_row_layout(&self) {
+    pub(super) fn begin_row_layout(&self, contains_source_row: impl FnMut(&K) -> bool) {
+        self.text_selections
+            .borrow_mut()
+            .retain(contains_source_row);
         // Only rows prepainted in this frame may participate in hit testing and anchoring.
         self.row_bounds.borrow_mut().clear();
     }

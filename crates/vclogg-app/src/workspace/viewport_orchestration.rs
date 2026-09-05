@@ -496,8 +496,6 @@ impl Workspace {
             {
                 return false;
             }
-            table.delegate().clear_row_selection();
-            table.clear_selection(cx);
             table.refresh(cx);
             cx.notify();
             true

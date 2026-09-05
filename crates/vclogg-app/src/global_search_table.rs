@@ -135,7 +135,16 @@ struct GlobalInteractionState {
     suppress_table_clear: Cell<bool>,
     row_bounds: Rc<RefCell<BTreeMap<usize, Bounds<Pixels>>>>,
     collapsed_documents: BTreeSet<u64>,
+    collapsed_rows: RefCell<CollapsedInteractionRows>,
     selected_rows_count_cache: Cell<Option<(u64, u64, usize)>>,
+}
+
+#[derive(Default)]
+struct CollapsedInteractionRows {
+    selection_revision: u64,
+    selected_rows: BTreeMap<u64, CompressedRows>,
+    active_row: Option<LogRowKey>,
+    selection_anchor: Option<LogRowKey>,
 }
 
 impl Default for GlobalSearchProjectionState {
@@ -215,6 +224,7 @@ impl Default for GlobalInteractionState {
             suppress_table_clear: Cell::default(),
             row_bounds: Rc::default(),
             collapsed_documents: BTreeSet::new(),
+            collapsed_rows: RefCell::default(),
             selected_rows_count_cache: Cell::default(),
         }
     }
@@ -863,7 +873,7 @@ impl GlobalSearchTableDelegate {
         Option<usize>,
         Option<LogRowKey>,
     ) {
-        let selected_rows = self
+        let mut selected_rows: BTreeMap<_, _> = self
             .selected_position_ranges_by_document()
             .into_iter()
             .filter_map(|(document_id, ranges)| {
@@ -876,9 +886,16 @@ impl GlobalSearchTableDelegate {
             })
             .collect();
         let selection = self.interaction.row_selection.borrow();
-        let selection_anchor = selection.anchor().and_then(|row_ix| self.row_key(row_ix));
+        let mut selection_anchor = selection.anchor().and_then(|row_ix| self.row_key(row_ix));
         let active_row_ix = self.interaction.active_row.get();
-        let active_row = active_row_ix.and_then(|row_ix| self.row_key(row_ix));
+        let mut active_row = active_row_ix.and_then(|row_ix| self.row_key(row_ix));
+        let collapsed_rows = self.interaction.collapsed_rows.borrow();
+        // A later selection gesture or explicit clear supersedes the hidden selection.
+        if collapsed_rows.selection_revision == selection.revision() {
+            selected_rows.extend(collapsed_rows.selected_rows.clone());
+            active_row = active_row.or(collapsed_rows.active_row);
+            selection_anchor = collapsed_rows.selection_anchor.or(selection_anchor);
+        }
         (selected_rows, active_row, active_row_ix, selection_anchor)
     }
 
@@ -890,12 +907,34 @@ impl GlobalSearchTableDelegate {
         selection_anchor: Option<LogRowKey>,
         retain_nearest_active_row: bool,
     ) {
+        let mut collapsed_rows = CollapsedInteractionRows {
+            active_row: active_row.filter(|key| self.is_collapsed_result_key(*key)),
+            selection_anchor: selection_anchor.filter(|key| self.is_collapsed_result_key(*key)),
+            ..CollapsedInteractionRows::default()
+        };
+        for (&document_id, rows) in &selected_rows {
+            if !self.interaction.collapsed_documents.contains(&document_id) {
+                continue;
+            }
+            let Some(&group_ix) = self.projection.group_by_document.get(&document_id) else {
+                continue;
+            };
+            let projection = &self.projection.groups[group_ix].projection.rows;
+            let rows =
+                projection.rows_at_position_ranges(projection.position_ranges_for_subset(rows));
+            if !rows.is_empty() {
+                collapsed_rows.selected_rows.insert(document_id, rows);
+            }
+        }
         let selected_ranges = self.position_ranges_for_selected_rows(&selected_rows);
         let anchor = selection_anchor.and_then(|key| self.row_ix_for_key(key));
         self.interaction
             .row_selection
             .borrow_mut()
             .replace_ranges_with_anchor(selected_ranges, anchor);
+        collapsed_rows.selection_revision = self.interaction.row_selection.borrow().revision();
+        let retain_nearest_active_row =
+            retain_nearest_active_row && collapsed_rows.active_row.is_none();
         let active_row = active_row
             .and_then(|key| {
                 self.row_ix_for_key(key).or_else(|| {
@@ -910,6 +949,28 @@ impl GlobalSearchTableDelegate {
                     .flatten()
             });
         self.interaction.active_row.set(active_row);
+        *self.interaction.collapsed_rows.borrow_mut() = collapsed_rows;
+    }
+
+    fn is_collapsed_result_key(&self, key: LogRowKey) -> bool {
+        let LogRowKey::Row {
+            document_id,
+            source_row,
+        } = key
+        else {
+            return false;
+        };
+        self.interaction.collapsed_documents.contains(&document_id)
+            && self
+                .projection
+                .group_by_document
+                .get(&document_id)
+                .is_some_and(|group_ix| {
+                    self.projection.groups[*group_ix]
+                        .projection
+                        .rows
+                        .contains(source_row)
+                })
     }
 
     pub fn collapsed_document_ids(&self) -> BTreeSet<u64> {
@@ -1780,6 +1841,13 @@ impl LogTableCursor for GlobalSearchTableDelegate {
     }
 
     fn set_active_log_row(&self, row_ix: Option<usize>) {
+        // File headers are disclosure controls, so activating one keeps the result cursor.
+        if row_ix
+            .is_some_and(|row_ix| matches!(self.row(row_ix), Some(GlobalSearchRow::Group { .. })))
+        {
+            return;
+        }
+        self.interaction.collapsed_rows.borrow_mut().active_row = None;
         self.interaction.active_row.set(row_ix);
     }
 

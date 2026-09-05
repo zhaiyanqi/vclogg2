@@ -60,6 +60,10 @@ windows-sys = { version = "0.61", features = [
 # public API while applying the rustc future-incompatibility fix locally.
 block = { path = "vendor/block" }
 
+[patch."https://github.com/longbridge/gpui-component"]
+# Keep single-line inputs vertically stationary before painting at every DPI.
+gpui-base = { path = "vendor/gpui-base" }
+
 [workspace.lints.clippy]
 dbg_macro = "deny"
 todo = "deny"

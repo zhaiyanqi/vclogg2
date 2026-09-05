@@ -438,6 +438,29 @@ impl<K: Clone + Ord> TextSelectionCache<K> {
         window: &Window,
         cx: &mut App,
     ) -> LogTextSelection {
+        let incompatible = self.entries.get(&key).is_some_and(|cached| {
+            let state = cached.selection.state.borrow();
+            if state.text.source() == text.source() {
+                return false;
+            }
+            // Keep a word/line selection when a writer only extends text after it.
+            // Display offsets include expanded tabs, while copy uses source text.
+            let compatible = state.local_selection.as_ref().is_some_and(|selection| {
+                let range = selection.range();
+                state
+                    .text
+                    .display()
+                    .get(..range.end)
+                    .zip(text.display().get(..range.end))
+                    .is_some_and(|(old, new)| old == new)
+                    && state.text.source_text(range.clone()) == text.source_text(range.clone())
+            });
+            !compatible
+        });
+        if incompatible && let Some(cached) = self.entries.remove(&key) {
+            cached.selection.handle.set_local_selection(false, cx);
+            self.recency.remove(&(cached.last_used, key.clone()));
+        }
         let use_order = self.next_use_order();
         if !self.entries.contains_key(&key) {
             while self.entries.len() >= CACHE_LIMIT {
@@ -523,6 +546,13 @@ impl<K: Clone + Ord> TextSelectionCache<K> {
         self.entries.clear();
         self.recency.clear();
         self.use_clock = 0;
+    }
+
+    /// Retain source rows still present in the projection, even outside the viewport.
+    pub(crate) fn retain(&mut self, mut keep: impl FnMut(&K) -> bool) {
+        self.entries.retain(|key, _| keep(key));
+        self.recency
+            .retain(|(_, key)| self.entries.contains_key(key));
     }
 }
 
