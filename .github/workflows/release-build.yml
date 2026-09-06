@@ -310,23 +310,16 @@ jobs:
 
           if [[ -n "$previous_tag" ]]; then
             commit_range="$previous_tag..$GITHUB_REF_NAME"
-            notes_heading="Changes since $previous_tag"
           else
             commit_range="$GITHUB_REF_NAME"
-            notes_heading="Changes in $GITHUB_REF_NAME"
           fi
 
           {
-            echo "## $notes_heading"
+            echo "## Changelog"
             echo
             git log "$commit_range" \
               --pretty=format:'- %s ([%h](https://github.com/'"$GITHUB_REPOSITORY"'/commit/%H))'
             echo
-
-            if [[ -n "$previous_tag" ]]; then
-              echo
-              echo "**Full Changelog**: https://github.com/$GITHUB_REPOSITORY/compare/$previous_tag...$GITHUB_REF_NAME"
-            fi
           } > release-notes.md
 
       - name: Create GitHub Release
