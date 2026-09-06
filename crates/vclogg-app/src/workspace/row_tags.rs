@@ -289,7 +289,13 @@ impl Workspace {
             tab.log_table.read(cx).delegate(),
             cx,
         );
-        let editor = cx.new(|cx| RowTagDialog::new(draft.preset(), presets, preview, window, cx));
+        let mut initial_preset = draft.preset();
+        if is_new && let Some(last_used) = presets.first() {
+            // Reuse the last confirmed appearance, keeping the new tag's text empty.
+            initial_preset.color = last_used.color;
+            initial_preset.style = last_used.style.clone();
+        }
+        let editor = cx.new(|cx| RowTagDialog::new(initial_preset, presets, preview, window, cx));
         self.row_tags.dialog = Some(editor.downgrade());
         let input = editor.read(cx).input();
         window.defer(cx, move |window, cx| {
