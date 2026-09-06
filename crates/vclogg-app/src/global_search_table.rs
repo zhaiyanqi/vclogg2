@@ -601,7 +601,7 @@ impl GlobalSearchTableDelegate {
     }
 
     pub fn set_appearance(&mut self, settings: &AppSettings) {
-        self.presenter.log_font_family = settings.log_font_family;
+        self.presenter.log_font_family = settings.log_font_family.clone();
         self.presenter.log_font_size = settings.log_font_size.clamp(8, 32);
         self.presenter.log_line_spacing = settings.log_line_spacing.clamp(1, 40);
         self.presenter.line_number_width = settings.line_number_width.clamp(40, 160);
@@ -633,12 +633,10 @@ impl GlobalSearchTableDelegate {
     }
 
     pub(crate) fn resolved_font_family(&self, cx: &App) -> SharedString {
-        match self.presenter.log_font_family {
-            LogFontFamily::CascadiaMono => "Cascadia Mono".into(),
-            LogFontFamily::JetBrainsMono => "JetBrains Mono".into(),
-            LogFontFamily::Consolas => "Consolas".into(),
-            LogFontFamily::SystemMonospace => cx.theme().mono_font_family.clone(),
-        }
+        self.presenter.log_font_family.family_name().map_or_else(
+            || cx.theme().mono_font_family.clone(),
+            |name| name.to_owned().into(),
+        )
     }
 
     pub(crate) fn content_revision(&self) -> u64 {

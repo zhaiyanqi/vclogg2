@@ -23,7 +23,7 @@ use gpui_component::{
     input::{Input, InputContentType, InputEvent, InputState, NumberInput},
     radio::{Radio, RadioGroup},
     scroll::ScrollableElement as _,
-    select::{Select, SelectEvent, SelectItem, SelectState},
+    select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
     sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
     slider::{Slider, SliderEvent, SliderState},
     switch::Switch,
@@ -40,6 +40,7 @@ use crate::{
         SEARCH_TOOLBAR_FONT_SIZE_RANGE, SEARCH_TOOLBAR_HEIGHT_RANGE, ShortcutSettings,
         ThemePreference, normalize_search_history,
     },
+    system_fonts::SystemFonts,
 };
 use vclogg_data::IndexCacheInfo;
 
@@ -54,6 +55,7 @@ impl SelectItem for LogFontFamily {
             Self::JetBrainsMono => "JetBrains Mono".into(),
             Self::Consolas => "Consolas".into(),
             Self::SystemMonospace => crate::tr!("系统等宽字体", "System monospace").into(),
+            Self::Named(name) => name.clone().into(),
         }
     }
 
@@ -445,7 +447,7 @@ pub struct SettingsDialog {
     search_history: Vec<String>,
     search_history_filter: Entity<InputState>,
     search_history_scroll: UniformListScrollHandle,
-    font_family: Entity<SelectState<Vec<LogFontFamily>>>,
+    font_family: Entity<SelectState<SearchableVec<LogFontFamily>>>,
     app_log_level: Entity<SelectState<Vec<AppLogLevel>>>,
     font_size: Entity<SliderState>,
     search_toolbar_height: Entity<SliderState>,
@@ -718,12 +720,22 @@ impl SettingsDialog {
                 .default_value("")
         });
         let font_family = cx.new(|cx| {
-            SelectState::new(
-                LogFontFamily::ALL.to_vec(),
-                Some(IndexPath::new(settings.log_font_family.select_index())),
-                window,
-                cx,
-            )
+            let families = cx
+                .global::<SystemFonts>()
+                .available_families()
+                .into_iter()
+                .map(|name| LogFontFamily::from_family_name(&name))
+                .collect::<Vec<_>>();
+            let selected_name = settings
+                .log_font_family
+                .family_name()
+                .unwrap_or(cx.theme().mono_font_family.as_ref());
+            let selected_index = families
+                .iter()
+                .position(|family| family.family_name() == Some(selected_name))
+                .map(IndexPath::new);
+            SelectState::new(SearchableVec::new(families), selected_index, window, cx)
+                .searchable(true)
         });
         let app_log_level = cx.new(|cx| {
             SelectState::new(
@@ -931,7 +943,9 @@ impl SettingsDialog {
         );
         subscriptions.push(cx.subscribe(
             &font_family,
-            |_, _, _: &SelectEvent<Vec<LogFontFamily>>, cx| SettingsDialog::draft_changed(cx),
+            |_, _, _: &SelectEvent<SearchableVec<LogFontFamily>>, cx| {
+                SettingsDialog::draft_changed(cx)
+            },
         ));
         subscriptions.push(cx.subscribe(
             &app_log_level,
@@ -1105,12 +1119,18 @@ impl SettingsDialog {
             .selected_value()
             .copied()
             .unwrap_or_default();
-        settings.log_font_family = self
-            .font_family
-            .read(cx)
-            .selected_value()
-            .copied()
-            .unwrap_or_default();
+        if let Some(family) = self.font_family.read(cx).selected_value() {
+            let saved_name = settings
+                .log_font_family
+                .family_name()
+                .unwrap_or(cx.theme().mono_font_family.as_ref());
+            // Preserve a legacy system-font choice until the user selects a
+            // different family. A missing saved font is likewise not overwritten
+            // merely by changing another setting.
+            if family.family_name() != Some(saved_name) {
+                settings.log_font_family = family.clone();
+            }
+        }
         settings.log_font_size = self.font_size.read(cx).value().start().round() as u16;
         settings.search_toolbar_height =
             self.search_toolbar_height.read(cx).value().start().round() as u16;
@@ -2761,7 +2781,17 @@ impl Render for SettingsDialog {
                                     .child(crate::tr!("应用于正文、行号和搜索结果", "Applies to log text, line numbers, and search results")),
                             ),
                     )
-                    .child(Select::new(&self.font_family).small().w_56()),
+                    .child(
+                        Select::new(&self.font_family)
+                            .small()
+                            .w_56()
+                            .search_placeholder(crate::tr!("搜索字体…", "Search fonts…"))
+                            .placeholder(crate::tr_args!(
+                                "{}（不可用）", "{} (unavailable)",
+                                self.draft.log_font_family.family_name()
+                                    .unwrap_or(cx.theme().mono_font_family.as_ref()),
+                            )),
+                    ),
             )
             .child(
                 h_flex()

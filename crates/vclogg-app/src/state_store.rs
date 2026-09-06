@@ -75,29 +75,24 @@ pub struct ShortcutSettings {
     pub toggle_word_wrap: String,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum LogFontFamily {
     CascadiaMono,
     JetBrainsMono,
     #[default]
     Consolas,
     SystemMonospace,
+    Named(String),
 }
 
 impl LogFontFamily {
-    pub const ALL: [Self; 4] = [
-        Self::CascadiaMono,
-        Self::JetBrainsMono,
-        Self::Consolas,
-        Self::SystemMonospace,
-    ];
-
-    pub fn database_value(self) -> &'static str {
+    pub fn database_value(&self) -> String {
         match self {
-            Self::CascadiaMono => "cascadia-mono",
-            Self::JetBrainsMono => "jetbrains-mono",
-            Self::Consolas => "consolas",
-            Self::SystemMonospace => "system-monospace",
+            Self::CascadiaMono => "cascadia-mono".into(),
+            Self::JetBrainsMono => "jetbrains-mono".into(),
+            Self::Consolas => "consolas".into(),
+            Self::SystemMonospace => "system-monospace".into(),
+            Self::Named(name) => format!("font:{name}"),
         }
     }
 
@@ -106,15 +101,30 @@ impl LogFontFamily {
             "cascadia-mono" => Self::CascadiaMono,
             "jetbrains-mono" => Self::JetBrainsMono,
             "consolas" => Self::Consolas,
+            value if value.starts_with("font:") && value.len() > "font:".len() => {
+                Self::from_family_name(&value["font:".len()..])
+            }
             _ => Self::SystemMonospace,
         }
     }
 
-    pub fn select_index(self) -> usize {
-        Self::ALL
-            .iter()
-            .position(|candidate| *candidate == self)
-            .unwrap_or(3)
+    pub(crate) fn from_family_name(name: &str) -> Self {
+        match name {
+            "Cascadia Mono" => Self::CascadiaMono,
+            "JetBrains Mono" => Self::JetBrainsMono,
+            "Consolas" => Self::Consolas,
+            _ => Self::Named(name.to_owned()),
+        }
+    }
+
+    pub(crate) fn family_name(&self) -> Option<&str> {
+        match self {
+            Self::CascadiaMono => Some("Cascadia Mono"),
+            Self::JetBrainsMono => Some("JetBrains Mono"),
+            Self::Consolas => Some("Consolas"),
+            Self::SystemMonospace => None,
+            Self::Named(name) => Some(name),
+        }
     }
 }
 
@@ -795,7 +805,7 @@ fn app_settings_to_record(settings: AppSettings) -> AppSettingsRecord {
         search_input_height: i64::from(settings.search_input_control_height()),
         search_input_font_size: i64::from(settings.search_input_font_size),
         log_line_spacing: i64::from(settings.log_line_spacing),
-        log_font_family: settings.log_font_family.database_value().into(),
+        log_font_family: settings.log_font_family.database_value(),
         shortcut_open_file: settings.shortcuts.open_file,
         shortcut_focus_search: settings.shortcuts.focus_search,
         shortcut_quick_find: settings.shortcuts.quick_find,

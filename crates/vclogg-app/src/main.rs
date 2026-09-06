@@ -37,6 +37,7 @@ mod selection_style_section;
 mod settings_dialog;
 mod single_instance;
 mod state_store;
+mod system_fonts;
 mod tab_resume;
 mod ui_performance;
 mod ui_theme;
@@ -170,7 +171,9 @@ fn main() {
         .into_iter()
         .map(InitialDocument::from_path)
         .collect::<Vec<_>>();
-    let app = gpui_platform::application().with_assets(gpui_component_assets::Assets);
+    let platform = gpui_platform::current_platform(false);
+    let system_fonts = system_fonts::SystemFonts::new(platform.text_system());
+    let app = Application::with_platform(platform).with_assets(gpui_component_assets::Assets);
     let (platform_open_sender, platform_open_receiver) = async_channel::unbounded();
     app.on_open_urls(move |urls| {
         let paths = urls
@@ -200,6 +203,7 @@ fn main() {
         ui_performance::init_ui_thread();
         ui_performance::start_framework_monitor(cx);
         gpui_component::init(cx);
+        cx.set_global(system_fonts);
         cx.set_cursor_hide_mode(CursorHideMode::Never);
         ui_theme::apply_product_theme(ThemeMode::Light, cx);
         actions::init(cx);
