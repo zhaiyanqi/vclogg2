@@ -24,6 +24,9 @@ jobs:
     timeout-minutes: 90
     env:
       WINDOWS_SIGNING_PROVIDER: ${{ vars.WINDOWS_SIGNING_PROVIDER || 'unsigned' }}
+    outputs:
+      portable-artifact-name: ${{ steps.packages.outputs.portable_name }}
+      setup-artifact-name: ${{ steps.packages.outputs.setup_name }}
     permissions:
       contents: read
       id-token: write
@@ -91,6 +94,22 @@ jobs:
           powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
           -SigningMode PreSigned -SkipBuild
 
+      - name: Sign Windows installer with Artifact Signing
+        if: env.WINDOWS_SIGNING_PROVIDER == 'artifact-signing'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.WINDOWS_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.WINDOWS_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.WINDOWS_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}\dist\windows-x86_64
+          files-folder-filter: exe
+          files-folder-recurse: false
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: VCLogg2 Setup
+          description-url: https://github.com/zhaiyanqi/vclogg2
+
       - name: Restore Windows signing certificate
         if: env.WINDOWS_SIGNING_PROVIDER == 'pfx'
         shell: powershell
@@ -138,7 +157,7 @@ jobs:
         if: env.WINDOWS_SIGNING_PROVIDER != 'unsigned'
         shell: powershell
         run: |
-          $archives = @(Get-ChildItem -LiteralPath 'dist\windows-x86_64' -Filter 'vclogg2-*-windows-x86_64.zip')
+          $archives = @(Get-ChildItem -LiteralPath 'dist\windows-x86_64' -Filter 'vclogg-*-windows-x86_86-portable.zip')
           if ($archives.Count -ne 1) {
             throw "Expected exactly one Windows release archive, found $($archives.Count)."
           }
@@ -160,11 +179,47 @@ jobs:
           Write-Output "Verified signer: $($signature.SignerCertificate.Subject)"
           Write-Output "Verified timestamp authority: $($signature.TimeStamperCertificate.Subject)"
 
-      - name: Upload Windows release package
+          $installers = @(Get-ChildItem -LiteralPath 'dist\windows-x86_64' -Filter 'vclogg-*-windows-x86_86-setup.exe')
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one Windows installer, found $($installers.Count)."
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $installers[0].FullName
+          if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+              $null -eq $signature.SignerCertificate -or
+              $null -eq $signature.TimeStamperCertificate) {
+            throw "Windows installer must have a valid trusted Authenticode signature and RFC 3161 timestamp; status: $($signature.Status)."
+          }
+
+      - name: Resolve Windows artifact names
+        id: packages
+        shell: powershell
+        run: |
+          $portable = @(Get-ChildItem -LiteralPath 'dist\windows-x86_64' -Filter 'vclogg-*-windows-x86_86-portable.zip')
+          $setup = @(Get-ChildItem -LiteralPath 'dist\windows-x86_64' -Filter 'vclogg-*-windows-x86_86-setup.exe')
+          if ($portable.Count -ne 1 -or $setup.Count -ne 1) {
+            throw 'Expected one portable package and one installer.'
+          }
+          if ($portable[0].Length -eq 0 -or $setup[0].Length -eq 0 -or
+              $setup[0].BaseName -ne ($portable[0].BaseName -replace '-portable$', '-setup')) {
+            throw 'Windows packages must be non-empty and have matching versions.'
+          }
+          "portable_name=$($portable[0].BaseName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "setup_name=$($setup[0].BaseName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Upload Windows portable package
         uses: actions/upload-artifact@v7
         with:
-          name: vclogg2-windows-x86_64
-          path: dist/windows-x86_64/vclogg2-*-windows-x86_64.zip
+          name: ${{ steps.packages.outputs.portable_name }}
+          path: dist/windows-x86_64/vclogg-*-windows-x86_86-portable.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.packages.outputs.setup_name }}
+          path: dist/windows-x86_64/vclogg-*-windows-x86_86-setup.exe
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -265,10 +320,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download Windows release package
+      - name: Download Windows portable package
         uses: actions/download-artifact@v8
         with:
-          name: vclogg2-windows-x86_64
+          name: ${{ needs.windows.outputs.portable-artifact-name }}
+          path: release-assets/windows-x86_64
+
+      - name: Download Windows installer
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.windows.outputs.setup-artifact-name }}
           path: release-assets/windows-x86_64
 
       - name: Download macOS release package
@@ -287,13 +348,9 @@ jobs:
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
-          windows_packages=(release-assets/windows-x86_64/vclogg2-*-windows-x86_64.zip)
-          if (( ${#windows_packages[@]} != 1 )) || [[ ! -s "${windows_packages[0]}" ]]; then
-            echo "Expected exactly one non-empty Windows release package." >&2
-            exit 1
-          fi
           packages=(
-            "${windows_packages[0]}"
+            "release-assets/windows-x86_64/vclogg-${version}-windows-x86_86-portable.zip"
+            "release-assets/windows-x86_64/vclogg-${version}-windows-x86_86-setup.exe"
             "release-assets/macos-aarch64/vclogg2-${version}-macos-aarch64.dmg"
             "release-assets/linux-x86_64/vclogg2-${version}-linux-x86_64.tar.gz"
           )
@@ -343,7 +400,8 @@ jobs:
             )
           fi
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            release-assets/windows-x86_64/vclogg2-*-windows-x86_64.zip \
+            release-assets/windows-x86_64/vclogg-*-windows-x86_86-portable.zip \
+            release-assets/windows-x86_64/vclogg-*-windows-x86_86-setup.exe \
             release-assets/macos-aarch64/vclogg2-*-macos-aarch64.dmg \
             release-assets/linux-x86_64/vclogg2-*-linux-x86_64.tar.gz \
             "${release_options[@]}"

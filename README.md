@@ -42,13 +42,20 @@ VCLogg2 面向大文件浏览、持续追加日志、多范围检索和分析型
 
 ### Windows
 
-下载已签名的 `vclogg2-<version>-windows-x86_64.zip`，或文件名带 `unsigned` 的未签名版本，解压后直接运行：
+Windows 同时提供便携版和安装版（实际目标架构均为 x64，产物名按约定使用 `x86_86`）：
+
+- **便携版**：下载 `vclogg-<version>-windows-x86_86-portable.zip`，解压后运行 `vclogg2.exe`；数据保存在 EXE 同级的 `VCLogg2` 目录。
+- **安装版**：下载并运行 `vclogg-<version>-windows-x86_86-setup.exe`。安装向导可分别选择安装目录和数据目录；默认安装到 `%LOCALAPPDATA%\Programs\VCLogg2`，数据默认保存到 `%LOCALAPPDATA%\VCLogg2`。按当前用户安装，无需管理员权限，所选目录须对当前用户可写。
+
+便携版启动命令：
 
 ```powershell
 .\vclogg2.exe
 ```
 
-Windows 包是纯便携包，不创建开始菜单快捷方式或文件关联。应用不会自动下载或安装更新。
+安装版创建开始菜单入口，可选创建桌面快捷方式，并提供系统卸载入口。覆盖升级默认沿用原安装目录和数据目录；选择其他数据目录不会自动搬迁旧数据，卸载也保留数据。便携版不创建快捷方式。两种版本均不注册文件关联，应用不会自动下载或安装更新；便携版手动替换 EXE，安装版重新运行新版安装包。
+
+产物名称不区分签名状态；未配置 Windows 签名后端时，两种包均未签名。启用 PFX 或 Artifact Signing 时，发布流程签署程序和安装包并验证签名。
 
 ### macOS
 
@@ -157,6 +164,14 @@ powershell -ExecutionPolicy Bypass -File scripts/run-performance-debug.ps1 `
 
 平台打包入口如下；产物分别写入 `dist/windows-x86_64/`、`dist/macos-aarch64/` 和 `dist/linux-x86_64/`：
 
+Windows 打包还需安装 [Inno Setup](https://jrsoftware.org/isinfo.php) 6.3 或更新的 6.x 版本。可通过 Windows Package Manager 安装：
+
+```powershell
+winget install --id JRSoftware.InnoSetup --exact --source winget
+```
+
+打包脚本从 PATH 和 Inno Setup 6 默认安装目录查找 `ISCC.exe`；自定义位置可通过 `-InnoSetupCompiler "D:\Tools\Inno Setup 6\ISCC.exe"` 指定。
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 ```
@@ -166,12 +181,12 @@ powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 ./scripts/package-release-linux.sh
 ```
 
-正式版本由指向当前 `main` 的 `v<SemVer>` 标签触发三平台 GitHub Actions。Windows 未配置签名时生成带 `unsigned` 标识的包；macOS 正式公开分发仍需 Developer ID 签名和公证。签名后端、产物内容、发布脚本与信任边界见[交付说明](doc/delivery.md)。
+正式版本由指向当前 `main` 的 `v<SemVer>` 标签触发三平台 GitHub Actions。以 `v2.2.4` 为例，Windows Actions 产物分别命名为 `vclogg-2.2.4-windows-x86_86-portable` 和 `vclogg-2.2.4-windows-x86_86-setup`，内部对应 ZIP 与安装 EXE；版本号随构建标签变化。Windows 未配置签名时两种包均未签名；macOS 正式公开分发仍需 Developer ID 签名和公证。签名后端、产物内容、发布脚本与信任边界见[交付说明](doc/delivery.md)。
 
 ## 本地数据与隐私
 
 - 源日志始终作为只读输入；只有用户显式导出结果时才写入所选位置。
-- Windows 便携版把状态库、索引缓存、崩溃报告和应用临时结果保存在可执行文件同级的 `VCLogg2` 目录；macOS/Linux 使用各自的系统应用数据、缓存和临时目录。
+- Windows 便携版把状态库、索引缓存、崩溃报告和应用临时结果保存在可执行文件同级的 `VCLogg2` 目录；安装版全部保存在安装时选择的数据目录，默认 `%LOCALAPPDATA%\VCLogg2`。安装目录内的 `vclogg2-data-dir.txt` 记录数据目录，请保留该文件。两种版本按当前用户和数据目录隔离单实例；macOS/Linux 使用各自的系统应用数据、缓存和临时目录。
 - 会话状态使用 SQLite/WAL；索引缓存与会话身份分离，失效时会安全重建。
 - 云端连接的公开配置写入 SQLite，Cookie 与 CSRF 只保存在系统凭据库。
 - 应用日志使用有界内存缓冲，不会自行创建长期日志文件。

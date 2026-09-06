@@ -19,6 +19,7 @@ pub(crate) fn log_development_override() {
     }
 }
 
+#[cfg(any(not(windows), test))]
 pub(crate) fn data_local_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     {
@@ -32,6 +33,7 @@ pub(crate) fn data_local_dir() -> Option<PathBuf> {
     }
 }
 
+#[cfg(any(not(windows), test))]
 pub(crate) fn cache_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     {
@@ -46,11 +48,25 @@ pub(crate) fn cache_dir() -> Option<PathBuf> {
 }
 
 pub(crate) fn application_data_dir() -> Option<PathBuf> {
-    data_local_dir().map(application_data_dir_from_root)
+    #[cfg(windows)]
+    {
+        windows_application_data_dir().as_ref().ok().cloned()
+    }
+    #[cfg(not(windows))]
+    {
+        data_local_dir().map(application_data_dir_from_root)
+    }
 }
 
 pub(crate) fn index_cache_dir() -> Option<PathBuf> {
-    cache_dir().map(|root| application_data_dir_from_root(root).join("index"))
+    #[cfg(windows)]
+    {
+        application_data_dir().map(|root| root.join("index"))
+    }
+    #[cfg(not(windows))]
+    {
+        cache_dir().map(|root| application_data_dir_from_root(root).join("index"))
+    }
 }
 
 pub(crate) fn temporary_dir() -> Option<PathBuf> {
@@ -91,6 +107,65 @@ fn executable_parent(executable: &Path) -> Option<PathBuf> {
 
 fn application_data_dir_from_root(root: PathBuf) -> PathBuf {
     root.join(APPLICATION_DIRECTORY)
+}
+
+#[cfg(windows)]
+pub(crate) fn initialize_windows_data_directory() -> Result<(), String> {
+    windows_application_data_dir()
+        .as_ref()
+        .map(|_| ())
+        .map_err(Clone::clone)
+}
+
+#[cfg(windows)]
+fn windows_application_data_dir() -> &'static Result<PathBuf, String> {
+    // Resolve once before single-instance routing or any state/cache writes.
+    // A malformed installed configuration must never fall back to portable data.
+    static DIRECTORY: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
+    DIRECTORY.get_or_init(|| resolve_windows_data_directory().map_err(|error| format!("{error:#}")))
+}
+
+#[cfg(windows)]
+fn resolve_windows_data_directory() -> anyhow::Result<PathBuf> {
+    use anyhow::Context as _;
+
+    let executable_root = executable_directory().context("无法确定程序目录")?;
+    let configuration_path = executable_root.join("vclogg2-data-dir.txt");
+    let directory = match std::fs::read_to_string(&configuration_path) {
+        Ok(value) => {
+            let value = value.trim_start_matches('\u{feff}').trim();
+            let directory = PathBuf::from(value);
+            anyhow::ensure!(
+                directory.is_absolute() && !value.contains(['\r', '\n', '\0']),
+                "安装版数据目录配置必须是绝对路径：{}",
+                configuration_path.display()
+            );
+            directory
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            application_data_dir_from_root(executable_root)
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "无法读取安装版数据目录配置：{}",
+                    configuration_path.display()
+                )
+            });
+        }
+    };
+    std::fs::create_dir_all(&directory)
+        .with_context(|| format!("无法创建数据目录：{}", directory.display()))?;
+    let probe = directory.join(format!(".vclogg2-write-{}", uuid::Uuid::new_v4()));
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+        .with_context(|| format!("数据目录不可写：{}", directory.display()))?;
+    drop(file);
+    std::fs::remove_file(&probe)
+        .with_context(|| format!("无法清理数据目录写入检查文件：{}", probe.display()))?;
+    Ok(directory)
 }
 
 #[cfg(test)]

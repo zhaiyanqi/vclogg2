@@ -1100,3 +1100,31 @@ AppShell [A001] - Root
 - 结果面板“新标签打开”和“保存…”始终捕获点击时的完整已提交结果快照；当前文件按结果顺序写原始日志正文，全局范围按标签顺序写出非空分组，并在每组前写入完整文件路径标题。全局“按时间合并”识别行首 `MM-DD HH:mm:ss.1–6 位小数`（空格也可为 `T`）；没有时间戳的续行优先继承同文件此前最近时间，首批续行必要时向后探测首个时间，并按时间、标签顺序、源行号稳定归并，不写文件分组标题。写入期间只让对应导出命令进入 loading，不冻结搜索、滚动或标签操作。
 - “保存…”先显示系统目标选择框；取消不会创建或覆盖文件。确认后在目标目录写入唯一暂存文件并同步落盘，成功才原子替换目标，失败清理暂存文件并保留已有目标。
 - “新标签打开”先在唯一 `vclogg2-search-*` 临时目录完整生成结果，再沿用普通文件索引和标签安装路径；临时结果标签不进入最近文件、会话检查点或上一次工作区恢复。
+
+
+## Windows 安装与启动界面
+
+以下界面由 Inno Setup / Windows 原生对话框提供，独立于 GPUI 应用布局；安装向导采用 Inno 默认英文界面。
+
+```text
+Windows 安装向导 [I001] - TWizardForm
+├─ 许可证页 [I013] - TNewNotebookPage
+│  └─ 接受许可证 [I014] - TNewRadioButton
+├─ 安装目录页 [I002] - TNewNotebookPage
+│  └─ 安装目录输入与浏览 [I003] - TNewPathEdit / TNewButton
+├─ 数据目录页 [I004] - TInputDirWizardPage
+│  └─ 数据目录输入与浏览 [I005] - TNewPathEdit / TNewButton
+├─ 附加任务页 [I006] - TNewNotebookPage
+│  └─ 创建桌面快捷方式 [I007] - TNewCheckListBox
+├─ 安装确认页 [I008] - TNewNotebookPage
+├─ 准备安装页 [I015] - TNewNotebookPage
+├─ 安装进度页 [I009] - TNewNotebookPage
+└─ 完成页 [I010] - TNewNotebookPage
+   └─ 启动 VCLogg2 [I011] - TNewCheckListBox
+数据目录启动错误 [I012] - MessageBoxW
+```
+
+- I002 始终显示，可选择当前用户可写的安装目录，默认 `%LOCALAPPDATA%\Programs\VCLogg2`；升级优先复用已安装目录。
+- I004 位于安装目录页之后，数据目录默认 `%LOCALAPPDATA%\VCLogg2`；升级默认读取原安装配置，命令行 `/DATADIR` 可显式覆盖。该页说明更换目录不迁移已有数据，卸载保留数据。
+- I007 默认不勾选；开始菜单快捷方式默认创建。I008 同时列出程序目录、数据目录及桌面快捷方式选择，供安装前核对。
+- I012 在安装配置无效或数据目录不可用时显示错误；确认后进程退出，不打开工作区，也不切换数据根。

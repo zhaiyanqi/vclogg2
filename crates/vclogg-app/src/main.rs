@@ -149,6 +149,27 @@ fn external_request_listener(
 
 fn main() {
     app_log::init();
+    #[cfg(windows)]
+    if let Err(error) = app_paths::initialize_windows_data_directory() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+
+        log::error!("VCLogg2 数据目录初始化失败：{error}");
+        let message = format!("无法使用 VCLogg2 数据目录。\n\n{error}\n\n请检查目录权限，或重新运行安装程序选择数据目录。")
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let title = windows_sys::w!("VCLogg2");
+        // Both strings are NUL-terminated and remain alive for this modal call.
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                message.as_ptr(),
+                title,
+                MB_OK | MB_ICONERROR,
+            );
+        }
+        std::process::exit(1);
+    }
     app_paths::log_development_override();
     crash_report::install_panic_hook();
     log::info!("VCLogg2 {} starting", build_info::VERSION);

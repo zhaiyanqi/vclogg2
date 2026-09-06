@@ -643,8 +643,8 @@ mod windows {
     }
 
     fn pipe_name() -> Vec<u16> {
-        // The user profile is hashed only to keep the named pipe user-specific;
-        // this path is never opened or written by the single-instance protocol.
+        // Scope routing to both the user and the resolved data directory so an
+        // installed copy cannot forward its launch to an unrelated portable copy.
         let identity = dirs::data_local_dir()
             .or_else(dirs::home_dir)
             .unwrap_or_else(|| PathBuf::from("vclogg2-default-user"));
@@ -652,12 +652,19 @@ mod windows {
         for unit in identity.as_os_str().encode_wide() {
             hasher.update(unit.to_le_bytes());
         }
+        hasher.update([0, 0]);
+        let data_directory = crate::app_paths::application_data_dir()
+            .expect("Windows data directory is initialized before single-instance routing");
+        let data_directory = std::fs::canonicalize(&data_directory).unwrap_or(data_directory);
+        for unit in crate::path_identity::path_match_key(&data_directory) {
+            hasher.update(unit.to_le_bytes());
+        }
         let digest = hasher.finalize();
         let mut user_key = String::with_capacity(16);
         for byte in digest.iter().take(8) {
             _ = write!(user_key, "{byte:02x}");
         }
-        format!(r"\\.\pipe\VCLogg2.SingleInstance.v1.{user_key}")
+        format!(r"\\.\pipe\VCLogg2.SingleInstance.v2.{user_key}")
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect()

@@ -4,6 +4,7 @@
     [string]$TimestampUrl = $env:VCLOGG2_WINDOWS_TIMESTAMP_URL,
     [ValidateSet('None', 'Pfx', 'PreSigned')]
     [string]$SigningMode = 'None',
+    [string]$InnoSetupCompiler = $env:VCLOGG2_INNO_SETUP_COMPILER,
     [switch]$SkipBuild
 )
 
@@ -11,6 +12,27 @@ $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $resolvedOutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
+if ([string]::IsNullOrWhiteSpace($InnoSetupCompiler)) {
+    $compilerCommand = Get-Command 'ISCC.exe' -CommandType Application -ErrorAction SilentlyContinue
+    if ($null -ne $compilerCommand) {
+        $InnoSetupCompiler = $compilerCommand.Source
+    } else {
+        foreach ($programDirectory in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
+            if (-not [string]::IsNullOrWhiteSpace($programDirectory)) {
+                $candidate = Join-Path $programDirectory 'Inno Setup 6\ISCC.exe'
+                if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                    $InnoSetupCompiler = $candidate
+                    break
+                }
+            }
+        }
+    }
+}
+if ([string]::IsNullOrWhiteSpace($InnoSetupCompiler) -or
+    -not (Test-Path -LiteralPath $InnoSetupCompiler -PathType Leaf)) {
+    throw '请安装 Inno Setup 6.3 或更新的 6.x 版本，或使用 -InnoSetupCompiler 指定 ISCC.exe。'
+}
+$InnoSetupCompiler = [System.IO.Path]::GetFullPath($InnoSetupCompiler)
 if ($SigningMode -eq 'Pfx') {
     if ([string]::IsNullOrWhiteSpace($SigningCertificatePath)) {
         throw 'PFX 签名模式必须提供代码签名证书；请设置 VCLOGG2_WINDOWS_SIGNING_CERTIFICATE_PATH。'
@@ -66,7 +88,7 @@ $platformDirectory = [System.IO.Path]::GetFullPath(
 )
 New-Item -ItemType Directory -Path $platformDirectory -Force | Out-Null
 $stageDirectory = [System.IO.Path]::GetFullPath(
-    (Join-Path $platformDirectory "vclogg2-$version-windows-x86_64")
+    (Join-Path $platformDirectory "vclogg-$version-windows-x86_86-portable")
 )
 $outputPrefix = $platformDirectory.TrimEnd('\') + '\'
 if (-not $stageDirectory.StartsWith($outputPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -119,16 +141,34 @@ if ($packageDifference.Count -ne 0) {
     throw 'Windows 用户分发包必须且只能包含 LICENSE、README.md 与 vclogg2.exe。'
 }
 
-$archiveName = if ($SigningMode -eq 'None') {
-    "vclogg2-$version-unsigned-windows-x86_64.zip"
-} else {
-    "vclogg2-$version-windows-x86_64.zip"
-}
+$archiveName = "vclogg-$version-windows-x86_86-portable.zip"
 $archivePath = Join-Path $platformDirectory $archiveName
 if (Test-Path -LiteralPath $archivePath) {
     Remove-Item -LiteralPath $archivePath -Force
 }
 Compress-Archive -Path (Join-Path $stageDirectory '*') -DestinationPath $archivePath -CompressionLevel Optimal
+
+$setupPath = Join-Path $platformDirectory "vclogg-$version-windows-x86_86-setup.exe"
+if (Test-Path -LiteralPath $setupPath) {
+    Remove-Item -LiteralPath $setupPath -Force
+}
+& $InnoSetupCompiler `
+    "/DAppVersion=$version" `
+    "/DPackageDirectory=$stageDirectory" `
+    "/DPackageOutputDirectory=$platformDirectory" `
+    "/DRepositoryRoot=$repositoryRoot" `
+    (Join-Path $PSScriptRoot 'windows-installer.iss')
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $setupPath -PathType Leaf)) {
+    throw "Inno Setup 安装包生成失败（退出码 $LASTEXITCODE）。"
+}
+if ($SigningMode -eq 'Pfx') {
+    & (Join-Path $PSScriptRoot 'sign-windows.ps1') `
+        -ExecutablePath $setupPath `
+        -CertificatePath $resolvedSigningCertificate `
+        -TimestampUrl $TimestampUrl
+}
+# PreSigned validates the input executable only. The external signing backend
+# must also sign the newly generated setup executable before uploading it.
 
 $releaseSymbols = Join-Path $repositoryRoot 'target\release\vclogg2.pdb'
 $symbolsArchiveName = "vclogg2-$version-windows-x86_64-symbols.zip"
@@ -140,5 +180,10 @@ Compress-Archive -LiteralPath $releaseSymbols -DestinationPath $symbolsArchivePa
 
 Write-Output "便携目录：$stageDirectory"
 Write-Output "发布压缩包：$archivePath"
+Write-Output "安装包：$setupPath"
+Write-Output "签名模式：$SigningMode"
+if ($SigningMode -eq 'PreSigned') {
+    Write-Output '安装包还需由外部签名后端签名并验证后再分发。'
+}
 Write-Output "调试符号包（不向用户分发）：$symbolsArchivePath"
 Pop-Location
