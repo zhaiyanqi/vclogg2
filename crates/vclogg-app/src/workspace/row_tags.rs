@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     log_tag_layer::{LogTagLayer, PositionedTag, TagGeometryHandle},
     log_tags::{RowTag, TagColor, TagPreset, TagStyle, source_digest},
-    row_tag_dialog::RowTagDialog,
+    row_tag_dialog::{RowTagDialog, RowTagPreview},
 };
 use std::sync::Weak;
 
@@ -34,6 +34,7 @@ pub(super) struct TagMenuTarget {
     target: TagTarget,
     id: String,
     document: Weak<LogDocument>,
+    text: SharedString,
 }
 
 #[derive(Clone)]
@@ -228,6 +229,7 @@ impl Workspace {
                     draft,
                     is_new: true,
                 },
+                context.text.display().clone(),
                 window,
                 cx,
             );
@@ -237,6 +239,7 @@ impl Workspace {
     fn open_row_tag_dialog(
         &mut self,
         request: TagEditRequest,
+        text: SharedString,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -270,8 +273,23 @@ impl Workspace {
             .unwrap_or_default();
         let font = px(self.app_settings.log_font_size as f32);
         let row_height = self.log_row_height();
-        let editor =
-            cx.new(|cx| RowTagDialog::new(draft.preset(), presets, font, row_height, window, cx));
+        let tab = self
+            .documents
+            .iter()
+            .find(|tab| tab.id == target.document_id)
+            .unwrap();
+        let preview = RowTagPreview::new(
+            text,
+            target.source_row,
+            point(
+                font * (draft.x as f32 / 1000.),
+                font * (draft.y as f32 / 1000.),
+            ),
+            row_height,
+            tab.log_table.read(cx).delegate(),
+            cx,
+        );
+        let editor = cx.new(|cx| RowTagDialog::new(draft.preset(), presets, preview, window, cx));
         self.row_tags.dialog = Some(editor.downgrade());
         let input = editor.read(cx).input();
         window.defer(cx, move |window, cx| {
@@ -529,6 +547,7 @@ impl Workspace {
             target,
             id,
             document,
+            text,
         } = menu_target;
         let edit_id = id.clone();
         menu.item(
@@ -550,6 +569,7 @@ impl Workspace {
                                 draft: tag,
                                 is_new: false,
                             },
+                            text.clone(),
                             window,
                             cx,
                         );
@@ -616,9 +636,11 @@ impl Workspace {
                 let element = {
                     let edit_id = id.clone();
                     let edit_document = context.document.clone();
+                    let edit_text = context.text.display().clone();
                     let edit_tag = tag.clone();
                     let menu_id = id.clone();
                     let menu_document = context.document.clone();
+                    let menu_text = context.text.display().clone();
                     let payload = TagDragPayload {
                         target,
                         document: context.document.clone(),
@@ -649,6 +671,7 @@ impl Workspace {
                                             draft: edit_tag.clone(),
                                             is_new: false,
                                         },
+                                        edit_text.clone(),
                                         window,
                                         cx,
                                     );
@@ -664,6 +687,7 @@ impl Workspace {
                                     target,
                                     id: menu_id.clone(),
                                     document: menu_document.clone(),
+                                    text: menu_text.clone(),
                                 });
                                 cx.stop_propagation();
                             }),

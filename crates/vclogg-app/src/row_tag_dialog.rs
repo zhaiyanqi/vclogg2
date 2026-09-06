@@ -1,7 +1,9 @@
+use std::{cell::Cell, rc::Rc};
+
 use gpui::{
-    App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Pixels, Render, Rgba,
-    Styled as _, Subscription, UniformListScrollHandle, Window, div, prelude::FluentBuilder as _,
-    px, uniform_list,
+    App, AppContext as _, Context, Entity, Hsla, IntoElement, ParentElement as _, Pixels, Point,
+    Render, Rgba, SharedString, Styled as _, Subscription, UniformListScrollHandle, Window, div,
+    prelude::FluentBuilder as _, px, uniform_list,
 };
 use gpui_component::{
     ActiveTheme as _, Selectable as _, Sizable as _,
@@ -15,7 +17,125 @@ use gpui_component::{
     v_flex,
 };
 
-use crate::log_tags::{TagPreset, TagStyle};
+use crate::{
+    log_table::{
+        LogTableDelegate, line_marker, line_marker_column_width, log_cell_horizontal_padding,
+        log_line_number_cell, log_row_separator_overlay,
+    },
+    log_tag_layer::{LogTagLayer, PositionedTag},
+    log_tags::{TagPreset, TagStyle},
+};
+
+/// A bounded snapshot of the source row and its presentation, without a live table or file reader.
+pub(crate) struct RowTagPreview {
+    text: SharedString,
+    source_row: usize,
+    position: Point<Pixels>,
+    font_size: u16,
+    font_family: SharedString,
+    row_height: Pixels,
+    text_color: Hsla,
+    show_line_numbers: bool,
+    line_number_width: u16,
+    line_number_text_color: Hsla,
+    line_number_background: Hsla,
+    show_line_number_separators: bool,
+    show_row_separators: bool,
+}
+
+impl RowTagPreview {
+    pub(crate) fn new(
+        text: SharedString,
+        source_row: usize,
+        position: Point<Pixels>,
+        row_height: Pixels,
+        delegate: &LogTableDelegate,
+        cx: &App,
+    ) -> Self {
+        Self {
+            text,
+            source_row,
+            position,
+            font_size: delegate.log_font_size(),
+            font_family: delegate.resolved_font_family(cx),
+            row_height,
+            text_color: delegate.log_text_color(cx),
+            show_line_numbers: delegate.show_line_numbers(),
+            line_number_width: delegate.line_number_width(),
+            line_number_text_color: delegate.line_number_text_color(cx),
+            line_number_background: delegate.line_number_background_color(cx),
+            show_line_number_separators: delegate.show_line_number_row_separators(),
+            show_row_separators: delegate.show_row_separators(),
+        }
+    }
+
+    fn render(&self, preset: &TagPreset, cx: &App) -> impl IntoElement {
+        let font = px(self.font_size as f32);
+        h_flex()
+            .w_full()
+            .h(self.row_height)
+            .overflow_hidden()
+            .bg(cx.theme().tokens.table)
+            .child(
+                h_flex()
+                    .w(line_marker_column_width())
+                    .h_full()
+                    .flex_none()
+                    .justify_center()
+                    .child(line_marker(true, false, cx)),
+            )
+            .when(self.show_line_numbers, |row| {
+                row.child(
+                    log_line_number_cell(
+                        self.source_row,
+                        self.font_size,
+                        self.row_height,
+                        self.line_number_text_color,
+                        self.line_number_background,
+                        self.show_line_number_separators,
+                        cx,
+                    )
+                    .w(px(self.line_number_width as f32))
+                    .h_full()
+                    .flex_none(),
+                )
+            })
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .px(log_cell_horizontal_padding(cx))
+                    .text_size(font)
+                    .font_family(self.font_family.clone())
+                    .line_height(self.row_height)
+                    .text_color(self.text_color)
+                    .when(self.show_row_separators, |cell| {
+                        cell.child(log_row_separator_overlay(false, cx))
+                    })
+                    .child(self.text.clone())
+                    .child(LogTagLayer::new(
+                        "tag-dialog-preview-layer",
+                        vec![PositionedTag {
+                            position: self.position,
+                            geometry: Rc::new(Cell::new(None)),
+                            element: Some(
+                                div()
+                                    .max_w(font * 24.)
+                                    .overflow_hidden()
+                                    .child(preset.render_tag(font, self.row_height, cx).child(
+                                        div().min_w_0().truncate().child(preset.label.clone()),
+                                    ))
+                                    .into_any_element(),
+                            ),
+                        }],
+                    )),
+            )
+    }
+}
 
 /// The dialog owns the whole draft. No input entity is retained by a virtual log row.
 pub(crate) struct RowTagDialog {
@@ -31,6 +151,7 @@ pub(crate) struct RowTagDialog {
     preset_scroll: UniformListScrollHandle,
     log_font: Pixels,
     row_height: Pixels,
+    preview: RowTagPreview,
     error: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
@@ -39,12 +160,12 @@ impl RowTagDialog {
     pub(crate) fn new(
         preset: TagPreset,
         presets: Vec<TagPreset>,
-        log_font: Pixels,
-        row_height: Pixels,
+        preview: RowTagPreview,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let row_height = px(f32::from(row_height).floor().max(3.));
+        let log_font = px(preview.font_size as f32);
+        let row_height = px(f32::from(preview.row_height).floor().max(3.));
         let label = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(preset.label.clone())
@@ -52,7 +173,8 @@ impl RowTagDialog {
                 .validate(|value, _| value.chars().count() <= 128 && !value.contains(['\n', '\r']))
         });
         let filter = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(crate::tr!("搜索已用标签", "Search used tags"))
+            InputState::new(window, cx)
+                .placeholder(crate::tr!("搜索历史标签", "Search tag history"))
         });
         let (font, height_value) = preset.dimensions(log_font, row_height);
         let font_size = cx.new(|_| {
@@ -129,6 +251,7 @@ impl RowTagDialog {
             presets,
             log_font,
             row_height,
+            preview,
             error: None,
             _subscriptions: subscriptions,
         }
@@ -245,6 +368,83 @@ impl Render for RowTagDialog {
         let height = (window.viewport_size().height - window.rem_size() * 12.)
             .min(window.rem_size() * 29.)
             .max(window.rem_size() * 16.);
+        let form = v_flex()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            // Input's focus ring extends outside its border. Keep it inside
+            // the scroll clip without replacing the component's own chrome.
+            .p_2()
+            .gap_4()
+            .child(
+                v_flex()
+                    .gap_2()
+                    .child(crate::tr!("文字", "Text"))
+                    .child(Input::new(&self.label).w_full()),
+            )
+            .child(
+                h_flex()
+                    .gap_4()
+                    .child(self.size_field(
+                        crate::tr!("文字大小", "Text size"),
+                        &self.font_size,
+                        cx,
+                    ))
+                    .child(self.size_field(crate::tr!("标签高度", "Tag height"), &self.height, cx)),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(crate::tr_args!(
+                        "当前行高 {row_height_pixels} px；复用时自动适配行高",
+                        "Row height: {row_height_pixels} px; reused tags fit their row"
+                    )),
+            )
+            .child(
+                h_flex()
+                    .gap_4()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .gap_2()
+                            .child(crate::tr!("文字颜色", "Text color"))
+                            .child(ColorPicker::new(&self.text_color)),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .gap_2()
+                            .child(crate::tr!("标签颜色", "Tag color"))
+                            .child(ColorPicker::new(&self.background)),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap_4()
+                    .child(
+                        Checkbox::new("tag-bold")
+                            .label(crate::tr!("加粗", "Bold"))
+                            .checked(self.preset.style.bold)
+                            .on_click(cx.listener(|this, value, _, cx| {
+                                this.preset.style.bold = *value;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Checkbox::new("tag-pill")
+                            .label(crate::tr!("胶囊圆角", "Pill corners"))
+                            .checked(self.preset.style.pill)
+                            .on_click(cx.listener(|this, value, _, cx| {
+                                this.preset.style.pill = *value;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .when_some(self.error.clone(), |content, error| {
+                content.child(div().text_sm().text_color(cx.theme().danger).child(error))
+            })
+            .overflow_y_scrollbar();
         h_flex()
             .h(height)
             .w_full()
@@ -256,96 +456,24 @@ impl Render for RowTagDialog {
                     .min_w_0()
                     .min_h_0()
                     .gap_4()
+                    .child(form)
                     .child(
                         v_flex()
+                            .flex_none()
+                            .px_2()
+                            .pb_2()
                             .gap_2()
-                            .child(crate::tr!("文字", "Text"))
-                            .child(Input::new(&self.label).w_full()),
-                    )
-                    .child(
-                        v_flex().gap_2().child(crate::tr!("预览", "Preview")).child(
-                            h_flex()
-                                .h_12()
-                                .px_3()
-                                .overflow_hidden()
-                                .bg(cx.theme().muted)
-                                .rounded(cx.theme().radius)
-                                .child(
-                                    preview
-                                        .render_tag(self.log_font, self.row_height, cx)
-                                        .child(
-                                            div().min_w_0().truncate().child(preview.label.clone()),
-                                        ),
-                                ),
-                        ),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_4()
-                            .child(self.size_field(
-                                crate::tr!("文字大小", "Text size"),
-                                &self.font_size,
-                                cx,
-                            ))
-                            .child(self.size_field(
-                                crate::tr!("标签高度", "Tag height"),
-                                &self.height,
-                                cx,
-                            )),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(crate::tr_args!(
-                                "当前行高 {row_height_pixels} px；复用时自动适配行高",
-                                "Row height: {row_height_pixels} px; reused tags fit their row"
-                            )),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_4()
+                            .child(crate::tr!("日志行预览", "Log row preview"))
                             .child(
-                                v_flex()
-                                    .flex_1()
-                                    .gap_2()
-                                    .child(crate::tr!("文字颜色", "Text color"))
-                                    .child(ColorPicker::new(&self.text_color)),
-                            )
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .gap_2()
-                                    .child(crate::tr!("标签颜色", "Tag color"))
-                                    .child(ColorPicker::new(&self.background)),
+                                div()
+                                    .py_3()
+                                    .bg(cx.theme().tokens.table)
+                                    .border_1()
+                                    .border_color(cx.theme().border)
+                                    .rounded(cx.theme().radius)
+                                    .child(self.preview.render(&preview, cx)),
                             ),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_4()
-                            .child(
-                                Checkbox::new("tag-bold")
-                                    .label(crate::tr!("加粗", "Bold"))
-                                    .checked(self.preset.style.bold)
-                                    .on_click(cx.listener(|this, value, _, cx| {
-                                        this.preset.style.bold = *value;
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                Checkbox::new("tag-pill")
-                                    .label(crate::tr!("胶囊圆角", "Pill corners"))
-                                    .checked(self.preset.style.pill)
-                                    .on_click(cx.listener(|this, value, _, cx| {
-                                        this.preset.style.pill = *value;
-                                        cx.notify();
-                                    })),
-                            ),
-                    )
-                    .when_some(self.error.clone(), |content, error| {
-                        content.child(div().text_sm().text_color(cx.theme().danger).child(error))
-                    })
-                    .overflow_y_scrollbar(),
+                    ),
             )
             .child(
                 v_flex()
@@ -356,7 +484,9 @@ impl Render for RowTagDialog {
                     .border_l_1()
                     .border_color(cx.theme().border)
                     .pl_4()
-                    .child(crate::tr!("已用标签", "Used tags"))
+                    .pr_2()
+                    .py_2()
+                    .child(crate::tr!("历史标签", "Tag history"))
                     .child(Input::new(&self.filter).small())
                     .child(
                         div()
@@ -398,18 +528,10 @@ impl Render for RowTagDialog {
                                                 .justify_start()
                                                 .selected(selected)
                                                 .child(
-                                                    preset
-                                                        .render_tag(
-                                                            this.log_font,
-                                                            this.row_height.min(px(24.)),
-                                                            cx,
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .min_w_0()
-                                                                .truncate()
-                                                                .child(preset.label.clone()),
-                                                        ),
+                                                    div()
+                                                        .min_w_0()
+                                                        .truncate()
+                                                        .child(preset.label.clone()),
                                                 )
                                                 .on_click(cx.listener(
                                                     move |this, _, window, cx| {
