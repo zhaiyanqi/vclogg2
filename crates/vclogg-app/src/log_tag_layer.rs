@@ -1,15 +1,44 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    AnyElement, App, AvailableSpace, Bounds, Div, Element, ElementId, GlobalElementId,
+    AnyElement, App, AvailableSpace, Bounds, Context, Div, Element, ElementId, GlobalElementId,
     InspectorElementId, InteractiveElement as _, IntoElement, LayoutId, ParentElement as _, Pixels,
-    Point, Stateful, Styled as _, Window, div, point, px, size,
+    Point, Render, Stateful, Styled as _, Window, div, point, px, size,
 };
 
 #[derive(Clone, Copy)]
 pub(crate) struct TagGeometry {
     pub(crate) content: Bounds<Pixels>,
     pub(crate) tag: Bounds<Pixels>,
+}
+
+impl TagGeometry {
+    pub(crate) fn drag_position(
+        self,
+        pointer: Point<Pixels>,
+        grab_offset: Point<Pixels>,
+    ) -> Point<Pixels> {
+        let position = pointer - self.content.origin - grab_offset;
+        point(
+            position.x.clamp(
+                px(0.),
+                (self.content.size.width - self.tag.size.width).max(px(0.)),
+            ),
+            position.y.clamp(
+                px(0.),
+                (self.content.size.height - self.tag.size.height).max(px(0.)),
+            ),
+        )
+    }
+}
+
+pub(crate) struct TagDragPreview;
+
+impl Render for TagDragPreview {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        // The original tag moves in its row; no detached duplicate follows the pointer.
+        div()
+    }
 }
 
 pub(crate) type TagGeometryHandle = Rc<Cell<Option<TagGeometry>>>;

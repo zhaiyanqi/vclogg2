@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    log_tag_layer::{LogTagLayer, PositionedTag, TagGeometryHandle},
+    log_tag_layer::{LogTagLayer, PositionedTag, TagDragPreview, TagGeometryHandle},
     log_tags::{RowTag, TagColor, TagPreset, TagStyle, source_digest},
     row_tag_dialog::{RowTagDialog, RowTagPreview},
 };
@@ -59,15 +59,6 @@ struct TagDrag {
     payload: TagDragPayload,
     grab_offset: Point<Pixels>,
     position: Point<Pixels>,
-}
-
-struct TagDragPreview;
-
-impl Render for TagDragPreview {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        // The original tag moves in its row; no detached duplicate follows the pointer.
-        div()
-    }
 }
 
 impl Workspace {
@@ -217,6 +208,7 @@ impl Workspace {
                     is_new: true,
                 },
                 preset,
+                None,
                 window,
                 cx,
             );
@@ -305,6 +297,7 @@ impl Workspace {
         let workspace = cx.weak_entity();
         window.open_dialog(cx, move |dialog, window, cx| {
             let editor_submit = editor.clone();
+            let editor_close = editor.clone();
             let workspace_submit = workspace.clone();
             let workspace_close = workspace.clone();
             let id = id.clone();
@@ -341,6 +334,7 @@ impl Workspace {
                         return false;
                     }
                     let preset = editor_submit.read(cx).value(cx);
+                    let position = editor_submit.read(cx).position();
                     if !preset.is_valid() {
                         editor_submit.update(cx, |editor, cx| {
                             editor.show_error(
@@ -365,6 +359,7 @@ impl Workspace {
                                     is_new,
                                 },
                                 preset,
+                                position,
                                 window,
                                 cx,
                             )
@@ -384,7 +379,8 @@ impl Workspace {
                     }
                     saved
                 })
-                .on_close(move |_, _, cx| {
+                .on_close(move |_, window, cx| {
+                    editor_close.update(cx, |editor, cx| editor.cancel_preview_drag(window, cx));
                     _ = workspace_close.update(cx, |this, cx| {
                         this.row_tags.dialog = None;
                         cx.notify();
@@ -398,6 +394,7 @@ impl Workspace {
         &mut self,
         request: TagEditRequest,
         preset: TagPreset,
+        position: Option<Point<Pixels>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -428,6 +425,11 @@ impl Workspace {
         tag.label = preset.label.clone();
         tag.color = preset.color;
         tag.style = preset.style.clone();
+        if let Some(position) = position {
+            let font = px(self.app_settings.log_font_size as f32);
+            tag.x = position_units(position.x, font);
+            tag.y = position_units(position.y, font);
+        }
         tab.file.row_tags.insert(id, tag);
         self.remember_row_tag_preset(preset, window, cx);
         self.row_tag_changed(
@@ -753,17 +755,7 @@ impl Workspace {
         let Some(geometry) = drag.payload.geometry.get() else {
             return;
         };
-        let position = position - geometry.content.origin - drag.grab_offset;
-        drag.position = point(
-            position.x.clamp(
-                px(0.),
-                (geometry.content.size.width - geometry.tag.size.width).max(px(0.)),
-            ),
-            position.y.clamp(
-                px(0.),
-                (geometry.content.size.height - geometry.tag.size.height).max(px(0.)),
-            ),
-        );
+        drag.position = geometry.drag_position(position, drag.grab_offset);
         cx.notify();
     }
 

@@ -1,10 +1,13 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    App, AppContext as _, Context, Entity, Hsla, IntoElement, ParentElement as _, Pixels, Point,
-    Render, Rgba, SharedString, Styled as _, Subscription, UniformListScrollHandle, Window, div,
+    App, AppContext as _, Context, Div, DragMoveEvent, Entity, FocusHandle, Hsla,
+    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseUpEvent,
+    ParentElement as _, Pixels, Point, Render, Rgba, SharedString, StatefulInteractiveElement as _,
+    Styled as _, StyledText, Subscription, UniformListScrollHandle, Window, div,
     prelude::FluentBuilder as _, px, uniform_list,
 };
+use gpui_base::{GlobalState, TextSelection};
 use gpui_component::{
     ActiveTheme as _, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
@@ -22,13 +25,14 @@ use crate::{
         LogTableDelegate, line_marker, line_marker_column_width, log_cell_horizontal_padding,
         log_line_number_cell, log_row_separator_overlay,
     },
-    log_tag_layer::{LogTagLayer, PositionedTag},
+    log_tag_layer::{LogTagLayer, PositionedTag, TagDragPreview, TagGeometryHandle},
     log_tags::{TagPreset, TagStyle},
+    selectable_log_text::{LogText, SelectableLogText, TextSelectionCache},
 };
 
 /// A bounded snapshot of the source row and its presentation, without a live table or file reader.
 pub(crate) struct RowTagPreview {
-    text: SharedString,
+    text: LogText,
     source_row: usize,
     position: Point<Pixels>,
     font_size: u16,
@@ -53,7 +57,7 @@ impl RowTagPreview {
         cx: &App,
     ) -> Self {
         Self {
-            text,
+            text: LogText::new(text),
             source_row,
             position,
             font_size: delegate.log_font_size(),
@@ -69,7 +73,7 @@ impl RowTagPreview {
         }
     }
 
-    fn render(&self, preset: &TagPreset, cx: &App) -> impl IntoElement {
+    fn render(&self, text: SelectableLogText, tags: LogTagLayer, cx: &App) -> Div {
         let font = px(self.font_size as f32);
         h_flex()
             .w_full()
@@ -103,9 +107,11 @@ impl RowTagPreview {
             .child(
                 div()
                     .relative()
+                    .flex()
+                    .items_center()
                     .flex_1()
                     .min_w_0()
-                    .h_full()
+                    .h(self.row_height)
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .px(log_cell_horizontal_padding(cx))
@@ -116,25 +122,17 @@ impl RowTagPreview {
                     .when(self.show_row_separators, |cell| {
                         cell.child(log_row_separator_overlay(false, cx))
                     })
-                    .child(self.text.clone())
-                    .child(LogTagLayer::new(
-                        "tag-dialog-preview-layer",
-                        vec![PositionedTag {
-                            position: self.position,
-                            geometry: Rc::new(Cell::new(None)),
-                            element: Some(
-                                div()
-                                    .max_w(font * 24.)
-                                    .overflow_hidden()
-                                    .child(preset.render_tag(font, self.row_height, cx).child(
-                                        div().min_w_0().truncate().child(preset.label.clone()),
-                                    ))
-                                    .into_any_element(),
-                            ),
-                        }],
-                    )),
+                    .child(text)
+                    .child(tags),
             )
     }
+}
+
+struct DraggedPreviewTag;
+
+struct PreviewTagDrag {
+    grab_offset: Point<Pixels>,
+    previous_position: Option<Point<Pixels>>,
 }
 
 /// The dialog owns the whole draft. No input entity is retained by a virtual log row.
@@ -152,6 +150,11 @@ pub(crate) struct RowTagDialog {
     log_font: Pixels,
     row_height: Pixels,
     preview: RowTagPreview,
+    preview_selections: TextSelectionCache<usize>,
+    preview_geometry: TagGeometryHandle,
+    preview_position: Option<Point<Pixels>>,
+    preview_drag: Option<PreviewTagDrag>,
+    preview_focus: FocusHandle,
     error: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
@@ -237,6 +240,11 @@ impl RowTagDialog {
             }),
             Self::observe_color(&text_color, window, cx),
             Self::observe_color(&background, window, cx),
+            cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.cancel_preview_drag(window, cx);
+                }
+            }),
         ];
         Self {
             label,
@@ -252,6 +260,11 @@ impl RowTagDialog {
             log_font,
             row_height,
             preview,
+            preview_selections: TextSelectionCache::default(),
+            preview_geometry: Rc::new(Cell::new(None)),
+            preview_position: None,
+            preview_drag: None,
+            preview_focus: cx.focus_handle(),
             error: None,
             _subscriptions: subscriptions,
         }
@@ -310,6 +323,134 @@ impl RowTagDialog {
                 pill: self.preset.style.pill,
             },
         }
+    }
+
+    /// An untouched preview must not replace the source tag's unclamped position.
+    pub(crate) fn position(&self) -> Option<Point<Pixels>> {
+        self.preview_position
+    }
+
+    fn update_preview_drag(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(drag) = &self.preview_drag else {
+            return;
+        };
+        let Some(geometry) = self.preview_geometry.get() else {
+            return;
+        };
+        let position = geometry.drag_position(position, drag.grab_offset);
+        if self.preview_position != Some(position) {
+            self.preview_position = Some(position);
+            cx.notify();
+        }
+    }
+
+    fn finish_preview_drag(
+        &mut self,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.preview_drag.is_none() {
+            return;
+        }
+        self.update_preview_drag(position, cx);
+        self.preview_drag = None;
+        cx.stop_active_drag(window);
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    pub(crate) fn cancel_preview_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(drag) = self.preview_drag.take() {
+            self.preview_position = drag.previous_position;
+            cx.stop_active_drag(window);
+            cx.notify();
+        }
+    }
+
+    fn render_preview(
+        &mut self,
+        preset: &TagPreset,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let text = &self.preview.text;
+        let selection = self
+            .preview_selections
+            .handle(self.preview.source_row, text, window, cx);
+        let text = SelectableLogText::new(
+            selection,
+            self.preview.source_row as u64,
+            text.clone(),
+            StyledText::new(text.display().clone()),
+            crate::ui_theme::text_selection_highlight(cx),
+        )
+        .preview_range(0..0);
+        let owner = cx.weak_entity();
+        let tag = div()
+            .id("tag-dialog-preview-tag")
+            .max_w(self.log_font * 24.)
+            .overflow_hidden()
+            .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                GlobalState::suppress_text_selection(cx);
+                TextSelection::clear(window, cx);
+                cx.stop_propagation();
+            })
+            .on_drag(DraggedPreviewTag, move |_, offset, window, cx| {
+                _ = owner.update(cx, |this, cx| {
+                    if this.preview_geometry.get().is_some() {
+                        this.preview_drag = Some(PreviewTagDrag {
+                            grab_offset: offset,
+                            previous_position: this.preview_position,
+                        });
+                        this.preview_focus.focus(window, cx);
+                        cx.notify();
+                    }
+                });
+                cx.new(|_| TagDragPreview)
+            })
+            .child(
+                preset
+                    .render_tag(self.log_font, self.preview.row_height, cx)
+                    .child(div().min_w_0().truncate().child(preset.label.clone())),
+            );
+        let tags = LogTagLayer::new(
+            "tag-dialog-preview-layer",
+            vec![PositionedTag {
+                position: self.preview_position.unwrap_or(self.preview.position),
+                geometry: self.preview_geometry.clone(),
+                element: Some(tag.into_any_element()),
+            }],
+        );
+        self.preview
+            .render(text, tags, cx)
+            .id("row-tag-preview")
+            .track_focus(&self.preview_focus)
+            .on_drag_move::<DraggedPreviewTag>(cx.listener(
+                |this, event: &DragMoveEvent<DraggedPreviewTag>, _, cx| {
+                    if this.preview_drag.is_some() {
+                        this.update_preview_drag(event.event.position, cx);
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                if event.button == MouseButton::Left {
+                    this.finish_preview_drag(event.position, window, cx);
+                }
+            }))
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    this.finish_preview_drag(event.position, window, cx);
+                }),
+            )
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" && this.preview_drag.is_some() {
+                    this.cancel_preview_drag(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
     }
 
     pub(crate) fn show_error(&mut self, message: String, cx: &mut Context<Self>) {
@@ -471,7 +612,7 @@ impl Render for RowTagDialog {
                                     .border_1()
                                     .border_color(cx.theme().border)
                                     .rounded(cx.theme().radius)
-                                    .child(self.preview.render(&preview, cx)),
+                                    .child(self.render_preview(&preview, window, cx)),
                             ),
                     ),
             )
