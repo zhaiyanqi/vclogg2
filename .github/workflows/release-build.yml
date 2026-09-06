@@ -157,7 +157,7 @@ jobs:
         if: env.WINDOWS_SIGNING_PROVIDER != 'unsigned'
         shell: powershell
         run: |
-          $archives = @(Get-ChildItem -LiteralPath 'dist\windows-x86_64' -Filter 'vclogg-*-windows-x86_86-portable.zip')
+          $archives = @(Get-ChildItem -LiteralPath 'dist\windows-x86_64' -Filter 'vclogg-*-windows-x86_64-portable.zip')
           if ($archives.Count -ne 1) {
             throw "Expected exactly one Windows release archive, found $($archives.Count)."
           }
@@ -179,7 +179,7 @@ jobs:
           Write-Output "Verified signer: $($signature.SignerCertificate.Subject)"
           Write-Output "Verified timestamp authority: $($signature.TimeStamperCertificate.Subject)"
 
-          $installers = @(Get-ChildItem -LiteralPath 'dist\windows-x86_64' -Filter 'vclogg-*-windows-x86_86-setup.exe')
+          $installers = @(Get-ChildItem -LiteralPath 'dist\windows-x86_64' -Filter 'vclogg-*-windows-x86_64-setup.exe')
           if ($installers.Count -ne 1) {
             throw "Expected exactly one Windows installer, found $($installers.Count)."
           }
@@ -194,8 +194,8 @@ jobs:
         id: packages
         shell: powershell
         run: |
-          $portable = @(Get-ChildItem -LiteralPath 'dist\windows-x86_64' -Filter 'vclogg-*-windows-x86_86-portable.zip')
-          $setup = @(Get-ChildItem -LiteralPath 'dist\windows-x86_64' -Filter 'vclogg-*-windows-x86_86-setup.exe')
+          $portable = @(Get-ChildItem -LiteralPath 'dist\windows-x86_64' -Filter 'vclogg-*-windows-x86_64-portable.zip')
+          $setup = @(Get-ChildItem -LiteralPath 'dist\windows-x86_64' -Filter 'vclogg-*-windows-x86_64-setup.exe')
           if ($portable.Count -ne 1 -or $setup.Count -ne 1) {
             throw 'Expected one portable package and one installer.'
           }
@@ -210,7 +210,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.packages.outputs.portable_name }}
-          path: dist/windows-x86_64/vclogg-*-windows-x86_86-portable.zip
+          path: dist/windows-x86_64/vclogg-*-windows-x86_64-portable.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -219,7 +219,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.packages.outputs.setup_name }}
-          path: dist/windows-x86_64/vclogg-*-windows-x86_86-setup.exe
+          path: dist/windows-x86_64/vclogg-*-windows-x86_64-setup.exe
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -349,8 +349,8 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           packages=(
-            "release-assets/windows-x86_64/vclogg-${version}-windows-x86_86-portable.zip"
-            "release-assets/windows-x86_64/vclogg-${version}-windows-x86_86-setup.exe"
+            "release-assets/windows-x86_64/vclogg-${version}-windows-x86_64-portable.zip"
+            "release-assets/windows-x86_64/vclogg-${version}-windows-x86_64-setup.exe"
             "release-assets/macos-aarch64/vclogg2-${version}-macos-aarch64.dmg"
             "release-assets/linux-x86_64/vclogg2-${version}-linux-x86_64.tar.gz"
           )
@@ -400,8 +400,8 @@ jobs:
             )
           fi
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            release-assets/windows-x86_64/vclogg-*-windows-x86_86-portable.zip \
-            release-assets/windows-x86_64/vclogg-*-windows-x86_86-setup.exe \
+            release-assets/windows-x86_64/vclogg-*-windows-x86_64-portable.zip \
+            release-assets/windows-x86_64/vclogg-*-windows-x86_64-setup.exe \
             release-assets/macos-aarch64/vclogg2-*-macos-aarch64.dmg \
             release-assets/linux-x86_64/vclogg2-*-linux-x86_64.tar.gz \
             "${release_options[@]}"

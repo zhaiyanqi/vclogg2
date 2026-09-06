@@ -88,7 +88,7 @@ $platformDirectory = [System.IO.Path]::GetFullPath(
 )
 New-Item -ItemType Directory -Path $platformDirectory -Force | Out-Null
 $stageDirectory = [System.IO.Path]::GetFullPath(
-    (Join-Path $platformDirectory "vclogg-$version-windows-x86_86-portable")
+    (Join-Path $platformDirectory "vclogg-$version-windows-x86_64-portable")
 )
 $outputPrefix = $platformDirectory.TrimEnd('\') + '\'
 if (-not $stageDirectory.StartsWith($outputPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -141,14 +141,14 @@ if ($packageDifference.Count -ne 0) {
     throw 'Windows 用户分发包必须且只能包含 LICENSE、README.md 与 vclogg2.exe。'
 }
 
-$archiveName = "vclogg-$version-windows-x86_86-portable.zip"
+$archiveName = "vclogg-$version-windows-x86_64-portable.zip"
 $archivePath = Join-Path $platformDirectory $archiveName
 if (Test-Path -LiteralPath $archivePath) {
     Remove-Item -LiteralPath $archivePath -Force
 }
 Compress-Archive -Path (Join-Path $stageDirectory '*') -DestinationPath $archivePath -CompressionLevel Optimal
 
-$setupPath = Join-Path $platformDirectory "vclogg-$version-windows-x86_86-setup.exe"
+$setupPath = Join-Path $platformDirectory "vclogg-$version-windows-x86_64-setup.exe"
 if (Test-Path -LiteralPath $setupPath) {
     Remove-Item -LiteralPath $setupPath -Force
 }

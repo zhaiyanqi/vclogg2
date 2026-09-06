@@ -42,10 +42,10 @@ VCLogg2 面向大文件浏览、持续追加日志、多范围检索和分析型
 
 ### Windows
 
-Windows 同时提供便携版和安装版（实际目标架构均为 x64，产物名按约定使用 `x86_86`）：
+Windows x64 同时提供便携版和安装版：
 
-- **便携版**：下载 `vclogg-<version>-windows-x86_86-portable.zip`，解压后运行 `vclogg2.exe`；数据保存在 EXE 同级的 `VCLogg2` 目录。
-- **安装版**：下载并运行 `vclogg-<version>-windows-x86_86-setup.exe`。安装向导可分别选择安装目录和数据目录；默认安装到 `%LOCALAPPDATA%\Programs\VCLogg2`，数据默认保存到 `%LOCALAPPDATA%\VCLogg2`。按当前用户安装，无需管理员权限，所选目录须对当前用户可写。
+- **便携版**：下载 `vclogg-<version>-windows-x86_64-portable.zip`，解压后运行 `vclogg2.exe`；数据保存在 EXE 同级的 `VCLogg2` 目录。
+- **安装版**：下载并运行 `vclogg-<version>-windows-x86_64-setup.exe`。安装向导可分别选择安装目录和数据目录；默认安装到 `%LOCALAPPDATA%\Programs\VCLogg2`，数据默认保存到 `%LOCALAPPDATA%\VCLogg2`。按当前用户安装，无需管理员权限，所选目录须对当前用户可写。
 
 便携版启动命令：
 
@@ -181,7 +181,7 @@ powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 ./scripts/package-release-linux.sh
 ```
 
-正式版本由指向当前 `main` 的 `v<SemVer>` 标签触发三平台 GitHub Actions。以 `v2.2.4` 为例，Windows Actions 产物分别命名为 `vclogg-2.2.4-windows-x86_86-portable` 和 `vclogg-2.2.4-windows-x86_86-setup`，内部对应 ZIP 与安装 EXE；版本号随构建标签变化。Windows 未配置签名时两种包均未签名；macOS 正式公开分发仍需 Developer ID 签名和公证。签名后端、产物内容、发布脚本与信任边界见[交付说明](doc/delivery.md)。
+正式版本由指向当前 `main` 的 `v<SemVer>` 标签触发三平台 GitHub Actions。以 `v2.2.4` 为例，Windows Actions 产物分别命名为 `vclogg-2.2.4-windows-x86_64-portable` 和 `vclogg-2.2.4-windows-x86_64-setup`，内部对应 ZIP 与安装 EXE；版本号随构建标签变化。Windows 未配置签名时两种包均未签名；macOS 正式公开分发仍需 Developer ID 签名和公证。签名后端、产物内容、发布脚本与信任边界见[交付说明](doc/delivery.md)。
 
 ## 本地数据与隐私
 

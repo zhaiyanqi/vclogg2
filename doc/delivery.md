@@ -29,14 +29,14 @@ Windows 使用 Inno Setup 6.3 或更新的 6.x 版本生成安装向导。安装
 powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 ```
 
-输出位于 `dist/windows-x86_64/`，实际编译目标仍为 Windows x64，用户分发名按约定使用 `vclogg` 与 `x86_86`：
+Windows x64 产物输出位于 `dist/windows-x86_64/`：
 
-- `vclogg-<version>-windows-x86_86-portable/`：仅包含 `vclogg2.exe`、README 和许可证的暂存目录；
-- `vclogg-<version>-windows-x86_86-portable.zip`：便携版，解压后直接运行，数据写入 EXE 同级 `VCLogg2` 子目录；
-- `vclogg-<version>-windows-x86_86-setup.exe`：安装版；
+- `vclogg-<version>-windows-x86_64-portable/`：仅包含 `vclogg2.exe`、README 和许可证的暂存目录；
+- `vclogg-<version>-windows-x86_64-portable.zip`：便携版，解压后直接运行，数据写入 EXE 同级 `VCLogg2` 子目录；
+- `vclogg-<version>-windows-x86_64-setup.exe`：安装版；
 - `vclogg2-<version>-windows-x86_64-symbols.zip`：仅供开发侧崩溃分析的 PDB，不上传为用户包。
 
-以标签 `v2.2.4` 为例，Actions 分别上传 `vclogg-2.2.4-windows-x86_86-portable` 和 `vclogg-2.2.4-windows-x86_86-setup` 两个产物，各含上述 ZIP / EXE。GitHub Release 直接附加这两个文件，以及 macOS DMG、Linux tar.gz。版本取自构建标签或 `VCLOGG2_BUILD_VERSION`，没有固定为 2.2.4；无标签的手动构建沿用开发版本规则。
+以标签 `v2.2.4` 为例，Actions 分别上传 `vclogg-2.2.4-windows-x86_64-portable` 和 `vclogg-2.2.4-windows-x86_64-setup` 两个产物，各含上述 ZIP / EXE。GitHub Release 直接附加这两个文件，以及 macOS DMG、Linux tar.gz。版本取自构建标签或 `VCLOGG2_BUILD_VERSION`，没有固定为 2.2.4；无标签的手动构建沿用开发版本规则。
 
 #### 安装与数据目录
 
@@ -45,7 +45,7 @@ powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 静默安装可指定两个目录：
 
 ```powershell
-.\vclogg-2.2.4-windows-x86_86-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="D:\Apps\VCLogg2" /DATADIR="D:\VCLogg2Data"
+.\vclogg-2.2.4-windows-x86_64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="D:\Apps\VCLogg2" /DATADIR="D:\VCLogg2Data"
 ```
 
 安装器检查数据目录可创建、可写并可清理检查文件后，通过 Inno 的文件安装流程写入 EXE 同级 `vclogg2-data-dir.txt`。该文件采用 UTF-8，内容为所选绝对路径；所选目录本身就是数据根，不再追加一层 `VCLogg2`。状态库、索引、公开云目录缓存、崩溃报告和临时结果分别位于该根下的 `sessions`、`index`、`cloud`、`crashes`、`temp`。
