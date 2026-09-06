@@ -313,7 +313,9 @@ impl Workspace {
             input.update(cx, |input, cx| input.select_all(window, cx));
         });
         let workspace = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, window, cx| {
+        let (dialog_size, margin_top) = management_dialog_geometry(window);
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let content = editor.clone();
             let editor_submit = editor.clone();
             let editor_close = editor.clone();
             let workspace_submit = workspace.clone();
@@ -327,9 +329,11 @@ impl Workspace {
                 } else {
                     crate::tr!("编辑标记", "Edit mark")
                 })
-                .width(window.rem_size() * 46.)
+                .w(dialog_size.width)
+                .h(dialog_size.height)
+                .margin_top(margin_top)
                 .close_button(false)
-                .child(editor.clone())
+                .content(move |area, _, _| area.min_h_0().overflow_hidden().child(content.clone()))
                 .footer(
                     DialogFooter::new()
                         .child(crate::dialog_focus::dialog_cancel_action(

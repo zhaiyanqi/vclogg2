@@ -525,9 +525,6 @@ impl Render for RowTagDialog {
             preview.label = crate::tr!("标记", "Mark").to_string();
         }
         let row_height_pixels = f32::from(self.row_height) as u16;
-        let height = (window.viewport_size().height - window.rem_size() * 12.)
-            .min(window.rem_size() * 29.)
-            .max(window.rem_size() * 16.);
         let form = v_flex()
             .flex_1()
             .min_w_0()
@@ -639,7 +636,8 @@ impl Render for RowTagDialog {
             })
             .overflow_y_scrollbar();
         h_flex()
-            .h(height)
+            .h_full()
+            .min_h_0()
             .w_full()
             .items_stretch()
             .gap_4()
