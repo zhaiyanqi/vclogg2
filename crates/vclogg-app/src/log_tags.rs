@@ -30,8 +30,16 @@ pub(crate) struct TagStyle {
     pub(crate) height: Option<u16>,
     pub(crate) text_color: Option<u32>,
     pub(crate) background_color: Option<u32>,
+    #[serde(default)]
+    pub(crate) transparency: u8,
     pub(crate) bold: bool,
     pub(crate) pill: bool,
+}
+
+impl TagStyle {
+    pub(crate) fn opacity(&self) -> f32 {
+        1. - f32::from(self.transparency.min(100)) / 100.
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -54,7 +62,8 @@ impl RowTag {
 
 impl TagPreset {
     pub(crate) fn id(&self) -> String {
-        source_digest(&serde_json::to_string(self).expect("tag preset is serializable"))
+        // History identity follows the text; the latest use replaces its appearance.
+        source_digest(&self.label)
     }
 
     pub(crate) fn is_valid(&self) -> bool {

@@ -502,7 +502,8 @@ impl StateStore {
             .load_row_tag_presets()?
             .into_iter()
             .filter_map(|payload| serde_json::from_str::<crate::log_tags::TagPreset>(&payload).ok())
-            .filter(|preset| preset.is_valid() && seen.insert(preset.id()))
+            // Repository order is newest first, including records from older versions.
+            .filter(|preset| preset.is_valid() && seen.insert(preset.label.clone()))
             .collect())
     }
 

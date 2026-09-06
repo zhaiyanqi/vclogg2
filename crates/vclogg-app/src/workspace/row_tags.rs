@@ -127,7 +127,8 @@ impl Workspace {
                 && this.tag_target_is_current(context.target, &context.document)
         });
         let Some((context, position)) = context else {
-            return menu.item(PopupMenuItem::new(crate::tr!("添加标签", "Add tag")).disabled(true));
+            return menu
+                .item(PopupMenuItem::new(crate::tr!("文字标记", "Text mark")).disabled(true));
         };
         let recent = cx
             .global::<WorkspaceWindowRegistry>()
@@ -135,13 +136,13 @@ impl Workspace {
             .clone()
             .unwrap_or_default();
         menu.submenu(
-            crate::tr!("添加标签", "Add tag"),
+            crate::tr!("文字标记", "Text mark"),
             window,
             cx,
             move |mut menu, window, _| {
                 let create_context = context.clone();
                 menu = menu.item(
-                    PopupMenuItem::new(crate::tr!("新增标签…", "New tag…")).on_click(
+                    PopupMenuItem::new(crate::tr!("新增标记…", "New mark…")).on_click(
                         window.listener_for(&workspace, move |this, _, window, cx| {
                             this.add_row_tag(create_context.clone(), position, None, window, cx);
                         }),
@@ -305,9 +306,9 @@ impl Workspace {
             let draft = draft.clone();
             dialog
                 .title(if is_new {
-                    crate::tr!("新增标签", "New tag")
+                    crate::tr!("新增标记", "New mark")
                 } else {
-                    crate::tr!("编辑标签", "Edit tag")
+                    crate::tr!("编辑标记", "Edit mark")
                 })
                 .width(window.rem_size() * 46.)
                 .close_button(false)
@@ -339,8 +340,8 @@ impl Workspace {
                         editor_submit.update(cx, |editor, cx| {
                             editor.show_error(
                                 crate::tr!(
-                                    "请输入 1–128 个字符的标签文字",
-                                    "Enter 1–128 characters for the tag"
+                                    "请输入 1–128 个字符的标记文字",
+                                    "Enter 1–128 characters for the mark"
                                 )
                                 .to_string(),
                                 cx,
@@ -369,8 +370,8 @@ impl Workspace {
                         editor_submit.update(cx, |editor, cx| {
                             editor.show_error(
                                 crate::tr!(
-                                    "源行已变化，请取消后重新打开标签",
-                                    "The source row changed. Cancel and reopen the tag"
+                                    "源行已变化，请取消后重新打开标记",
+                                    "The source row changed. Cancel and reopen the mark"
                                 )
                                 .to_string(),
                                 cx,
@@ -453,7 +454,7 @@ impl Workspace {
         let (sender, receiver) = async_channel::bounded::<()>(1);
         let previous = cx.update_global::<WorkspaceWindowRegistry, _>(|registry, _| {
             let presets = registry.row_tag_presets.get_or_insert_with(Vec::new);
-            presets.retain(|existing| existing != &preset);
+            presets.retain(|existing| existing.label != preset.label);
             presets.insert(0, preset.clone());
             registry.row_tag_preset_save_completion.replace(receiver)
         });
@@ -471,8 +472,8 @@ impl Workspace {
                     _ = cx.update(|window, cx| {
                         window.push_notification(
                             crate::tr_args!(
-                                "标签历史未能保存：{error}",
-                                "Couldn’t save tag history: {error}"
+                                "标记历史未能保存：{error}",
+                                "Couldn’t save mark history: {error}"
                             ),
                             cx,
                         )
@@ -559,9 +560,8 @@ impl Workspace {
         } = menu_target;
         let edit_id = id.clone();
         menu.item(
-            PopupMenuItem::new(crate::tr!("编辑标签…", "Edit tag…")).on_click(window.listener_for(
-                &workspace,
-                move |this, _, window, cx| {
+            PopupMenuItem::new(crate::tr!("编辑标记…", "Edit mark…")).on_click(
+                window.listener_for(&workspace, move |this, _, window, cx| {
                     let tag = this
                         .documents
                         .iter()
@@ -582,17 +582,16 @@ impl Workspace {
                             cx,
                         );
                     }
-                },
-            )),
+                }),
+            ),
         )
         .separator()
         .item(
-            PopupMenuItem::new(crate::tr!("删除标签", "Delete tag")).on_click(window.listener_for(
-                &workspace,
-                move |this, _, window, cx| {
+            PopupMenuItem::new(crate::tr!("删除标记", "Delete mark")).on_click(
+                window.listener_for(&workspace, move |this, _, window, cx| {
                     this.delete_row_tag(target, &id, window, cx);
-                },
-            )),
+                }),
+            ),
         )
     }
 
@@ -664,6 +663,7 @@ impl Workspace {
                         ))
                         .max_w(font * 24.)
                         .overflow_hidden()
+                        .opacity(tag.style.opacity())
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, event: &MouseDownEvent, window, cx| {

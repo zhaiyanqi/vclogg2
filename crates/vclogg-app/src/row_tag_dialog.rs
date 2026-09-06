@@ -141,6 +141,7 @@ pub(crate) struct RowTagDialog {
     filter: Entity<InputState>,
     font_size: Entity<SliderState>,
     height: Entity<SliderState>,
+    transparency: Entity<SliderState>,
     text_color: Entity<ColorPickerState>,
     background: Entity<ColorPickerState>,
     preset: TagPreset,
@@ -172,12 +173,12 @@ impl RowTagDialog {
         let label = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(preset.label.clone())
-                .placeholder(crate::tr!("输入标签文字", "Enter tag text"))
+                .placeholder(crate::tr!("输入标记文字", "Enter mark text"))
                 .validate(|value, _| value.chars().count() <= 128 && !value.contains(['\n', '\r']))
         });
         let filter = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder(crate::tr!("搜索历史标签", "Search tag history"))
+                .placeholder(crate::tr!("搜索历史标记", "Search mark history"))
         });
         let (font, height_value) = preset.dimensions(log_font, row_height);
         let font_size = cx.new(|_| {
@@ -193,6 +194,13 @@ impl RowTagDialog {
                 .max(f32::from(row_height))
                 .step(1.)
                 .default_value(f32::from(height_value).round())
+        });
+        let transparency = cx.new(|_| {
+            SliderState::new()
+                .min(0.)
+                .max(100.)
+                .step(1.)
+                .default_value(f32::from(preset.style.transparency.min(100)))
         });
         let (foreground, background_color) = preset.colors(cx);
         let text_color = cx.new(|cx| ColorPickerState::new(window, cx).default_value(foreground));
@@ -238,6 +246,7 @@ impl RowTagDialog {
                 }
                 cx.notify();
             }),
+            cx.subscribe(&transparency, |_, _, _: &SliderEvent, cx| cx.notify()),
             Self::observe_color(&text_color, window, cx),
             Self::observe_color(&background, window, cx),
             cx.observe_window_activation(window, |this, window, cx| {
@@ -251,6 +260,7 @@ impl RowTagDialog {
             filter,
             font_size,
             height,
+            transparency,
             text_color,
             background,
             preset,
@@ -319,6 +329,7 @@ impl RowTagDialog {
                     .read(cx)
                     .value()
                     .map(|color| u32::from(Rgba::from(color))),
+                transparency: self.transparency.read(cx).value().start().round() as u8,
                 bold: self.preset.style.bold,
                 pill: self.preset.style.pill,
             },
@@ -391,6 +402,8 @@ impl RowTagDialog {
             .id("tag-dialog-preview-tag")
             .max_w(self.log_font * 24.)
             .overflow_hidden()
+            // Keep opacity outside Tag so its built-in hover style cannot override it.
+            .opacity(preset.style.opacity())
             .on_mouse_down(MouseButton::Left, |_, window, cx| {
                 GlobalState::suppress_text_selection(cx);
                 TextSelection::clear(window, cx);
@@ -470,6 +483,9 @@ impl RowTagDialog {
         self.height.update(cx, |slider, cx| {
             slider.set_value(f32::from(height).round(), window, cx)
         });
+        self.transparency.update(cx, |slider, cx| {
+            slider.set_value(f32::from(preset.style.transparency.min(100)), window, cx)
+        });
         self.text_color
             .update(cx, |picker, cx| picker.set_value(text, window, cx));
         self.background
@@ -479,10 +495,11 @@ impl RowTagDialog {
         cx.notify();
     }
 
-    fn size_field(
+    fn slider_field(
         &self,
         label: &'static str,
         slider: &Entity<SliderState>,
+        suffix: &'static str,
         cx: &App,
     ) -> impl IntoElement {
         v_flex()
@@ -491,7 +508,7 @@ impl RowTagDialog {
             .gap_2()
             .child(h_flex().justify_between().child(label).child(
                 div().text_color(cx.theme().muted_foreground).child(format!(
-                    "{} px",
+                    "{}{suffix}",
                     slider.read(cx).value().start().round() as u16
                 )),
             ))
@@ -503,7 +520,7 @@ impl Render for RowTagDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut preview = self.value(cx);
         if preview.label.is_empty() {
-            preview.label = crate::tr!("标签", "Tag").to_string();
+            preview.label = crate::tr!("标记", "Mark").to_string();
         }
         let row_height_pixels = f32::from(self.row_height) as u16;
         let height = (window.viewport_size().height - window.rem_size() * 12.)
@@ -526,12 +543,18 @@ impl Render for RowTagDialog {
             .child(
                 h_flex()
                     .gap_4()
-                    .child(self.size_field(
+                    .child(self.slider_field(
                         crate::tr!("文字大小", "Text size"),
                         &self.font_size,
+                        " px",
                         cx,
                     ))
-                    .child(self.size_field(crate::tr!("标签高度", "Tag height"), &self.height, cx)),
+                    .child(self.slider_field(
+                        crate::tr!("标记高度", "Mark height"),
+                        &self.height,
+                        " px",
+                        cx,
+                    )),
             )
             .child(
                 div()
@@ -539,7 +562,7 @@ impl Render for RowTagDialog {
                     .text_color(cx.theme().muted_foreground)
                     .child(crate::tr_args!(
                         "当前行高 {row_height_pixels} px；复用时自动适配行高",
-                        "Row height: {row_height_pixels} px; reused tags fit their row"
+                        "Row height: {row_height_pixels} px; reused marks fit their row"
                     )),
             )
             .child(
@@ -556,8 +579,26 @@ impl Render for RowTagDialog {
                         v_flex()
                             .flex_1()
                             .gap_2()
-                            .child(crate::tr!("标签颜色", "Tag color"))
+                            .child(crate::tr!("标记颜色", "Mark color"))
                             .child(ColorPicker::new(&self.background)),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .gap_2()
+                    .child(h_flex().child(self.slider_field(
+                        crate::tr!("透明度", "Transparency"),
+                        &self.transparency,
+                        "%",
+                        cx,
+                    )))
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(crate::tr!("不透明", "Opaque"))
+                            .child(crate::tr!("完全透明", "Transparent")),
                     ),
             )
             .child(
@@ -627,23 +668,14 @@ impl Render for RowTagDialog {
                     .pl_4()
                     .pr_2()
                     .py_2()
-                    .child(crate::tr!("历史标签", "Tag history"))
+                    .child(crate::tr!("历史标记", "Mark history"))
                     .child(Input::new(&self.filter).small())
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(crate::tr!(
-                                "点击复用，再按需修改",
-                                "Choose a tag, then adjust it"
-                            )),
-                    )
                     .when(self.visible.is_empty(), |content| {
                         content.child(
                             div()
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(crate::tr!("没有可复用的标签", "No matching tags")),
+                                .child(crate::tr!("没有可复用的标记", "No matching marks")),
                         )
                     })
                     .child(
