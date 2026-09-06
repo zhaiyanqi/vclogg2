@@ -41,7 +41,7 @@ vclogg-data = { path = "../vclogg-data" }
 windows-sys = { workspace = true, features = ["Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
-raw-window-handle = "0.6.2"
+raw-window-handle = { version = "0.6.2", features = ["std"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"

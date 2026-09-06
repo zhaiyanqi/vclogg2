@@ -2,7 +2,6 @@ use std::{
     collections::{BTreeMap, HashMap},
     path::PathBuf,
     rc::Rc,
-    sync::Arc,
 };
 
 use chrono::{DateTime, Local, Utc};
