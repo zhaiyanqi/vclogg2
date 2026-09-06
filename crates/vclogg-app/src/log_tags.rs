@@ -179,6 +179,14 @@ impl TagColor {
 }
 
 impl RowTags {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.0.clear();
+    }
+
     pub(crate) fn row(&self, row: usize) -> impl Iterator<Item = (&String, &RowTag)> {
         self.0.get(&row).into_iter().flat_map(|tags| tags.iter())
     }

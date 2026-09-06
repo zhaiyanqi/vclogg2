@@ -130,6 +130,11 @@ impl Workspace {
             return menu
                 .item(PopupMenuItem::new(crate::tr!("文字标记", "Text mark")).disabled(true));
         };
+        let has_tags = this
+            .documents
+            .iter()
+            .find(|tab| tab.id == context.target.document_id)
+            .is_some_and(|tab| !tab.file.row_tags.is_empty());
         let recent = cx
             .global::<WorkspaceWindowRegistry>()
             .row_tag_presets
@@ -147,6 +152,19 @@ impl Workspace {
                             this.add_row_tag(create_context.clone(), position, None, window, cx);
                         }),
                     ),
+                );
+                let clear_context = context.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(crate::tr!("清除所有标记", "Clear all marks"))
+                        .disabled(!has_tags)
+                        .on_click(window.listener_for(&workspace, move |this, _, window, cx| {
+                            this.clear_document_row_tags(
+                                clear_context.target,
+                                &clear_context.document,
+                                window,
+                                cx,
+                            );
+                        })),
                 );
                 if !recent.is_empty() {
                     menu = menu.separator();
@@ -209,7 +227,6 @@ impl Workspace {
                     is_new: true,
                 },
                 preset,
-                None,
                 window,
                 cx,
             );
@@ -335,7 +352,6 @@ impl Workspace {
                         return false;
                     }
                     let preset = editor_submit.read(cx).value(cx);
-                    let position = editor_submit.read(cx).position();
                     if !preset.is_valid() {
                         editor_submit.update(cx, |editor, cx| {
                             editor.show_error(
@@ -360,7 +376,6 @@ impl Workspace {
                                     is_new,
                                 },
                                 preset,
-                                position,
                                 window,
                                 cx,
                             )
@@ -395,7 +410,6 @@ impl Workspace {
         &mut self,
         request: TagEditRequest,
         preset: TagPreset,
-        position: Option<Point<Pixels>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -426,11 +440,6 @@ impl Workspace {
         tag.label = preset.label.clone();
         tag.color = preset.color;
         tag.style = preset.style.clone();
-        if let Some(position) = position {
-            let font = px(self.app_settings.log_font_size as f32);
-            tag.x = position_units(position.x, font);
-            tag.y = position_units(position.y, font);
-        }
         tab.file.row_tags.insert(id, tag);
         self.remember_row_tag_preset(preset, window, cx);
         self.row_tag_changed(
@@ -524,6 +533,39 @@ impl Workspace {
         }
         self.schedule_checkpoint(document_id, window, cx);
         cx.notify();
+    }
+
+    fn clear_document_row_tags(
+        &mut self,
+        target: TagTarget,
+        document: &Weak<LogDocument>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.open_task.is_some()
+            || self.persistence.store.is_none()
+            || !self.tag_target_is_current(target, document)
+        {
+            return;
+        }
+        let tab = self
+            .documents
+            .iter_mut()
+            .find(|tab| tab.id == target.document_id)
+            .unwrap();
+        if tab.file.row_tags.is_empty() {
+            return;
+        }
+        tab.file.row_tags.clear();
+        if self
+            .row_tags
+            .drag
+            .as_ref()
+            .is_some_and(|drag| drag.payload.target.document_id == target.document_id)
+        {
+            self.cancel_tag_drag(window, cx);
+        }
+        self.row_tag_changed(target.document_id, None, window, cx);
     }
 
     fn delete_row_tag(

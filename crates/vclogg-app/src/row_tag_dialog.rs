@@ -153,6 +153,7 @@ pub(crate) struct RowTagDialog {
     preview: RowTagPreview,
     preview_selections: TextSelectionCache<usize>,
     preview_geometry: TagGeometryHandle,
+    // Display-only position, never included in the submitted preset.
     preview_position: Option<Point<Pixels>>,
     preview_drag: Option<PreviewTagDrag>,
     preview_focus: FocusHandle,
@@ -334,11 +335,6 @@ impl RowTagDialog {
                 pill: self.preset.style.pill,
             },
         }
-    }
-
-    /// An untouched preview must not replace the source tag's unclamped position.
-    pub(crate) fn position(&self) -> Option<Point<Pixels>> {
-        self.preview_position
     }
 
     fn update_preview_drag(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
