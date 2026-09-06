@@ -109,6 +109,7 @@ pub struct AppSettingsRecord {
     pub shortcut_jump_to_bottom: String,
     pub shortcut_cycle_color_label: String,
     pub shortcut_toggle_word_wrap: String,
+    pub shortcut_add_text_mark: String,
     pub mouse_wheel_scroll_percent: i64,
     pub scroll_by_line: bool,
     pub mouse_wheel_scroll_lines: i64,

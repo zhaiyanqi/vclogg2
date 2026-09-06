@@ -12,6 +12,8 @@ data 的 schema v10 增加 `file_row_tags`，v11 增加全局复用历史 `row_t
 
 新增标记按语言生成递增名称，窗口注册表分配序号，已使用序号写入 `ui_state`；新增默认开启垂直居中，旧记录与历史复用保留自身值。可选字体保存在 `TagStyle.font_family`，缺省时沿用主题字体。左侧表单用独立 ScrollHandle 与同级占位滚动条避免遮挡。schema v12 增加 `deleted_row_tag_presets`，按文字摘要记录历史删除，阻止旧文件注释重新回填同名历史；再次明确使用时清除删除记录。新增与删除复用历史共用后台串行队列，先提交数据库，再同步注册表和各窗口弹窗；任务纳入关闭/退出等待，发布结果不依赖发起窗口仍然存在。历史删除只影响复用集合，日志注释与编辑草稿独立保留。
 
+新增文字标记的键盘入口由 `AddTextMark` action 接入日志焦点上下文（排除 Input），按当前日志区域的单行选择与已安装文字快照解析业务目标，并复用右键的新增与弹窗流程。快捷键归属 `ShortcutSettings`，沿用设置预览/撤销与跨窗口重绑定；schema v13 为 `app_settings` 增加 `shortcut_add_text_mark`，旧配置缺省为 N。
+
 ```text
 vclogg-app                    # GPUI 应用外壳、展示状态与交互编排
 ├─ workspace                  # 窗口、标签、焦点和后台任务编排

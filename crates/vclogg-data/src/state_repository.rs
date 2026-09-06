@@ -20,7 +20,7 @@ use crate::{
 };
 
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
-pub const STATE_SCHEMA_VERSION: u32 = 12;
+pub const STATE_SCHEMA_VERSION: u32 = 13;
 
 /// Owns SQLite access for durable file-history and workspace records.
 pub struct StateRepository {
@@ -524,7 +524,7 @@ impl StateRepository {
                         app_log_level, light_log_text_color, light_log_background_color,
                         dark_log_text_color, dark_log_background_color, log_level_color_rules, selection_styles,
                         search_toolbar_height, search_toolbar_font_size,
-                        search_input_height, search_input_font_size
+                        search_input_height, search_input_font_size, shortcut_add_text_mark
                  FROM app_settings WHERE id = 1",
                 [],
                 |row| {
@@ -575,6 +575,7 @@ impl StateRepository {
                         search_toolbar_font_size: row.get(43)?,
                         search_input_height: row.get(44)?,
                         search_input_font_size: row.get(45)?,
+                        shortcut_add_text_mark: row.get(46)?,
                     })
                 },
             )
@@ -618,6 +619,7 @@ impl StateRepository {
                      shortcut_jump_to_bottom = excluded.shortcut_jump_to_bottom,
                      shortcut_cycle_color_label = excluded.shortcut_cycle_color_label,
                      shortcut_toggle_word_wrap = excluded.shortcut_toggle_word_wrap,
+                     shortcut_add_text_mark = excluded.shortcut_add_text_mark,
                      mouse_wheel_scroll_percent = excluded.mouse_wheel_scroll_percent,
                      scroll_by_line = excluded.scroll_by_line,
                      mouse_wheel_scroll_lines = excluded.mouse_wheel_scroll_lines,
@@ -663,8 +665,8 @@ impl StateRepository {
                      app_log_level, light_log_text_color, light_log_background_color,
                      dark_log_text_color, dark_log_background_color, log_level_color_rules, selection_styles,
                      search_toolbar_height, search_toolbar_font_size,
-                     search_input_height, search_input_font_size
-                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46)
+                     search_input_height, search_input_font_size, shortcut_add_text_mark
+                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47)
                  ON CONFLICT(id) DO UPDATE SET {update}");
         connection
             .execute(
@@ -716,6 +718,7 @@ impl StateRepository {
                     settings.search_toolbar_font_size,
                     settings.search_input_height,
                     settings.search_input_font_size,
+                    settings.shortcut_add_text_mark,
                 ],
             )
             .context("无法保存应用设置")?;
@@ -1306,6 +1309,7 @@ fn initialize_schema(connection: &Connection, defaults: &StateMigrationDefaults)
                  shortcut_jump_to_bottom TEXT NOT NULL DEFAULT 'Ctrl+End',
                  shortcut_cycle_color_label TEXT NOT NULL DEFAULT 'Ctrl+D',
                  shortcut_toggle_word_wrap TEXT NOT NULL DEFAULT 'W',
+                 shortcut_add_text_mark TEXT NOT NULL DEFAULT 'N',
                  mouse_wheel_scroll_percent INTEGER NOT NULL DEFAULT 100,
                  scroll_by_line INTEGER NOT NULL DEFAULT 0,
                  mouse_wheel_scroll_lines INTEGER NOT NULL DEFAULT 1,
@@ -1450,7 +1454,7 @@ fn ensure_color_label_columns(
 }
 
 fn ensure_app_settings_columns(connection: &Connection, default_log_level: &str) -> Result<()> {
-    const COLUMNS: [(&str, &str); 43] = [
+    const COLUMNS: [(&str, &str); 44] = [
         ("highlight_log_levels", "INTEGER NOT NULL DEFAULT 0"),
         ("log_level_color_rules", "TEXT NOT NULL DEFAULT ''"),
         ("selection_styles", "TEXT NOT NULL DEFAULT ''"),
@@ -1482,6 +1486,7 @@ fn ensure_app_settings_columns(connection: &Connection, default_log_level: &str)
             "TEXT NOT NULL DEFAULT 'Ctrl+D'",
         ),
         ("shortcut_toggle_word_wrap", "TEXT NOT NULL DEFAULT 'W'"),
+        ("shortcut_add_text_mark", "TEXT NOT NULL DEFAULT 'N'"),
         ("mouse_wheel_scroll_percent", "INTEGER NOT NULL DEFAULT 100"),
         ("scroll_by_line", "INTEGER NOT NULL DEFAULT 0"),
         ("mouse_wheel_scroll_lines", "INTEGER NOT NULL DEFAULT 1"),

@@ -316,10 +316,11 @@ enum ShortcutAction {
     JumpBottom,
     CycleColorLabel,
     ToggleWordWrap,
+    AddTextMark,
 }
 
 impl ShortcutAction {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::OpenFile,
         Self::FocusSearch,
         Self::QuickFind,
@@ -329,6 +330,7 @@ impl ShortcutAction {
         Self::JumpBottom,
         Self::CycleColorLabel,
         Self::ToggleWordWrap,
+        Self::AddTextMark,
     ];
 
     fn id(self) -> &'static str {
@@ -342,6 +344,7 @@ impl ShortcutAction {
             Self::JumpBottom => "jump-bottom",
             Self::CycleColorLabel => "cycle-color-label",
             Self::ToggleWordWrap => "toggle-word-wrap",
+            Self::AddTextMark => "add-text-mark",
         }
     }
 
@@ -356,6 +359,7 @@ impl ShortcutAction {
             Self::JumpBottom => crate::tr!("跳到日志底部", "Jump to end"),
             Self::CycleColorLabel => crate::tr!("轮换颜色标签", "Cycle color label"),
             Self::ToggleWordWrap => crate::tr!("切换自动换行", "Toggle word wrap"),
+            Self::AddTextMark => crate::tr!("新增文字标记", "New text mark"),
         }
     }
 
@@ -383,6 +387,10 @@ impl ShortcutAction {
                 "为选中日志行添加、轮换或移除颜色标签",
                 "Add, cycle, or remove a color label on selected log lines"
             ),
+            Self::AddTextMark => crate::tr!(
+                "为选中的一行打开新增文字标记弹窗",
+                "Open the new text mark dialog for the selected line"
+            ),
             Self::ToggleWordWrap => crate::tr!(
                 "切换正文、当前结果和全局结果的长行换行显示",
                 "Toggle wrapping in the log, current results, and global results"
@@ -401,6 +409,7 @@ impl ShortcutAction {
             Self::JumpBottom => &settings.jump_to_bottom,
             Self::CycleColorLabel => &settings.cycle_color_label,
             Self::ToggleWordWrap => &settings.toggle_word_wrap,
+            Self::AddTextMark => &settings.add_text_mark,
         }
     }
 
@@ -415,6 +424,7 @@ impl ShortcutAction {
             Self::JumpBottom => settings.jump_to_bottom = value,
             Self::CycleColorLabel => settings.cycle_color_label = value,
             Self::ToggleWordWrap => settings.toggle_word_wrap = value,
+            Self::AddTextMark => settings.add_text_mark = value,
         }
     }
 }

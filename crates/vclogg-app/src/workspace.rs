@@ -58,10 +58,10 @@ use vclogg_core::{
 
 use crate::{
     actions::{
-        CancelSearch, ClearSearch, CloseActiveTab, CopyCurrentLine, CopyCurrentLineWithNumber,
-        CopyFilePath, CycleColorLabel, ExtendSelectionDown, ExtendSelectionFirst,
-        ExtendSelectionLast, ExtendSelectionPageDown, ExtendSelectionPageUp, ExtendSelectionUp,
-        FocusSearch, GoToLine, JumpToEnd, JumpToStart, LOG_TABLE_CONTEXT,
+        AddTextMark, CancelSearch, ClearSearch, CloseActiveTab, CopyCurrentLine,
+        CopyCurrentLineWithNumber, CopyFilePath, CycleColorLabel, ExtendSelectionDown,
+        ExtendSelectionFirst, ExtendSelectionLast, ExtendSelectionPageDown, ExtendSelectionPageUp,
+        ExtendSelectionUp, FocusSearch, GoToLine, JumpToEnd, JumpToStart, LOG_TABLE_CONTEXT,
         MergeSearchResultsInNewTab, NewWindow, OpenFiles, OpenQuickFind, OpenSearchResultsInNewTab,
         OpenSettings, ReloadActive, SaveSearchResultsToFile, SelectAllRows, StartSearch,
         ToggleCaseSensitive, ToggleFullscreen, ToggleMarkedRow, ToggleRegex, ToggleWordWrap,
@@ -2546,6 +2546,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::copy_file_path))
             .on_action(cx.listener(Self::open_go_to_line))
             .on_action(cx.listener(Self::toggle_marked_row))
+            .on_action(cx.listener(Self::add_text_mark))
             .on_action(cx.listener(Self::cycle_color_label))
             .on_action(cx.listener(Self::focus_search))
             .on_action(cx.listener(Self::open_quick_find))

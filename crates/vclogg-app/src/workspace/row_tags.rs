@@ -71,6 +71,96 @@ struct TagDrag {
 }
 
 impl Workspace {
+    pub(super) fn add_text_mark(
+        &mut self,
+        _: &AddTextMark,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.open_task.is_some() || self.persistence.store.is_none() {
+            return;
+        }
+        let Some(context) = self.selected_tag_context(cx) else {
+            window.push_notification(
+                crate::tr!(
+                    "请选中一条已打开文件中的可见日志行",
+                    "Select one visible log line from an open file"
+                ),
+                cx,
+            );
+            return;
+        };
+        // Keyboard creation starts at the content origin, independent of the mouse
+        // and any previous context-menu target. The dialog defaults to vertical centering.
+        self.add_row_tag_at_position(context, Point::default(), None, window, cx);
+    }
+
+    fn selected_tag_context(&self, cx: &App) -> Option<TagContext> {
+        let (document_id, source_row, region, text, source_unavailable) =
+            match self.active_log_region {
+                LogRegion::GlobalResults if self.global_search.results_visible => {
+                    let table = self.global_table.read(cx);
+                    if table.delegate().selected_rows_count() != 1 {
+                        return None;
+                    }
+                    let WrappedGlobalRow::Match {
+                        document_id,
+                        source_row,
+                        text,
+                        source_unavailable,
+                        selected: true,
+                        ..
+                    } = table.delegate().wrapped_row(table.active_log_row()?)?
+                    else {
+                        return None;
+                    };
+                    (
+                        document_id,
+                        source_row,
+                        WrappedRegion::GlobalResults,
+                        text,
+                        source_unavailable,
+                    )
+                }
+                LogRegion::Body | LogRegion::CurrentResults => {
+                    let tab = self.active_document()?;
+                    let (table, region) = if self.active_log_region == LogRegion::CurrentResults {
+                        if !tab.results_visible {
+                            return None;
+                        }
+                        (&tab.result_table, WrappedRegion::Results)
+                    } else {
+                        (&tab.log_table, WrappedRegion::Log)
+                    };
+                    let table = table.read(cx);
+                    if table.delegate().selected_rows_count() != 1 {
+                        return None;
+                    }
+                    let row = table.delegate().wrapped_row(table.active_log_row()?)?;
+                    if !row.selected {
+                        return None;
+                    }
+                    (
+                        tab.id,
+                        row.source_row,
+                        region,
+                        row.text,
+                        row.source_unavailable,
+                    )
+                }
+                _ => return None,
+            };
+        // No pointer geometry is needed for the keyboard's content-relative origin.
+        self.tag_row_context(
+            document_id,
+            source_row,
+            region,
+            &text,
+            source_unavailable,
+            Rc::default(),
+        )
+    }
+
     pub(super) fn tag_row_context(
         &self,
         document_id: u64,
@@ -156,11 +246,11 @@ impl Workspace {
             move |mut menu, window, _| {
                 let create_context = context.clone();
                 menu = menu.item(
-                    PopupMenuItem::new(crate::tr!("新增标记…", "New mark…")).on_click(
-                        window.listener_for(&workspace, move |this, _, window, cx| {
+                    PopupMenuItem::new(crate::tr!("新增标记…", "New mark…"))
+                        .action(Box::new(AddTextMark))
+                        .on_click(window.listener_for(&workspace, move |this, _, window, cx| {
                             this.add_row_tag(create_context.clone(), position, None, window, cx);
-                        }),
-                    ),
+                        })),
                 );
                 let clear_context = context.clone();
                 menu = menu.item(
@@ -206,16 +296,27 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let Some(bounds) = context.bounds.get() else {
+            return;
+        };
+        self.add_row_tag_at_position(context, pointer - bounds.origin, preset, window, cx);
+    }
+
+    fn add_row_tag_at_position(
+        &mut self,
+        context: TagContext,
+        position: Point<Pixels>,
+        preset: Option<TagPreset>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.open_task.is_some()
+            || self.persistence.store.is_none()
             || !self.tag_target_is_current(context.target, &context.document)
         {
             return;
         }
-        let Some(bounds) = context.bounds.get() else {
-            return;
-        };
         let font_size = px(self.app_settings.log_font_size as f32);
-        let position = pointer - bounds.origin;
         let draft = RowTag {
             source_row: context.target.source_row,
             label: String::new(),

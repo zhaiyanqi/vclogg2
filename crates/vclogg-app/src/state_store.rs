@@ -73,6 +73,7 @@ pub struct ShortcutSettings {
     pub jump_to_bottom: String,
     pub cycle_color_label: String,
     pub toggle_word_wrap: String,
+    pub add_text_mark: String,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -224,6 +225,7 @@ impl Default for ShortcutSettings {
             jump_to_bottom: format!("{primary}+End"),
             cycle_color_label: format!("{primary}+D"),
             toggle_word_wrap: "W".into(),
+            add_text_mark: "N".into(),
         }
     }
 }
@@ -787,6 +789,7 @@ fn app_settings_from_record(record: AppSettingsRecord) -> AppSettings {
             jump_to_bottom: record.shortcut_jump_to_bottom,
             cycle_color_label: record.shortcut_cycle_color_label,
             toggle_word_wrap: record.shortcut_toggle_word_wrap,
+            add_text_mark: record.shortcut_add_text_mark,
         },
     }
 }
@@ -815,6 +818,7 @@ fn app_settings_to_record(settings: AppSettings) -> AppSettingsRecord {
         shortcut_jump_to_bottom: settings.shortcuts.jump_to_bottom,
         shortcut_cycle_color_label: settings.shortcuts.cycle_color_label,
         shortcut_toggle_word_wrap: settings.shortcuts.toggle_word_wrap,
+        shortcut_add_text_mark: settings.shortcuts.add_text_mark,
         mouse_wheel_scroll_percent: i64::from(settings.mouse_wheel_scroll_percent),
         scroll_by_line: settings.scroll_by_line,
         mouse_wheel_scroll_lines: i64::from(settings.mouse_wheel_scroll_lines),

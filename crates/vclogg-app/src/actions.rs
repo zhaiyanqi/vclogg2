@@ -27,6 +27,7 @@ actions!(
         CopyFilePath,
         GoToLine,
         ToggleMarkedRow,
+        AddTextMark,
         CycleColorLabel,
         FocusSearch,
         OpenQuickFind,
@@ -116,6 +117,7 @@ pub fn init(cx: &mut App) {
             Some(WORKSPACE_SHORTCUT_CONTEXT),
         ),
         KeyBinding::new("m", ToggleMarkedRow, Some(LOG_TABLE_SHORTCUT_CONTEXT)),
+        KeyBinding::new("n", AddTextMark, Some(LOG_TABLE_SHORTCUT_CONTEXT)),
         KeyBinding::new(
             &format!("{primary}-d"),
             CycleColorLabel,
@@ -254,6 +256,13 @@ pub fn apply_shortcuts(previous: &ShortcutSettings, next: &ShortcutSettings, cx:
         &next.toggle_word_wrap,
         ToggleWordWrap,
         WORKSPACE_SHORTCUT_CONTEXT,
+    );
+    rebind(
+        &mut bindings,
+        &previous.add_text_mark,
+        &next.add_text_mark,
+        AddTextMark,
+        LOG_TABLE_SHORTCUT_CONTEXT,
     );
     cx.bind_keys(bindings);
 }
