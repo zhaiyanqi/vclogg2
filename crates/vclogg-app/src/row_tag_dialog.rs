@@ -333,6 +333,7 @@ impl RowTagDialog {
                 transparency: self.transparency.read(cx).value().start().round() as u8,
                 bold: self.preset.style.bold,
                 pill: self.preset.style.pill,
+                vertical_center: self.preset.style.vertical_center,
             },
         }
     }
@@ -344,7 +345,11 @@ impl RowTagDialog {
         let Some(geometry) = self.preview_geometry.get() else {
             return;
         };
-        let position = geometry.drag_position(position, drag.grab_offset);
+        let mut position = geometry.drag_position(position, drag.grab_offset);
+        if self.preset.style.vertical_center {
+            // Keep the free-position draft for when centering is turned off again.
+            position.y = self.preview_position.unwrap_or(self.preview.position).y;
+        }
         if self.preview_position != Some(position) {
             self.preview_position = Some(position);
             cx.notify();
@@ -427,6 +432,7 @@ impl RowTagDialog {
             "tag-dialog-preview-layer",
             vec![PositionedTag {
                 position: self.preview_position.unwrap_or(self.preview.position),
+                vertical_center: preset.style.vertical_center,
                 geometry: self.preview_geometry.clone(),
                 element: Some(tag.into_any_element()),
             }],
@@ -618,6 +624,15 @@ impl Render for RowTagDialog {
                                 cx.notify();
                             })),
                     ),
+            )
+            .child(
+                Checkbox::new("tag-vertical-center")
+                    .label(crate::tr!("垂直居中", "Center vertically"))
+                    .checked(self.preset.style.vertical_center)
+                    .on_click(cx.listener(|this, value, _, cx| {
+                        this.preset.style.vertical_center = *value;
+                        cx.notify();
+                    })),
             )
             .when_some(self.error.clone(), |content, error| {
                 content.child(div().text_sm().text_color(cx.theme().danger).child(error))

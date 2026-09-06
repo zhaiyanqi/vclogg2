@@ -10,6 +10,7 @@ use gpui::{
 pub(crate) struct TagGeometry {
     pub(crate) content: Bounds<Pixels>,
     pub(crate) tag: Bounds<Pixels>,
+    vertical_center: bool,
 }
 
 impl TagGeometry {
@@ -18,16 +19,21 @@ impl TagGeometry {
         pointer: Point<Pixels>,
         grab_offset: Point<Pixels>,
     ) -> Point<Pixels> {
-        let position = pointer - self.content.origin - grab_offset;
+        self.constrain_position(pointer - self.content.origin - grab_offset)
+    }
+
+    fn constrain_position(self, position: Point<Pixels>) -> Point<Pixels> {
+        let vertical_space = (self.content.size.height - self.tag.size.height).max(px(0.));
         point(
             position.x.clamp(
                 px(0.),
                 (self.content.size.width - self.tag.size.width).max(px(0.)),
             ),
-            position.y.clamp(
-                px(0.),
-                (self.content.size.height - self.tag.size.height).max(px(0.)),
-            ),
+            if self.vertical_center {
+                vertical_space / 2.
+            } else {
+                position.y.clamp(px(0.), vertical_space)
+            },
         )
     }
 }
@@ -45,6 +51,7 @@ pub(crate) type TagGeometryHandle = Rc<Cell<Option<TagGeometry>>>;
 
 pub(crate) struct PositionedTag {
     pub(crate) position: Point<Pixels>,
+    pub(crate) vertical_center: bool,
     pub(crate) geometry: TagGeometryHandle,
     pub(crate) element: Option<AnyElement>,
 }
@@ -130,20 +137,14 @@ impl Element for LogTagLayer {
                 window,
                 cx,
             );
-            let offset = point(
-                tag.position
-                    .x
-                    .clamp(px(0.), (bounds.size.width - measured.width).max(px(0.))),
-                tag.position
-                    .y
-                    .clamp(px(0.), (bounds.size.height - measured.height).max(px(0.))),
-            );
-            let tag_bounds = Bounds::new(bounds.origin + offset, measured);
-            tag.geometry.set(Some(TagGeometry {
+            let mut geometry = TagGeometry {
                 content: bounds,
-                tag: tag_bounds,
-            }));
-            element.prepaint_at(tag_bounds.origin, window, cx);
+                tag: Bounds::new(bounds.origin, measured),
+                vertical_center: tag.vertical_center,
+            };
+            geometry.tag.origin = bounds.origin + geometry.constrain_position(tag.position);
+            tag.geometry.set(Some(geometry));
+            element.prepaint_at(geometry.tag.origin, window, cx);
             elements.push(element);
         }
     }

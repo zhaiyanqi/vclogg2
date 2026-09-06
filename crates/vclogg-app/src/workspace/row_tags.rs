@@ -776,6 +776,7 @@ impl Workspace {
                 };
                 PositionedTag {
                     position,
+                    vertical_center: tag.style.vertical_center,
                     geometry,
                     element: Some(element),
                 }
@@ -849,7 +850,9 @@ impl Workspace {
             .cloned()
         {
             tag.x = position_units(drag.position.x, drag.payload.font_size);
-            tag.y = position_units(drag.position.y, drag.payload.font_size);
+            if !tag.style.vertical_center {
+                tag.y = position_units(drag.position.y, drag.payload.font_size);
+            }
             tab.file.row_tags.insert(drag.payload.id, tag);
             self.row_tag_changed(drag.payload.target.document_id, None, window, cx);
         }

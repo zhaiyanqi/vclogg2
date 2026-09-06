@@ -34,6 +34,8 @@ pub(crate) struct TagStyle {
     pub(crate) transparency: u8,
     pub(crate) bold: bool,
     pub(crate) pill: bool,
+    #[serde(default)]
+    pub(crate) vertical_center: bool,
 }
 
 impl TagStyle {
