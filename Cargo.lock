@@ -7578,9 +7578,14 @@ dependencies = [
  "gpui-component",
  "gpui-component-assets",
  "gpui_platform",
+ "image",
  "keyring",
  "log",
  "notify",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "raw-window-handle",
  "rayon",
  "reqwest",
  "semver",
@@ -7593,6 +7598,7 @@ dependencies = [
  "vclogg-core",
  "vclogg-data",
  "windows-sys 0.61.2",
+ "x11rb",
 ]
 
 [[package]]

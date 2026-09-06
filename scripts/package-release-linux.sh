@@ -56,6 +56,12 @@ install -m 644 "$repository_root/LICENSE" "$stage_directory/LICENSE"
 install -m 644 \
   "$repository_root/crates/vclogg-app/resources/windows/vclogg2.png" \
   "$stage_directory/vclogg2.png"
+mkdir -p "$stage_directory/icons"
+for icon in soft compact illustration sticker; do
+  install -m 644 \
+    "$repository_root/crates/vclogg-app/resources/icons/$icon.png" \
+    "$stage_directory/icons/$icon.png"
+done
 install -m 755 \
   "$script_directory/Install-VCLogg2-linux.sh" \
   "$stage_directory/Install-VCLogg2-linux.sh"

@@ -88,6 +88,7 @@ pub struct ColorLabelRecord {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppSettingsRecord {
+    pub app_icon: String,
     pub default_show_line_numbers: bool,
     pub default_show_row_separators: bool,
     pub highlight_log_levels: bool,

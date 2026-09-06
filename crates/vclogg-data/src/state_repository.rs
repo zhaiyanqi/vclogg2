@@ -20,7 +20,7 @@ use crate::{
 };
 
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
-pub const STATE_SCHEMA_VERSION: u32 = 13;
+pub const STATE_SCHEMA_VERSION: u32 = 14;
 
 /// Owns SQLite access for durable file-history and workspace records.
 pub struct StateRepository {
@@ -524,7 +524,7 @@ impl StateRepository {
                         app_log_level, light_log_text_color, light_log_background_color,
                         dark_log_text_color, dark_log_background_color, log_level_color_rules, selection_styles,
                         search_toolbar_height, search_toolbar_font_size,
-                        search_input_height, search_input_font_size, shortcut_add_text_mark
+                        search_input_height, search_input_font_size, shortcut_add_text_mark, app_icon
                  FROM app_settings WHERE id = 1",
                 [],
                 |row| {
@@ -576,6 +576,7 @@ impl StateRepository {
                         search_input_height: row.get(44)?,
                         search_input_font_size: row.get(45)?,
                         shortcut_add_text_mark: row.get(46)?,
+                        app_icon: row.get(47)?,
                     })
                 },
             )
@@ -641,6 +642,7 @@ impl StateRepository {
                      viewer_overscan = excluded.viewer_overscan,
                      language = excluded.language,
                      app_log_level = excluded.app_log_level,
+                     app_icon = excluded.app_icon,
                      light_log_text_color = excluded.light_log_text_color,
                      light_log_background_color = excluded.light_log_background_color,
                      dark_log_text_color = excluded.dark_log_text_color,
@@ -665,8 +667,8 @@ impl StateRepository {
                      app_log_level, light_log_text_color, light_log_background_color,
                      dark_log_text_color, dark_log_background_color, log_level_color_rules, selection_styles,
                      search_toolbar_height, search_toolbar_font_size,
-                     search_input_height, search_input_font_size, shortcut_add_text_mark
-                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47)
+                     search_input_height, search_input_font_size, shortcut_add_text_mark, app_icon
+                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48)
                  ON CONFLICT(id) DO UPDATE SET {update}");
         connection
             .execute(
@@ -719,6 +721,7 @@ impl StateRepository {
                     settings.search_input_height,
                     settings.search_input_font_size,
                     settings.shortcut_add_text_mark,
+                    settings.app_icon,
                 ],
             )
             .context("无法保存应用设置")?;
@@ -1331,6 +1334,7 @@ fn initialize_schema(connection: &Connection, defaults: &StateMigrationDefaults)
                  viewer_overscan INTEGER NOT NULL DEFAULT 12,
                  language TEXT NOT NULL DEFAULT 'zh-CN',
                  app_log_level TEXT NOT NULL DEFAULT 'error',
+                 app_icon TEXT NOT NULL DEFAULT 'soft',
                  light_log_text_color TEXT,
                  light_log_background_color TEXT,
                  dark_log_text_color TEXT,
@@ -1454,7 +1458,8 @@ fn ensure_color_label_columns(
 }
 
 fn ensure_app_settings_columns(connection: &Connection, default_log_level: &str) -> Result<()> {
-    const COLUMNS: [(&str, &str); 44] = [
+    const COLUMNS: [(&str, &str); 45] = [
+        ("app_icon", "TEXT NOT NULL DEFAULT 'soft'"),
         ("highlight_log_levels", "INTEGER NOT NULL DEFAULT 0"),
         ("log_level_color_rules", "TEXT NOT NULL DEFAULT ''"),
         ("selection_styles", "TEXT NOT NULL DEFAULT ''"),

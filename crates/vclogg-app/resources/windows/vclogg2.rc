@@ -4,3 +4,6 @@
 #define IDI_VCLOGG2 1
 
 IDI_VCLOGG2 ICON "resources/windows/vclogg2.ico"
+2 ICON "resources/icons/compact.ico"
+3 ICON "resources/icons/illustration.ico"
+4 ICON "resources/icons/sticker.ico"

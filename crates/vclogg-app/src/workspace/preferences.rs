@@ -8,6 +8,7 @@ impl Workspace {
             .unwrap_or_default();
         (
             AppSettings {
+                app_icon: crate::app_icon::restored_icon(Default::default(), cx),
                 default_case_sensitive: search_options.0,
                 default_use_regex: search_options.1,
                 ..AppSettings::default()
@@ -1177,6 +1178,7 @@ impl Workspace {
         crate::i18n::set_language(settings.language);
         self.refresh_localized_input_copy(window, cx);
         crate::app_log::set_level(settings.app_log_level);
+        crate::app_icon::apply(settings.app_icon, window, cx);
         Self::apply_theme_preference(&settings, window, cx);
         self.app_settings = settings.clone();
         if commit_defaults {

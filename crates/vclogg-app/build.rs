@@ -120,6 +120,9 @@ fn embed_windows_resources() {
 
     println!("cargo:rerun-if-changed={RESOURCE_SCRIPT}");
     println!("cargo:rerun-if-changed=resources/windows/vclogg2.ico");
+    for name in ["compact", "illustration", "sticker"] {
+        println!("cargo:rerun-if-changed=resources/icons/{name}.ico");
+    }
     embed_resource::compile(RESOURCE_SCRIPT, embed_resource::NONE)
         .manifest_required()
         .expect("compile VCLogg2 Windows resources");

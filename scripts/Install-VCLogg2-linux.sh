@@ -45,7 +45,7 @@ done
 binary_directory="${HOME}/.local/bin"
 data_directory="${XDG_DATA_HOME:-${HOME}/.local/share}"
 application_directory="$data_directory/applications"
-icon_directory="$data_directory/icons/hicolor/512x512/apps"
+icon_directory="$data_directory/icons/hicolor/1024x1024/apps"
 mime_package_directory="$data_directory/mime/packages"
 mkdir -p \
   "$binary_directory" \
@@ -55,6 +55,8 @@ mkdir -p \
 ln -sfn "$installed_executable" "$binary_directory/vclogg2"
 if [ -f "$source_icon" ]; then
   install -m 644 "$source_icon" "$icon_directory/com.vclogg2.desktop.png"
+  # Replace the older installer's size entry so it cannot mask the new default.
+  rm -f "$data_directory/icons/hicolor/512x512/apps/com.vclogg2.desktop.png"
 fi
 
 desktop_file="$application_directory/com.vclogg2.desktop.desktop"
@@ -71,6 +73,28 @@ desktop_file="$application_directory/com.vclogg2.desktop.desktop"
   echo 'StartupNotify=true'
 } >"$desktop_file"
 chmod 644 "$desktop_file"
+
+# Wayland resolves the running window's app ID through a desktop entry. Keep
+# alternate entries out of launch menus and file associations; they only supply
+# the selected running icon. The normal launcher remains the default A icon.
+for icon in compact illustration sticker; do
+  alternate_icon="$script_directory/icons/$icon.png"
+  if [ -f "$alternate_icon" ]; then
+    desktop_id="com.vclogg2.desktop.$icon"
+    install -m 644 "$alternate_icon" "$icon_directory/$desktop_id.png"
+    {
+      echo '[Desktop Entry]'
+      echo 'Type=Application'
+      echo 'Name=VCLogg2'
+      printf 'Exec="%s" %%F\n' "$installed_executable"
+      printf 'Icon=%s\n' "$desktop_id"
+      echo 'NoDisplay=true'
+      echo 'Terminal=false'
+      echo 'StartupNotify=true'
+    } >"$application_directory/$desktop_id.desktop"
+    chmod 644 "$application_directory/$desktop_id.desktop"
+  fi
+done
 
 mime_package="$mime_package_directory/com.vclogg2.desktop.xml"
 {
@@ -90,6 +114,9 @@ if command -v update-mime-database >/dev/null 2>&1; then
 fi
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "$application_directory" >/dev/null 2>&1 || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -f -t "$data_directory/icons/hicolor" >/dev/null 2>&1 || true
 fi
 
 echo "VCLogg2 installed at: $installed_executable"

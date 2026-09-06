@@ -2033,6 +2033,8 @@ impl Workspace {
                         cloud_settings,
                     )) => {
                         let mut app_settings = app_settings;
+                        app_settings.app_icon = crate::app_icon::restored_icon(app_settings.app_icon, cx);
+                        crate::app_icon::apply(app_settings.app_icon, window, cx);
                         let preserve_search_options = this.search_options_modified;
                         let local_search_options = preserve_search_options
                             .then_some((this.case_sensitive, this.regex));

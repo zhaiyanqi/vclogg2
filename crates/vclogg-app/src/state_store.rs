@@ -232,6 +232,7 @@ impl Default for ShortcutSettings {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppSettings {
+    pub(crate) app_icon: crate::app_icon::AppIcon,
     pub app_log_level: AppLogLevel,
     pub language: Language,
     pub theme_preference: ThemePreference,
@@ -277,6 +278,7 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            app_icon: crate::app_icon::AppIcon::default(),
             app_log_level: AppLogLevel::default(),
             language: Language::Chinese,
             theme_preference: ThemePreference::Light,
@@ -714,6 +716,7 @@ impl StateStore {
 
 fn app_settings_from_record(record: AppSettingsRecord) -> AppSettings {
     AppSettings {
+        app_icon: crate::app_icon::AppIcon::from_storage_value(&record.app_icon),
         app_log_level: AppLogLevel::from_database(&record.app_log_level),
         language: Language::from_database(&record.language),
         theme_preference: ThemePreference::from_database(&record.theme_preference),
@@ -796,6 +799,7 @@ fn app_settings_from_record(record: AppSettingsRecord) -> AppSettings {
 
 fn app_settings_to_record(settings: AppSettings) -> AppSettingsRecord {
     AppSettingsRecord {
+        app_icon: settings.app_icon.storage_value().into(),
         default_show_line_numbers: settings.default_show_line_numbers,
         default_show_row_separators: settings.default_show_row_separators,
         highlight_log_levels: settings.highlight_log_levels,

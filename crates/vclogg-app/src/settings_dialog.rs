@@ -2,12 +2,12 @@ use std::{
     collections::{BTreeMap, HashMap},
     path::PathBuf,
     rc::Rc,
-    sync::{Arc, OnceLock},
+    sync::Arc,
 };
 
 use chrono::{DateTime, Local, Utc};
 use gpui::{
-    AnyElement, AppContext as _, Context, Entity, EventEmitter, Focusable as _, Image, ImageFormat,
+    AnyElement, AppContext as _, Context, Entity, EventEmitter, Focusable as _,
     InteractiveElement as _, IntoElement, KeyDownEvent, ObjectFit, ParentElement as _, Render,
     SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _, Subscription,
     Task, UniformListScrollHandle, Window, div, img, prelude::FluentBuilder as _, uniform_list,
@@ -32,6 +32,7 @@ use gpui_component::{
 };
 
 use crate::{
+    app_icon::AppIcon,
     app_log::{self, AppLogLevel},
     cloud_filters::{CloudClient, CloudConnectionProfile},
     i18n::Language,
@@ -107,32 +108,6 @@ fn theme_preference_description(preference: ThemePreference) -> &'static str {
             "Low-glare dark surfaces for dim environments",
         ),
     }
-}
-
-#[cfg(windows)]
-fn application_icon() -> Arc<Image> {
-    static ICON: OnceLock<Arc<Image>> = OnceLock::new();
-
-    ICON.get_or_init(|| {
-        Arc::new(Image::from_bytes(
-            ImageFormat::Ico,
-            include_bytes!("../resources/windows/vclogg2.ico").to_vec(),
-        ))
-    })
-    .clone()
-}
-
-#[cfg(not(windows))]
-fn application_icon() -> Arc<Image> {
-    static ICON: OnceLock<Arc<Image>> = OnceLock::new();
-
-    ICON.get_or_init(|| {
-        Arc::new(Image::from_bytes(
-            ImageFormat::Png,
-            include_bytes!("../resources/windows/vclogg2.png").to_vec(),
-        ))
-    })
-    .clone()
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -240,8 +215,8 @@ impl SettingsCategory {
                 "Keyboard bindings and conflict checks for application commands",
             ),
             Self::Advanced => crate::tr!(
-                "应用日志等级、诊断记录与导出",
-                "Application log levels, diagnostic records, and export",
+                "应用图标、日志等级、诊断记录与导出",
+                "Application icon, log levels, diagnostic records, and export",
             ),
             Self::About => crate::tr!(
                 "版本、构建信息、技术栈、开源组件与许可",
@@ -279,7 +254,7 @@ impl SettingsCategory {
                 "快捷键 打开文件 聚焦搜索框 快速查找 关闭当前标签 打开设置 切换区分大小写 跳到日志底部 轮换颜色标签 切换自动换行 按键 绑定 冲突 keyboard shortcut keymap"
             }
             Self::Advanced => {
-                "高级 应用日志 日志等级 关闭 Error Warn Info Debug Trace 导出 诊断 advanced application log level export diagnostics"
+                "高级 应用图标 啄木鸟 软萌 立体 坐姿 插画 贴纸 应用日志 日志等级 关闭 Error Warn Info Debug Trace 导出 诊断 advanced application icon mascot log level export diagnostics"
             }
             Self::About => {
                 "关于 VCLogg2 版本 编译时间 构建目标 commit 提交 技术栈 开源库 GitHub 仓库 repository 源代码 source code 作者 zhaiyanqi copyright 版权 Apache 2.0 license Rust GPUI SQLite"
@@ -1958,6 +1933,46 @@ impl SettingsDialog {
             .into_any_element()
     }
 
+    fn render_icon_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        v_flex()
+            .id("settings-application-icon-section")
+            .gap_3()
+            .p_3()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(crate::tr!("应用图标", "Application icon")))
+            .child(div().text_sm().text_color(cx.theme().muted_foreground).child(crate::tr!(
+                "选择后立即预览，保存后下次启动继续使用。",
+                "Preview immediately; save to keep your choice on the next launch."
+            )))
+            .child(
+                RadioGroup::horizontal("settings-application-icon")
+                    .selected_index(Some(self.draft.app_icon.index()))
+                    .children(AppIcon::ALL.into_iter().map(|icon| {
+                        Radio::new((gpui::ElementId::from("application-icon"), icon.storage_value()))
+                            .label(icon.label())
+                            .small()
+                            .w_56()
+                            .p_2()
+                            .border_1()
+                            .border_color(if self.draft.app_icon == icon { cx.theme().primary } else { cx.theme().border })
+                            .child(img(icon.image()).size_16().object_fit(ObjectFit::Contain))
+                    }))
+                    .on_click(cx.listener(|this, ix, _, cx| {
+                        if let Some(icon) = AppIcon::ALL.get(*ix) {
+                            this.draft.app_icon = *icon;
+                            Self::draft_changed(cx);
+                        }
+                    })),
+            )
+            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(crate::tr!(
+                "更改运行中的应用图标；安装包、文件管理器和已固定快捷方式仍使用默认图标。Linux 桌面需运行安装器，显示效果取决于桌面环境。",
+                "Changes the running app icon. Packages, file managers, and pinned shortcuts keep the default. Linux desktop icons require the installer and depend on the desktop environment."
+            )))
+            .into_any_element()
+    }
+
     fn render_about(&self, cx: &mut Context<Self>) -> AnyElement {
         let build_time = local_build_time();
         v_flex()
@@ -1980,7 +1995,7 @@ impl SettingsDialog {
                             .border_color(cx.theme().border)
                             .bg(cx.theme().muted)
                             .child(
-                                img(application_icon())
+                                img(self.draft.app_icon.image())
                                     .size_12()
                                     .object_fit(ObjectFit::Contain),
                             ),
@@ -3505,7 +3520,7 @@ impl Render for SettingsDialog {
                                         has_matches
                                             && active_category == SettingsCategory::Advanced,
                                         |content| {
-                                            content.child(
+                                            content.child(self.render_icon_settings(cx)).child(
                                                 v_flex()
                     .id("settings-application-log-section")
                     .gap_3()

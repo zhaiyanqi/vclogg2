@@ -4,6 +4,7 @@
 )]
 
 mod actions;
+mod app_icon;
 mod app_log;
 mod app_paths;
 mod build_info;
@@ -103,6 +104,7 @@ fn open_workspace_window_with_options(
     };
     let handle = cx.open_window(window_options, |window, cx| {
         window.set_window_title("VCLogg2");
+        app_icon::attach_window(window, cx);
         let workspace = cx.new(|cx| Workspace::new(primary, initial_documents, window, cx));
         Workspace::register_window(&workspace, window, cx);
         cx.new(|cx| Root::new(workspace, window, cx))
@@ -208,6 +210,7 @@ fn main() {
         ui_theme::apply_product_theme(ThemeMode::Light, cx);
         actions::init(cx);
         Workspace::init_window_registry(cx);
+        app_icon::init(cx);
         let mut request_tasks = vec![external_request_listener(platform_open_receiver, cx)];
         if let Some(receiver) = forwarded_requests {
             request_tasks.push(external_request_listener(receiver, cx));
