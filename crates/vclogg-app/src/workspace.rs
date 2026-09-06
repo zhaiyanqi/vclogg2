@@ -408,6 +408,7 @@ struct WorkspaceWindowRegistry {
     closed_flush_tasks: Vec<Task<()>>,
     predefined_filters: Option<Vec<PredefinedFilter>>,
     row_tag_presets: Option<Vec<crate::log_tags::TagPreset>>,
+    row_tag_sequence: u64,
     row_tag_preset_save_completion: Option<async_channel::Receiver<()>>,
     cross_window_tab_drag: Option<CrossWindowTabDrag>,
     search_options: Option<(bool, bool)>,
@@ -1990,6 +1991,7 @@ impl Workspace {
                     let search_history = store.load_search_history()?;
                     let predefined_filters = store.load_predefined_filters()?;
                     let row_tag_presets = store.load_row_tag_presets()?;
+                    let row_tag_sequence = store.load_row_tag_sequence()?;
                     let cloud_settings = store.load_cloud_settings()?;
                     Ok::<_, anyhow::Error>((
                         store,
@@ -2005,6 +2007,7 @@ impl Workspace {
                         search_history,
                         predefined_filters,
                         row_tag_presets,
+                        row_tag_sequence,
                         cloud_settings,
                     ))
                 })
@@ -2026,6 +2029,7 @@ impl Workspace {
                         search_history,
                         predefined_filters,
                         row_tag_presets,
+                        row_tag_sequence,
                         cloud_settings,
                     )) => {
                         let mut app_settings = app_settings;
@@ -2051,6 +2055,7 @@ impl Workspace {
                         let pending_workspace_search_save =
                             this.persistence.pending_workspace_search_save.take();
                         cx.update_global::<WorkspaceWindowRegistry, _>(|registry, _| {
+                            registry.row_tag_sequence = registry.row_tag_sequence.max(row_tag_sequence);
                             registry.row_tag_presets.get_or_insert(row_tag_presets);
                             if !registry.last_settings_category_loaded {
                                 registry.last_settings_category = last_settings_category

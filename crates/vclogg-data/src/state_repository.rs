@@ -20,7 +20,7 @@ use crate::{
 };
 
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
-pub const STATE_SCHEMA_VERSION: u32 = 11;
+pub const STATE_SCHEMA_VERSION: u32 = 12;
 
 /// Owns SQLite access for durable file-history and workspace records.
 pub struct StateRepository {
@@ -450,9 +450,36 @@ impl StateRepository {
         Ok(presets)
     }
 
-    pub fn remember_row_tag_preset(&self, id: &str, payload: &str) -> Result<()> {
+    pub fn deleted_row_tag_preset_ids(&self) -> Result<Vec<String>> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare("SELECT id FROM deleted_row_tag_presets")?;
+        Ok(statement
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn delete_row_tag_preset(&self, id: &str) -> Result<()> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute("DELETE FROM row_tag_presets WHERE id = ?1", [id])?;
+        // Legacy file annotations may still contain this preset. Hide them on future loads.
+        transaction.execute(
+            "INSERT OR IGNORE INTO deleted_row_tag_presets(id) VALUES (?1)",
+            [id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn remember_row_tag_preset(&self, id: &str, payload: &str, sequence: u64) -> Result<()> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute("DELETE FROM deleted_row_tag_presets WHERE id = ?1", [id])?;
+        transaction.execute(
+            "INSERT INTO ui_state(key, value) VALUES ('row_tags.sequence', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = CAST(MAX(CAST(value AS INTEGER), ?1) AS TEXT)",
+            [i64::try_from(sequence).unwrap_or(i64::MAX)],
+        )?;
         transaction.execute(
             "INSERT INTO row_tag_presets(id, payload, used_order)
              VALUES (?1, ?2, (SELECT COALESCE(MAX(used_order), 0) + 1 FROM row_tag_presets))
@@ -1246,6 +1273,9 @@ fn initialize_schema(connection: &Connection, defaults: &StateMigrationDefaults)
                  id TEXT PRIMARY KEY,
                  payload TEXT NOT NULL,
                  used_order INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS deleted_row_tag_presets (
+                 id TEXT PRIMARY KEY
              );
              CREATE TABLE IF NOT EXISTS last_workspace_files (
                  position INTEGER PRIMARY KEY,

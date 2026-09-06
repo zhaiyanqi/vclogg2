@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     log_tag_layer::{LogTagLayer, PositionedTag, TagDragPreview, TagGeometryHandle},
     log_tags::{RowTag, TagColor, TagPreset, TagStyle, source_digest},
-    row_tag_dialog::{RowTagDialog, RowTagPreview},
+    row_tag_dialog::{RowTagDialog, RowTagDialogEvent, RowTagPreview},
 };
 use std::sync::Weak;
 
@@ -26,6 +26,7 @@ pub(super) struct TagInteractionState {
     context: Option<(TagContext, Point<Pixels>)>,
     pub(super) menu_target: Option<TagMenuTarget>,
     dialog: Option<WeakEntity<RowTagDialog>>,
+    dialog_subscription: Option<Subscription>,
     drag: Option<TagDrag>,
 }
 
@@ -44,6 +45,14 @@ struct TagEditRequest {
     id: String,
     draft: RowTag,
     is_new: bool,
+}
+
+enum TagPresetChange {
+    Remember(TagPreset),
+    Delete {
+        label: String,
+        editor: WeakEntity<RowTagDialog>,
+    },
 }
 
 #[derive(Clone)]
@@ -300,13 +309,43 @@ impl Workspace {
             cx,
         );
         let mut initial_preset = draft.preset();
-        if is_new && let Some(last_used) = presets.first() {
-            // Reuse the last confirmed appearance, keeping the new tag's text empty.
-            initial_preset.color = last_used.color;
-            initial_preset.style = last_used.style.clone();
+        if is_new {
+            if let Some(last_used) = presets.first() {
+                initial_preset.color = last_used.color;
+                initial_preset.style = last_used.style.clone();
+            }
+            initial_preset.style.vertical_center = true;
+            let number = cx.update_global::<WorkspaceWindowRegistry, _>(|registry, _| {
+                registry.row_tag_sequence = registry
+                    .row_tag_sequence
+                    .max(
+                        presets
+                            .iter()
+                            .filter_map(TagPreset::sequence_number)
+                            .max()
+                            .unwrap_or_default(),
+                    )
+                    .saturating_add(1);
+                registry.row_tag_sequence
+            });
+            initial_preset.label = crate::tr_args!("标记 {number}", "mark {number}");
         }
         let editor = cx.new(|cx| RowTagDialog::new(initial_preset, presets, preview, window, cx));
         self.row_tags.dialog = Some(editor.downgrade());
+        self.row_tags.dialog_subscription = Some(cx.subscribe_in(
+            &editor,
+            window,
+            |this, editor, event: &RowTagDialogEvent, window, cx| match event {
+                RowTagDialogEvent::DeletePreset(label) => this.change_row_tag_preset(
+                    TagPresetChange::Delete {
+                        label: label.clone(),
+                        editor: editor.downgrade(),
+                    },
+                    window,
+                    cx,
+                ),
+            },
+        ));
         let input = editor.read(cx).input();
         window.defer(cx, move |window, cx| {
             input.focus_handle(cx).focus(window, cx);
@@ -403,6 +442,7 @@ impl Workspace {
                     editor_close.update(cx, |editor, cx| editor.cancel_preview_drag(window, cx));
                     _ = workspace_close.update(cx, |this, cx| {
                         this.row_tags.dialog = None;
+                        this.row_tags.dialog_subscription = None;
                         cx.notify();
                     });
                 })
@@ -461,14 +501,39 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.change_row_tag_preset(TagPresetChange::Remember(preset), window, cx);
+    }
+
+    fn change_row_tag_preset(
+        &mut self,
+        change: TagPresetChange,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(store) = self.persistence.store.clone() else {
+            if let TagPresetChange::Delete { editor, .. } = change {
+                _ = editor.update(cx, |editor, cx| {
+                    editor.finish_history_delete(
+                        Some(
+                            crate::tr!(
+                                "状态库不可用，请稍后重试",
+                                "Storage unavailable. Try again later"
+                            )
+                            .into(),
+                        ),
+                        cx,
+                    )
+                });
+            }
             return;
         };
         let (sender, receiver) = async_channel::bounded::<()>(1);
         let previous = cx.update_global::<WorkspaceWindowRegistry, _>(|registry, _| {
-            let presets = registry.row_tag_presets.get_or_insert_with(Vec::new);
-            presets.retain(|existing| existing.label != preset.label);
-            presets.insert(0, preset.clone());
+            if let TagPresetChange::Remember(preset) = &change {
+                registry.row_tag_sequence = registry
+                    .row_tag_sequence
+                    .max(preset.sequence_number().unwrap_or_default());
+            }
             registry.row_tag_preset_save_completion.replace(receiver)
         });
         self.persistence
@@ -477,10 +542,64 @@ impl Workspace {
                 if let Some(previous) = previous {
                     _ = previous.recv().await;
                 }
-                let result = cx
-                    .background_spawn(async move { store.remember_row_tag_preset(&preset) })
-                    .await;
-                drop(sender);
+                let result = match &change {
+                    TagPresetChange::Remember(preset) => {
+                        let preset = preset.clone();
+                        cx.background_spawn(async move { store.remember_row_tag_preset(&preset) })
+                            .await
+                    }
+                    TagPresetChange::Delete { label, .. } => {
+                        let label = label.clone();
+                        cx.background_spawn(async move { store.delete_row_tag_preset(&label) })
+                            .await
+                    }
+                };
+                gpui::AsyncApp::update_global::<WorkspaceWindowRegistry, _>(cx, |registry, cx| {
+                    if result.is_ok() {
+                        let presets = registry.row_tag_presets.get_or_insert_with(Vec::new);
+                        match &change {
+                            TagPresetChange::Remember(preset) => {
+                                presets.retain(|existing| existing.label != preset.label);
+                                presets.insert(0, preset.clone());
+                            }
+                            TagPresetChange::Delete { label, .. } => {
+                                presets.retain(|preset| &preset.label != label)
+                            }
+                        }
+                        let presets = presets.clone();
+                        let editors = registry
+                            .windows
+                            .iter()
+                            .filter_map(|entry| {
+                                entry
+                                    .workspace
+                                    .read(cx)
+                                    .row_tags
+                                    .dialog
+                                    .as_ref()
+                                    .and_then(WeakEntity::upgrade)
+                            })
+                            .collect::<Vec<_>>();
+                        for editor in editors {
+                            editor.update(cx, |editor, cx| {
+                                editor.replace_presets(presets.clone(), cx)
+                            });
+                        }
+                    }
+                    if let TagPresetChange::Delete { editor, .. } = &change {
+                        _ = editor.update(cx, |editor, cx| {
+                            editor.finish_history_delete(
+                                result.as_ref().err().map(|error| {
+                                    crate::tr_args!(
+                                        "历史标记删除失败：{error}",
+                                        "Couldn’t delete history mark: {error}"
+                                    )
+                                }),
+                                cx,
+                            )
+                        });
+                    }
+                });
                 if let Err(error) = result {
                     _ = cx.update(|window, cx| {
                         window.push_notification(
@@ -492,6 +611,8 @@ impl Workspace {
                         )
                     });
                 }
+                // Publish the result before the next queued add/delete can commit.
+                drop(sender);
             }));
     }
 

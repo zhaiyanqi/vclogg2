@@ -1,21 +1,22 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    App, AppContext as _, Context, Div, DragMoveEvent, Entity, FocusHandle, Hsla,
+    App, AppContext as _, Context, Div, DragMoveEvent, Entity, EventEmitter, FocusHandle, Hsla,
     InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseUpEvent,
-    ParentElement as _, Pixels, Point, Render, Rgba, SharedString, StatefulInteractiveElement as _,
-    Styled as _, StyledText, Subscription, UniformListScrollHandle, Window, div,
-    prelude::FluentBuilder as _, px, uniform_list,
+    ParentElement as _, Pixels, Point, Render, Rgba, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, Styled as _, StyledText, Subscription,
+    UniformListScrollHandle, Window, div, prelude::FluentBuilder as _, px, uniform_list,
 };
 use gpui_base::{GlobalState, TextSelection};
 use gpui_component::{
-    ActiveTheme as _, Selectable as _, Sizable as _,
+    ActiveTheme as _, Disableable as _, IconName, IndexPath, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     h_flex,
     input::{Input, InputEvent, InputState},
-    scroll::{ScrollableElement as _, Scrollbar, ScrollbarMode},
+    scroll::{Scrollbar, ScrollbarMode},
+    select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
     slider::{Slider, SliderEvent, SliderState},
     v_flex,
 };
@@ -130,6 +131,30 @@ impl RowTagPreview {
 
 struct DraggedPreviewTag;
 
+#[derive(Clone)]
+struct TagFontOption(Option<String>);
+
+impl SelectItem for TagFontOption {
+    type Value = Option<String>;
+
+    fn title(&self) -> SharedString {
+        self.0
+            .clone()
+            .unwrap_or_else(|| crate::tr!("默认字体", "Default font").to_string())
+            .into()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.0
+    }
+}
+
+pub(crate) enum RowTagDialogEvent {
+    DeletePreset(String),
+}
+
+impl EventEmitter<RowTagDialogEvent> for RowTagDialog {}
+
 struct PreviewTagDrag {
     grab_offset: Point<Pixels>,
     previous_position: Option<Point<Pixels>>,
@@ -139,6 +164,7 @@ struct PreviewTagDrag {
 pub(crate) struct RowTagDialog {
     label: Entity<InputState>,
     filter: Entity<InputState>,
+    font_family: Entity<SelectState<SearchableVec<TagFontOption>>>,
     font_size: Entity<SliderState>,
     height: Entity<SliderState>,
     transparency: Entity<SliderState>,
@@ -148,6 +174,9 @@ pub(crate) struct RowTagDialog {
     presets: Vec<TagPreset>,
     visible: Vec<usize>,
     preset_scroll: UniformListScrollHandle,
+    form_scroll: ScrollHandle,
+    deleting_preset: Option<String>,
+    history_error: Option<String>,
     log_font: Pixels,
     row_height: Pixels,
     preview: RowTagPreview,
@@ -180,6 +209,33 @@ impl RowTagDialog {
         let filter = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(crate::tr!("搜索历史标记", "Search mark history"))
+        });
+        let mut fonts = cx.text_system().all_font_names();
+        fonts.extend(
+            presets
+                .iter()
+                .chain(std::iter::once(&preset))
+                .filter_map(|preset| preset.style.font_family.clone()),
+        );
+        fonts.sort();
+        fonts.dedup();
+        let mut fonts: Vec<_> = fonts
+            .into_iter()
+            .map(|font| TagFontOption(Some(font)))
+            .collect();
+        fonts.insert(0, TagFontOption(None));
+        let selected_font = fonts
+            .iter()
+            .position(|font| font.0 == preset.style.font_family)
+            .unwrap_or(0);
+        let font_family = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(fonts),
+                Some(IndexPath::new(selected_font)),
+                window,
+                cx,
+            )
+            .searchable(true)
         });
         let (font, height_value) = preset.dimensions(log_font, row_height);
         let font_size = cx.new(|_| {
@@ -216,14 +272,7 @@ impl RowTagDialog {
             }),
             cx.subscribe(&filter, |this, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
-                    let filter = this.filter.read(cx).value().to_lowercase();
-                    this.visible = this
-                        .presets
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, preset)| preset.label.to_lowercase().contains(&filter))
-                        .map(|(ix, _)| ix)
-                        .collect();
+                    this.filter_presets(cx);
                     cx.notify();
                 }
             }),
@@ -248,6 +297,10 @@ impl RowTagDialog {
                 cx.notify();
             }),
             cx.subscribe(&transparency, |_, _, _: &SliderEvent, cx| cx.notify()),
+            cx.subscribe(
+                &font_family,
+                |_, _, _: &SelectEvent<SearchableVec<TagFontOption>>, cx| cx.notify(),
+            ),
             Self::observe_color(&text_color, window, cx),
             Self::observe_color(&background, window, cx),
             cx.observe_window_activation(window, |this, window, cx| {
@@ -259,6 +312,7 @@ impl RowTagDialog {
         Self {
             label,
             filter,
+            font_family,
             font_size,
             height,
             transparency,
@@ -267,6 +321,9 @@ impl RowTagDialog {
             preset,
             visible: (0..presets.len()).collect(),
             preset_scroll: UniformListScrollHandle::new(),
+            form_scroll: ScrollHandle::new(),
+            deleting_preset: None,
+            history_error: None,
             presets,
             log_font,
             row_height,
@@ -314,6 +371,12 @@ impl RowTagDialog {
             label: self.label.read(cx).value().trim().to_string(),
             color: self.preset.color,
             style: TagStyle {
+                font_family: self
+                    .font_family
+                    .read(cx)
+                    .selected_value()
+                    .cloned()
+                    .flatten(),
                 font_size: Some(
                     (self.font_size.read(cx).value().start().round() as u16)
                         .min(height.saturating_sub(2))
@@ -473,9 +536,35 @@ impl RowTagDialog {
         cx.notify();
     }
 
+    fn filter_presets(&mut self, cx: &App) {
+        let filter = self.filter.read(cx).value().to_lowercase();
+        self.visible = self
+            .presets
+            .iter()
+            .enumerate()
+            .filter(|(_, preset)| preset.label.to_lowercase().contains(&filter))
+            .map(|(ix, _)| ix)
+            .collect();
+    }
+
+    pub(crate) fn replace_presets(&mut self, presets: Vec<TagPreset>, cx: &mut Context<Self>) {
+        self.presets = presets;
+        self.filter_presets(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn finish_history_delete(&mut self, error: Option<String>, cx: &mut Context<Self>) {
+        self.deleting_preset = None;
+        self.history_error = error;
+        cx.notify();
+    }
+
     fn use_preset(&mut self, preset: TagPreset, window: &mut Window, cx: &mut Context<Self>) {
         let (font, height) = preset.dimensions(self.log_font, self.row_height);
         let (text, background) = preset.colors(cx);
+        self.font_family.update(cx, |select, cx| {
+            select.set_selected_value(&preset.style.font_family, window, cx)
+        });
         self.label.update(cx, |input, cx| {
             input.set_value(preset.label.clone(), window, cx)
         });
@@ -526,9 +615,9 @@ impl Render for RowTagDialog {
         }
         let row_height_pixels = f32::from(self.row_height) as u16;
         let form = v_flex()
-            .flex_1()
+            .w_full()
+            .flex_none()
             .min_w_0()
-            .min_h_0()
             // Input's focus ring extends outside its border. Keep it inside
             // the scroll clip without replacing the component's own chrome.
             .p_2()
@@ -538,6 +627,12 @@ impl Render for RowTagDialog {
                     .gap_2()
                     .child(crate::tr!("文字", "Text"))
                     .child(Input::new(&self.label).w_full()),
+            )
+            .child(
+                v_flex()
+                    .gap_2()
+                    .child(crate::tr!("字体", "Font"))
+                    .child(Select::new(&self.font_family).w_full()),
             )
             .child(
                 h_flex()
@@ -633,8 +728,7 @@ impl Render for RowTagDialog {
             )
             .when_some(self.error.clone(), |content, error| {
                 content.child(div().text_sm().text_color(cx.theme().danger).child(error))
-            })
-            .overflow_y_scrollbar();
+            });
         h_flex()
             .h_full()
             .min_h_0()
@@ -647,7 +741,13 @@ impl Render for RowTagDialog {
                     .min_w_0()
                     .min_h_0()
                     .gap_4()
-                    .child(form)
+                    .child(h_flex().flex_1().min_h_0().items_stretch()
+                        .child(div().id("tag-form-scroll").flex_1().min_w_0().h_full()
+                            .overflow_y_scroll().track_scroll(&self.form_scroll).child(form))
+                        .child(div().w(Scrollbar::width()).h_full().flex_none().child(
+                            Scrollbar::vertical(&self.form_scroll).id("tag-form-scrollbar")
+                                .mode(ScrollbarMode::Always).viewport_from_layout(),
+                        )))
                     .child(
                         v_flex()
                             .flex_none()
@@ -679,6 +779,9 @@ impl Render for RowTagDialog {
                     .py_2()
                     .child(crate::tr!("历史标记", "Mark history"))
                     .child(Input::new(&self.filter).small())
+                    .when_some(self.history_error.clone(), |content, error| {
+                        content.child(div().text_sm().text_color(cx.theme().danger).child(error))
+                    })
                     .when(self.visible.is_empty(), |content| {
                         content.child(
                             div()
@@ -699,6 +802,7 @@ impl Render for RowTagDialog {
                                         range
                                             .map(|ix| {
                                                 let preset = this.presets[this.visible[ix]].clone();
+                                                let delete_label = preset.label.clone();
                                                 let selected = this.value(cx) == preset;
                                                 let button = Button::new(format!(
                                                     "tag-preset-{}",
@@ -706,7 +810,8 @@ impl Render for RowTagDialog {
                                                 ))
                                                 .small()
                                                 .ghost()
-                                                .w_full()
+                                                .flex_1()
+                                                .min_w_0()
                                                 .justify_start()
                                                 .selected(selected)
                                                 .child(
@@ -720,7 +825,24 @@ impl Render for RowTagDialog {
                                                         this.use_preset(preset.clone(), window, cx)
                                                     },
                                                 ));
-                                                div().h_8().w_full().child(button)
+                                                h_flex().group("tag-history-row").h_8().w_full()
+                                                    .child(button)
+                                                    .child(Button::new(format!("delete-tag-preset-{}", crate::log_tags::source_digest(&delete_label)))
+                                                        .xsmall().ghost().icon(IconName::Close)
+                                                        .tooltip(crate::tr!("删除历史标记", "Delete history mark"))
+                                                        .disabled(this.deleting_preset.is_some())
+                                                        .opacity(0.)
+                                                        .group_hover("tag-history-row", |style| style.opacity(1.))
+                                                        .focus(|style| style.opacity(1.))
+                                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                                            cx.stop_propagation();
+                                                            if this.deleting_preset.is_none() {
+                                                                this.deleting_preset = Some(delete_label.clone());
+                                                                this.history_error = None;
+                                                                cx.emit(RowTagDialogEvent::DeletePreset(delete_label.clone()));
+                                                                cx.notify();
+                                                            }
+                                                        })))
                                             })
                                             .collect::<Vec<_>>()
                                     }),

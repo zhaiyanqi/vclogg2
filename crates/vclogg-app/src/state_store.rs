@@ -497,22 +497,47 @@ impl StateStore {
 
     pub(crate) fn load_row_tag_presets(&self) -> Result<Vec<crate::log_tags::TagPreset>> {
         let mut seen = std::collections::HashSet::new();
+        let deleted: HashSet<_> = self
+            .repository
+            .deleted_row_tag_preset_ids()?
+            .into_iter()
+            .collect();
         Ok(self
             .repository
             .load_row_tag_presets()?
             .into_iter()
             .filter_map(|payload| serde_json::from_str::<crate::log_tags::TagPreset>(&payload).ok())
             // Repository order is newest first, including records from older versions.
-            .filter(|preset| preset.is_valid() && seen.insert(preset.label.clone()))
+            .filter(|preset| {
+                preset.is_valid()
+                    && !deleted.contains(&preset.id())
+                    && seen.insert(preset.label.clone())
+            })
             .collect())
+    }
+
+    pub(crate) fn load_row_tag_sequence(&self) -> Result<u64> {
+        Ok(self
+            .repository
+            .load_ui_value("row_tags.sequence")?
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_default())
+    }
+
+    pub(crate) fn delete_row_tag_preset(&self, label: &str) -> Result<()> {
+        self.repository
+            .delete_row_tag_preset(&crate::log_tags::source_digest(label))
     }
 
     pub(crate) fn remember_row_tag_preset(
         &self,
         preset: &crate::log_tags::TagPreset,
     ) -> Result<()> {
-        self.repository
-            .remember_row_tag_preset(&preset.id(), &serde_json::to_string(preset)?)
+        self.repository.remember_row_tag_preset(
+            &preset.id(),
+            &serde_json::to_string(preset)?,
+            preset.sequence_number().unwrap_or_default(),
+        )
     }
 
     pub fn save_search_history(&self, history: &[String]) -> Result<()> {

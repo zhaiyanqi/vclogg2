@@ -26,6 +26,8 @@ pub(crate) struct RowTag {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct TagStyle {
+    #[serde(default)]
+    pub(crate) font_family: Option<String>,
     pub(crate) font_size: Option<u16>,
     pub(crate) height: Option<u16>,
     pub(crate) text_color: Option<u32>,
@@ -63,6 +65,15 @@ impl RowTag {
 }
 
 impl TagPreset {
+    pub(crate) fn sequence_number(&self) -> Option<u64> {
+        self.label
+            .strip_prefix("标记 ")
+            .or_else(|| self.label.strip_prefix("mark "))?
+            .parse::<u64>()
+            .ok()
+            .filter(|number| *number > 0 && *number < i64::MAX as u64)
+    }
+
     pub(crate) fn id(&self) -> String {
         // History identity follows the text; the latest use replaces its appearance.
         source_digest(&self.label)
@@ -120,7 +131,10 @@ impl TagPreset {
                 cx.theme().radius
             })
             .text_size(text)
-            .font_family(cx.theme().font_family.clone())
+            .font_family(self.style.font_family.as_ref().map_or_else(
+                || cx.theme().font_family.clone(),
+                |font| font.clone().into(),
+            ))
             .font_weight(if self.style.bold {
                 FontWeight::BOLD
             } else {
