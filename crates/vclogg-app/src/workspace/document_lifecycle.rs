@@ -331,6 +331,10 @@ impl Workspace {
             if let Some(warning) = prepared.warning.take() {
                 warnings.push(warning);
             }
+            if prepared.load_state == DocumentLoadState::Ready {
+                self.search_ranges
+                    .completed(&path, prepared.search_range, false);
+            }
             let pending_index_cache = prepared.pending_index_cache.take();
             cache_writes.extend(pending_index_cache);
             // A zero-result directory header is navigation, not an invitation to publish the
@@ -1569,6 +1573,11 @@ impl Workspace {
         }
         tab.result_replace_task.take();
         tab.result_replace_revision = tab.result_replace_revision.saturating_add(1);
+        self.search_ranges.completed(
+            plan.document.path(),
+            self.search_ranges.get(plan.document.path()),
+            false,
+        );
         tab.document = plan.document;
         tab.search_query = plan.query;
         tab.search_result = plan.search_result;
@@ -1721,13 +1730,20 @@ impl Workspace {
         self.cancel_search_for(document_id);
         let global_revision = self.global_search.revision;
         let global_search = self.all_open_result_for_reload(document_id);
+        let range = self
+            .search_ranges
+            .get(self.documents[document_ix].document.path());
+        let range_unchanged = self
+            .search_ranges
+            .can_extend(self.documents[document_ix].document.path(), false);
         let tab = &mut self.documents[document_ix];
         tab.search_revision += 1;
         let revision = tab.search_revision;
         let previous_document = tab.document.clone();
         let query = tab.search_query.clone();
         let previous_result = tab.search_result.clone();
-        let previous_search_complete = query.text.is_empty() || tab.search_matcher.is_some();
+        let previous_search_complete =
+            range_unchanged && (query.text.is_empty() || tab.search_matcher.is_some());
         let results_visible = tab.results_visible;
         let selected_source_row = {
             let table = tab.log_table.read(cx);
@@ -1763,7 +1779,7 @@ impl Workspace {
                     };
                     let document = Arc::new(document);
                     let search_matcher = SearchMatcher::new(&query)?;
-                    let search_result = search_reloaded_document(
+                    let search_result = search_reloaded_document_in_range(
                         &document,
                         &reload_source,
                         if previous_search_complete {
@@ -1775,6 +1791,7 @@ impl Workspace {
                         &query,
                         search_matcher.as_ref(),
                         &background_cancellation,
+                        range,
                     )?;
                     let global_search = global_search
                         .map(|mut global| -> Result<_> {
@@ -1785,7 +1802,7 @@ impl Workspace {
                             } else {
                                 DocumentRefreshKind::Rebuilt
                             };
-                            global.result = search_reloaded_document(
+                            global.result = search_reloaded_document_in_range(
                                 &document,
                                 &global.document,
                                 kind,
@@ -1793,6 +1810,7 @@ impl Workspace {
                                 &global.query,
                                 global.matcher.as_ref(),
                                 &background_cancellation,
+                                range,
                             )?;
                             global.document = document.clone();
                             Ok(global)

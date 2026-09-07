@@ -53,7 +53,8 @@ use rayon::prelude::{IntoParallelIterator as _, ParallelIterator as _};
 use vclogg_core::{
     CompressedRows, DocumentRefreshKind, LinePreviewReader, LineReader, LogDocument,
     PendingIndexCacheWrite, RefreshValidation, SearchCancellation, SearchMatcher, SearchQuery,
-    SearchResult, SearchRun, search_appended_with_compiled_matcher, search_with_compiled_matcher,
+    SearchRange, SearchResult, SearchRun, search_appended_with_compiled_matcher_in_range,
+    search_with_compiled_matcher, search_with_compiled_matcher_in_range,
 };
 
 use crate::{
@@ -199,6 +200,7 @@ struct PreparedDocument {
     color_labels_snapshot: Option<Vec<ColorLabel>>,
     resolved_color_rules: Arc<ResolvedColorRules>,
     search_result: SearchResult,
+    search_range: SearchRange,
     search_matcher: Option<SearchMatcher>,
     search_case_sensitive: bool,
     search_regex: bool,
@@ -328,6 +330,7 @@ struct OpenDocumentOverrides {
 
 pub(crate) struct InitialDocument {
     path: PathBuf,
+    search_range: Option<SearchRange>,
     session: Option<FileSessionState>,
     transient: bool,
     replace_new_tab: bool,
@@ -344,6 +347,7 @@ impl InitialDocument {
             replace_new_tab: false,
             move_completion: None,
             target_ix: None,
+            search_range: None,
         }
     }
 
@@ -355,6 +359,7 @@ impl InitialDocument {
             replace_new_tab: true,
             move_completion: None,
             target_ix: None,
+            search_range: None,
         }
     }
 
@@ -378,7 +383,13 @@ impl InitialDocument {
                 captured_state: session,
             }),
             target_ix: None,
+            search_range: None,
         }
+    }
+
+    fn with_search_range(mut self, range: SearchRange) -> Self {
+        self.search_range = Some(range);
+        self
     }
 
     fn at_index(mut self, target_ix: usize) -> Self {
@@ -1603,6 +1614,7 @@ pub struct Workspace {
     view_state: WorkspaceViewState,
     row_tags: row_tags::TagInteractionState,
     global_search: GlobalSearchState,
+    search_ranges: search_limits::FileSearchRanges,
     global_table: Entity<VirtualLogListState<GlobalSearchTableDelegate, LogRowKey>>,
     log_viewer: SharedDisplayState,
     search_results_viewer: SharedDisplayState,
@@ -1703,6 +1715,7 @@ mod quick_find;
 mod render_shell;
 mod result_export_flow;
 mod row_tags;
+mod search_limits;
 mod search_orchestration;
 mod tab_lifecycle;
 mod view_state;
@@ -2205,6 +2218,7 @@ impl Workspace {
             view_state: WorkspaceViewState::default(),
             row_tags: row_tags::TagInteractionState::default(),
             global_search: GlobalSearchState::new(global_result_mode_select),
+            search_ranges: search_limits::FileSearchRanges::default(),
             global_table,
             log_viewer,
             search_results_viewer,

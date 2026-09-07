@@ -5,8 +5,8 @@ use std::{
 };
 
 use super::{
-    SearchCancellation, SearchMatcher, SearchProgress, SearchQuery, SearchResult, SearchRun,
-    search_with_compiled_matcher_inner,
+    SearchCancellation, SearchMatcher, SearchProgress, SearchQuery, SearchRange, SearchResult,
+    SearchRun, search_with_compiled_matcher_inner,
 };
 use crate::LogDocument;
 
@@ -24,6 +24,7 @@ struct Entry {
     path: PathBuf,
     identity: ([u8; 32], u64, String),
     query: SearchQuery,
+    range: SearchRange,
     result: SearchResult,
     bytes: usize,
 }
@@ -31,10 +32,19 @@ struct Entry {
 impl SearchResultCache {
     /// A scheduling hint only; a hit still requires snapshot validation in `search`.
     pub fn has_candidate(&self, path: &Path, query: &SearchQuery) -> bool {
+        self.has_candidate_in_range(path, query, SearchRange::default())
+    }
+
+    pub fn has_candidate_in_range(
+        &self,
+        path: &Path,
+        query: &SearchQuery,
+        range: SearchRange,
+    ) -> bool {
         self.entries.lock().is_ok_and(|entries| {
             entries
                 .iter()
-                .any(|entry| entry.path == path && entry.query == *query)
+                .any(|entry| entry.path == path && entry.query == *query && entry.range == range)
         })
     }
 
@@ -45,7 +55,24 @@ impl SearchResultCache {
         matcher: Option<&SearchMatcher>,
         cancellation: &SearchCancellation,
     ) -> SearchRun {
-        self.search_inner(document, query, matcher, cancellation, None)
+        self.search_in_range(
+            document,
+            query,
+            matcher,
+            cancellation,
+            SearchRange::default(),
+        )
+    }
+
+    pub fn search_in_range(
+        &self,
+        document: &LogDocument,
+        query: &SearchQuery,
+        matcher: Option<&SearchMatcher>,
+        cancellation: &SearchCancellation,
+        range: SearchRange,
+    ) -> SearchRun {
+        self.search_inner(document, query, matcher, cancellation, None, range)
     }
 
     pub fn search_with_progress(
@@ -56,7 +83,14 @@ impl SearchResultCache {
         cancellation: &SearchCancellation,
         progress: &SearchProgress,
     ) -> SearchRun {
-        self.search_inner(document, query, matcher, cancellation, Some(progress))
+        self.search_inner(
+            document,
+            query,
+            matcher,
+            cancellation,
+            Some(progress),
+            SearchRange::default(),
+        )
     }
 
     fn search_inner(
@@ -66,6 +100,7 @@ impl SearchResultCache {
         matcher: Option<&SearchMatcher>,
         cancellation: &SearchCancellation,
         progress: Option<&SearchProgress>,
+        range: SearchRange,
     ) -> SearchRun {
         if cancellation.is_cancelled() {
             return SearchRun::Cancelled;
@@ -79,12 +114,16 @@ impl SearchResultCache {
                 cancellation,
                 progress,
                 false,
+                range,
             );
         }
         let cached = document.search_cache_identity().and_then(|identity| {
             let mut entries = self.entries.lock().ok()?;
             let index = entries.iter().position(|entry| {
-                entry.path == document.path() && entry.identity == identity && entry.query == *query
+                entry.path == document.path()
+                    && entry.identity == identity
+                    && entry.query == *query
+                    && entry.range == range
             })?;
             let entry = entries.remove(index)?;
             let result = entry.result.clone();
@@ -110,15 +149,26 @@ impl SearchResultCache {
             cancellation,
             progress,
             false,
+            range,
         );
         if let SearchRun::Completed(result) = &run {
-            self.remember(document, query, result);
+            self.remember_in_range(document, query, result, range);
         }
         run
     }
 
     /// Remember a completed, verified scan, including results from combined indexing.
     pub fn remember(&self, document: &LogDocument, query: &SearchQuery, result: &SearchResult) {
+        self.remember_in_range(document, query, result, SearchRange::default());
+    }
+
+    pub fn remember_in_range(
+        &self,
+        document: &LogDocument,
+        query: &SearchQuery,
+        result: &SearchResult,
+        range: SearchRange,
+    ) {
         let Some(identity) = document.search_cache_identity() else {
             return;
         };
@@ -133,7 +183,9 @@ impl SearchResultCache {
         let Ok(mut entries) = self.entries.lock() else {
             return;
         };
-        entries.retain(|entry| !(entry.path == document.path() && entry.query == *query));
+        entries.retain(|entry| {
+            !(entry.path == document.path() && entry.query == *query && entry.range == range)
+        });
         let mut retained = entries.iter().map(|entry| entry.bytes).sum::<usize>();
         while entries.len() >= MAX_ENTRIES || retained.saturating_add(bytes) > MAX_RESULT_BYTES {
             let Some(oldest) = entries.pop_front() else {
@@ -145,6 +197,7 @@ impl SearchResultCache {
             path: document.path().to_path_buf(),
             identity,
             query: query.clone(),
+            range,
             result: result.clone(),
             bytes,
         });

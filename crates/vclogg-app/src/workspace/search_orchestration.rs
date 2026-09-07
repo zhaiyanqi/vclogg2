@@ -1782,15 +1782,17 @@ impl Workspace {
             self.activity = Activity::Searching;
             cx.notify();
         }
+        let ranges = self.search_ranges.clone();
         let query_for_search = query.clone();
         let task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
                     let (cancelled, results, matcher) = match scope {
-                        SearchScope::AllOpenFiles => run_persisted_all_open_search(
+                        SearchScope::AllOpenFiles => run_persisted_all_open_search_in_ranges(
                             all_open_paths,
                             query_for_search,
                             cancellation,
+                            ranges,
                         )?,
                         SearchScope::Directory => {
                             let run = run_directory_search(
@@ -1798,6 +1800,7 @@ impl Workspace {
                                 query_for_search,
                                 open_document_paths,
                                 cancellation,
+                                ranges,
                             )?;
                             (run.cancelled, run.results, run.matcher)
                         }
@@ -1843,6 +1846,15 @@ impl Workspace {
                                 )
                             })
                             .collect::<GlobalSearchResults>();
+                        if scope == SearchScope::AllOpenFiles {
+                            for result in results.values() {
+                                this.search_ranges.completed(
+                                    &result.path,
+                                    this.search_ranges.get(&result.path),
+                                    true,
+                                );
+                            }
+                        }
                         this.restore_persisted_global_presentation(
                             scope, persisted, results, matcher, window, cx,
                         );
@@ -2373,6 +2385,9 @@ impl Workspace {
             regex: self.regex,
             max_results: self.app_settings.search_result_limit(),
         };
+        let range = self
+            .search_ranges
+            .get(self.documents[active_ix].document.path());
         let document_id = self.documents[active_ix].id;
         self.cancel_search();
         let cancellation = SearchCancellation::default();
@@ -2390,11 +2405,12 @@ impl Workspace {
             let result = cx
                 .background_spawn(async move {
                     let matcher = SearchMatcher::new(&query_for_search)?;
-                    let run = search_result_cache().search(
+                    let run = search_result_cache().search_in_range(
                         &document,
                         &query_for_search,
                         matcher.as_ref(),
                         &cancellation,
+                        range,
                     );
                     Ok::<_, anyhow::Error>((run, matcher))
                 })
@@ -2430,6 +2446,7 @@ impl Workspace {
                 let mut reload_after_source_change = false;
                 let results_changed = match result {
                     Ok((SearchRun::Completed(result), search_matcher)) => {
+                        this.search_ranges.completed(tab.document.path(), range, false);
                         tab.search_query = query;
                         tab.search_result = result;
                         tab.search_matcher = search_matcher;
@@ -2518,6 +2535,15 @@ impl Workspace {
                     "current-file results have a document-owned installer"
                 );
                 return;
+            }
+        }
+        if completed.scope == SearchScope::AllOpenFiles {
+            for result in completed.results.values() {
+                self.search_ranges.completed(
+                    &result.path,
+                    self.search_ranges.get(&result.path),
+                    true,
+                );
             }
         }
         self.global_search.results = completed.results;
@@ -2612,6 +2638,7 @@ impl Workspace {
         self.global_search.results_visible = true;
         self.activity = Activity::Searching;
         cx.notify();
+        let ranges = self.search_ranges.clone();
         let query_for_search = query.clone();
         let task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
@@ -2621,11 +2648,12 @@ impl Workspace {
                     let outcomes = targets
                         .into_par_iter()
                         .map(|target| {
-                            let run = search_result_cache().search(
+                            let run = search_result_cache().search_in_range(
                                 &target.3,
                                 &query_for_search,
                                 matcher_for_search,
                                 &cancellation,
+                                ranges.get(&target.2),
                             );
                             (target, Ok::<_, anyhow::Error>(run))
                         })
@@ -2761,11 +2789,12 @@ impl Workspace {
         self.global_search.results_visible = true;
         self.activity = Activity::Searching;
         cx.notify();
+        let ranges = self.search_ranges.clone();
         let query_for_search = query.clone();
         let task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
-                    run_directory_search(options, query_for_search, open_document_paths, cancellation)
+                    run_directory_search(options, query_for_search, open_document_paths, cancellation, ranges)
                 })
                 .await;
 
@@ -2925,7 +2954,8 @@ impl Workspace {
             };
         let previous = results.get(&document_id)?;
         Some(ReloadGlobalSearch {
-            completed: previous.failure.is_none(),
+            completed: previous.failure.is_none()
+                && self.search_ranges.can_extend(&previous.path, true),
             query: query.clone(),
             document: previous.document.clone(),
             result: previous.search_result.clone(),
@@ -2938,6 +2968,11 @@ impl Workspace {
         document_id: u64,
         replacement: ReloadGlobalSearch,
     ) {
+        self.search_ranges.completed(
+            replacement.document.path(),
+            self.search_ranges.get(replacement.document.path()),
+            true,
+        );
         let replace = |results: &GlobalSearchResults| {
             results
                 .iter()

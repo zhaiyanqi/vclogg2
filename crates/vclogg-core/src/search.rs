@@ -29,6 +29,68 @@ pub struct SearchQuery {
     pub max_results: Option<usize>,
 }
 
+/// Per-file search boundaries in zero-based source rows. Both selected rows are included.
+/// An unset end follows the current end of the file; reversed bounds resolve to an empty range.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SearchRange {
+    start: usize,
+    end: Option<usize>,
+}
+
+impl SearchRange {
+    pub fn with_start(mut self, source_row: usize) -> Self {
+        self.start = source_row;
+        self
+    }
+
+    pub fn with_end(mut self, source_row: usize) -> Self {
+        self.end = Some(source_row);
+        self
+    }
+
+    pub fn start(self) -> usize {
+        self.start
+    }
+
+    pub fn end(self) -> Option<usize> {
+        self.end
+    }
+
+    pub fn is_unrestricted(self) -> bool {
+        self == Self::default()
+    }
+
+    pub fn resolve(self, line_count: usize) -> Range<usize> {
+        let start = self.start.min(line_count);
+        let end = self
+            .end
+            .map_or(line_count, |row| row.saturating_add(1).min(line_count));
+        start..end.max(start)
+    }
+
+    fn local_rows(self, document: &LogDocument) -> Range<usize> {
+        if document.has_complete_line_index() {
+            return self.resolve(document.line_count());
+        }
+        // Sparse results and anchor previews keep original source coordinates.
+        let bounds = self.resolve(document.source_line_count());
+        let lower_bound = |source_row| {
+            let mut low = 0;
+            let mut high = document.line_count();
+            while low < high {
+                let mid = low + (high - low) / 2;
+                if document.source_row(mid).is_some_and(|row| row < source_row) {
+                    low = mid + 1;
+                } else {
+                    high = mid;
+                }
+            }
+            low
+        };
+        lower_bound(bounds.start)..lower_bound(bounds.end)
+    }
+}
+
 /// Source row coordinates returned by a completed search.
 #[derive(Clone, Debug, Default)]
 pub struct SearchResult {
@@ -231,6 +293,7 @@ pub fn search_with_progress(
         cancellation,
         Some(progress),
         false,
+        SearchRange::default(),
     ))
 }
 
@@ -245,7 +308,32 @@ pub fn search_with_compiled_matcher(
     max_results: Option<usize>,
     cancellation: &SearchCancellation,
 ) -> SearchRun {
-    search_with_compiled_matcher_inner(document, matcher, max_results, cancellation, None, false)
+    search_with_compiled_matcher_in_range(
+        document,
+        matcher,
+        max_results,
+        cancellation,
+        SearchRange::default(),
+    )
+}
+
+/// Scan only the selected source rows, applying the result limit within that range.
+pub fn search_with_compiled_matcher_in_range(
+    document: &LogDocument,
+    matcher: Option<&SearchMatcher>,
+    max_results: Option<usize>,
+    cancellation: &SearchCancellation,
+    range: SearchRange,
+) -> SearchRun {
+    search_with_compiled_matcher_inner(
+        document,
+        matcher,
+        max_results,
+        cancellation,
+        None,
+        false,
+        range,
+    )
 }
 
 fn search_with_compiled_matcher_inner(
@@ -255,6 +343,7 @@ fn search_with_compiled_matcher_inner(
     cancellation: &SearchCancellation,
     progress: Option<&SearchProgress>,
     force_verify_integrity: bool,
+    range: SearchRange,
 ) -> SearchRun {
     if cancellation.is_cancelled() {
         return SearchRun::Cancelled;
@@ -277,12 +366,21 @@ fn search_with_compiled_matcher_inner(
         || !document.has_strong_source_change_token()
         || !document.source_identity_matches();
     let line_count = document.line_count();
+    let search_rows = range.local_rows(document);
     let mut row_ranges = document.search_row_ranges(rayon::current_num_threads());
+    for rows in &mut row_ranges {
+        rows.start = rows.start.max(search_rows.start);
+        rows.end = rows.end.min(search_rows.end);
+    }
+    row_ranges.retain(|rows| rows.start < rows.end);
     let mut chunks = Vec::new();
     let mut prefix_matches: usize = 0;
     // A bounded prefix avoids waking every scanner when a small requested limit
     // is already satisfied near the start. Sparse queries retain parallel scanning.
-    if row_ranges.len() > 1 && max_results.is_some_and(|limit| limit <= 4096) {
+    if range.is_unrestricted()
+        && row_ranges.len() > 1
+        && max_results.is_some_and(|limit| limit <= 4096)
+    {
         let end = document.search_prefix_end(4096, 256 * 1024);
         let prefix = scan_search_chunk(
             document,
@@ -368,6 +466,7 @@ fn search_with_compiled_matcher_inner(
             cancellation,
             progress,
             true,
+            range,
         );
     }
 
@@ -418,23 +517,57 @@ pub fn search_appended_with_compiled_matcher(
     max_results: Option<usize>,
     cancellation: &SearchCancellation,
 ) -> SearchRun {
+    search_appended_with_compiled_matcher_in_range(
+        document,
+        previous_line_count,
+        previous,
+        matcher,
+        max_results,
+        cancellation,
+        SearchRange::default(),
+    )
+}
+
+/// Extend results produced with the same matcher, limit and source-row boundaries.
+pub fn search_appended_with_compiled_matcher_in_range(
+    document: &LogDocument,
+    previous_line_count: usize,
+    previous: &SearchResult,
+    matcher: Option<&SearchMatcher>,
+    max_results: Option<usize>,
+    cancellation: &SearchCancellation,
+    range: SearchRange,
+) -> SearchRun {
     if cancellation.is_cancelled() {
         return SearchRun::Cancelled;
     }
     let Some(matcher) = matcher else {
         return SearchRun::Completed(SearchResult::default());
     };
-    if previous.truncated || previous_line_count > document.line_count() {
-        return search_with_compiled_matcher(document, Some(matcher), max_results, cancellation);
+    if previous.truncated
+        || previous_line_count > document.line_count()
+        || !document.has_complete_line_index()
+    {
+        return search_with_compiled_matcher_in_range(
+            document,
+            Some(matcher),
+            max_results,
+            cancellation,
+            range,
+        );
     }
-    let start = previous_line_count.saturating_sub(2);
+    let rows = range.resolve(document.line_count());
+    let start = previous_line_count
+        .saturating_sub(2)
+        .max(rows.start)
+        .min(rows.end);
     let mut retained = previous.line_indices.clone();
     retained.retain_below(start);
     let remaining = max_results.map(|limit| limit.saturating_sub(retained.len()));
     match scan_search_chunk(
         document,
         matcher,
-        start..document.line_count(),
+        start..rows.end,
         remaining,
         cancellation,
         None,

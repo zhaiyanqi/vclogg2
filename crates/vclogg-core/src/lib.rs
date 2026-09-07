@@ -13,8 +13,9 @@ pub use document::{
 pub use result_set::CompressedRows;
 pub use search::{
     SearchCancellation, SearchMatcher, SearchPreview, SearchProgress, SearchProgressSnapshot,
-    SearchQuery, SearchResult, SearchResultCache, SearchRun, search,
-    search_appended_with_compiled_matcher, search_cancellable, search_with_compiled_matcher,
+    SearchQuery, SearchRange, SearchResult, SearchResultCache, SearchRun, search,
+    search_appended_with_compiled_matcher, search_appended_with_compiled_matcher_in_range,
+    search_cancellable, search_with_compiled_matcher, search_with_compiled_matcher_in_range,
     search_with_progress,
 };
 

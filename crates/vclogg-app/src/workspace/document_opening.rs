@@ -154,6 +154,9 @@ impl Workspace {
             .iter()
             .all(|initial| initial.replace_new_tab);
         for initial in initial_documents {
+            if let Some(range) = initial.search_range {
+                self.search_ranges.set(&initial.path, range);
+            }
             if initial.transient {
                 self.transient_paths.insert(path_match_key(&initial.path));
             }
@@ -314,6 +317,7 @@ impl Workspace {
             max_results: search_result_limit,
         };
         let color_labels = self.color_labels.clone();
+        let search_ranges = self.search_ranges.clone();
 
         self.open_task = Some(cx.spawn_in(window, async move |this, cx| {
             let restore_paths = paths.clone();
@@ -419,7 +423,7 @@ impl Workspace {
             let mut opened = cx
                 .background_spawn(async move {
                     prepare_paths_bounded(full_paths, |path| {
-                        prepare_document(
+                        prepare_document_in_range(
                             path,
                             path_buf_map_get(&cached_complete_documents, path).cloned(),
                             full_store.as_deref(),
@@ -429,6 +433,7 @@ impl Workspace {
                                 ..search_options
                             },
                             &color_labels,
+                            search_ranges.get(path),
                         )
                     })
                 })

@@ -811,6 +811,7 @@ impl Workspace {
             return;
         };
         let path = tab.document.path().to_path_buf();
+        let range = self.search_ranges.get(&path);
         let session = self.file_session_state(tab, cx);
         let transient = path_match_set_contains(&self.transient_paths, &path);
         let initial = match mode {
@@ -823,7 +824,8 @@ impl Workspace {
                 window.window_handle(),
                 document_id,
             ),
-        };
+        }
+        .with_search_range(range);
         let result = if let Some((bounds, display_id)) = placement {
             crate::open_workspace_window_at(cx, false, vec![initial], bounds, display_id)
         } else {
@@ -954,6 +956,7 @@ impl Workspace {
         };
         let path = tab.document.path().to_path_buf();
         let file_name = tab.file.title.clone();
+        let range = self.search_ranges.get(&path);
         let session = self.file_session_state(tab, cx);
         let transient = path_match_set_contains(&self.transient_paths, &path);
         let mut initial = match mode {
@@ -966,7 +969,8 @@ impl Workspace {
                 source_window,
                 document_id,
             ),
-        };
+        }
+        .with_search_range(range);
         if let Some(target_ix) = target.target_ix {
             initial = initial.at_index(target_ix);
         }

@@ -14,16 +14,24 @@ impl Workspace {
     pub(super) fn highlight_styles(
         &self,
         highlights: &[(Range<usize>, TextHighlight)],
+        outside_search_range: bool,
         cx: &App,
     ) -> Vec<(Range<usize>, HighlightStyle)> {
         highlights
             .iter()
             .cloned()
             .map(|(range, highlight)| {
-                (
-                    range,
-                    text_highlight_style(highlight, &self.app_settings.keyword_match_styles, cx),
-                )
+                let mut style =
+                    text_highlight_style(highlight, &self.app_settings.keyword_match_styles, cx);
+                if outside_search_range {
+                    style.color = Some(cx.theme().muted_foreground);
+                    style.background_color = None;
+                    if let Some(underline) = &mut style.underline {
+                        underline.color = Some(cx.theme().muted_foreground);
+                    }
+                }
+                // Keep font metrics so range changes never disturb wrapped-row geometry.
+                (range, style)
             })
             .collect()
     }
@@ -666,6 +674,11 @@ impl Workspace {
         let Some(tab_ix) = self.documents.iter().position(|tab| tab.id == document_id) else {
             return Vec::new();
         };
+        let document = &self.documents[tab_ix].document;
+        let search_rows = self
+            .search_ranges
+            .get(document.path())
+            .resolve(document.source_line_count());
         let table = if region == WrappedRegion::Results {
             self.documents[tab_ix].result_table.clone()
         } else {
@@ -761,6 +774,7 @@ impl Workspace {
                 let selected_below = row_ix + 1 < table.read(cx).delegate().row_count()
                     && table.read(cx).delegate().is_row_selected(row_ix + 1);
                 let source_row = row.source_row;
+                let outside_search_range = !search_rows.contains(&source_row);
                 let source_unavailable = row.source_unavailable;
                 let selection = {
                     let viewport = if region == WrappedRegion::Results {
@@ -770,9 +784,10 @@ impl Workspace {
                     };
                     viewport.wrapped_selection(source_row, &row.text, window, cx)
                 };
-                let styled_text = StyledText::new(row.text.display().clone())
-                    .with_highlights(self.highlight_styles(&row.highlights, cx));
-                let log_level_style = (!source_unavailable)
+                let styled_text = StyledText::new(row.text.display().clone()).with_highlights(
+                    self.highlight_styles(&row.highlights, outside_search_range, cx),
+                );
+                let log_level_style = (!source_unavailable && !outside_search_range)
                     .then_some(row.log_level_style)
                     .flatten();
                 let row_bounds = rendered_row_bounds.clone();
@@ -800,7 +815,7 @@ impl Workspace {
                     if selection_style.text.legacy_overlay {
                         Vec::new()
                     } else {
-                        self.highlight_styles(&row.highlights, cx)
+                        self.highlight_styles(&row.highlights, outside_search_range, cx)
                     },
                 )
                 .suppress_selection(suppress_text_selection)
@@ -866,7 +881,11 @@ impl Workspace {
                                     source_row,
                                     font_size,
                                     base_height,
-                                    line_number_text_color,
+                                    if outside_search_range {
+                                        cx.theme().muted_foreground
+                                    } else {
+                                        line_number_text_color
+                                    },
                                     line_number_background_color,
                                     show_line_number_row_separators,
                                     cx,
@@ -894,6 +913,9 @@ impl Workspace {
                                 .font_family(font_family.clone())
                                 .when(source_unavailable, |cell| {
                                     cell.text_color(cx.theme().danger)
+                                })
+                                .when(outside_search_range, |cell| {
+                                    cell.text_color(cx.theme().muted_foreground)
                                 })
                                 .when(row.selected, |cell| {
                                     cell.child(selection_style.row_overlay(
@@ -1712,6 +1734,13 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
+        let range_region = if context.include_global_merge {
+            LogRegion::GlobalResults
+        } else if context.include_results {
+            LogRegion::CurrentResults
+        } else {
+            LogRegion::Body
+        };
         let tag_target = workspace.read(cx).row_tags.menu_target.clone();
         if let Some(target) = tag_target {
             return Self::render_row_tag_menu(menu, workspace, target, window, cx);
@@ -1735,7 +1764,7 @@ impl Workspace {
         };
         if selected_text.is_none() && !has_row_selection {
             if !context.include_results {
-                return menu;
+                return Self::append_search_limit_menu(menu, workspace, range_region, window, cx);
             }
             let mut menu = menu.item(
                 PopupMenuItem::new(crate::tr!("在新标签页打开", "Open in new tab"))
@@ -1749,11 +1778,12 @@ impl Workspace {
                         .disabled(context.export_disabled),
                 );
             }
-            return menu.item(
+            let menu = menu.item(
                 PopupMenuItem::new(crate::tr!("保存到文件…", "Save to file…"))
                     .action(Box::new(SaveSearchResultsToFile))
                     .disabled(context.export_disabled),
             );
+            return Self::append_search_limit_menu(menu, workspace, range_region, window, cx);
         }
         let copy_text = selected_text.clone();
         let copy = window.listener_for(&workspace, move |this, _, window, cx| {
@@ -1872,7 +1902,7 @@ impl Workspace {
                     .disabled(context.export_disabled),
             );
         }
-        menu
+        Self::append_search_limit_menu(menu, workspace, range_region, window, cx)
     }
 
     pub(super) fn capture_local_row_viewport_anchor(
@@ -2323,6 +2353,7 @@ impl Workspace {
 
     pub(super) fn prepare_wrapped_global_group_context(
         &mut self,
+        row_ix: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -2332,6 +2363,7 @@ impl Workspace {
         self.global_table.update(cx, |table, cx| {
             table.delegate().clear_row_selection();
             table.clear_selection(cx);
+            table.set_active_log_row(row_ix, cx);
         });
         cx.notify();
     }
@@ -2448,7 +2480,9 @@ impl Workspace {
                                 .on_mouse_down(
                                     MouseButton::Right,
                                     cx.listener(move |this, _: &MouseDownEvent, window, cx| {
-                                        this.prepare_wrapped_global_group_context(window, cx);
+                                        this.prepare_wrapped_global_group_context(
+                                            row_ix, window, cx,
+                                        );
                                     }),
                                 )
                                 .child(
@@ -2489,16 +2523,29 @@ impl Workspace {
                                 .read(cx)
                                 .delegate()
                                 .is_row_selected(row_ix + 1);
+                        let outside_search_range = self
+                            .global_search
+                            .results
+                            .get(&document_id)
+                            .is_some_and(|result| {
+                                !self
+                                    .search_ranges
+                                    .get(&result.path)
+                                    .resolve(result.document.source_line_count())
+                                    .contains(&source_row)
+                            });
                         let selection = self.global_viewport.wrapped_selection(
                             (document_id, source_row),
                             &text,
                             window,
                             cx,
                         );
-                        let styled_text = StyledText::new(text.display().clone())
-                            .with_highlights(self.highlight_styles(&highlights, cx));
-                        let log_level_style =
-                            (!source_unavailable).then_some(log_level_style).flatten();
+                        let styled_text = StyledText::new(text.display().clone()).with_highlights(
+                            self.highlight_styles(&highlights, outside_search_range, cx),
+                        );
+                        let log_level_style = (!source_unavailable && !outside_search_range)
+                            .then_some(log_level_style)
+                            .flatten();
                         let row_bounds = rendered_row_bounds.clone();
                         let content_bounds = Rc::new(Cell::new(None));
                         let tag_context = self.tag_row_context(
@@ -2527,7 +2574,7 @@ impl Workspace {
                             if selection_style.text.legacy_overlay {
                                 Vec::new()
                             } else {
-                                self.highlight_styles(&highlights, cx)
+                                self.highlight_styles(&highlights, outside_search_range, cx)
                             },
                         )
                         .suppress_selection(suppress_text_selection);
@@ -2581,7 +2628,11 @@ impl Workspace {
                                         source_row,
                                         font_size,
                                         base_height,
-                                        line_number_text_color,
+                                        if outside_search_range {
+                                            cx.theme().muted_foreground
+                                        } else {
+                                            line_number_text_color
+                                        },
                                         line_number_background_color,
                                         show_line_number_row_separators,
                                         cx,
@@ -2608,6 +2659,9 @@ impl Workspace {
                                         .font_family(font_family.clone())
                                         .when(source_unavailable, |cell| {
                                             cell.text_color(cx.theme().danger)
+                                        })
+                                        .when(outside_search_range, |cell| {
+                                            cell.text_color(cx.theme().muted_foreground)
                                         })
                                         .when(selected, |cell| {
                                             cell.child(selection_style.row_overlay(

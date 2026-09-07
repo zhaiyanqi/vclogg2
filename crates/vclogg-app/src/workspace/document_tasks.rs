@@ -18,11 +18,14 @@ fn search_path_snapshot(
     matcher: Option<&SearchMatcher>,
     max_results: Option<usize>,
     cancellation: &SearchCancellation,
+    range: SearchRange,
 ) -> Result<Option<(Arc<LogDocument>, SearchResult)>> {
     if cancellation.is_cancelled() {
         return Ok(None);
     }
-    let cached_open = if search_result_cache().has_candidate(path, query) {
+    let cached_open = if !range.is_unrestricted()
+        || search_result_cache().has_candidate_in_range(path, query, range)
+    {
         if let Some(cache_dir) = crate::app_paths::index_cache_dir() {
             LogDocument::open_with_index_cache_cancellable(path, cache_dir, cancellation)?
         } else {
@@ -32,7 +35,8 @@ fn search_path_snapshot(
         None
     };
     let opened = if let Some((document, pending)) = cached_open {
-        let run = search_result_cache().search(&document, query, matcher, cancellation);
+        let run =
+            search_result_cache().search_in_range(&document, query, matcher, cancellation, range);
         Some((document, pending, run))
     } else if let Some(matcher) = matcher {
         if let Some(cache_dir) = crate::app_paths::index_cache_dir() {
@@ -66,7 +70,7 @@ fn search_path_snapshot(
     let document = Arc::new(document);
     match run {
         SearchRun::Completed(search_result) => {
-            search_result_cache().remember(&document, query, &search_result);
+            search_result_cache().remember_in_range(&document, query, &search_result, range);
             let document = Arc::new(document.project_source_rows(&search_result.line_indices));
             document.release_source_handle();
             if !cancellation.is_cancelled()
@@ -89,6 +93,7 @@ pub(super) fn run_directory_search(
     query: SearchQuery,
     open_document_paths: BTreeSet<PathMatchKey>,
     cancellation: SearchCancellation,
+    ranges: search_limits::FileSearchRanges,
 ) -> Result<DirectorySearchRun> {
     let matcher = SearchMatcher::new(&query)?;
     let Some(enumeration) = enumerate_directory_search_paths(&options, &cancellation)? else {
@@ -115,6 +120,7 @@ pub(super) fn run_directory_search(
                 matcher.as_ref(),
                 query.max_results,
                 &cancellation,
+                ranges.get(path),
             )
         },
     );
@@ -134,7 +140,8 @@ pub(super) fn run_directory_search(
         .filter_map(|(path, outcome)| match outcome {
             Ok(Some((document, search_result)))
                 if !search_result.line_indices.is_empty()
-                    || path_match_set_contains(&open_document_paths, &path) =>
+                    || path_match_set_contains(&open_document_paths, &path)
+                    || !ranges.get(&path).is_unrestricted() =>
             {
                 let title: SharedString = path
                     .file_name()
@@ -165,10 +172,25 @@ pub(super) fn run_directory_search(
     })
 }
 
+#[cfg(test)]
 pub(super) fn run_persisted_all_open_search(
     paths: Vec<PathBuf>,
     query: SearchQuery,
     cancellation: SearchCancellation,
+) -> Result<(bool, Vec<DirectorySearchResult>, Option<SearchMatcher>)> {
+    run_persisted_all_open_search_in_ranges(
+        paths,
+        query,
+        cancellation,
+        search_limits::FileSearchRanges::default(),
+    )
+}
+
+pub(super) fn run_persisted_all_open_search_in_ranges(
+    paths: Vec<PathBuf>,
+    query: SearchQuery,
+    cancellation: SearchCancellation,
+    ranges: search_limits::FileSearchRanges,
 ) -> Result<(bool, Vec<DirectorySearchResult>, Option<SearchMatcher>)> {
     let matcher = SearchMatcher::new(&query)?;
     let outcomes = prepare_paths_bounded_while(
@@ -181,6 +203,7 @@ pub(super) fn run_persisted_all_open_search(
                 matcher.as_ref(),
                 query.max_results,
                 &cancellation,
+                ranges.get(path),
             )
         },
     );
@@ -595,6 +618,7 @@ where
     })
 }
 
+#[cfg(test)]
 pub(super) fn prepare_document(
     path: &std::path::Path,
     cached_complete_document: Option<Arc<LogDocument>>,
@@ -602,6 +626,26 @@ pub(super) fn prepare_document(
     session_override: Option<FileSessionState>,
     search_options: SearchPreparationOptions,
     color_labels: &[ColorLabel],
+) -> Result<PreparedDocument> {
+    prepare_document_in_range(
+        path,
+        cached_complete_document,
+        store,
+        session_override,
+        search_options,
+        color_labels,
+        SearchRange::default(),
+    )
+}
+
+pub(super) fn prepare_document_in_range(
+    path: &std::path::Path,
+    cached_complete_document: Option<Arc<LogDocument>>,
+    store: Option<&StateStore>,
+    session_override: Option<FileSessionState>,
+    search_options: SearchPreparationOptions,
+    color_labels: &[ColorLabel],
+    range: SearchRange,
 ) -> Result<PreparedDocument> {
     let (document, pending_index_cache) = match cached_complete_document {
         Some(document) => (document, None),
@@ -645,7 +689,16 @@ pub(super) fn prepare_document(
         let result = if query.text.is_empty() {
             SearchResult::default()
         } else {
-            search_document_with_matcher(&document, &query, matcher.as_ref())?
+            search_reloaded_document_in_range(
+                &document,
+                &document,
+                DocumentRefreshKind::Rebuilt,
+                &SearchResult::default(),
+                &query,
+                matcher.as_ref(),
+                &SearchCancellation::default(),
+                range,
+            )?
         };
         Ok::<_, anyhow::Error>((result, matcher))
     })();
@@ -671,6 +724,7 @@ pub(super) fn prepare_document(
         session,
         color_labels_snapshot: Some(color_labels.to_vec()),
         resolved_color_rules,
+        search_range: range,
         search_result,
         search_matcher,
         search_case_sensitive: search_options.case_sensitive,
@@ -739,6 +793,7 @@ pub(super) fn prepare_document_shell(
         session,
         color_labels_snapshot: None,
         resolved_color_rules: Arc::default(),
+        search_range: SearchRange::default(),
         search_result: SearchResult::default(),
         search_matcher: None,
         search_case_sensitive: case_sensitive,
@@ -750,7 +805,7 @@ pub(super) fn prepare_document_shell(
     }
 }
 
-pub(super) fn search_reloaded_document(
+pub(super) fn search_reloaded_document_in_range(
     document: &LogDocument,
     previous_document: &LogDocument,
     kind: DocumentRefreshKind,
@@ -758,19 +813,25 @@ pub(super) fn search_reloaded_document(
     query: &SearchQuery,
     matcher: Option<&SearchMatcher>,
     cancellation: &SearchCancellation,
+    range: SearchRange,
 ) -> Result<SearchResult> {
     let run = match kind {
-        DocumentRefreshKind::Appended => search_appended_with_compiled_matcher(
+        DocumentRefreshKind::Appended => search_appended_with_compiled_matcher_in_range(
             document,
             previous_document.line_count(),
             previous_result,
             matcher,
             query.max_results,
             cancellation,
+            range,
         ),
-        DocumentRefreshKind::Rebuilt => {
-            search_with_compiled_matcher(document, matcher, query.max_results, cancellation)
-        }
+        DocumentRefreshKind::Rebuilt => search_with_compiled_matcher_in_range(
+            document,
+            matcher,
+            query.max_results,
+            cancellation,
+            range,
+        ),
     };
     match run {
         SearchRun::Completed(result) => Ok(result),
@@ -779,22 +840,6 @@ pub(super) fn search_reloaded_document(
         }
         SearchRun::Cancelled => anyhow::bail!("搜索已取消"),
     }
-}
-
-pub(super) fn search_document_with_matcher(
-    document: &LogDocument,
-    query: &SearchQuery,
-    matcher: Option<&SearchMatcher>,
-) -> Result<SearchResult> {
-    search_reloaded_document(
-        document,
-        document,
-        DocumentRefreshKind::Rebuilt,
-        &SearchResult::default(),
-        query,
-        matcher,
-        &SearchCancellation::default(),
-    )
 }
 
 pub(super) fn prepare_document_preview(
@@ -879,6 +924,7 @@ pub(super) fn prepare_document_preview(
         session,
         color_labels_snapshot: Some(color_labels.to_vec()),
         resolved_color_rules,
+        search_range: SearchRange::default(),
         search_result: SearchResult::default(),
         search_matcher,
         search_case_sensitive: search_options.case_sensitive,
