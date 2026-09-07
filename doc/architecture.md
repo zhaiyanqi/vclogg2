@@ -143,3 +143,5 @@ core 提供 `RefreshValidation::{FullPrefix, HeadAndTail}` 与 `refresh_cancella
 core 的 `SearchRange` 以零基源行号表达包含两端的范围；未设置终点时跟随源文件 EOF，反向范围为空。完整索引直接裁剪并行扫描分段，稀疏投影和预览用源行号二分映射为局部行区间；`SearchResultCache` 将范围纳入键。目录受限文件先建立完整索引再扫描范围，未受限文件继续使用现有索引/搜索联合扫描。增量搜索仅复用相同范围的旧命中，限制变化或清除后重扫；结果上限应用于范围内命中。目录零命中受限文件保留可清除限制的分组标题。
 
 范围外行的灰态由 `workspace/log_presentation.rs` 在可见行渲染时读取最新 `FileSearchRanges` 并按源行号决定，正文与当前结果共享本地行入口，全局与目录共享全局行入口。正文/行号及关键词装饰使用主题 `muted_foreground`，范围外不绘制日志级别背景与色条；保留匹配样式的字体度量和正常选择交互。`LogRegionSurface` 订阅 Workspace 通知，因此设置/清除范围立即更新显示，无须重搜、重新读取文件或重建结果投影。
+
+过滤器弹层的列表呈现、边框缩放手势和尺寸保存任务由 `workspace/filter_popover.rs` 持有。`StateStore` 将宽高作为一个 JSON 值写入现有 UI 设置仓储；拖动帧仅更新内存，结束后串行异步保存，启动读取不会覆盖已经发生的用户缩放。
