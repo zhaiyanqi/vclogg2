@@ -4,7 +4,6 @@ compile_error!("ui-performance-profiler 仅允许用于 Debug 性能诊断构建
 #[cfg(debug_assertions)]
 mod debug {
     use std::{
-        backtrace::Backtrace,
         cell::{Cell, RefCell},
         collections::HashMap,
         sync::{Mutex, OnceLock},
@@ -29,7 +28,7 @@ mod debug {
     const LOG_TARGET: &str = "vclogg2::ui_performance";
     const DEFAULT_WARN_AFTER_MS: u64 = 16;
     const DEFAULT_REPEAT_AFTER_MS: u64 = 2_000;
-    const MIN_STACK_INTERVAL: Duration = Duration::from_millis(100);
+    const MIN_LOG_INTERVAL: Duration = Duration::from_millis(100);
     const MAX_SETTING_MS: u64 = 60_000;
     #[cfg(feature = "ui-performance-profiler")]
     const FRAME_MONITOR_INTERVAL: Duration = Duration::from_millis(250);
@@ -50,7 +49,7 @@ mod debug {
 
     #[derive(Default)]
     struct LogStates {
-        last_stack_at: Option<Instant>,
+        last_logged_at: Option<Instant>,
         scopes: HashMap<&'static str, ScopeLogState>,
     }
 
@@ -74,8 +73,8 @@ mod debug {
 
     thread_local! {
         static ACTIVE_AGGREGATES: RefCell<Vec<ActiveAggregate>> = const { RefCell::new(Vec::new()) };
-        // 子作用域打印堆栈时会暂停 UI 线程。累计这部分诊断开销，供仍在计时的
-        // 父作用域扣除，避免一次真实热点被放大成多层数百毫秒的误报。
+        // 累计子作用域写日志等诊断开销，供仍在计时的父作用域扣除，
+        // 避免诊断本身放大父作用域耗时。
         static DIAGNOSTIC_OVERHEAD: Cell<Duration> = const { Cell::new(Duration::ZERO) };
     }
 
@@ -179,7 +178,7 @@ mod debug {
         let settings = settings();
         log::debug!(
             target: LOG_TARGET,
-            "Debug UI 性能检测已启用：长任务阈值={}ms，重复堆栈限频={}ms，父级净耗时排除诊断开销=true，UI线程={:?}",
+            "Debug UI 性能检测已启用：长任务阈值={}ms，重复日志限频={}ms，父级净耗时排除诊断开销=true，UI线程={:?}",
             settings.warn_after.as_millis(),
             settings.repeat_after.as_millis(),
             current_thread.id(),
@@ -279,10 +278,9 @@ mod debug {
             let is_ui_thread = expected_ui_thread == Some(&current_thread.id());
             let thread_name = current_thread.name().unwrap_or("<unnamed>");
             let diagnostic_started_at = Instant::now();
-            let backtrace = Backtrace::force_capture();
             log::warn!(
                 target: LOG_TARGET,
-                "检测到 UI 渲染线程长耗时任务：scope={} elapsed_ms={:.3} threshold_ms={} ui_thread={} thread_id={:?} thread_name={} suppressed_since_last={}\nstack:\n{}",
+                "检测到 UI 渲染线程长耗时任务：scope={} elapsed_ms={:.3} threshold_ms={} ui_thread={} thread_id={:?} thread_name={} suppressed_since_last={}",
                 self.name,
                 elapsed.as_secs_f64() * 1_000.,
                 self.warn_after.as_millis(),
@@ -290,7 +288,6 @@ mod debug {
                 current_thread.id(),
                 thread_name,
                 suppressed_count,
-                backtrace,
             );
             record_diagnostic_overhead(diagnostic_started_at.elapsed());
         }
@@ -414,8 +411,8 @@ mod debug {
             return Some(0);
         };
         let globally_limited = states
-            .last_stack_at
-            .is_some_and(|last_stack_at| now.duration_since(last_stack_at) < MIN_STACK_INTERVAL);
+            .last_logged_at
+            .is_some_and(|last_logged_at| now.duration_since(last_logged_at) < MIN_LOG_INTERVAL);
         let state = states.scopes.entry(name).or_default();
         let scope_limited = state.last_logged_at.is_some_and(|last_logged_at| {
             now.duration_since(last_logged_at) < settings().repeat_after
@@ -427,7 +424,7 @@ mod debug {
 
         state.last_logged_at = Some(now);
         let suppressed_count = std::mem::take(&mut state.suppressed_count);
-        states.last_stack_at = Some(now);
+        states.last_logged_at = Some(now);
         Some(suppressed_count)
     }
 }
