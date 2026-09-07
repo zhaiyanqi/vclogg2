@@ -188,7 +188,7 @@ powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 - 源日志始终作为只读输入；只有用户显式导出结果时才写入所选位置。
 - Windows 便携版把状态库、索引缓存、崩溃报告和应用临时结果保存在可执行文件同级的 `VCLogg2` 目录；安装版全部保存在安装时选择的数据目录，默认 `%LOCALAPPDATA%\VCLogg2`。安装目录内的 `vclogg2-data-dir.txt` 记录数据目录，请保留该文件。两种版本按当前用户和数据目录隔离单实例；macOS/Linux 使用各自的系统应用数据、缓存和临时目录。
 - 会话状态使用 SQLite/WAL；索引缓存与会话身份分离，失效时会安全重建。
-- 云端连接的公开配置写入 SQLite，Cookie 与 CSRF 只保存在系统凭据库。
+- 云端连接的公开配置写入 SQLite，Cookie 与 CSRF 保存为应用数据目录下的 `cloud/sessions/<服务器地址 SHA-256>.json`，不使用系统钥匙串。macOS 默认路径为 `~/Library/Application Support/VCLogg2/cloud/sessions/`；会话文件内容不额外加密，macOS/Linux 目录权限为 0700、文件权限为 0600，Windows 遵循所选数据根的访问权限。
 - 应用日志使用有界内存缓冲，不会自行创建长期日志文件。
 
 ## 文档

@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::Write as _,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -22,7 +23,6 @@ const PROFILE_FILE: &str = "cloud-filter-profile.json";
 const CLIENT_UUID_FILE: &str = "client-uuid";
 const DIRECTORY_CACHE_SCHEMA: u32 = 1;
 const DIRECTORY_CACHE_LIMIT: usize = 256;
-const KEYRING_SERVICE: &str = "com.vclogg2.desktop.cloud";
 const CLIENT_COOKIE: &str = "vclogg_client_session";
 pub const FILTER_UUID_BRANCHES_CAPABILITY: &str = "filter-uuid-branches-v1";
 
@@ -540,7 +540,7 @@ struct SavedProfile {
     capabilities: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SecretState {
     cookie: String,
@@ -610,6 +610,12 @@ impl CloudCore {
         self.data_root.join(PROFILE_FILE)
     }
 
+    fn secret_path(&self, server_url: &str) -> PathBuf {
+        self.data_root
+            .join("sessions")
+            .join(format!("{}.json", credential_account(server_url)))
+    }
+
     fn client_uuid_path(&self) -> PathBuf {
         self.data_root.join(CLIENT_UUID_FILE)
     }
@@ -658,7 +664,7 @@ impl CloudCore {
                 "Invalid cloud connection profile"
             )));
         }
-        state.secret = load_secret(&profile.server_url)?;
+        state.secret = load_secret(&self.secret_path(&profile.server_url))?;
         state.profile = Some(profile);
         Ok(())
     }
@@ -876,7 +882,7 @@ impl CloudCore {
             state
                 .secret
                 .clone()
-                .or_else(|| load_secret(&server_url).ok().flatten())
+                .or_else(|| load_secret(&self.secret_path(&server_url)).ok().flatten())
         } else {
             None
         };
@@ -905,7 +911,7 @@ impl CloudCore {
             }
             _ => self.authorize(&server_url, display_name)?,
         };
-        save_secret(&profile.server_url, &secret)?;
+        save_secret(&self.secret_path(&profile.server_url), &secret)?;
         self.persist_profile(&profile)?;
         state.profile = Some(profile.clone());
         state.secret = Some(secret);
@@ -987,7 +993,7 @@ impl CloudCore {
             return first.success();
         }
         let (profile, secret) = self.authorize(&profile.server_url, &profile.display_name)?;
-        save_secret(&profile.server_url, &secret)?;
+        save_secret(&self.secret_path(&profile.server_url), &secret)?;
         self.persist_profile(&profile)?;
         state.profile = Some(profile.clone());
         state.secret = Some(secret.clone());
@@ -1252,47 +1258,70 @@ fn parse_client_cookie(headers: &HeaderMap) -> CloudResult<(String, i64)> {
     )))
 }
 
-fn load_secret(server_url: &str) -> CloudResult<Option<SecretState>> {
-    let entry =
-        keyring::Entry::new(KEYRING_SERVICE, &credential_account(server_url)).map_err(|_| {
-            CloudError::coded(
+fn load_secret(path: &Path) -> CloudResult<Option<SecretState>> {
+    let value = match fs::read(path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => {
+            return Err(CloudError::coded(
                 "credential_store_unavailable",
-                crate::tr!("无法读取云端会话", "Couldn’t read the cloud session"),
-            )
-        })?;
-    match entry.get_password() {
-        Ok(value) => serde_json::from_str(&value).map(Some).map_err(|_| {
-            CloudError::message(crate::tr!(
-                "系统凭据库中的云端会话已损坏",
-                "The cloud session in the system credential store is corrupted"
-            ))
-        }),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(_) => Err(CloudError::coded(
-            "credential_store_unavailable",
-            crate::tr!("无法读取云端会话", "Couldn’t read the cloud session"),
-        )),
-    }
+                crate::tr!(
+                    "无法读取本地云端会话",
+                    "Couldn’t read the local cloud session"
+                ),
+            ));
+        }
+    };
+    serde_json::from_slice(&value).map(Some).map_err(|_| {
+        CloudError::message(crate::tr!(
+            "本地云端会话文件已损坏",
+            "The local cloud session file is corrupted"
+        ))
+    })
 }
 
-fn save_secret(server_url: &str, secret: &SecretState) -> CloudResult<()> {
-    let entry =
-        keyring::Entry::new(KEYRING_SERVICE, &credential_account(server_url)).map_err(|_| {
-            CloudError::coded(
-                "credential_store_unavailable",
-                crate::tr!("无法保存云端会话", "Couldn’t save the cloud session"),
-            )
-        })?;
-    let value = serde_json::to_string(secret).map_err(|_| {
+fn save_secret(path: &Path, secret: &SecretState) -> CloudResult<()> {
+    let value = serde_json::to_vec(secret).map_err(|_| {
         CloudError::message(crate::tr!(
             "无法序列化云端会话",
             "Couldn’t serialize the cloud session"
         ))
     })?;
-    entry.set_password(&value).map_err(|_| {
+    let save = || -> std::io::Result<()> {
+        let parent = path.parent().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Missing session directory",
+            )
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(parent)?;
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+        }
+        #[cfg(not(unix))]
+        fs::create_dir_all(parent)?;
+
+        // NamedTempFile creates private files (0600 on Unix) and replaces the
+        // destination atomically on both Unix and Windows, retaining the old
+        // session if writing fails. No credential-store APIs are involved.
+        let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+        temporary.write_all(&value)?;
+        temporary.as_file().sync_all()?;
+        temporary.persist(path).map_err(|error| error.error)?;
+        Ok(())
+    };
+    save().map_err(|_| {
         CloudError::coded(
             "credential_store_unavailable",
-            crate::tr!("无法保存云端会话", "Couldn’t save the cloud session"),
+            crate::tr!(
+                "无法保存本地云端会话",
+                "Couldn’t save the local cloud session"
+            ),
         )
     })
 }

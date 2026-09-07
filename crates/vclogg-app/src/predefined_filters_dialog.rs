@@ -1167,6 +1167,15 @@ impl PredefinedFiltersDialog {
         if self.cloud_task.is_some() || self.cloud_connection.is_none() {
             return;
         }
+        if !self.cloud_offline
+            && self
+                .cloud_connection
+                .as_ref()
+                .is_some_and(|connection| !connection.connected)
+        {
+            self.connect_cloud(window, cx);
+            return;
+        }
         let Some(client) = self.cloud_client.clone() else {
             return;
         };
@@ -2479,8 +2488,8 @@ impl PredefinedFiltersDialog {
                         this.cloud_revision_total = 0;
                         this.cloud_message = Some(
                             crate::tr!(
-                                "已关闭本次云端会话；系统凭据仍保留",
-                                "Closed this cloud session; system credentials were retained"
+                                "已关闭本次云端会话；本地凭据仍保留",
+                                "Closed this cloud session; local credentials were retained"
                             )
                             .to_string(),
                         );
@@ -2563,7 +2572,11 @@ impl PredefinedFiltersDialog {
 
     fn render_local_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let busy = self.io_task.is_some();
-        let online = self.cloud_connection.is_some() && !self.cloud_offline;
+        let online = self
+            .cloud_connection
+            .as_ref()
+            .is_some_and(|connection| connection.connected)
+            && !self.cloud_offline;
         let protocol_supported = self
             .cloud_connection
             .as_ref()
@@ -3041,7 +3054,11 @@ impl PredefinedFiltersDialog {
         } else {
             display_value
         };
-        let online = self.cloud_connection.is_some() && !self.cloud_offline;
+        let online = self
+            .cloud_connection
+            .as_ref()
+            .is_some_and(|connection| connection.connected)
+            && !self.cloud_offline;
         let protocol_supported = self
             .cloud_connection
             .as_ref()
@@ -3500,13 +3517,12 @@ impl PredefinedFiltersDialog {
                         "只读缓存 · 不含账户凭据",
                         "Read-only cache · no account credentials"
                     )
+                } else if !connection.connected {
+                    crate::tr!("尚未连接", "Not connected")
                 } else if connection.insecure {
                     crate::tr!("HTTP · 未加密连接", "HTTP · unencrypted connection")
                 } else {
-                    crate::tr!(
-                        "HTTPS · 系统凭据库会话",
-                        "HTTPS · system credential session"
-                    )
+                    crate::tr!("HTTPS · 本地会话", "HTTPS · local session")
                 }
             })
             .unwrap_or_default();
@@ -4079,7 +4095,11 @@ impl PredefinedFiltersDialog {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let busy = self.cloud_task.is_some();
-        let online = self.cloud_connection.is_some() && !self.cloud_offline;
+        let online = self
+            .cloud_connection
+            .as_ref()
+            .is_some_and(|connection| connection.connected)
+            && !self.cloud_offline;
         let protocol_supported = self
             .cloud_connection
             .as_ref()
@@ -5025,7 +5045,11 @@ impl PredefinedFiltersDialog {
 
     fn render_cloud_share_page(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let busy = self.cloud_task.is_some();
-        let online = self.cloud_connection.is_some() && !self.cloud_offline;
+        let online = self
+            .cloud_connection
+            .as_ref()
+            .is_some_and(|connection| connection.connected)
+            && !self.cloud_offline;
         let server_url = self
             .cloud_connection
             .as_ref()

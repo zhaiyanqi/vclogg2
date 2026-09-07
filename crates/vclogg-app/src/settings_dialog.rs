@@ -2101,8 +2101,8 @@ impl SettingsDialog {
                         1,
                     )
                     .item(
-                        "keyring / sha2",
-                        crate::tr!("系统凭据保护与安全摘要", "System credential protection and secure digests"),
+                        "sha2",
+                        crate::tr!("安全摘要", "Secure digests"),
                         1,
                     ),
                 cx,
