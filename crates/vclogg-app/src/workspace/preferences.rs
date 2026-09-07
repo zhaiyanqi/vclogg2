@@ -563,7 +563,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings_saving {
+        // The subscription stays alive until this dialog's on_close callback.
+        if self.settings_saving || self.settings_dialog_subscription.is_some() {
             return;
         }
         let active_category = requested_category
