@@ -775,26 +775,20 @@ impl Workspace {
     }
 
     pub(super) fn refresh_global_color_rules(&mut self, cx: &mut Context<Self>) {
-        self.global_search.all_open_context.resolved_color_rules = resolve_color_rules(
-            &self.global_search.all_open_context.keyword_color_rules,
-            &self.color_labels,
-        );
-        self.global_search.directory_context.resolved_color_rules = resolve_color_rules(
-            &self.global_search.directory_context.keyword_color_rules,
-            &self.color_labels,
-        );
-        let session_color_rules = match self.global_search.scope {
-            SearchScope::AllOpenFiles => self
-                .global_search
-                .all_open_context
-                .resolved_color_rules
-                .clone(),
-            SearchScope::Directory => self
-                .global_search
-                .directory_context
-                .resolved_color_rules
-                .clone(),
-            SearchScope::CurrentFile => Arc::default(),
+        for context in [
+            &mut self.global_search.all_open_context,
+            &mut self.global_search.directory_context,
+        ] {
+            context.resolved_color_rules =
+                resolve_color_rules(&context.keyword_color_rules, &self.color_labels);
+            context
+                .color_exclusions
+                .refresh(&context.keyword_color_rules, &self.color_labels);
+        }
+        let session = match self.global_search.scope {
+            SearchScope::AllOpenFiles => Some(&self.global_search.all_open_context),
+            SearchScope::Directory => Some(&self.global_search.directory_context),
+            SearchScope::CurrentFile => None,
         };
         let color_rules_by_path = self
             .documents
@@ -814,7 +808,12 @@ impl Workspace {
                     })
                     .map(|(_, color_rules)| color_rules.clone())
                     .unwrap_or_default();
-                ResolvedColorRules::layered(color_rules, session_color_rules.clone())
+                ResolvedColorRules::layered(
+                    color_rules,
+                    session
+                        .map(|context| context.color_rules_for(&source.path))
+                        .unwrap_or_default(),
+                )
             });
             table.refresh(cx);
         });

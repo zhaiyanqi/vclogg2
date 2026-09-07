@@ -33,6 +33,7 @@ mod rename_tab_dialog;
 mod result_export;
 mod row_tag_dialog;
 mod search_autocomplete;
+mod search_color_exclusions;
 mod search_context;
 mod selectable_log_text;
 mod selection_style;

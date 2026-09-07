@@ -48,13 +48,11 @@ impl Workspace {
                         SearchScope::AllOpenFiles => self
                             .global_search
                             .all_open_context
-                            .resolved_color_rules
-                            .clone(),
+                            .color_rules_for(tab.document.path()),
                         SearchScope::Directory => self
                             .global_search
                             .directory_context
-                            .resolved_color_rules
-                            .clone(),
+                            .color_rules_for(tab.document.path()),
                         SearchScope::CurrentFile => unreachable!(),
                     },
                 )
@@ -266,6 +264,11 @@ impl Workspace {
         let resolved_color_rules = resolve_color_rules(&keyword_color_rules, &self.color_labels);
         self.global_search.directory_context = SearchSessionState {
             query: self.global_search.directory_query.clone(),
+            color_exclusions: crate::search_color_exclusions::SearchColorExclusions::restore(
+                &session.context.cleared_color_keywords,
+                &keyword_color_rules,
+                &self.color_labels,
+            ),
             keyword_color_rules,
             resolved_color_rules,
             result_mode: ResultMode::from_database(session.context.result_mode),
@@ -415,7 +418,7 @@ impl Workspace {
                                         open_tab
                                             .map(|tab| tab.file.resolved_color_rules.clone())
                                             .unwrap_or_else(Arc::default),
-                                        context.resolved_color_rules.clone(),
+                                        context.color_rules_for(&result.path),
                                     ),
                                 },
                         }
@@ -460,7 +463,7 @@ impl Workspace {
                             failure: result.and_then(|result| result.failure.clone()),
                             color_rules: ResolvedColorRules::layered(
                                 tab.file.resolved_color_rules.clone(),
-                                context.resolved_color_rules.clone(),
+                                context.color_rules_for(tab.document.path()),
                             ),
                         },
                     }
@@ -518,7 +521,7 @@ impl Workspace {
                                         open_tab
                                             .map(|tab| tab.file.resolved_color_rules.clone())
                                             .unwrap_or_else(Arc::default),
-                                        context.resolved_color_rules.clone(),
+                                        context.color_rules_for(&result.path),
                                     ),
                                 },
                         })
@@ -543,6 +546,7 @@ impl Workspace {
             },
             keyword_color_rules: retained.keyword_color_rules.clone(),
             resolved_color_rules: retained.resolved_color_rules.clone(),
+            color_exclusions: retained.color_exclusions.clone(),
             initialized: self.global_search.result_scope == Some(self.global_search.scope),
             results: self.global_search.results.clone(),
             matcher: self.global_search.matcher.clone(),
@@ -1270,6 +1274,7 @@ impl Workspace {
             persisted.results_visible = context.results_visible;
             persisted.word_wrap = context.word_wrap;
             persisted.keyword_color_rules = context.keyword_color_rules.clone();
+            persisted.cleared_color_keywords = context.color_exclusions.persisted();
             persisted.active = context.active;
             return persisted;
         }
@@ -1350,6 +1355,7 @@ impl Workspace {
             results_visible: context.results_visible,
             word_wrap: context.word_wrap,
             keyword_color_rules: context.keyword_color_rules.clone(),
+            cleared_color_keywords: context.color_exclusions.persisted(),
             source_paths,
             collapsed_paths,
             selection,
@@ -1493,6 +1499,11 @@ impl Workspace {
             resolve_color_rules(&all_open_keyword_color_rules, &self.color_labels);
         self.global_search.all_open_context = SearchSessionState {
             query: self.global_search.query.clone(),
+            color_exclusions: crate::search_color_exclusions::SearchColorExclusions::restore(
+                &state.all_open.cleared_color_keywords,
+                &all_open_keyword_color_rules,
+                &self.color_labels,
+            ),
             keyword_color_rules: all_open_keyword_color_rules,
             resolved_color_rules: all_open_resolved_color_rules,
             result_mode: ResultMode::from_database(state.all_open.result_mode),
@@ -1506,6 +1517,11 @@ impl Workspace {
             resolve_color_rules(&directory_keyword_color_rules, &self.color_labels);
         self.global_search.directory_context = SearchSessionState {
             query: self.global_search.directory_query.clone(),
+            color_exclusions: crate::search_color_exclusions::SearchColorExclusions::restore(
+                &directory_context.cleared_color_keywords,
+                &directory_keyword_color_rules,
+                &self.color_labels,
+            ),
             keyword_color_rules: directory_keyword_color_rules,
             resolved_color_rules: directory_resolved_color_rules,
             result_mode: ResultMode::from_database(directory_context.result_mode),
@@ -1653,6 +1669,11 @@ impl Workspace {
                 self.app_settings.default_case_sensitive,
                 self.app_settings.default_use_regex,
                 self.app_settings.search_result_limit(),
+            ),
+            color_exclusions: crate::search_color_exclusions::SearchColorExclusions::restore(
+                &persisted.cleared_color_keywords,
+                &persisted.keyword_color_rules,
+                &self.color_labels,
             ),
             keyword_color_rules: persisted.keyword_color_rules.clone(),
             resolved_color_rules: resolve_color_rules(
@@ -1926,6 +1947,7 @@ impl Workspace {
                     .all_open_context
                     .resolved_color_rules
                     .clone(),
+                self.global_search.all_open_context.color_exclusions.clone(),
             ),
             SearchScope::Directory => (
                 self.global_search
@@ -1935,6 +1957,10 @@ impl Workspace {
                 self.global_search
                     .directory_context
                     .resolved_color_rules
+                    .clone(),
+                self.global_search
+                    .directory_context
+                    .color_exclusions
                     .clone(),
             ),
             SearchScope::CurrentFile => return,
@@ -1947,6 +1973,7 @@ impl Workspace {
             },
             keyword_color_rules: retained_color_rules.0,
             resolved_color_rules: retained_color_rules.1,
+            color_exclusions: retained_color_rules.2,
             initialized: self.global_search.result_scope == Some(scope),
             results: self.global_search.results.clone(),
             matcher: self.global_search.matcher.clone(),

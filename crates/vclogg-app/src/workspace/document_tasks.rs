@@ -459,6 +459,7 @@ pub(super) fn prepare_color_rule_update(
             synchronize_keyword_color_rules(&mut target_rules, &rules, &keywords);
             let target_resolved = resolve_color_rules(&target_rules, &labels);
             search_session = Some(PreparedColorRuleSession {
+                keywords: keywords.clone(),
                 scope: target.scope,
                 expected_revision: target.expected_revision,
                 expected_rules: target.expected_rules,

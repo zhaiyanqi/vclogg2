@@ -1345,6 +1345,7 @@ struct PreparedColorRulePropagation {
 }
 
 struct PreparedColorRuleSession {
+    keywords: BTreeSet<String>,
     scope: SearchScope,
     expected_revision: u64,
     expected_rules: Vec<KeywordColorRule>,
@@ -1705,6 +1706,7 @@ pub struct Workspace {
 
 impl Workspace {}
 
+mod color_commands;
 mod document_commands;
 mod document_lifecycle;
 mod document_opening;

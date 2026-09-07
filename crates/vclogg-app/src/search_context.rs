@@ -1,4 +1,7 @@
-use std::{cmp::Reverse, collections::BTreeSet};
+use std::{
+    cmp::Reverse,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use serde::{Deserialize, Serialize};
 use vclogg_core::CompressedRows;
@@ -123,6 +126,7 @@ pub(crate) struct PersistedGlobalSearchContext {
     pub results_visible: bool,
     pub word_wrap: bool,
     pub keyword_color_rules: Vec<KeywordColorRule>,
+    pub cleared_color_keywords: BTreeMap<String, BTreeSet<String>>,
     /// Sources captured by the last completed search. All-open-files restoration uses these
     /// paths even when the corresponding documents are not currently open as tabs.
     pub source_paths: Vec<String>,
@@ -142,6 +146,7 @@ impl Default for PersistedGlobalSearchContext {
             results_visible: false,
             word_wrap: false,
             keyword_color_rules: Vec::new(),
+            cleared_color_keywords: BTreeMap::new(),
             source_paths: Vec::new(),
             collapsed_paths: Vec::new(),
             selection: Vec::new(),

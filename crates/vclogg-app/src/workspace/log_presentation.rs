@@ -1575,6 +1575,10 @@ impl Workspace {
                 SearchScope::Directory => &mut self.global_search.directory_context,
                 SearchScope::CurrentFile => unreachable!(),
             };
+            context.color_exclusions.include_keywords(&session.keywords);
+            context
+                .color_exclusions
+                .refresh(&session.rules, &self.color_labels);
             context.keyword_color_rules = session.rules;
             context.resolved_color_rules = session.resolved;
             true
@@ -1702,11 +1706,34 @@ impl Workspace {
         let selected_text = selected_text
             .map(str::trim)
             .filter(|text| !text.is_empty())?;
-        let session_rules: &[KeywordColorRule] = match self.global_search.scope {
-            SearchScope::AllOpenFiles => &self.global_search.all_open_context.keyword_color_rules,
-            SearchScope::Directory => &self.global_search.directory_context.keyword_color_rules,
-            SearchScope::CurrentFile => &[],
+        let session = match self.global_search.scope {
+            SearchScope::AllOpenFiles => Some(&self.global_search.all_open_context),
+            SearchScope::Directory => Some(&self.global_search.directory_context),
+            SearchScope::CurrentFile => None,
         };
+        let path = if self.active_log_region == LogRegion::GlobalResults {
+            let table = self.global_table.read(cx);
+            table
+                .active_log_row()
+                .and_then(|row| table.delegate().row_key(row))
+                .and_then(|key| {
+                    let document_id = match key {
+                        LogRowKey::Row { document_id, .. }
+                        | LogRowKey::FileGroup { document_id } => document_id,
+                    };
+                    self.global_search
+                        .results
+                        .get(&document_id)
+                        .map(|result| result.path.as_path())
+                })
+        } else {
+            self.active_document().map(|tab| tab.document.path())
+        };
+        let session_rules = session
+            .filter(|session| {
+                !path.is_some_and(|path| session.color_exclusions.excludes(path, selected_text))
+            })
+            .map_or(&[][..], |session| session.keyword_color_rules.as_slice());
         let session_rule = session_rules
             .iter()
             .find(|rule| {
@@ -1716,9 +1743,12 @@ impl Workspace {
         if session_rule.is_some() {
             return session_rule;
         }
-        let (tab_ix, _) = self.context_color_target(Some(selected_text), cx).ok()?;
-        self.documents[tab_ix]
-            .file
+        let tab = path.and_then(|path| {
+            self.documents
+                .iter()
+                .find(|tab| paths_match(tab.document.path(), path))
+        })?;
+        tab.file
             .keyword_color_rules
             .iter()
             .find(|rule| {
@@ -1766,6 +1796,24 @@ impl Workspace {
             if !context.include_results {
                 return Self::append_search_limit_menu(menu, workspace, range_region, window, cx);
             }
+            let menu = if context.include_global_merge {
+                let color_workspace = workspace.clone();
+                menu.submenu(
+                    crate::tr!("颜色标签", "Color labels"),
+                    window,
+                    cx,
+                    move |menu, window, cx| {
+                        Self::append_search_color_clear_menu(
+                            menu,
+                            color_workspace.clone(),
+                            window,
+                            cx,
+                        )
+                    },
+                )
+            } else {
+                menu
+            };
             let mut menu = menu.item(
                 PopupMenuItem::new(crate::tr!("在新标签页打开", "Open in new tab"))
                     .action(Box::new(OpenSearchResultsInNewTab))
@@ -1859,7 +1907,16 @@ impl Workspace {
                                 )),
                         );
                     }
-                    menu.separator().item(
+                    let menu = menu.separator();
+                    if context.include_global_merge {
+                        return Self::append_search_color_clear_menu(
+                            menu,
+                            clear_workspace.clone(),
+                            window,
+                            cx,
+                        );
+                    }
+                    menu.item(
                         PopupMenuItem::new(crate::tr!("清除所有颜色", "Clear all colors"))
                             .on_click(window.listener_for(
                                 &clear_workspace,

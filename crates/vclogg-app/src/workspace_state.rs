@@ -19,6 +19,7 @@ use crate::{
     directory_search_dialog::DirectorySearchOptions,
     global_search_table::{GlobalQuickFindGroup, GlobalSearchRow},
     path_identity::{PathMatchKey, path_match_key},
+    search_color_exclusions::SearchColorExclusions,
     search_context::{PersistedGlobalSearchContext, WorkspaceSearchState},
     state_store::{CloudSettings, FileSessionState, StateStore},
     virtual_log_lines::{LogRowKey, VisibleLineSnapshot},
@@ -126,6 +127,10 @@ pub(crate) struct GlobalSearchResults {
 }
 
 impl GlobalSearchResults {
+    pub(crate) fn is_same_snapshot(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.by_document, &other.by_document)
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.order.is_empty()
     }
@@ -180,6 +185,7 @@ pub(crate) struct SearchSessionState {
     pub(crate) query: SearchQuery,
     pub(crate) keyword_color_rules: Vec<KeywordColorRule>,
     pub(crate) resolved_color_rules: Arc<ResolvedColorRules>,
+    pub(crate) color_exclusions: SearchColorExclusions,
     pub(crate) initialized: bool,
     pub(crate) results: GlobalSearchResults,
     pub(crate) matcher: Option<SearchMatcher>,
@@ -201,6 +207,7 @@ impl Default for SearchSessionState {
             query: SearchQuery::default(),
             keyword_color_rules: Vec::new(),
             resolved_color_rules: Arc::default(),
+            color_exclusions: SearchColorExclusions::default(),
             initialized: false,
             results: GlobalSearchResults::default(),
             matcher: None,
@@ -219,6 +226,11 @@ impl Default for SearchSessionState {
 }
 
 impl SearchSessionState {
+    pub(crate) fn color_rules_for(&self, path: &Path) -> Arc<ResolvedColorRules> {
+        self.color_exclusions
+            .rules_for(path, &self.resolved_color_rules)
+    }
+
     pub(crate) fn invalidate_results(&mut self) {
         self.initialized = false;
         self.results.clear();
@@ -880,6 +892,7 @@ mod state_controller_tests {
             word_wrap: true,
             active: true,
             visible_lines: None,
+            color_exclusions: SearchColorExclusions::default(),
         };
 
         context.invalidate_results();
