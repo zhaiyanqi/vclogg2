@@ -37,6 +37,7 @@ struct ColorLabelDraft {
 
 #[derive(Clone)]
 pub struct LogColoringConfig {
+    pub(crate) keyword_match_styles: crate::keyword_match_style::KeywordMatchStyles,
     pub(crate) selection_styles: crate::selection_style::SelectionStyles,
     pub highlight_log_levels: bool,
     pub log_level_rules: Vec<LogLevelColorRule>,
@@ -49,9 +50,11 @@ enum LogColoringSection {
     LogLevels,
     ColorLabels,
     SelectionStyle,
+    KeywordMatch,
 }
 
 pub struct ColorLabelsDialog {
+    keyword_match: Entity<crate::keyword_match_style_section::KeywordMatchStyleSection>,
     selection_style: Entity<crate::selection_style_section::SelectionStyleSection>,
     saving: bool,
     error: Option<String>,
@@ -80,7 +83,15 @@ impl ColorLabelsDialog {
                 cx,
             )
         });
+        let keyword_match = cx.new(|cx| {
+            crate::keyword_match_style_section::KeywordMatchStyleSection::new(
+                Default::default(),
+                window,
+                cx,
+            )
+        });
         let mut this = Self {
+            keyword_match,
             selection_style,
             saving: false,
             error: None,
@@ -114,6 +125,18 @@ impl ColorLabelsDialog {
         self
     }
 
+    pub(crate) fn with_keyword_match_styles(
+        mut self,
+        styles: crate::keyword_match_style::KeywordMatchStyles,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        self.keyword_match = cx.new(|cx| {
+            crate::keyword_match_style_section::KeywordMatchStyleSection::new(styles, window, cx)
+        });
+        self
+    }
+
     pub(crate) fn is_saving(&self) -> bool {
         self.saving
     }
@@ -123,6 +146,8 @@ impl ColorLabelsDialog {
         self.error = None;
         self.selection_style
             .update(cx, |section, cx| section.set_saving(true, cx));
+        self.keyword_match
+            .update(cx, |section, cx| section.set_saving(true, cx));
         cx.notify();
     }
 
@@ -130,6 +155,8 @@ impl ColorLabelsDialog {
         self.saving = false;
         self.error = Some(error);
         self.selection_style
+            .update(cx, |section, cx| section.set_saving(false, cx));
+        self.keyword_match
             .update(cx, |section, cx| section.set_saving(false, cx));
         cx.notify();
     }
@@ -212,6 +239,7 @@ impl ColorLabelsDialog {
             })
             .collect::<Result<Vec<_>, String>>()?;
         Ok(LogColoringConfig {
+            keyword_match_styles: self.keyword_match.read(cx).draft(),
             selection_styles: self.selection_style.read(cx).draft(),
             highlight_log_levels: self.highlight_log_levels,
             log_level_rules,
@@ -343,6 +371,7 @@ impl ColorLabelsDialog {
                 LogColoringSection::LogLevels => 0,
                 LogColoringSection::ColorLabels => 1,
                 LogColoringSection::SelectionStyle => 2,
+                LogColoringSection::KeywordMatch => 3,
             })
             .border_b_1()
             .border_color(cx.theme().border)
@@ -361,6 +390,11 @@ impl ColorLabelsDialog {
                     .label(crate::tr!("选中样式", "Selection style"))
                     .disabled(self.saving),
             )
+            .child(
+                Tab::new()
+                    .label(crate::tr!("搜索匹配", "Search matches"))
+                    .disabled(self.saving),
+            )
             .on_click(cx.listener(|this, index: &usize, _, cx| {
                 if this.saving {
                     return;
@@ -368,7 +402,8 @@ impl ColorLabelsDialog {
                 this.active_section = match index {
                     0 => LogColoringSection::LogLevels,
                     1 => LogColoringSection::ColorLabels,
-                    _ => LogColoringSection::SelectionStyle,
+                    2 => LogColoringSection::SelectionStyle,
+                    _ => LogColoringSection::KeywordMatch,
                 };
                 cx.notify();
             }))
@@ -879,6 +914,7 @@ impl Render for ColorLabelsDialog {
                 LogColoringSection::SelectionStyle => {
                     self.selection_style.clone().into_any_element()
                 }
+                LogColoringSection::KeywordMatch => self.keyword_match.clone().into_any_element(),
             })
             .when_some(self.error.clone(), |content, error| {
                 content.child(

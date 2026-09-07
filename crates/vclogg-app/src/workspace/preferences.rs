@@ -1167,8 +1167,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // General settings drafts do not own the independently committed selection appearance.
+        // General settings drafts do not own the independently committed highlight styles.
         settings.selection_styles = self.app_settings.selection_styles.clone();
+        settings.keyword_match_styles = self.app_settings.keyword_match_styles.clone();
         if self.app_settings.search_result_limit() != settings.search_result_limit() {
             self.cancel_search();
         }

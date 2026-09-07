@@ -12,13 +12,19 @@ impl Workspace {
     }
 
     pub(super) fn highlight_styles(
+        &self,
         highlights: &[(Range<usize>, TextHighlight)],
         cx: &App,
     ) -> Vec<(Range<usize>, HighlightStyle)> {
         highlights
             .iter()
             .cloned()
-            .map(|(range, highlight)| (range, text_highlight_style(highlight, cx)))
+            .map(|(range, highlight)| {
+                (
+                    range,
+                    text_highlight_style(highlight, &self.app_settings.keyword_match_styles, cx),
+                )
+            })
             .collect()
     }
 
@@ -765,7 +771,7 @@ impl Workspace {
                     viewport.wrapped_selection(source_row, &row.text, window, cx)
                 };
                 let styled_text = StyledText::new(row.text.display().clone())
-                    .with_highlights(Self::highlight_styles(&row.highlights, cx));
+                    .with_highlights(self.highlight_styles(&row.highlights, cx));
                 let log_level_style = (!source_unavailable)
                     .then_some(row.log_level_style)
                     .flatten();
@@ -794,7 +800,7 @@ impl Workspace {
                     if selection_style.text.legacy_overlay {
                         Vec::new()
                     } else {
-                        Self::highlight_styles(&row.highlights, cx)
+                        self.highlight_styles(&row.highlights, cx)
                     },
                 )
                 .suppress_selection(suppress_text_selection)
@@ -2490,7 +2496,7 @@ impl Workspace {
                             cx,
                         );
                         let styled_text = StyledText::new(text.display().clone())
-                            .with_highlights(Self::highlight_styles(&highlights, cx));
+                            .with_highlights(self.highlight_styles(&highlights, cx));
                         let log_level_style =
                             (!source_unavailable).then_some(log_level_style).flatten();
                         let row_bounds = rendered_row_bounds.clone();
@@ -2521,7 +2527,7 @@ impl Workspace {
                             if selection_style.text.legacy_overlay {
                                 Vec::new()
                             } else {
-                                Self::highlight_styles(&highlights, cx)
+                                self.highlight_styles(&highlights, cx)
                             },
                         )
                         .suppress_selection(suppress_text_selection);

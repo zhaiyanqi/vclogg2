@@ -13,8 +13,9 @@ impl Workspace {
                 window,
                 cx,
             )
-            .with_selection_styles(
-                self.app_settings.selection_styles.clone(),
+            .with_selection_styles(self.app_settings.selection_styles.clone(), window, cx)
+            .with_keyword_match_styles(
+                self.app_settings.keyword_match_styles.clone(),
                 window,
                 cx,
             )
@@ -98,6 +99,7 @@ impl Workspace {
         };
         let mut settings = self.app_settings.clone();
         settings.selection_styles = draft.selection_styles.clone();
+        settings.keyword_match_styles = draft.keyword_match_styles.clone();
         settings.highlight_log_levels = draft.highlight_log_levels;
         settings.log_level_color_rules = draft.log_level_rules.clone();
         editor.update(cx, |editor, cx| editor.begin_save(cx));
@@ -171,6 +173,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.app_settings.selection_styles = draft.selection_styles.clone();
+        self.app_settings.keyword_match_styles = draft.keyword_match_styles.clone();
         self.app_settings.highlight_log_levels = draft.highlight_log_levels;
         self.app_settings.log_level_color_rules = draft.log_level_rules.clone();
         for tab in &mut self.documents {

@@ -171,12 +171,18 @@ pub(crate) fn line_marker(marked: bool, matched: bool, cx: &App) -> AnyElement {
 }
 
 /// 命中与标记的正文高亮始终成对提供背景与前景，避免自定义颜色在不同主题下失去可读性。
-pub(crate) fn text_highlight_style(highlight: TextHighlight, cx: &App) -> HighlightStyle {
-    let colors = ui_theme::palette(cx);
+pub(crate) fn text_highlight_style(
+    highlight: TextHighlight,
+    styles: &crate::keyword_match_style::KeywordMatchStyles,
+    cx: &App,
+) -> HighlightStyle {
     let (background, foreground) = match highlight {
         TextHighlight::Color(style) => (style.background, style.foreground),
-        TextHighlight::Search => (colors.search_match, colors.search_match_foreground),
-        TextHighlight::QuickFind => (colors.quick_find, colors.quick_find_foreground),
+        TextHighlight::Search | TextHighlight::QuickFind => {
+            let dark = ui_theme::is_dark(cx);
+            let quick_find = matches!(highlight, TextHighlight::QuickFind);
+            return styles.style(dark, quick_find).resolve(dark, quick_find);
+        }
     };
     HighlightStyle {
         background_color: Some(background),

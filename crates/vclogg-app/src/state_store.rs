@@ -248,6 +248,7 @@ pub struct AppSettings {
     pub dark_log_background_color: Option<String>,
     pub highlight_log_levels: bool,
     pub log_level_color_rules: Vec<LogLevelColorRule>,
+    pub(crate) keyword_match_styles: crate::keyword_match_style::KeywordMatchStyles,
     pub(crate) selection_styles: crate::selection_style::SelectionStyles,
     pub log_font_size: u16,
     pub search_toolbar_height: u16,
@@ -295,6 +296,7 @@ impl Default for AppSettings {
             highlight_log_levels: false,
             log_level_color_rules: default_log_level_rules(),
             selection_styles: Default::default(),
+            keyword_match_styles: Default::default(),
             log_font_size: 13,
             search_toolbar_height: 28,
             search_toolbar_font_size: 13,
@@ -734,6 +736,8 @@ fn app_settings_from_record(record: AppSettingsRecord) -> AppSettings {
         dark_log_background_color: normalize_optional_hex_color(record.dark_log_background_color),
         highlight_log_levels: record.highlight_log_levels,
         selection_styles: serde_json::from_str(&record.selection_styles).unwrap_or_default(),
+        keyword_match_styles: serde_json::from_str(&record.keyword_match_styles)
+            .unwrap_or_default(),
         log_level_color_rules: if record.log_level_color_rules.trim().is_empty() {
             default_log_level_rules()
         } else {
@@ -804,6 +808,8 @@ fn app_settings_to_record(settings: AppSettings) -> AppSettingsRecord {
         default_show_row_separators: settings.default_show_row_separators,
         highlight_log_levels: settings.highlight_log_levels,
         selection_styles: serde_json::to_string(&settings.selection_styles).unwrap_or_default(),
+        keyword_match_styles: serde_json::to_string(&settings.keyword_match_styles)
+            .unwrap_or_default(),
         log_level_color_rules: serde_json::to_string(&settings.log_level_color_rules)
             .unwrap_or_else(|_| "[]".to_string()),
         log_font_size: i64::from(settings.log_font_size),

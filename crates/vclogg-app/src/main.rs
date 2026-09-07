@@ -19,6 +19,8 @@ mod global_search_files_dialog;
 mod global_search_table;
 mod history_dialog;
 mod i18n;
+mod keyword_match_style;
+mod keyword_match_style_section;
 mod log_table;
 mod log_tag_layer;
 mod log_tags;
