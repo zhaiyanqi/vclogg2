@@ -292,7 +292,7 @@ impl Workspace {
                 (registry.unregister(window_id), target_to_clear)
             });
         if let Some(target_to_clear) = target_to_clear {
-            Self::set_cross_window_drop_visual(&target_to_clear, None, cx);
+            Self::set_cross_window_drop_visual(&target_to_clear, false, cx);
         }
         let Some(workspace) = workspace else {
             return;
@@ -342,24 +342,68 @@ impl Workspace {
         });
     }
 
-    fn set_cross_window_drop_visual(
-        target: &CrossWindowDropTarget,
-        mode: Option<TabTransferMode>,
-        cx: &mut App,
-    ) {
+    fn set_cross_window_drop_visual(target: &CrossWindowDropTarget, visible: bool, cx: &mut App) {
         target.workspace.update(cx, |workspace, cx| {
-            let target_ix = mode.map(|_| target.target_ix);
-            let visible = mode.is_some();
-            if workspace.cross_window_drop_ix != target_ix
-                || workspace.file_drop_visible != visible
-                || workspace.file_drop_tab_transfer != mode
-            {
-                workspace.cross_window_drop_ix = target_ix;
-                workspace.file_drop_visible = visible;
-                workspace.file_drop_tab_transfer = mode;
-                cx.notify();
-            }
+            workspace.cross_window_drop_ix = visible.then_some(target.target_ix);
+            // Pointer movement also invalidates GPUI's drag preview in this window,
+            // even when the insertion index has not changed.
+            cx.notify();
         });
+    }
+
+    fn cross_window_tab_drop_target(
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<CrossWindowDropTarget> {
+        let source_window = window.window_handle();
+        let source_bounds = window.bounds();
+        let source_scale = window.scale_factor();
+        let screen_x = (source_bounds.origin.x.as_f32() + position.x.as_f32()) * source_scale;
+        let screen_y = (source_bounds.origin.y.as_f32() + position.y.as_f32()) * source_scale;
+        let mut candidates = cx.global::<WorkspaceWindowRegistry>().windows.clone();
+        candidates.sort_by_key(|entry| std::cmp::Reverse(entry.focus_order));
+
+        for candidate in candidates {
+            // Respect the source window when it covers another workspace window.
+            if candidate.window == source_window {
+                if Bounds::new(Point::default(), source_bounds.size).contains(&position) {
+                    return None;
+                }
+                continue;
+            }
+            let hit = candidate.window.update(cx, |_, target_window, cx| {
+                let bounds = target_window.bounds();
+                let target_scale = target_window.scale_factor();
+                let left = bounds.origin.x.as_f32() * target_scale;
+                let top = bounds.origin.y.as_f32() * target_scale;
+                let right = (bounds.origin.x + bounds.size.width).as_f32() * target_scale;
+                let bottom = (bounds.origin.y + bounds.size.height).as_f32() * target_scale;
+                if screen_x < left || screen_x >= right || screen_y < top || screen_y >= bottom {
+                    return None;
+                }
+                let position = Point {
+                    x: px((screen_x - left) / target_scale),
+                    y: px((screen_y - top) / target_scale),
+                };
+                let workspace = candidate.workspace.read(cx);
+                let target_ix = workspace
+                    .tab_drop_layout
+                    .borrow()
+                    .drop_index(position)
+                    .unwrap_or(workspace.tabs.len());
+                Some((target_ix, position))
+            });
+            if let Ok(Some((target_ix, position))) = hit {
+                return Some(CrossWindowDropTarget {
+                    window: candidate.window,
+                    workspace: candidate.workspace,
+                    target_ix,
+                    position,
+                });
+            }
+        }
+        None
     }
 
     pub(super) fn track_cross_window_tab_drag(
@@ -372,84 +416,17 @@ impl Workspace {
             return;
         };
         let source_window = window.window_handle();
-        let source_bounds = window.bounds();
-        let source_scale = window.scale_factor();
-        let screen_x =
-            (source_bounds.origin.x.as_f32() + event.event.position.x.as_f32()) * source_scale;
-        let screen_y =
-            (source_bounds.origin.y.as_f32() + event.event.position.y.as_f32()) * source_scale;
-        let mut candidates = cx
-            .global::<WorkspaceWindowRegistry>()
-            .windows
-            .iter()
-            .filter(|entry| entry.window != source_window)
-            .cloned()
-            .collect::<Vec<_>>();
-        candidates.sort_by_key(|entry| std::cmp::Reverse(entry.focus_order));
-
-        let mut next_target = None;
-        let mut over_workspace_window = false;
-        for candidate in candidates {
-            let target_window = candidate.window;
-            let target_workspace = candidate.workspace.clone();
-            let hit = target_window
-                .update(cx, |_, target_window, cx| {
-                    let bounds = target_window.bounds();
-                    let target_scale = target_window.scale_factor();
-                    let left = bounds.origin.x.as_f32() * target_scale;
-                    let top = bounds.origin.y.as_f32() * target_scale;
-                    let right = (bounds.origin.x + bounds.size.width).as_f32() * target_scale;
-                    let bottom = (bounds.origin.y + bounds.size.height).as_f32() * target_scale;
-                    if screen_x < left || screen_x >= right || screen_y < top || screen_y >= bottom
-                    {
-                        return (false, None);
-                    }
-                    let local_position = Point {
-                        x: px((screen_x - left) / target_scale),
-                        y: px((screen_y - top) / target_scale),
-                    };
-                    let workspace = target_workspace.read(cx);
-                    (
-                        true,
-                        workspace
-                            .tab_drop_layout
-                            .borrow()
-                            .drop_index(local_position),
-                    )
-                })
-                .unwrap_or((false, None));
-            let (inside_window, target_ix) = hit;
-            if inside_window {
-                over_workspace_window = true;
-            }
-            if let Some(target_ix) = target_ix {
-                next_target = Some(CrossWindowDropTarget {
-                    window: target_window,
-                    workspace: candidate.workspace,
-                    target_ix,
-                });
-                break;
-            }
-            if inside_window {
-                break;
-            }
-        }
-
-        let mode = if window.modifiers().control {
-            TabTransferMode::Copy
-        } else {
-            TabTransferMode::Move
-        };
+        let next_target = Self::cross_window_tab_drop_target(event.event.position, window, cx);
         let (previous_target, changed) =
             cx.update_global::<WorkspaceWindowRegistry, _>(|registry, _| {
                 let unchanged = registry.cross_window_tab_drag.as_ref().is_some_and(|drag| {
                     drag.source_window == source_window
                         && drag.document_id == document_id
-                        && drag.mode == mode
-                        && drag.over_workspace_window == over_workspace_window
                         && match (&drag.target, &next_target) {
                             (Some(left), Some(right)) => {
-                                left.window == right.window && left.target_ix == right.target_ix
+                                left.window == right.window
+                                    && left.target_ix == right.target_ix
+                                    && left.position == right.position
                             }
                             (None, None) => true,
                             _ => false,
@@ -466,20 +443,22 @@ impl Workspace {
                     source_window,
                     source: dragged.source.clone(),
                     document_id,
-                    mode,
                     target: next_target.clone(),
-                    over_workspace_window,
                 });
                 (previous_target, true)
             });
         if !changed {
             return;
         }
-        if let Some(previous_target) = previous_target {
-            Self::set_cross_window_drop_visual(&previous_target, None, cx);
+        if let Some(previous_target) = previous_target
+            && next_target
+                .as_ref()
+                .is_none_or(|target| target.window != previous_target.window)
+        {
+            Self::set_cross_window_drop_visual(&previous_target, false, cx);
         }
         if let Some(next_target) = next_target {
-            Self::set_cross_window_drop_visual(&next_target, Some(mode), cx);
+            Self::set_cross_window_drop_visual(&next_target, true, cx);
         }
     }
 
@@ -488,6 +467,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut App,
     ) {
+        if event.button != MouseButton::Left {
+            return;
+        }
         let source_window = window.window_handle();
         let drag = cx.update_global::<WorkspaceWindowRegistry, _>(|registry, _| {
             registry
@@ -505,11 +487,15 @@ impl Workspace {
         } else {
             TabTransferMode::Move
         };
+        if let Some(target) = &drag.target {
+            Self::set_cross_window_drop_visual(target, false, cx);
+        }
         let Some(source) = drag.source.upgrade() else {
             return;
         };
-        if let Some(target) = drag.target {
-            Self::set_cross_window_drop_visual(&target, None, cx);
+        // Resolve the release itself: the last move event may precede a boundary crossing.
+        if let Some(target) = Self::cross_window_tab_drop_target(event.position, window, cx) {
+            cx.stop_active_drag(window);
             source.update(cx, |source, cx| {
                 source.transfer_tab_to_window_target(
                     drag.document_id,
@@ -527,9 +513,10 @@ impl Workspace {
         }
 
         let client_bounds = Bounds::new(Point::default(), window.bounds().size);
-        if drag.over_workspace_window || client_bounds.contains(&event.position) {
+        if client_bounds.contains(&event.position) {
             return;
         }
+        cx.stop_active_drag(window);
         let screen_position = window.bounds().origin + event.position;
         let (bounds, display_id) = Self::detached_window_placement(screen_position, window, cx);
         source.update(cx, |source, cx| {

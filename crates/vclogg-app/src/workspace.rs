@@ -433,6 +433,7 @@ struct CrossWindowDropTarget {
     window: AnyWindowHandle,
     workspace: Entity<Workspace>,
     target_ix: usize,
+    position: Point<Pixels>,
 }
 
 struct TabTransferTarget {
@@ -445,9 +446,7 @@ struct CrossWindowTabDrag {
     source_window: AnyWindowHandle,
     source: WeakEntity<Workspace>,
     document_id: u64,
-    mode: TabTransferMode,
     target: Option<CrossWindowDropTarget>,
-    over_workspace_window: bool,
 }
 
 impl Global for WorkspaceWindowRegistry {}
@@ -1470,8 +1469,30 @@ impl DraggedTab {
 }
 
 impl Render for DraggedTab {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _performance_scope = crate::ui_performance::scope("DraggedTab::render");
+        let registry = cx.global::<WorkspaceWindowRegistry>();
+        let target = registry
+            .cross_window_tab_drag
+            .as_ref()
+            .and_then(|drag| drag.target.as_ref());
+        let position = if let Some(target) = target {
+            if target.window != window.window_handle() {
+                return div().into_any_element();
+            }
+            // The source keeps pointer capture, so the target's GPUI mouse position
+            // is stale. Compensate for GPUI's drag-root offset using the tracked point.
+            self.position + target.position - window.mouse_position()
+        } else {
+            let is_source = registry.windows.iter().any(|entry| {
+                entry.window == window.window_handle()
+                    && entry.workspace.entity_id() == self.source.entity_id()
+            });
+            if !is_source {
+                return div().into_any_element();
+            }
+            self.position
+        };
         let width = cx.theme().font_size * 15.;
         let height = cx.theme().font_size * 2.5;
 
@@ -1482,10 +1503,12 @@ impl Render for DraggedTab {
 
         div()
             .id(element_id)
-            .pl(self.position.x - width * 0.5)
-            .pt(self.position.y - height * 0.5)
+            .relative()
             .child(
                 h_flex()
+                    .absolute()
+                    .left(position.x - width * 0.5)
+                    .top(position.y - height * 0.5)
                     .w(width)
                     .h(height)
                     .px_3()
@@ -1498,6 +1521,7 @@ impl Render for DraggedTab {
                     .overflow_hidden()
                     .child(div().truncate().child(self.title.clone())),
             )
+            .into_any_element()
     }
 }
 
@@ -1666,7 +1690,6 @@ pub struct Workspace {
     color_labels_resolution_cancellation: Option<SearchCancellation>,
     color_labels_resolution_revision: u64,
     file_drop_visible: bool,
-    file_drop_tab_transfer: Option<TabTransferMode>,
     cross_window_drop_ix: Option<usize>,
     tab_drop_layout: Rc<RefCell<TabDropLayout>>,
     filter_popover: filter_popover::FilterPopoverState,
@@ -2277,7 +2300,6 @@ impl Workspace {
             color_labels_resolution_cancellation: None,
             color_labels_resolution_revision: 0,
             file_drop_visible: false,
-            file_drop_tab_transfer: None,
             cross_window_drop_ix: None,
             tab_drop_layout: Rc::new(RefCell::new(TabDropLayout::default())),
             search_panel_state,
@@ -2382,15 +2404,12 @@ impl Workspace {
                         FileDropEvent::Entered { .. } | FileDropEvent::Pending { .. } => None,
                         FileDropEvent::Exited
                         | FileDropEvent::Submit { .. }
-                        | FileDropEvent::Ended => Some((false, None)),
+                        | FileDropEvent::Ended => Some(false),
                     };
-                    if let Some((next_visible, next_transfer)) = next_state {
+                    if let Some(next_visible) = next_state {
                         _ = workspace.update(cx, |workspace, cx| {
-                            if workspace.file_drop_visible != next_visible
-                                || workspace.file_drop_tab_transfer != next_transfer
-                            {
+                            if workspace.file_drop_visible != next_visible {
                                 workspace.file_drop_visible = next_visible;
-                                workspace.file_drop_tab_transfer = next_transfer;
                                 cx.notify();
                             }
                         });
@@ -2493,31 +2512,12 @@ impl Render for Workspace {
             .global::<WorkspaceWindowRegistry>()
             .previous_window(window.window_handle())
             .is_some();
-        let (file_drop_title, file_drop_description) = match self.file_drop_tab_transfer {
-            Some(TabTransferMode::Move) => (
-                crate::tr!("松开以移动标签", "Release to move the tab"),
-                crate::tr!(
-                    "完整会话会插入此位置；目标确认后才关闭源标签",
-                    "The complete session will be inserted here; the source closes only after the destination confirms"
-                ),
-            ),
-            Some(TabTransferMode::Copy) => (
-                crate::tr!("松开以复制标签", "Release to copy the tab"),
-                crate::tr!(
-                    "完整会话会插入此位置；源标签保持不变",
-                    "The complete session will be inserted here; the source tab remains unchanged"
-                ),
-            ),
-            None => (
-                crate::tr!("松开以打开日志", "Release to open logs"),
-                crate::tr!(
-                    "支持同时拖入多个文件，文件夹会被忽略",
-                    "You can drop multiple files; folders are ignored"
-                ),
-            ),
-        };
+        let file_drop_title = crate::tr!("松开以打开日志", "Release to open logs");
+        let file_drop_description = crate::tr!(
+            "支持同时拖入多个文件，文件夹会被忽略",
+            "You can drop multiple files; folders are ignored"
+        );
         let drop_overlay_top = window.rem_size() * 0.5;
-        let drop_hint_top = window.rem_size() * 4.;
         let drop_enter_travel = window.rem_size() * 0.5;
         let colors = ui_theme::palette(cx);
         let element = v_flex()
@@ -2541,12 +2541,8 @@ impl Render for Workspace {
             .on_drag_move::<ExternalPaths>(cx.listener(
                 |this, event: &DragMoveEvent<ExternalPaths>, _, cx| {
                     let next_visible = event.bounds.contains(&event.event.position);
-                    let next_transfer = None;
-                    if this.file_drop_visible != next_visible
-                        || this.file_drop_tab_transfer != next_transfer
-                    {
+                    if this.file_drop_visible != next_visible {
                         this.file_drop_visible = next_visible;
-                        this.file_drop_tab_transfer = next_transfer;
                         cx.notify();
                     }
                 },
@@ -2615,92 +2611,48 @@ impl Render for Workspace {
             )
             .child(self.status_surface.clone())
             .child(self.render_file_drop_observer(cx))
-            .when(
-                self.file_drop_visible && self.file_drop_tab_transfer.is_none(),
-                |this| {
-                    this.child(render_shell::deferred_workspace_overlay(
-                        div()
-                            .id("file-drop-overlay")
-                            .absolute()
-                            .right_2()
-                            .bottom_2()
-                            .left_2()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(cx.theme().radius_lg)
-                            .border_2()
-                            .border_dashed()
-                            .border_color(cx.theme().primary)
-                            .bg(cx.theme().popover)
-                            .text_color(cx.theme().popover_foreground)
-                            .child(
-                                v_flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(Icon::new(IconName::FolderOpen).size_8())
-                                    .child(div().text_lg().font_semibold().child(file_drop_title))
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(file_drop_description),
-                                    ),
-                            )
-                            .with_animation(
-                                "file-drop-overlay-enter",
-                                Animation::new(TRANSIENT_SURFACE_ENTER_DURATION)
-                                    .with_easing(ease_out_cubic),
-                                move |overlay, delta| {
-                                    overlay
-                                        .top(drop_overlay_top - drop_enter_travel * (1. - delta))
-                                        .opacity(delta)
-                                },
-                            ),
-                    ))
-                },
-            )
-            .when(
-                self.file_drop_visible && self.file_drop_tab_transfer.is_some(),
-                |this| {
-                    this.child(render_shell::deferred_workspace_overlay(
-                        h_flex()
-                            .id("tab-transfer-drop-hint")
-                            .absolute()
-                            .right_4()
-                            .gap_2()
-                            .px_3()
-                            .py_2()
-                            .rounded(cx.theme().radius_lg)
-                            .border_1()
-                            .border_color(cx.theme().primary)
-                            .bg(cx.theme().popover)
-                            .text_color(cx.theme().popover_foreground)
-                            .shadow_lg()
-                            .child(Icon::new(IconName::FolderOpen).size_5())
-                            .child(
-                                v_flex()
-                                    .gap_1()
-                                    .child(div().font_semibold().child(file_drop_title))
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(file_drop_description),
-                                    ),
-                            )
-                            .with_animation(
-                                "tab-transfer-drop-hint-enter",
-                                Animation::new(TRANSIENT_SURFACE_ENTER_DURATION)
-                                    .with_easing(ease_out_cubic),
-                                move |hint, delta| {
-                                    hint.top(drop_hint_top - drop_enter_travel * (1. - delta))
-                                        .opacity(delta)
-                                },
-                            ),
-                    ))
-                },
-            )
+            .when(self.file_drop_visible, |this| {
+                this.child(render_shell::deferred_workspace_overlay(
+                    div()
+                        .id("file-drop-overlay")
+                        .absolute()
+                        .right_2()
+                        .bottom_2()
+                        .left_2()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(cx.theme().radius_lg)
+                        .border_2()
+                        .border_dashed()
+                        .border_color(cx.theme().primary)
+                        .bg(cx.theme().popover)
+                        .text_color(cx.theme().popover_foreground)
+                        .child(
+                            v_flex()
+                                .items_center()
+                                .gap_2()
+                                .child(Icon::new(IconName::FolderOpen).size_8())
+                                .child(div().text_lg().font_semibold().child(file_drop_title))
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(file_drop_description),
+                                ),
+                        )
+                        .with_animation(
+                            "file-drop-overlay-enter",
+                            Animation::new(TRANSIENT_SURFACE_ENTER_DURATION)
+                                .with_easing(ease_out_cubic),
+                            move |overlay, delta| {
+                                overlay
+                                    .top(drop_overlay_top - drop_enter_travel * (1. - delta))
+                                    .opacity(delta)
+                            },
+                        ),
+                ))
+            })
             .child(crate::modal_event_layer::render_foreground_pointer_barrier())
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_sheet_layer(window, cx))

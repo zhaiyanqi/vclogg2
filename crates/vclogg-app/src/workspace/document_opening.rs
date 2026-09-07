@@ -49,7 +49,6 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.file_drop_visible = false;
-        self.file_drop_tab_transfer = None;
         if self.open_task.is_some() {
             window.push_notification(
                 crate::tr!(

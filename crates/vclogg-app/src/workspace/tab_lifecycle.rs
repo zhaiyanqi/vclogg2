@@ -884,16 +884,7 @@ impl Workspace {
             );
             return TabTransferReception::Busy;
         }
-        let file_name = initial
-            .path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| initial.path.display().to_string());
         self.begin_open_initial_documents(vec![initial], window, cx);
-        window.push_notification(
-            crate::tr_args!("正在接收标签：{file_name}", "Receiving tab: {file_name}"),
-            cx,
-        );
         TabTransferReception::Accepted
     }
 
@@ -955,7 +946,6 @@ impl Workspace {
             return;
         };
         let path = tab.document.path().to_path_buf();
-        let file_name = tab.file.title.clone();
         let range = self.search_ranges.get(&path);
         let session = self.file_session_state(tab, cx);
         let transient = path_match_set_contains(&self.transient_paths, &path);
@@ -982,20 +972,7 @@ impl Workspace {
         });
         let reception = result.unwrap_or(TabTransferReception::Closed);
         match (mode, reception) {
-            (TabTransferMode::Copy, TabTransferReception::Accepted) => window.push_notification(
-                crate::tr_args!(
-                    "已把 {file_name} 复制到另一窗口",
-                    "Copied {file_name} to another window"
-                ),
-                cx,
-            ),
-            (TabTransferMode::Move, TabTransferReception::Accepted) => window.push_notification(
-                crate::tr_args!(
-                    "正在把 {file_name} 移动到另一窗口",
-                    "Moving {file_name} to another window"
-                ),
-                cx,
-            ),
+            (_, TabTransferReception::Accepted) => {}
             (TabTransferMode::Copy, TabTransferReception::AlreadyOpen) => window.push_notification(
                 crate::tr!(
                     "另一窗口已经打开同一文件",
