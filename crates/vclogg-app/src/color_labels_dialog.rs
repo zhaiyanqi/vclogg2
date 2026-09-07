@@ -1,11 +1,12 @@
 use gpui::{
-    AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, Rgba, ScrollHandle, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Window, div, prelude::FluentBuilder as _, rgb,
+    AppContext as _, Context, Entity, Focusable as _, HighlightStyle, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, Rgba, ScrollHandle, StatefulInteractiveElement as _,
+    Styled as _, StyledText, Subscription, Window, div, prelude::FluentBuilder as _, rems, rgb,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     h_flex,
     input::{Input, InputEvent, InputState},
@@ -22,6 +23,7 @@ use crate::color_labels::{
 struct LogLevelDraft {
     id: String,
     keyword: Entity<InputState>,
+    keyword_only: bool,
     text_color: Entity<ColorPickerState>,
     background_color: Entity<ColorPickerState>,
     _subscriptions: [Subscription; 3],
@@ -193,6 +195,7 @@ impl ColorLabelsDialog {
                 Ok(LogLevelColorRule {
                     id: row.id.clone(),
                     keyword,
+                    keyword_only: row.keyword_only,
                     text_color,
                     text_alpha,
                     background_color,
@@ -269,6 +272,7 @@ impl ColorLabelsDialog {
         self.log_level_rows.push(LogLevelDraft {
             id: rule.id,
             keyword,
+            keyword_only: rule.keyword_only,
             text_color,
             background_color,
             _subscriptions: subscriptions,
@@ -517,6 +521,13 @@ impl ColorLabelsDialog {
                             )
                             .child(
                                 div()
+                                    .w(rems(7.))
+                                    .flex_none()
+                                    .text_center()
+                                    .child(crate::tr!("仅高亮关键字", "Keyword only")),
+                            )
+                            .child(
+                                div()
                                     .w_20()
                                     .flex_none()
                                     .text_center()
@@ -560,6 +571,7 @@ impl ColorLabelsDialog {
                             })
                             .children(self.log_level_rows.iter().map(|row| {
                                 let row_id = row.id.clone();
+                                let keyword_only_id = row.id.clone();
                                 let remove_id = row.id.clone();
                                 let dialog = dialog.clone();
                                 let text_color = row
@@ -572,6 +584,21 @@ impl ColorLabelsDialog {
                                     .read(cx)
                                     .displayed_color()
                                     .unwrap_or_else(|| rgb(0).into());
+                                let keyword = row.keyword.read(cx).value();
+                                let keyword = keyword.trim();
+                                let preview = format!("{keyword} {}", crate::tr!("日志", "log"));
+                                let preview_highlights = if row.keyword_only && !keyword.is_empty() {
+                                    vec![(
+                                        0..keyword.len(),
+                                        HighlightStyle {
+                                            color: Some(text_color),
+                                            background_color: Some(background),
+                                            ..Default::default()
+                                        },
+                                    )]
+                                } else {
+                                    Vec::new()
+                                };
                                 h_flex()
                                     .id(format!("log-level-color-row-{row_id}"))
                                     .flex_none()
@@ -592,11 +619,53 @@ impl ColorLabelsDialog {
                                                 .rounded(cx.theme().radius / 2.)
                                                 .border_1()
                                                 .border_color(cx.theme().border)
-                                                .bg(background)
-                                                .text_color(text_color)
+                                                .bg(cx.theme().background)
+                                                .text_color(cx.theme().foreground)
+                                                .when(!row.keyword_only, |preview| {
+                                                    preview.bg(background).text_color(text_color)
+                                                })
                                                 .text_sm()
-                                                .child(crate::tr!("示例日志", "Sample log")),
+                                                .child(
+                                                    div().min_w_0().truncate().child(
+                                                        StyledText::new(preview)
+                                                            .with_highlights(preview_highlights),
+                                                    ),
+                                                ),
                                         ),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .w(rems(7.))
+                                            .flex_none()
+                                            .justify_center()
+                                            .child(
+                                                Checkbox::new(format!(
+                                                    "log-level-keyword-only-{row_id}"
+                                                ))
+                                                .small()
+                                                .checked(row.keyword_only)
+                                                .disabled(self.saving)
+                                                .aria_label(crate::tr!(
+                                                    "仅高亮关键字",
+                                                    "Keyword only"
+                                                ))
+                                                .tooltip(crate::tr!(
+                                                    "勾选后仅对匹配关键字着色，否则对整行着色",
+                                                    "Color only matching keywords when checked; otherwise color the entire line"
+                                                ))
+                                                .on_click(cx.listener(
+                                                    move |this, checked: &bool, _, cx| {
+                                                        if let Some(row) = this
+                                                            .log_level_rows
+                                                            .iter_mut()
+                                                            .find(|row| row.id == keyword_only_id)
+                                                        {
+                                                            row.keyword_only = *checked;
+                                                            cx.notify();
+                                                        }
+                                                    },
+                                                )),
+                                            ),
                                     )
                                     .child(
                                         h_flex()

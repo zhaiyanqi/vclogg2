@@ -192,6 +192,8 @@ impl GlobalRowPresenter {
             color_rules,
             self.matcher.as_ref(),
             self.quick_find_matcher.as_ref(),
+            self.highlight_log_levels
+                .then_some(self.log_level_rules.as_ref()),
         );
         GlobalRowPresentation {
             log_level_style: self.log_level_style(&text),

@@ -1,4 +1,4 @@
-use gpui::{InteractiveElement as _, SharedString, StatefulInteractiveElement as _};
+use gpui::{SharedString, StatefulInteractiveElement as _};
 use gpui_component::button::Button;
 
 // Button owns a stable ID but does not expose StatefulInteractiveElement.

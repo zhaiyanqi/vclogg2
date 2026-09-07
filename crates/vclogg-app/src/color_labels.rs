@@ -78,6 +78,8 @@ pub struct KeywordColorRule {
 pub struct LogLevelColorRule {
     pub id: String,
     pub keyword: String,
+    #[serde(default)]
+    pub keyword_only: bool,
     pub text_color: u32,
     #[serde(default = "opaque_color_alpha")]
     pub text_alpha: u8,
@@ -100,6 +102,7 @@ pub struct ResolvedLogLevelRules {
 #[derive(Clone)]
 struct ResolvedLogLevelRule {
     keyword: Arc<str>,
+    keyword_only: bool,
     style: LogColorStyle,
 }
 
@@ -224,13 +227,41 @@ impl ResolvedLogLevelRules {
         for word in
             text.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
         {
-            for rule in self.rules.iter() {
-                if word.eq_ignore_ascii_case(rule.keyword.as_ref()) {
-                    matched = Some(rule.style);
-                }
+            if let Some(rule) = self.matching_rule(word)
+                && !rule.keyword_only
+            {
+                matched = Some(rule.style);
             }
         }
         matched
+    }
+
+    pub(crate) fn matching_keyword_ranges(&self, text: &str) -> Vec<(Range<usize>, LogColorStyle)> {
+        if !self.rules.iter().any(|rule| rule.keyword_only) {
+            return Vec::new();
+        }
+        let mut ranges = Vec::new();
+        let mut offset = 0;
+        for segment in text.split_inclusive(|character: char| {
+            !character.is_ascii_alphanumeric() && character != '_'
+        }) {
+            let word = segment.trim_end_matches(|character: char| {
+                !character.is_ascii_alphanumeric() && character != '_'
+            });
+            if let Some(rule) = self.matching_rule(word)
+                && rule.keyword_only
+            {
+                ranges.push((offset..offset + word.len(), rule.style));
+            }
+            offset += segment.len();
+        }
+        ranges
+    }
+
+    fn matching_rule(&self, word: &str) -> Option<&ResolvedLogLevelRule> {
+        self.rules
+            .iter()
+            .rfind(|rule| word.eq_ignore_ascii_case(rule.keyword.as_ref()))
     }
 }
 
@@ -258,6 +289,7 @@ pub fn default_log_level_rules() -> Vec<LogLevelColorRule> {
         LogLevelColorRule {
             id: "log-level-info".to_string(),
             keyword: "INFO".to_string(),
+            keyword_only: false,
             text_color: 0x0c4a6e,
             text_alpha: u8::MAX,
             background_color: 0xe0f2fe,
@@ -266,6 +298,7 @@ pub fn default_log_level_rules() -> Vec<LogLevelColorRule> {
         LogLevelColorRule {
             id: "log-level-error".to_string(),
             keyword: "ERROR".to_string(),
+            keyword_only: false,
             text_color: 0x7f1d1d,
             text_alpha: u8::MAX,
             background_color: 0xfee2e2,
@@ -281,6 +314,7 @@ pub fn resolve_log_level_rules(rules: &[LogLevelColorRule]) -> Arc<ResolvedLogLe
             .filter(|rule| !rule.keyword.trim().is_empty())
             .map(|rule| ResolvedLogLevelRule {
                 keyword: Arc::from(rule.keyword.trim()),
+                keyword_only: rule.keyword_only,
                 style: LogColorStyle {
                     foreground: color_with_alpha(rule.text_color, rule.text_alpha),
                     background: color_with_alpha(rule.background_color, rule.background_alpha),

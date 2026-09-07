@@ -520,6 +520,7 @@ pub(crate) fn combined_match_ranges(
     color_rules: &ResolvedColorRules,
     search_matcher: Option<&SearchMatcher>,
     quick_find_matcher: Option<&SearchMatcher>,
+    log_level_rules: Option<&ResolvedLogLevelRules>,
 ) -> Vec<(Range<usize>, TextHighlight)> {
     #[derive(Clone, Copy)]
     struct Candidate {
@@ -567,6 +568,21 @@ pub(crate) fn combined_match_ranges(
         priority: search_priority,
         highlight: TextHighlight::Search,
     }));
+    if let Some(rules) = log_level_rules {
+        // Log-level coloring remains underneath explicit keyword colors and search matches.
+        let priority = search_priority.saturating_add(1);
+        candidates.extend(
+            rules
+                .matching_keyword_ranges(text)
+                .into_iter()
+                .map(|(range, style)| Candidate {
+                    start: range.start,
+                    end: range.end,
+                    priority,
+                    highlight: TextHighlight::Color(style),
+                }),
+        );
+    }
     if candidates.is_empty() {
         return Vec::new();
     }
@@ -829,6 +845,8 @@ impl LogRowPresenter {
             &self.color_rules,
             self.search_matcher.as_ref(),
             self.quick_find_matcher.as_ref(),
+            self.highlight_log_levels
+                .then_some(self.log_level_rules.as_ref()),
         );
         LogRowPresentation {
             log_level_style: self.log_level_style(&text),
@@ -1565,7 +1583,8 @@ mod tests {
             .expect("quick-find matcher should compile")
             .expect("quick-find text is non-empty");
 
-        let highlights = combined_match_ranges("abcdef", &color_rules, Some(&search), Some(&quick));
+        let highlights =
+            combined_match_ranges("abcdef", &color_rules, Some(&search), Some(&quick), None);
 
         assert_eq!(
             highlights
