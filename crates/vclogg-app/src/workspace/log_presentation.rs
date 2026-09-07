@@ -24,10 +24,10 @@ impl Workspace {
                 let mut style =
                     text_highlight_style(highlight, &self.app_settings.keyword_match_styles, cx);
                 if outside_search_range {
-                    style.color = Some(cx.theme().muted_foreground);
+                    style.color = Some(ui_theme::search_excluded_foreground(cx));
                     style.background_color = None;
                     if let Some(underline) = &mut style.underline {
-                        underline.color = Some(cx.theme().muted_foreground);
+                        underline.color = Some(ui_theme::search_excluded_foreground(cx));
                     }
                 }
                 // Keep font metrics so range changes never disturb wrapped-row geometry.
@@ -882,7 +882,7 @@ impl Workspace {
                                     font_size,
                                     base_height,
                                     if outside_search_range {
-                                        cx.theme().muted_foreground
+                                        ui_theme::search_excluded_foreground(cx)
                                     } else {
                                         line_number_text_color
                                     },
@@ -915,7 +915,7 @@ impl Workspace {
                                     cell.text_color(cx.theme().danger)
                                 })
                                 .when(outside_search_range, |cell| {
-                                    cell.text_color(cx.theme().muted_foreground)
+                                    cell.text_color(ui_theme::search_excluded_foreground(cx))
                                 })
                                 .when(row.selected, |cell| {
                                     cell.child(selection_style.row_overlay(
@@ -2629,7 +2629,7 @@ impl Workspace {
                                         font_size,
                                         base_height,
                                         if outside_search_range {
-                                            cx.theme().muted_foreground
+                                            ui_theme::search_excluded_foreground(cx)
                                         } else {
                                             line_number_text_color
                                         },
@@ -2661,7 +2661,9 @@ impl Workspace {
                                             cell.text_color(cx.theme().danger)
                                         })
                                         .when(outside_search_range, |cell| {
-                                            cell.text_color(cx.theme().muted_foreground)
+                                            cell.text_color(ui_theme::search_excluded_foreground(
+                                                cx,
+                                            ))
                                         })
                                         .when(selected, |cell| {
                                             cell.child(selection_style.row_overlay(

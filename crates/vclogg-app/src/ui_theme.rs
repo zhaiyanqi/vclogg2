@@ -437,6 +437,11 @@ pub(crate) fn material_highlight_line(colors: &ProductColors) -> Div {
         .bg(colors.material_highlight)
 }
 
+/// Fade excluded text into its actual background in both light and dark themes.
+pub(crate) fn search_excluded_foreground(cx: &App) -> Hsla {
+    Theme::global(cx).muted_foreground.opacity(0.40)
+}
+
 pub(crate) fn text_selection_highlight(cx: &App) -> Hsla {
     let colors = palette(cx);
     colors.primary.opacity(if Theme::global(cx).is_dark() {

@@ -7,7 +7,7 @@ use std::{
 use chrono::{DateTime, Local, Utc};
 use gpui::{
     AnyElement, AppContext as _, Context, Entity, EventEmitter, Focusable as _,
-    InteractiveElement as _, IntoElement, KeyDownEvent, ObjectFit, ParentElement as _, Render,
+    InteractiveElement as _, IntoElement, Keystroke, ObjectFit, ParentElement as _, Render,
     SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _, Subscription,
     Task, UniformListScrollHandle, Window, div, img, prelude::FluentBuilder as _, uniform_list,
 };
@@ -45,6 +45,7 @@ use crate::{
 use vclogg_data::IndexCacheInfo;
 
 const GITHUB_REPOSITORY_URL: &str = "https://github.com/zhaiyanqi/vclogg2";
+const SHORTCUT_INPUT_CONTEXT: &str = "VCLogg2ShortcutInput";
 
 impl SelectItem for LogFontFamily {
     type Value = Self;
@@ -1031,6 +1032,33 @@ impl SettingsDialog {
             shortcut_inputs.insert(action, input);
         }
 
+        // Action bindings run before both capture and bubble key listeners. Intercept
+        // recording here so Input commands cannot consume an assigned combination.
+        let inputs_for_capture = shortcut_inputs.clone();
+        subscriptions.push(cx.intercept_keystrokes(move |event, window, cx| {
+            if !event
+                .context_stack
+                .iter()
+                .any(|context| context.contains(SHORTCUT_INPUT_CONTEXT))
+            {
+                return;
+            }
+            let Some(input) = inputs_for_capture
+                .values()
+                .find(|input| input.read(cx).focus_handle(cx).is_focused(window))
+            else {
+                return;
+            };
+            let value = match event.keystroke.key.as_str() {
+                "escape" | "tab" => return,
+                "backspace" | "delete" => String::new(),
+                "control" | "ctrl" | "alt" | "shift" | "meta" | "cmd" | "command" => return,
+                _ => shortcut_from_keystroke(&event.keystroke),
+            };
+            cx.stop_propagation();
+            input.update(cx, |state, cx| state.set_value(value, window, cx));
+        }));
+
         let cache_dir = crate::app_paths::index_cache_dir();
         let mut dialog = Self {
             draft: settings,
@@ -1670,7 +1698,6 @@ impl SettingsDialog {
     ) -> gpui::AnyElement {
         let input = self.shortcut_inputs[&action].clone();
         let default_value = action.value(&ShortcutSettings::default()).to_string();
-        let input_for_capture = input.clone();
         let input_for_reset = input.clone();
 
         h_flex()
@@ -1707,26 +1734,8 @@ impl SettingsDialog {
                             .child(
                                 div()
                                     .id(format!("settings-shortcut-input-{}", action.id()))
+                                    .key_context(SHORTCUT_INPUT_CONTEXT)
                                     .flex_1()
-                                    .on_key_down(move |event: &KeyDownEvent, window, cx| {
-                                        match event.keystroke.key.as_str() {
-                                            "escape" | "tab" => return,
-                                            "backspace" | "delete" => {
-                                                input_for_capture.update(cx, |state, cx| {
-                                                    state.set_value("", window, cx)
-                                                });
-                                            }
-                                            "control" | "ctrl" | "alt" | "shift" | "meta"
-                                            | "cmd" | "command" => return,
-                                            _ => {
-                                                let value = shortcut_from_event(event);
-                                                input_for_capture.update(cx, |state, cx| {
-                                                    state.set_value(value, window, cx)
-                                                });
-                                            }
-                                        }
-                                        cx.stop_propagation();
-                                    })
                                     .child(Input::new(&input).small().readonly(true)),
                             )
                             .child(
@@ -3672,15 +3681,15 @@ fn format_byte_size(bytes: u64) -> String {
     }
 }
 
-fn shortcut_from_event(event: &KeyDownEvent) -> String {
+fn shortcut_from_keystroke(keystroke: &Keystroke) -> String {
     let mut parts = Vec::with_capacity(5);
-    if event.keystroke.modifiers.control {
+    if keystroke.modifiers.control {
         parts.push("Ctrl".to_string());
     }
-    if event.keystroke.modifiers.alt {
+    if keystroke.modifiers.alt {
         parts.push("Alt".to_string());
     }
-    if event.keystroke.modifiers.platform {
+    if keystroke.modifiers.platform {
         parts.push(
             if cfg!(target_os = "macos") {
                 "Cmd"
@@ -3690,11 +3699,11 @@ fn shortcut_from_event(event: &KeyDownEvent) -> String {
             .to_string(),
         );
     }
-    if event.keystroke.modifiers.shift {
+    if keystroke.modifiers.shift {
         parts.push("Shift".to_string());
     }
 
-    let key = match event.keystroke.key.as_str() {
+    let key = match keystroke.key.as_str() {
         "enter" => "Enter".to_string(),
         "space" => "Space".to_string(),
         "arrowup" | "up" => "Up".to_string(),
