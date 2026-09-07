@@ -80,7 +80,7 @@ impl Workspace {
             || self.global_search.revision != target.revision
             || !self.global_search.results.is_same_snapshot(&target.results)
         {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "搜索结果已发生变化，请重新打开菜单",
                     "Search results changed. Open the menu again."
@@ -132,7 +132,7 @@ impl Workspace {
             self.schedule_checkpoint(document_id, window, cx);
         }
         self.schedule_workspace_search_state_save(window, cx);
-        window.push_notification(
+        window.notify_message(
             if target.all_results {
                 crate::tr!(
                     "已清除搜索结果中的所有颜色",

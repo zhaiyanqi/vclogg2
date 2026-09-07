@@ -185,7 +185,7 @@ impl Workspace {
             )
             .to_string()
         };
-        window.push_notification(message, cx);
+        window.notify_message(message, cx);
         cx.notify();
     }
 }

@@ -772,7 +772,7 @@ impl Workspace {
             Self::refresh_log_surfaces_atomically(refreshed_surfaces, window, cx);
         }
 
-        window.push_notification(
+        window.notify_message(
             if enabled {
                 crate::tr!("已开启自动换行", "Word wrap enabled")
             } else {

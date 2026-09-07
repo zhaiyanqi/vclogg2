@@ -35,7 +35,7 @@ impl Workspace {
             let selected_text = TextSelection::selected_text(window, cx);
             if !selected_text.trim().is_empty() {
                 cx.write_to_clipboard(ClipboardItem::new_string(selected_text));
-                window.push_notification(crate::tr!("已复制所选文字", "Selected text copied"), cx);
+                window.notify_message(crate::tr!("已复制所选文字", "Selected text copied"), cx);
                 return;
             }
         }
@@ -47,7 +47,7 @@ impl Workspace {
                 .delegate()
                 .selected_match_documents();
             if selected_documents.is_empty() {
-                window.push_notification(
+                window.notify_message(
                     crate::tr!(
                         "请先选择要复制的全局结果行",
                         "Select global result lines to copy first"
@@ -71,7 +71,7 @@ impl Workspace {
         };
         let selected_rows = tab.selected_source_rows_compressed(cx);
         if selected_rows.is_empty() {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!("请先选择要复制的日志行", "Select log lines to copy first"),
                 cx,
             );
@@ -118,7 +118,7 @@ impl Workspace {
                     DocumentLineTask::Completed(copied) => copied,
                     DocumentLineTask::Cancelled => return,
                     DocumentLineTask::SourceUnavailable => {
-                        window.push_notification(
+                        window.notify_message(
                             crate::tr!(
                                 "所选日志的文件内容已改变，请重新加载后再复制",
                                 "The selected log file changed. Reload it before copying."
@@ -129,7 +129,7 @@ impl Workspace {
                     }
                 };
                 if copied.text.is_empty() {
-                    window.push_notification(
+                    window.notify_message(
                         match scope {
                             LineCopyScope::Local => crate::tr!(
                                 "所选日志行已不可用，请重新选择",
@@ -160,7 +160,7 @@ impl Workspace {
                         crate::tr_args!("已复制 {} 行", "Copied {} lines", copied.count)
                     }
                 };
-                window.push_notification(notification, cx);
+                window.notify_message(notification, cx);
             });
         }));
     }
@@ -214,7 +214,7 @@ impl Workspace {
         cx.write_to_clipboard(ClipboardItem::new_string(
             tab.document.path().display().to_string(),
         ));
-        window.push_notification(crate::tr!("已复制文件路径", "File path copied"), cx);
+        window.notify_message(crate::tr!("已复制文件路径", "File path copied"), cx);
     }
 
     pub(super) fn copy_document_encoding(
@@ -228,7 +228,7 @@ impl Workspace {
         };
         let encoding = tab.document.metadata().encoding_name.clone();
         cx.write_to_clipboard(ClipboardItem::new_string(encoding.clone()));
-        window.push_notification(
+        window.notify_message(
             crate::tr_args!(
                 "已复制编码名称：{encoding}",
                 "Encoding name copied: {encoding}"
@@ -285,7 +285,7 @@ impl Workspace {
             return;
         };
         if tab.load_state != DocumentLoadState::Ready {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "完整索引建立后即可按行号定位",
                     "Go to line will be available after the full index is built"
@@ -296,7 +296,7 @@ impl Workspace {
         }
         let line_count = tab.document.line_count();
         if line_count == 0 {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "当前文件没有可定位的日志行",
                     "The current file has no log line to locate"
@@ -347,7 +347,7 @@ impl Workspace {
                 .on_ok(move |_, window, cx| {
                     let value = input_for_confirm.read(cx).value().trim().to_string();
                     let Ok(line_number) = value.parse::<usize>() else {
-                        window.push_notification(crate::tr!("请输入有效的正整数行号", "Enter a valid positive line number"), cx);
+                        window.notify_message(crate::tr!("请输入有效的正整数行号", "Enter a valid positive line number"), cx);
                         return false;
                     };
                     let outcome = workspace_for_confirm.update(cx, |workspace, cx| {
@@ -371,7 +371,7 @@ impl Workspace {
                     match outcome {
                         Ok(()) => true,
                         Err(message) => {
-                            window.push_notification(message, cx);
+                            window.notify_message(message, cx);
                             false
                         }
                     }
@@ -389,7 +389,7 @@ impl Workspace {
         let (_, target) = match self.context_color_target(Some(selected_text.as_str()), cx) {
             Ok(target) => target,
             Err(message) => {
-                window.push_notification(message, cx);
+                window.notify_message(message, cx);
                 return;
             }
         };
@@ -406,7 +406,7 @@ impl Workspace {
         {
             let selected_matches = self.global_table.read(cx).delegate().selection_snapshot();
             if selected_matches.is_empty() {
-                window.push_notification(
+                window.notify_message(
                     crate::tr!(
                         "请先选择要标记的全局结果行",
                         "Select global result lines to mark first"
@@ -417,7 +417,7 @@ impl Workspace {
             }
             let Some(selected_by_document) = self.resolve_global_mark_targets(&selected_matches)
             else {
-                window.push_notification(
+                window.notify_message(
                     if self.global_search.scope == SearchScope::Directory {
                         crate::tr!(
                             "请打开所有选中结果对应的文件；若文件内容已改变，请重新搜索",
@@ -480,7 +480,7 @@ impl Workspace {
             for document_id in changed_documents {
                 self.schedule_checkpoint(document_id, window, cx);
             }
-            window.push_notification(
+            window.notify_message(
                 crate::tr_args!(
                     "{} {changed_rows} 条全局结果",
                     "{} {changed_rows} global results",
@@ -500,7 +500,7 @@ impl Workspace {
         };
         let selected_rows = self.documents[active_ix].selected_source_rows_compressed(cx);
         if selected_rows.is_empty() {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!("请先选择要标记的日志行", "Select log lines to mark first"),
                 cx,
             );
@@ -515,7 +515,7 @@ impl Workspace {
                         .is_some_and(|row| tab.document.contains_source_row(row))
             });
             if !selection_is_valid {
-                window.push_notification(
+                window.notify_message(
                     crate::tr!(
                         "所选日志行已不可用，请重新选择",
                         "The selected log lines are no longer available. Select them again."
@@ -566,12 +566,12 @@ impl Workspace {
             let source_row = selected_rows
                 .first()
                 .expect("a one-row selection has a first row");
-            window.push_notification(
+            window.notify_message(
                 crate::tr_args!("{action}第 {} 行", "{action} line {}", source_row + 1),
                 cx,
             );
         } else {
-            window.push_notification(
+            window.notify_message(
                 crate::tr_args!("{action} {} 行", "{action} {} lines", selected_rows.len()),
                 cx,
             );
@@ -625,7 +625,7 @@ impl Workspace {
             return;
         };
         if tab.document.line_count() == 0 {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!("当前文件没有日志行", "The current file has no log lines"),
                 cx,
             );
@@ -653,7 +653,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if let Err(error) = crate::open_workspace_window(cx, false, Vec::new()) {
-            window.push_notification(
+            window.notify_message(
                 crate::tr_args!(
                     "无法打开新窗口：{error}",
                     "Couldn’t open a new window: {error}"
@@ -673,7 +673,7 @@ impl Workspace {
             return;
         };
         if tab.load_state != DocumentLoadState::Ready {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "完整索引建立后即可跳到文件末尾",
                     "Jump to the end will be available after the full index is built"
@@ -684,7 +684,7 @@ impl Workspace {
         }
         let line_count = tab.document.line_count();
         if line_count == 0 {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!("当前文件没有日志行", "The current file has no log lines"),
                 cx,
             );
@@ -703,7 +703,7 @@ impl Workspace {
         };
         let tab = &mut self.documents[active_ix];
         if tab.load_state != DocumentLoadState::Ready {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "完整索引建立后即可开启末尾跟随",
                     "Follow end will be available after the full index is built"
@@ -724,14 +724,14 @@ impl Workspace {
                 self.selected_source_row = Some(last_row);
             }
             tab.log_viewport.scroll_to_end();
-            window.push_notification(crate::tr!("已开启末尾跟随", "Follow end enabled"), cx);
+            window.notify_message(crate::tr!("已开启末尾跟随", "Follow end enabled"), cx);
         } else {
             // Cancel a queued end jump when the toggle is switched off before layout.
             let position = tab.log_viewport.viewport().position();
             tab.log_viewport
                 .viewport()
                 .scroll_row_to_viewport_y(position.row_ix, -position.offset_in_row);
-            window.push_notification(crate::tr!("已关闭末尾跟随", "Follow end disabled"), cx);
+            window.notify_message(crate::tr!("已关闭末尾跟随", "Follow end disabled"), cx);
         }
         let document_id = tab.id;
         Self::refresh_log_surfaces_atomically([self.log_viewer.surface.clone()], window, cx);

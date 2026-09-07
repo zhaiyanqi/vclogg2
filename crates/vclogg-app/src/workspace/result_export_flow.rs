@@ -100,7 +100,7 @@ impl Workspace {
                     Ok((path, row_count)) if this.open_task.is_none() => {
                         this.transient_paths.insert(path_match_key(&path));
                         this.begin_open_paths(vec![path], window, cx);
-                        window.push_notification(
+                        window.notify_message(
                             crate::tr_args!(
                                 "已将 {row_count} 行结果写入新标签",
                                 "Wrote {row_count} result lines to a new tab",
@@ -108,7 +108,7 @@ impl Workspace {
                             cx,
                         );
                     }
-                    Ok((path, _)) => window.push_notification(
+                    Ok((path, _)) => window.notify_message(
                         crate::tr_args!(
                             "结果已写入 {}，但当前正在打开其他文件，请稍后重试",
                             "Results were written to {}, but another file is being opened. Try again shortly.",
@@ -117,7 +117,7 @@ impl Workspace {
                         cx,
                     ),
                     Err(error) => {
-                        window.push_notification(
+                        window.notify_message(
                             crate::tr_args!(
                                 "结果未能写入新标签：{error}",
                                 "Couldn’t write results to a new tab: {error}",
@@ -158,7 +158,7 @@ impl Workspace {
                     Ok((path, row_count)) if this.open_task.is_none() => {
                         this.transient_paths.insert(path_match_key(&path));
                         this.begin_open_paths(vec![path], window, cx);
-                        window.push_notification(
+                        window.notify_message(
                             crate::tr_args!(
                                 "已按时间戳合并 {row_count} 行结果到新标签",
                                 "Merged {row_count} result lines by timestamp into a new tab",
@@ -166,7 +166,7 @@ impl Workspace {
                             cx,
                         );
                     }
-                    Ok((path, _)) => window.push_notification(
+                    Ok((path, _)) => window.notify_message(
                         crate::tr_args!(
                             "结果已生成到 {}，但当前正在打开其他文件",
                             "Results were generated at {}, but another file is being opened",
@@ -174,7 +174,7 @@ impl Workspace {
                         ),
                         cx,
                     ),
-                    Err(error) => window.push_notification(
+                    Err(error) => window.notify_message(
                         crate::tr_args!(
                             "按时间戳合并失败：{error}",
                             "Couldn’t merge by timestamp: {error}",
@@ -223,7 +223,7 @@ impl Workspace {
                 this.result_export_task = None;
                 this.result_export_operation = None;
                 match result {
-                    Some(Ok((path, row_count))) => window.push_notification(
+                    Some(Ok((path, row_count))) => window.notify_message(
                         crate::tr_args!(
                             "已保存 {row_count} 行结果到 {}",
                             "Saved {row_count} result lines to {}",
@@ -231,7 +231,7 @@ impl Workspace {
                         ),
                         cx,
                     ),
-                    Some(Err(error)) => window.push_notification(
+                    Some(Err(error)) => window.notify_message(
                         crate::tr_args!("结果未能保存：{error}", "Couldn’t save results: {error}",),
                         cx,
                     ),

@@ -4,7 +4,8 @@
 use std::sync::{Arc, OnceLock};
 
 use gpui::{App, Global, Image, ImageFormat, Window};
-use gpui_component::WindowExt as _;
+
+use crate::notifications::NotificationWindowExt as _;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum AppIcon {
@@ -130,7 +131,7 @@ pub(crate) fn apply(icon: AppIcon, window: &mut Window, cx: &mut App) {
     }
     if !errors.is_empty() {
         log::warn!("Could not apply application icon: {}", errors.join("; "));
-        window.push_notification(
+        window.notify_message(
             crate::tr!(
                 "部分系统图标未能更新，请切换到其他图标后重试。",
                 "Some system icons couldn’t be updated. Switch to another icon and try again."

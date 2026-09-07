@@ -1296,7 +1296,7 @@ impl Workspace {
         let Some(tab) = self.documents.iter().find(|tab| {
             tab.id == target.document_id && Arc::ptr_eq(&tab.document, &target.document)
         }) else {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "目标日志已刷新或关闭，请重新选择",
                     "The target log was refreshed or closed. Select it again."
@@ -1388,7 +1388,7 @@ impl Workspace {
                     DocumentLineTask::Completed(prepared) => prepared,
                     DocumentLineTask::Cancelled => return,
                     DocumentLineTask::SourceUnavailable => {
-                        window.push_notification(
+                        window.notify_message(
                             crate::tr!(
                                 "所选日志的文件内容已改变，请重新加载后再应用颜色标签",
                                 "The selected log file changed. Reload it before applying a color label."
@@ -1420,7 +1420,7 @@ impl Workspace {
         let Some(active_ix) = self.documents.iter().position(|tab| {
             tab.id == prepared.document_id && Arc::ptr_eq(&tab.document, &prepared.document)
         }) else {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "目标日志已刷新或关闭，请重新选择",
                     "The target log was refreshed or closed. Select it again."
@@ -1432,7 +1432,7 @@ impl Workspace {
         if self.documents[active_ix].file.keyword_color_rules != prepared.expected_rules
             || self.color_labels != prepared.expected_labels
         {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "颜色设置已发生变化，请重新应用",
                     "Color settings changed. Apply the selection again."
@@ -1470,7 +1470,7 @@ impl Workspace {
         });
         let Some(propagated_file_indices) = propagated_file_indices.filter(|_| session_is_current)
         else {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "搜索结果或颜色设置已发生变化，请重新应用",
                     "Search results or color settings changed. Apply the selection again."
@@ -1481,7 +1481,7 @@ impl Workspace {
         };
         let notification = match &prepared.outcome {
             ColorRuleOutcome::EmptyKeywords => {
-                window.push_notification(
+                window.notify_message(
                     crate::tr!(
                         "请先选择包含文字的日志行",
                         "Select log lines containing text first"
@@ -1491,7 +1491,7 @@ impl Workspace {
                 return;
             }
             ColorRuleOutcome::MissingLabels => {
-                window.push_notification(
+                window.notify_message(
                     crate::tr!(
                         "请先在“颜色标签…”中添加标签",
                         "Add a label in Color labels… first"
@@ -1501,7 +1501,7 @@ impl Workspace {
                 return;
             }
             ColorRuleOutcome::MissingLabel => {
-                window.push_notification(
+                window.notify_message(
                     crate::tr!("颜色标签已不存在", "The color label no longer exists"),
                     cx,
                 );
@@ -1593,7 +1593,7 @@ impl Workspace {
         if search_session_changed {
             self.schedule_workspace_search_state_save(window, cx);
         }
-        window.push_notification(notification, cx);
+        window.notify_message(notification, cx);
         cx.notify();
     }
 
@@ -1656,7 +1656,7 @@ impl Workspace {
         let (_, target) = match self.context_color_target(selected_text.as_deref(), cx) {
             Ok(target) => target,
             Err(message) => {
-                window.push_notification(message, cx);
+                window.notify_message(message, cx);
                 return;
             }
         };
@@ -1837,7 +1837,7 @@ impl Workspace {
         let copy = window.listener_for(&workspace, move |this, _, window, cx| {
             if let Some(text) = copy_text.clone() {
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
-                window.push_notification(crate::tr!("已复制所选文字", "Selected text copied"), cx);
+                window.notify_message(crate::tr!("已复制所选文字", "Selected text copied"), cx);
             } else {
                 this.copy_selected_line(false, window, cx);
             }
@@ -3310,7 +3310,11 @@ impl Workspace {
             .child(search_panel_resize_event_layer)
     }
 
-    pub(super) fn render_status_bar(&self, cx: &App) -> impl IntoElement {
+    pub(super) fn render_status_bar(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let _performance_scope = crate::ui_performance::scope("Workspace::render_status_bar");
         let marked_count = self
             .active_document()
@@ -3351,6 +3355,11 @@ impl Workspace {
             .gap(px(8.))
             .text_size(px(11.))
             .bg(ui_theme::footer_material(&ui_theme::palette(cx)))
-            .right(right)
+            .right(
+                h_flex()
+                    .gap_2()
+                    .child(right)
+                    .child(crate::notifications::button(window, cx)),
+            )
     }
 }

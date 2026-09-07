@@ -50,7 +50,7 @@ impl Workspace {
     ) {
         self.file_drop_visible = false;
         if self.open_task.is_some() {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "当前正在打开其他文件，请稍后再拖入",
                     "Another file is being opened. Drop files again shortly.",
@@ -65,14 +65,14 @@ impl Workspace {
             .cloned()
             .partition(|path| !path.is_dir());
         if files.is_empty() {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!("请拖入一个或多个日志文件", "Drop one or more log files"),
                 cx,
             );
             return;
         }
         if !ignored_count.is_empty() {
-            window.push_notification(
+            window.notify_message(
                 crate::tr_args!(
                     "已忽略 {} 个文件夹",
                     "Ignored {} folders",
@@ -501,7 +501,7 @@ impl Workspace {
                         this.pinned_files = pinned_files;
                         cx.notify();
                     }
-                    Err(error) => window.push_notification(
+                    Err(error) => window.notify_message(
                         crate::tr_args!(
                             "最近文件未能保存：{error}",
                             "Couldn’t save recent files: {error}"

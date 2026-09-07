@@ -89,6 +89,7 @@ use crate::{
         log_level_accent_overlay, log_line_height, log_line_number_cell, log_row_separator_overlay,
         message_column_width, text_highlight_style,
     },
+    notifications::NotificationWindowExt as _,
     path_identity::{
         PathMatchKey, decode_persisted_path, deduplicate_paths, encode_persisted_path,
         normalized_path_match_key, path_buf_map_get, path_buf_map_insert, path_buf_map_remove,
@@ -602,7 +603,7 @@ impl TabMoveCompletion {
             source.update(cx, |source, cx| {
                 source.pending_tab_moves.remove(&self.document_id);
                 if !installed {
-                    window.push_notification(
+                    window.notify_message(
                         crate::tr!(
                             "标签未能移动，源标签已保留",
                             "The tab couldn’t be moved, so the source tab was kept",
@@ -624,7 +625,7 @@ impl TabMoveCompletion {
                 if unchanged {
                     source.close_tab_by_id(self.document_id, window, cx);
                 } else {
-                    window.push_notification(
+                    window.notify_message(
                         crate::tr!(
                             "目标窗口已打开副本；源标签在传输期间发生变化，因此保留",
                             "The destination opened a copy. The source tab changed during transfer and was kept.",
@@ -932,6 +933,7 @@ struct SharedDisplayState {
 struct WorkspaceStatusSurface {
     workspace: WeakEntity<Workspace>,
     _workspace_subscription: Subscription,
+    _notification_subscription: Subscription,
 }
 
 impl WorkspaceStatusSurface {
@@ -940,9 +942,12 @@ impl WorkspaceStatusSurface {
             .upgrade()
             .expect("workspace is alive while creating its status surface");
         let workspace_subscription = cx.observe(&workspace_entity, |_, _, cx| cx.notify());
+        let center = crate::notifications::center(cx);
+        let notification_subscription = cx.observe(&center, |_, _, cx| cx.notify());
         Self {
             workspace,
             _workspace_subscription: workspace_subscription,
+            _notification_subscription: notification_subscription,
         }
     }
 }
@@ -2023,6 +2028,7 @@ impl Workspace {
                     let pinned_files = store.pinned_files()?;
                     let last_workspace_files = store.last_workspace()?;
                     let app_settings = store.load_app_settings()?;
+                    let notifications_enabled = store.load_notifications_enabled()?;
                     let last_settings_category = store.load_last_settings_category()?;
                     let search_panel_height = store.load_search_panel_height()?;
                     let filter_popover_size = store.load_filter_popover_size()?;
@@ -2040,6 +2046,7 @@ impl Workspace {
                         pinned_files,
                         last_workspace_files,
                         app_settings,
+                        notifications_enabled,
                         last_settings_category,
                         search_panel_height,
                         filter_popover_size,
@@ -2063,6 +2070,7 @@ impl Workspace {
                         pinned_files,
                         last_workspace_files,
                         app_settings,
+                        notifications_enabled,
                         last_settings_category,
                         search_panel_height,
                         filter_popover_size,
@@ -2075,6 +2083,7 @@ impl Workspace {
                         row_tag_sequence,
                         cloud_settings,
                     )) => {
+                        crate::notifications::restore(store.clone(), notifications_enabled, window, cx);
                         let mut app_settings = app_settings;
                         app_settings.app_icon = crate::app_icon::restored_icon(app_settings.app_icon, cx);
                         crate::app_icon::apply(app_settings.app_icon, window, cx);
@@ -2215,7 +2224,7 @@ impl Workspace {
                     }
                     Err(error) => {
                         this.history_loading = false;
-                        window.push_notification(
+                        window.notify_message(
                             crate::tr_args!(
                                 "状态库不可用，本次仍可继续查看日志：{error}",
                                 "State storage is unavailable. You can continue viewing logs: {error}",
@@ -2449,12 +2458,12 @@ impl Focusable for Workspace {
 }
 
 impl Render for WorkspaceStatusSurface {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _performance_scope = crate::ui_performance::scope("WorkspaceStatusSurface::render");
         let workspace = self.workspace.clone();
         let element = workspace
             .update(cx, |workspace, cx| {
-                workspace.render_status_bar(cx).into_any_element()
+                workspace.render_status_bar(window, cx).into_any_element()
             })
             .unwrap_or_else(|_| div().into_any_element());
         crate::ui_performance::element(
@@ -2656,7 +2665,9 @@ impl Render for Workspace {
             .child(crate::modal_event_layer::render_foreground_pointer_barrier())
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_sheet_layer(window, cx))
-            .children(Root::render_notification_layer(window, cx));
+            .when(crate::notifications::is_enabled(cx), |shell| {
+                shell.children(Root::render_notification_layer(window, cx))
+            });
         crate::ui_performance::element(
             "Workspace::request_layout",
             "Workspace::prepaint",

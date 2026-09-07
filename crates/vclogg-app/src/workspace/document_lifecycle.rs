@@ -66,7 +66,7 @@ impl Workspace {
                     cx.notify();
                 }
                 Err(error) => {
-                    window.push_notification(
+                    window.notify_message(
                         crate::tr_args!(
                             "文件会话未能保存：{error}",
                             "Couldn’t save the file session: {error}"
@@ -775,13 +775,13 @@ impl Workspace {
         }
 
         if !warnings.is_empty() {
-            window.push_notification(warnings.join("；"), cx);
+            window.notify_message(warnings.join("；"), cx);
         }
         if final_phase && errors.is_empty() {
             self.activity = Activity::Ready;
         } else if final_phase {
             let message: SharedString = errors.join("；").into();
-            window.push_notification(message.clone(), cx);
+            window.notify_message(message.clone(), cx);
             self.activity = Activity::Error;
         }
         let active_id = self.active_document().map(|tab| tab.id);
@@ -958,7 +958,7 @@ impl Workspace {
         // committed frame is already centered and highlighted like the result row that opened it.
         self.refresh_active_log_search_presentation(cx);
         if !self.activate_document_log_row_atomically(document_ix, pending.source_row, window, cx) {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "该搜索结果行在当前文件中已不存在，请重新搜索",
                     "That search result line no longer exists in the current file. Search again."
@@ -1842,7 +1842,7 @@ impl Workspace {
                         // frame and follow preference; monitoring retries on the next round.
                         if matches!(strategy, ReloadStrategy::Full) {
                             let message: SharedString = error.to_string().into();
-                            window.push_notification(message, cx);
+                            window.notify_message(message, cx);
                             this.activity = Activity::Error;
                         }
                         this.finish_reload(strategy);

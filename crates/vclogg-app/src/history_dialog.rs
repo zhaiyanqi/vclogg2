@@ -19,6 +19,7 @@ use gpui_component::{
 };
 
 use crate::{
+    notifications::NotificationWindowExt as _,
     result_export::{
         TemporaryResultFile, is_temporary_result_path, move_temporary_result_to_trash,
         remove_empty_temporary_result_parent, temporary_result_files,
@@ -196,7 +197,7 @@ impl HistoryDialog {
             return;
         };
         if let Some(reason) = self.protection_reason(session) {
-            window.push_notification(
+            window.notify_message(
                 crate::tr_args!(
                     "这条历史记录受保护：{reason}",
                     "This history entry is protected: {reason}"
@@ -236,7 +237,7 @@ impl HistoryDialog {
                             pinned_files,
                             last_workspace_files,
                         });
-                        window.push_notification(
+                        window.notify_message(
                             crate::tr!(
                                 "历史记录已删除；日志文件未改变",
                                 "History entry deleted; the log file was not changed"
@@ -245,7 +246,7 @@ impl HistoryDialog {
                         );
                     }
                     Ok((false, ..)) => {
-                        window.push_notification(
+                        window.notify_message(
                             crate::tr!(
                                 "历史记录不存在或已变为受保护状态",
                                 "The history entry no longer exists or is now protected"
@@ -254,7 +255,7 @@ impl HistoryDialog {
                         );
                     }
                     Err(error) => {
-                        window.push_notification(
+                        window.notify_message(
                             crate::tr_args!(
                                 "历史记录未能删除：{error}",
                                 "Couldn’t delete the history entry: {error}"
@@ -355,12 +356,12 @@ impl HistoryDialog {
                         this.temporary_results = files;
                         this.refresh_visible_entries(cx);
                         if failures.is_empty() {
-                            window.push_notification(
+                            window.notify_message(
                                 format!("已将 {moved} 个临时搜索结果移入回收站"),
                                 cx,
                             );
                         } else {
-                            window.push_notification(
+                            window.notify_message(
                                 format!(
                                     "已清理 {moved} 个临时结果；另有 {} 个失败：{}",
                                     failures.len(),
@@ -370,7 +371,7 @@ impl HistoryDialog {
                             );
                         }
                     }
-                    Err(error) => window.push_notification(
+                    Err(error) => window.notify_message(
                         crate::tr_args!(
                             "临时结果未能清理：{error}",
                             "Couldn’t clean temporary results: {error}"

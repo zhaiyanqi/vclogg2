@@ -115,7 +115,7 @@ impl Workspace {
                             this.recent_files = recent_files;
                             this.pinned_files = pinned_files;
                         }
-                        Err(error) => window.push_notification(
+                        Err(error) => window.notify_message(
                             crate::tr_args!(
                                 "收藏状态未能保存：{error}",
                                 "Couldn’t save favorite status: {error}"
@@ -153,7 +153,7 @@ impl Workspace {
                             this.recent_files = recent_files;
                             this.pinned_files.clear();
                         }
-                        Err(error) => window.push_notification(
+                        Err(error) => window.notify_message(
                             crate::tr_args!(
                                 "收藏未能清空：{error}",
                                 "Couldn’t clear favorites: {error}"
@@ -168,7 +168,7 @@ impl Workspace {
 
     pub(super) fn open_history_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(store) = self.persistence.store.clone() else {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!("状态库尚未就绪", "State storage is not ready"),
                 cx,
             );
@@ -283,7 +283,7 @@ impl Workspace {
                                     )
                             });
                         }
-                        Err(error) => window.push_notification(
+                        Err(error) => window.notify_message(
                             crate::tr_args!(
                                 "历史记录未能读取：{error}",
                                 "Couldn’t read history: {error}"
@@ -330,7 +330,7 @@ impl Workspace {
                     .await;
                 if let Err(error) = result {
                     _ = this.update_in(cx, |_, window, cx| {
-                        window.push_notification(
+                        window.notify_message(
                             crate::tr_args!(
                                 "设置页位置未能保存：{error}",
                                 "Couldn’t save the settings page position: {error}"
@@ -390,7 +390,7 @@ impl Workspace {
                     .await;
                 if let Err(error) = result {
                     _ = this.update_in(cx, |_, window, cx| {
-                        window.push_notification(
+                        window.notify_message(
                             crate::tr_args!(
                                 "搜索面板高度未能保存：{error}",
                                 "Couldn’t save the search panel height: {error}"
@@ -658,7 +658,7 @@ impl Workspace {
                         let draft = match settings.settings(cx) {
                             Ok(draft) => draft,
                             Err(error) => {
-                                window.push_notification(error, cx);
+                                window.notify_message(error, cx);
                                 return false;
                             }
                         };
@@ -886,7 +886,7 @@ impl Workspace {
                     let draft = match filters.read(cx).filters(cx) {
                         Ok(draft) => draft,
                         Err(error) => {
-                            window.push_notification(error, cx);
+                            window.notify_message(error, cx);
                             return false;
                         }
                     };
@@ -933,7 +933,7 @@ impl Workspace {
             });
         }
         if self.persistence.store.is_none() {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "过滤器已应用，但状态库尚未就绪，未持久保存",
                     "The filter was applied but not persisted because state storage is not ready"
@@ -958,7 +958,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let Some(store) = self.persistence.store.clone() else {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "状态库尚未就绪，预定义过滤器未保存",
                     "State storage is not ready; predefined filters weren’t saved"
@@ -981,12 +981,12 @@ impl Workspace {
                     this.predefined_filters_saving = false;
                     let pending = this.pending_predefined_filters_save.take();
                     match result {
-                        Ok(true) if pending.is_none() => window.push_notification(
+                        Ok(true) if pending.is_none() => window.notify_message(
                             crate::tr!("预定义过滤器已保存", "Predefined filters saved"),
                             cx,
                         ),
                         Ok(_) => {}
-                        Err(error) => window.push_notification(
+                        Err(error) => window.notify_message(
                             crate::tr_args!(
                                 "预定义过滤器未能保存：{error}",
                                 "Couldn’t save predefined filters: {error}"
@@ -1009,7 +1009,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let Some(store) = self.persistence.store.clone() else {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "状态库尚未就绪，云端连接设置未保存",
                     "State storage is not ready; cloud connection settings weren’t saved"
@@ -1042,7 +1042,7 @@ impl Workspace {
                     .await;
                 if let Err(error) = result {
                     _ = this.update_in(cx, |_, window, cx| {
-                        window.push_notification(
+                        window.notify_message(
                             crate::tr_args!(
                                 "云端连接设置未能保存：{error}",
                                 "Couldn’t save cloud connection settings: {error}"
@@ -1105,17 +1105,17 @@ impl Workspace {
                     }
                     match result {
                         Ok(()) if report_completion => {
-                            window.push_notification(crate::tr!("设置已保存", "Settings saved"), cx)
+                            window.notify_message(crate::tr!("设置已保存", "Settings saved"), cx)
                         }
                         Ok(()) => {}
-                        Err(error) if report_completion => window.push_notification(
+                        Err(error) if report_completion => window.notify_message(
                             crate::tr_args!(
                                 "设置未能保存：{error}",
                                 "Couldn’t save settings: {error}"
                             ),
                             cx,
                         ),
-                        Err(error) => window.push_notification(
+                        Err(error) => window.notify_message(
                             crate::tr_args!(
                                 "搜索选项未能保存：{error}",
                                 "Couldn’t save search options: {error}"
@@ -1302,7 +1302,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if self.persistence.store.is_none() {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "状态库尚未就绪，设置未保存",
                     "State storage is not ready; settings weren’t saved"
@@ -1324,7 +1324,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if self.persistence.store.is_none() {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "状态库尚未就绪，设置未保存",
                     "State storage is not ready; settings weren’t saved"
@@ -1586,7 +1586,7 @@ impl Workspace {
                 .await;
             if let Err(error) = result {
                 _ = this.update_in(cx, |_, window, cx| {
-                    window.push_notification(
+                    window.notify_message(
                         crate::tr_args!(
                             "日志字号未能保存：{error}",
                             "Couldn’t save the log font size: {error}"
@@ -1668,7 +1668,7 @@ impl Workspace {
                             this.recent_files = recent_files;
                             this.pinned_files = pinned_files;
                             this.last_workspace_files = last_workspace_files;
-                            window.push_notification(
+                            window.notify_message(
                                 if removed == 0 {
                                     crate::tr!(
                                         "没有可清除的历史记录",
@@ -1684,7 +1684,7 @@ impl Workspace {
                                 cx,
                             );
                         }
-                        Err(error) => window.push_notification(
+                        Err(error) => window.notify_message(
                             crate::tr_args!(
                                 "历史记录未能清除：{error}",
                                 "Couldn’t clear history: {error}"

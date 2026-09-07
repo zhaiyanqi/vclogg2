@@ -151,3 +151,9 @@ core 的 `SearchRange` 以零基源行号表达包含两端的范围；未设置
 范围外行的灰态由 `workspace/log_presentation.rs` 在可见行渲染时读取最新 `FileSearchRanges` 并按源行号决定，正文与当前结果共享本地行入口，全局与目录共享全局行入口。正文/行号及关键词装饰使用 `ui_theme::search_excluded_foreground`，将主题 `muted_foreground` 的不透明度降至 40%，与实际背景混合以降低对比度，兼容浅色、深色及自定义日志底色，范围外不绘制日志级别背景与色条；保留匹配样式的字体度量和正常选择交互。`LogRegionSurface` 订阅 Workspace 通知，因此设置/清除范围立即更新显示，无须重搜、重新读取文件或重建结果投影。
 
 过滤器弹层的列表呈现、边框缩放手势和尺寸保存任务由 `workspace/filter_popover.rs` 持有。`StateStore` 将宽高作为一个 JSON 值写入现有 UI 设置仓储；拖动帧仅更新内存，结束后串行异步保存，启动读取不会覆盖已经发生的用户缩放。
+
+### 通知开关与历史
+
+`notifications.rs` 持有进程级 `NotificationCenter` 实体，统一记录应用通知，并根据开关决定是否调用组件弹出提示。历史仅保留本次运行最近 100 条消息，以递增 ID 标识，所有窗口共享；Right Sheet 直接展示该实体，消息更新由实体通知刷新，滚动与关闭由组件负责。状态栏只观察该实体的变更，避免把通知状态复制进 Workspace。
+
+开关使用 `StateStore` 适配现有 UI 设置仓储的 `notifications.enabled` 键，默认开启，无需数据库迁移；异步保存串行执行。仅首次成功 bootstrap 恢复设置，已发生的用户操作优先于迟到结果，其他窗口的 bootstrap 不覆盖当前值。关闭时清除各窗口弹出队列并隐藏通知渲染层，之后继续记录历史，重新开启不重播旧通知。

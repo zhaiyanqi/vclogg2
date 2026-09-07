@@ -706,7 +706,7 @@ impl Workspace {
                 .await;
             if let Err(error) = result {
                 _ = this.update_in(cx, |_, window, cx| {
-                    window.push_notification(
+                    window.notify_message(
                         crate::tr_args!(
                             "标签顺序未能保存：{error}",
                             "Couldn’t save tab order: {error}"
@@ -733,7 +733,7 @@ impl Workspace {
             return;
         };
         cx.write_to_clipboard(ClipboardItem::new_string(path));
-        window.push_notification(crate::tr!("已复制文件路径", "File path copied"), cx);
+        window.notify_message(crate::tr!("已复制文件路径", "File path copied"), cx);
     }
 
     pub(super) fn reveal_tab_file(
@@ -755,7 +755,7 @@ impl Workspace {
             Ok(true) => {}
             Ok(false) => {
                 let Some(directory) = path.parent() else {
-                    window.push_notification(
+                    window.notify_message(
                         crate::tr!(
                             "无法确定文件所在目录",
                             "Couldn’t determine the file’s folder"
@@ -766,7 +766,7 @@ impl Workspace {
                 };
                 cx.open_url(&directory.to_string_lossy());
             }
-            Err(error) => window.push_notification(error.to_string(), cx),
+            Err(error) => window.notify_message(error.to_string(), cx),
         }
     }
 
@@ -797,7 +797,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if mode == TabTransferMode::Move && !self.pending_tab_moves.insert(document_id) {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "此标签正在移动到新窗口",
                     "This tab is being moved to a new window"
@@ -837,7 +837,7 @@ impl Workspace {
                 TabTransferMode::Copy => crate::tr!("复制标签", "copy the tab"),
                 TabTransferMode::Move => crate::tr!("移动标签", "move the tab"),
             };
-            window.push_notification(
+            window.notify_message(
                 crate::tr_args!(
                     "无法在新窗口{operation}：{error}",
                     "Couldn’t {operation} in a new window: {error}"
@@ -862,7 +862,7 @@ impl Workspace {
             if let Some(completion) = initial.move_completion {
                 cx.defer(move |cx| completion.finish(false, cx));
             }
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "此窗口已经打开同一文件",
                     "This window already has the same file open"
@@ -875,7 +875,7 @@ impl Workspace {
             if let Some(completion) = initial.move_completion {
                 cx.defer(move |cx| completion.finish(false, cx));
             }
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "此窗口正在打开其他文件，请稍后重试",
                     "This window is opening another file. Try again shortly."
@@ -900,7 +900,7 @@ impl Workspace {
             .global::<WorkspaceWindowRegistry>()
             .previous_window(source_window);
         let Some(target) = target else {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "没有可接收标签的另一窗口",
                     "No other window can receive the tab"
@@ -932,7 +932,7 @@ impl Workspace {
     ) {
         let source_window = window.window_handle();
         if mode == TabTransferMode::Move && !self.pending_tab_moves.insert(document_id) {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "此标签正在移动到另一窗口",
                     "This tab is being moved to another window"
@@ -973,14 +973,14 @@ impl Workspace {
         let reception = result.unwrap_or(TabTransferReception::Closed);
         match (mode, reception) {
             (_, TabTransferReception::Accepted) => {}
-            (TabTransferMode::Copy, TabTransferReception::AlreadyOpen) => window.push_notification(
+            (TabTransferMode::Copy, TabTransferReception::AlreadyOpen) => window.notify_message(
                 crate::tr!(
                     "另一窗口已经打开同一文件",
                     "Another window already has the same file open"
                 ),
                 cx,
             ),
-            (TabTransferMode::Copy, TabTransferReception::Busy) => window.push_notification(
+            (TabTransferMode::Copy, TabTransferReception::Busy) => window.notify_message(
                 crate::tr!(
                     "另一窗口正忙，标签未复制",
                     "The other window is busy; the tab wasn’t copied"
@@ -989,7 +989,7 @@ impl Workspace {
             ),
             (_, TabTransferReception::Closed) => {
                 self.pending_tab_moves.remove(&document_id);
-                window.push_notification(
+                window.notify_message(
                     crate::tr!(
                         "另一窗口已关闭，标签仍保留在当前窗口",
                         "The other window closed; the tab remains in this window"
@@ -1094,7 +1094,7 @@ impl Workspace {
             self.sync_active_document(window, cx);
         }
         self.schedule_checkpoint(document_id, window, cx);
-        window.push_notification(
+        window.notify_message(
             crate::tr_args!("标签已重命名为 {title}", "Tab renamed to {title}"),
             cx,
         );
@@ -1130,7 +1130,7 @@ impl Workspace {
             self.sync_active_document(window, cx);
         }
         self.schedule_checkpoint(document_id, window, cx);
-        window.push_notification(
+        window.notify_message(
             crate::tr_args!(
                 "已恢复标签名称：{original_title}",
                 "Tab name restored: {original_title}"

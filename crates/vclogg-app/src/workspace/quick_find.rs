@@ -11,7 +11,7 @@ impl Workspace {
             return;
         };
         if tab.load_state != DocumentLoadState::Ready {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "完整索引建立后即可查找",
                     "Find will be available after the full index is built"

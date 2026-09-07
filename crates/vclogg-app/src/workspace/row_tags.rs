@@ -81,7 +81,7 @@ impl Workspace {
             return;
         }
         let Some(context) = self.selected_tag_context(cx) else {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "请选中一条已打开文件中的可见日志行",
                     "Select one visible log line from an open file"
@@ -703,7 +703,7 @@ impl Workspace {
                 });
                 if let Err(error) = result {
                     _ = cx.update(|window, cx| {
-                        window.push_notification(
+                        window.notify_message(
                             crate::tr_args!(
                                 "标记历史未能保存：{error}",
                                 "Couldn’t save mark history: {error}"

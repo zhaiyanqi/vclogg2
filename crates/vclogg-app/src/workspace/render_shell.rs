@@ -56,19 +56,6 @@ impl gpui::RenderOnce for FilePathInput {
 const WORKSPACE_OVERLAY_PRIORITY: usize = 1;
 const _: () = assert!(WORKSPACE_OVERLAY_PRIORITY < POPUP_PRIORITY);
 
-// Component Button already owns a stable ID, but does not expose GPUI's
-// StatefulInteractiveElement methods. Borrow its existing interactivity so the
-// accessible name stays on the button without adding another rendered node.
-struct ButtonAccessibility<'a>(&'a mut Button);
-
-impl gpui::InteractiveElement for ButtonAccessibility<'_> {
-    fn interactivity(&mut self) -> &mut gpui::Interactivity {
-        self.0.interactivity()
-    }
-}
-
-impl gpui::StatefulInteractiveElement for ButtonAccessibility<'_> {}
-
 pub(super) fn deferred_workspace_overlay(child: impl IntoElement) -> impl IntoElement {
     deferred(child).with_priority(WORKSPACE_OVERLAY_PRIORITY)
 }
@@ -326,6 +313,11 @@ impl Workspace {
             .dropdown_menu(move |menu, window, cx| {
                 let menu =
                     Self::popup_menu_with_workspace_action_context(menu, &view_workspace, cx);
+                let notification_label = if crate::notifications::is_enabled(cx) {
+                    crate::tr!("关闭通知", "Turn off notifications")
+                } else {
+                    crate::tr!("开启通知", "Turn on notifications")
+                };
                 let fullscreen_label = if window.is_fullscreen() {
                     crate::tr!("退出全屏", "Exit full screen")
                 } else {
@@ -394,6 +386,10 @@ impl Workspace {
                         .on_click(toggle_full_path),
                 )
                 .item(
+                    PopupMenuItem::new(notification_label)
+                        .on_click(|_, window, cx| crate::notifications::toggle(window, cx)),
+                )
+                .item(
                     PopupMenuItem::new(crate::tr!("末尾跟随", "Follow end"))
                         .checked(auto_follow)
                         .disabled(!has_document)
@@ -433,7 +429,7 @@ impl Workspace {
                     let clear_history =
                         window.listener_for(&tools_workspace, |this, _, window, cx| {
                             this.replace_search_history(Vec::new(), window, cx);
-                            window.push_notification(
+                            window.notify_message(
                                 crate::tr!("已清除搜索历史", "Search history cleared"),
                                 cx,
                             );
@@ -1288,12 +1284,11 @@ impl Workspace {
 
     pub(super) fn search_toolbar_button_label(
         &self,
-        mut button: Button,
+        button: Button,
         label: impl Into<SharedString>,
     ) -> Button {
         let label = label.into();
-        ButtonAccessibility(&mut button).aria_label(label.clone());
-        button.child(
+        crate::button_accessibility::with_label(button, label.clone()).child(
             div()
                 .min_w_0()
                 .truncate()

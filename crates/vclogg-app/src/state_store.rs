@@ -462,6 +462,21 @@ impl StateStore {
             .save_ui_value("settings.active_category", category)
     }
 
+    pub(crate) fn load_notifications_enabled(&self) -> Result<bool> {
+        Ok(self
+            .repository
+            .load_ui_value("notifications.enabled")?
+            .as_deref()
+            != Some("false"))
+    }
+
+    pub(crate) fn save_notifications_enabled(&self, enabled: bool) -> Result<()> {
+        self.repository.save_ui_value(
+            "notifications.enabled",
+            if enabled { "true" } else { "false" },
+        )
+    }
+
     pub fn load_search_panel_height(&self) -> Result<Option<f32>> {
         let value = self
             .repository

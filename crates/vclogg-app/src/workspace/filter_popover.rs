@@ -281,7 +281,7 @@ impl Workspace {
                 .await;
             if let Err(error) = result {
                 _ = this.update_in(cx, |_, window, cx| {
-                    window.push_notification(
+                    window.notify_message(
                         crate::tr_args!(
                             "过滤器菜单尺寸未能保存：{error}",
                             "Couldn’t save the filter menu size: {error}"

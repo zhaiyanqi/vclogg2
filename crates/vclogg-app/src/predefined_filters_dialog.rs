@@ -34,6 +34,7 @@ use crate::{
         CloudFilterRevision, CloudFilterRevisionSummary, CloudFilterShareItem, CloudFilterUpdate,
         cloud_error,
     },
+    notifications::NotificationWindowExt as _,
     predefined_filters::{
         CloudFilterLocalStatus, FilterBranchId, FilterField, FilterMergeConflict, FilterSnapshot,
         PredefinedFilter, RemoteFilterRelation, attach_published_reference,
@@ -730,7 +731,7 @@ impl PredefinedFiltersDialog {
     fn save_filters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.filters(cx) {
             Ok(filters) => cx.emit(PredefinedFiltersDialogEvent::Filters(filters)),
-            Err(error) => window.push_notification(error, cx),
+            Err(error) => window.notify_message(error, cx),
         }
     }
 
@@ -945,7 +946,7 @@ impl PredefinedFiltersDialog {
                         this.secondary_route = None;
                         this.local_scroll.set_offset(point(px(0.), px(0.)));
                         if conflicts.is_empty() {
-                            window.push_notification(
+                            window.notify_message(
                                 crate::tr_args!(
                                     "已按 UUID 合并导入，当前共 {} 个过滤器",
                                     "Merged by UUID; {} filters are now available",
@@ -954,7 +955,7 @@ impl PredefinedFiltersDialog {
                                 cx,
                             );
                         } else {
-                            window.push_notification(
+                            window.notify_message(
                                 crate::tr_args!(
                                     "已合入无冲突内容；另有 {} 个同 UUID 冲突保持本地版本",
                                     "Imported non-conflicting content; {} UUID conflicts kept their local versions",
@@ -965,7 +966,7 @@ impl PredefinedFiltersDialog {
                             this.show_merge_conflicts(conflicts, window, cx);
                         }
                     }
-                    Err(error) => window.push_notification(crate::tr_args!("导入过滤器失败：{error}", "Couldn’t import filters: {error}"), cx),
+                    Err(error) => window.notify_message(crate::tr_args!("导入过滤器失败：{error}", "Couldn’t import filters: {error}"), cx),
                 }
                 cx.notify();
             });
@@ -980,7 +981,7 @@ impl PredefinedFiltersDialog {
         let filters = match self.filters(cx) {
             Ok(filters) => filters,
             Err(error) => {
-                window.push_notification(error, cx);
+                window.notify_message(error, cx);
                 return;
             }
         };
@@ -1004,7 +1005,7 @@ impl PredefinedFiltersDialog {
             _ = this.update_in(cx, |this, window, cx| {
                 this.io_task = None;
                 match result {
-                    Some(Ok(path)) => window.push_notification(
+                    Some(Ok(path)) => window.notify_message(
                         crate::tr_args!(
                             "已导出预定义过滤器到 {}",
                             "Exported predefined filters to {}",
@@ -1012,7 +1013,7 @@ impl PredefinedFiltersDialog {
                         ),
                         cx,
                     ),
-                    Some(Err(error)) => window.push_notification(
+                    Some(Err(error)) => window.notify_message(
                         crate::tr_args!(
                             "导出过滤器失败：{error}",
                             "Couldn’t export filters: {error}"
@@ -1624,7 +1625,7 @@ impl PredefinedFiltersDialog {
                             results.len()
                         );
                         this.cloud_message = Some(message.clone());
-                        window.push_notification(message, cx);
+                        window.notify_message(message, cx);
                         if share_was_open {
                             window.close_dialog(cx);
                         }

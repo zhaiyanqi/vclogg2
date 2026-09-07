@@ -14,7 +14,6 @@ use gpui::{
 use gpui_base::Link;
 use gpui_component::{
     ActiveTheme as _, Colorize as _, Disableable as _, IconName, IndexPath, Sizable as _,
-    WindowExt as _,
     button::{Button, ButtonVariants as _},
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     description_list::DescriptionList,
@@ -35,6 +34,7 @@ use crate::{
     app_log::{self, AppLogLevel},
     cloud_filters::{CloudClient, CloudConnectionProfile},
     i18n::Language,
+    notifications::NotificationWindowExt as _,
     state_store::{
         AppSettings, CloudSettings, LogFontFamily, MAX_WORD_BOUNDARY_CHARACTERS,
         SEARCH_TOOLBAR_FONT_SIZE_RANGE, SEARCH_TOOLBAR_HEIGHT_RANGE, ShortcutSettings,
@@ -1668,7 +1668,7 @@ impl SettingsDialog {
                             )
                             .into(),
                         );
-                        window.push_notification(
+                        window.notify_message(
                             crate::tr!("应用日志已导出", "Application log exported"),
                             cx,
                         );

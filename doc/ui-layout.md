@@ -33,6 +33,7 @@ AppShell [A001] - Root
 │  │  │  ├─ 显示行号 [A336] - PopupMenuItem
 │  │  │  ├─ 日志分隔线 [A337] - PopupMenuItem
 │  │  │  ├─ 显示完整路径 [A410] - PopupMenuItem
+│  │  │  ├─ 开启通知 / 关闭通知 [A633] - PopupMenuItem
 │  │  │  ├─ 末尾跟随 [A338] - PopupMenuItem
 │  │  │  ├─ 文件开头 [A339] - PopupMenuItem
 │  │  │  ├─ 文件末尾 [A340] - PopupMenuItem
@@ -235,7 +236,8 @@ AppShell [A001] - Root
 │     │  └─ SearchPanelResizeHitArea [A481] - Div
 │     └─ SearchPanelResizeEventLayer [A520] - Canvas
 ├─ StatusBar [A007] - StatusBar
-│  └─ 行位置/核心版本 [A009] - Div
+│  ├─ 行位置/核心版本 [A009] - Div
+│  └─ 最近通知 [A634] - Button
 ├─ FileDropObserver / FileDropTarget [A128] - Canvas
 ├─ 标记手势观察层 [A573] - Canvas
 ├─ FileDropOverlay [A130] - Div
@@ -530,6 +532,13 @@ AppShell [A001] - Root
 │        │  └─ 删除临时结果 [A231] - Button
 │        └─ 临时结果滚动条 [A441] - Scrollbar
 ├─ SheetLayer [A043] - Root
+│  └─ 最近通知面板 [A635] - Right Sheet
+│     ├─ 通知状态说明 [A636] - Div
+│     ├─ 暂无通知 [A637] - Div
+│     ├─ 通知消息 [A638] - Div
+│     │  ├─ 通知时间 [A639] - Div
+│     │  └─ 通知内容 [A640] - Div
+│     └─ 清除通知 [A641] - Button
 └─ NotificationLayer [A044] - Root
 ```
 
@@ -538,6 +547,16 @@ AppShell [A001] - Root
 ## 控件备注
 
 以下备注按布局树顺序记录。`可重复`、条件呈现、作用域和交互细节均不写入布局树本体。
+
+- [A633] 开启通知 / 关闭通知：标签显示下一步动作；默认开启，应用级选择写入现有 UI 设置仓储并同步所有窗口。关闭后立即隐藏和清除现有弹出通知，之后的消息仅记录到历史；重新开启不补弹旧消息。状态库尚未读完时的主动选择优先于迟到的恢复值。
+- [A634] 最近通知：状态栏最右侧的铃铛按钮；空工作区和通知关闭时均可使用，带辅助功能名称及说明，打开时保持选中。点击通过组件 `WindowExt::open_sheet` 打开 A635。
+- [A635] 最近通知面板：标准 Right Sheet，默认宽 26rem、不超过窗口宽度；使用组件的滚动、关闭按钮、点击遮罩关闭与 Esc/焦点恢复行为。所有窗口共享本次运行最近 100 条通知，最新在前，打开期间实时更新；不写入磁盘。
+- [A636] 通知状态说明：开启时说明历史范围，关闭时说明消息仍保留在面板。
+- [A637] 暂无通知：仅历史为空时显示。
+- [A638] 通知消息：可重复，以递增消息 ID 保持身份；每条消息显示时间和完整可换行内容。
+- [A639] 通知时间：本地月日及时分秒。
+- [A640] 通知内容：所有应用通知入口统一记录，关闭弹出通知不影响历史保留。
+- [A641] 清除通知：固定在 Right Sheet 底部，清空所有窗口共享的通知历史并关闭当前弹出通知；面板保持打开并显示“暂无通知”，通知开关保持原值。历史为空时禁用，收到新通知后自动恢复可用，不额外生成清除成功通知。
 
 - [A001] AppShell：每个窗口由 `Root::new(workspace, ...)` 持有唯一 Workspace 实体，以下节点由 `Workspace::render` 依次组合
 - [A002] TitleBar：原生桌面窗口标题栏；覆盖组件默认底边框，与下方工具栏连续衔接；macOS 窗口模式为三色窗口按钮保留约 80px 外层起始间距，全屏时该外层占位归零，组件内部仍保留约 12px 紧凑边距

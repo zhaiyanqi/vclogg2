@@ -348,7 +348,7 @@ impl Workspace {
         }
         self.refresh_global_result_rows(window, cx);
         if invalidated_all_open_results == Some(true) {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "参与搜索的文件已改变，请重新执行全部打开文件搜索",
                     "The searched files changed. Run the all-open-files search again."
@@ -1118,7 +1118,7 @@ impl Workspace {
                     .await;
                 if let Err(error) = result {
                     _ = this.update_in(cx, |_, window, cx| {
-                        window.push_notification(
+                        window.notify_message(
                             crate::tr_args!(
                                 "搜索历史未能保存：{error}",
                                 "Couldn’t save search history: {error}"
@@ -1435,7 +1435,7 @@ impl Workspace {
                     .await;
                 if let Err(error) = result {
                     _ = this.update_in(cx, |_, window, cx| {
-                        window.push_notification(
+                        window.notify_message(
                             crate::tr_args!(
                                 "搜索状态未能保存：{error}",
                                 "Couldn’t save search state: {error}"
@@ -1900,7 +1900,7 @@ impl Workspace {
                             SearchScope::CurrentFile => {}
                         }
                         if this.global_search.scope == scope {
-                            window.push_notification(
+                            window.notify_message(
                                 crate::tr_args!(
                                     "上次搜索结果未能恢复：{error}",
                                     "Couldn’t restore the previous search results: {error}",
@@ -2264,7 +2264,7 @@ impl Workspace {
             return;
         }
         if !self.activate_document_log_row_atomically(document_ix, source_row, window, cx) {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "该结果行在当前文件中已不存在，请重新搜索",
                     "That result line no longer exists in the current file. Search again."
@@ -2304,7 +2304,7 @@ impl Workspace {
         }
         if self.open_task.is_some() {
             self.pending_search_result_jump = None;
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "当前正在打开其他文件，请稍后重试",
                     "Another file is being opened. Try again shortly."
@@ -2317,7 +2317,7 @@ impl Workspace {
     }
 
     pub(super) fn notify_stale_search_result(window: &mut Window, cx: &mut App) {
-        window.push_notification(
+        window.notify_message(
             crate::tr!(
                 "该搜索结果对应的文件内容已改变，请重新搜索",
                 "The file for that search result has changed. Search again."
@@ -2343,7 +2343,7 @@ impl Workspace {
                 return;
             };
             if self.open_task.is_some() {
-                window.push_notification(
+                window.notify_message(
                     crate::tr!(
                         "当前正在打开其他文件，请稍后重试",
                         "Another file is being opened. Try again shortly."
@@ -2395,7 +2395,7 @@ impl Workspace {
             return;
         };
         if self.documents[active_ix].load_state != DocumentLoadState::Ready {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "完整索引建立后即可搜索",
                     "Search will be available after the full index is built"
@@ -2498,7 +2498,7 @@ impl Workspace {
                     }
                     Err(error) => {
                         let message: SharedString = error.to_string().into();
-                        window.push_notification(message.clone(), cx);
+                        window.notify_message(message.clone(), cx);
                         this.activity = Activity::Error;
                         false
                     }
@@ -2514,7 +2514,7 @@ impl Workspace {
                         cx,
                     );
                     if reload_started {
-                        window.push_notification(
+                        window.notify_message(
                             crate::tr!(
                                 "文件内容已改变，正在重新加载并重新搜索",
                                 "The file changed. Reloading and searching again."
@@ -2522,7 +2522,7 @@ impl Workspace {
                             cx,
                         );
                     } else {
-                        window.push_notification(
+                        window.notify_message(
                             crate::tr!(
                                 "文件内容已改变，请在当前文件操作完成后重新加载并搜索",
                                 "The file changed. Reload and search again after the current file operation finishes."
@@ -2605,7 +2605,7 @@ impl Workspace {
         }
         let text = self.query.read(cx).value().to_string();
         if self.global_search.selected_documents.is_empty() {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "尚未选择参与全局搜索的文件",
                     "No files are selected for global search"
@@ -2618,7 +2618,7 @@ impl Workspace {
             self.global_search.selected_documents.contains(&tab.id)
                 && tab.load_state != DocumentLoadState::Ready
         }) {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "所选文件的完整索引建立后即可全局搜索",
                     "Global search will be available after the selected files are fully indexed"
@@ -2761,7 +2761,7 @@ impl Workspace {
                     }
                     Err(error) => {
                         let message: SharedString = error.to_string().into();
-                        window.push_notification(message.clone(), cx);
+                        window.notify_message(message.clone(), cx);
                         this.activity = Activity::Error;
                     }
                 }
@@ -2774,7 +2774,7 @@ impl Workspace {
 
     pub(super) fn start_directory_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(directory) = self.global_search.directory_options.directory.clone() else {
-            window.push_notification(
+            window.notify_message(
                 crate::tr!(
                     "请先设置目录搜索范围",
                     "Set the directory search scope first"
@@ -2866,12 +2866,12 @@ impl Workspace {
                             cx,
                         );
                         if run.file_count == 0 {
-                            window.push_notification(
+                            window.notify_message(
                                 crate::tr_args!("目录中没有符合文件类型的文件：{}", "No matching file types were found in the directory: {}", directory.display()),
                                 cx,
                             );
                         } else if run.open_error_count > 0 || run.unreadable_directory_count > 0 {
-                            window.push_notification(
+                            window.notify_message(
                                 crate::tr_args!(
                                     "目录搜索已完成；{} 个文件和 {} 个子目录无法读取",
                                     "Directory search completed; {} files and {} subdirectories couldn’t be read",
@@ -2883,7 +2883,7 @@ impl Workspace {
                         }
                     }
                     Err(error) => {
-                        window.push_notification(crate::tr_args!("目录搜索失败：{error}", "Directory search failed: {error}"), cx);
+                        window.notify_message(crate::tr_args!("目录搜索失败：{error}", "Directory search failed: {error}"), cx);
                         this.activity = Activity::Error;
                     }
                 }
@@ -2910,7 +2910,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if self.cancel_search() {
-            window.push_notification(crate::tr!("已取消当前搜索", "Current search canceled"), cx);
+            window.notify_message(crate::tr!("已取消当前搜索", "Current search canceled"), cx);
             cx.notify();
         }
     }
