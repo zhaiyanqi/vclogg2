@@ -2071,6 +2071,15 @@ impl Workspace {
                             .min_w(px(180.))
                             .h(input_height)
                             .relative()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    // Input's frame has its own focus handle. Forward clicks
+                                    // on its padding/prefix to the editor after child handlers.
+                                    this.query.focus_handle(cx).focus(window, cx);
+                                    window.prevent_default();
+                                }),
+                            )
                             .capture_key_down(cx.listener(
                                 |this, event: &KeyDownEvent, window, cx| {
                                     if !this.query.focus_handle(cx).is_focused(window)
