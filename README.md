@@ -68,7 +68,7 @@ Release executables are written to `target\release\vclogg2.exe` on Windows and `
 
 [User guide](doc/usage.md) · [Implementation status](doc/migration-status.md) · [Architecture](doc/architecture.md) · [Build & release](doc/delivery.md) · [All documents](doc/README.md)
 
-Detailed documentation is currently in Chinese. Issues and pull requests are welcome; read [RULES.md](RULES.md) before contributing.
+Detailed documentation is currently in Chinese. Issues and pull requests are welcome.
 
 ## Acknowledgments
 

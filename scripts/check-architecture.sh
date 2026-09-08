@@ -42,9 +42,6 @@ require_file crates/vclogg-data/Cargo.toml
 require_file crates/vclogg-data/src/lib.rs
 require_file crates/vclogg-app/Cargo.toml
 require_file crates/vclogg-app/src/main.rs
-require_file .agents/skills/vclogg-core/SKILL.md
-require_file .agents/skills/vclogg-data/SKILL.md
-require_file .agents/skills/vclogg-app/SKILL.md
 
 workspace_capabilities=(
   document_commands
@@ -70,15 +67,6 @@ workspace_line_count="$(wc -l < crates/vclogg-app/src/workspace.rs)"
 if (( workspace_line_count > workspace_line_limit )); then
   fail "workspace.rs has ${workspace_line_count} lines; move capabilities into workspace/* modules before exceeding ${workspace_line_limit}"
 fi
-
-for layer in core data app; do
-  skill=".agents/skills/vclogg-${layer}/SKILL.md"
-  search_quiet "^name: vclogg-${layer}$" "$skill" \
-    || fail "$skill has an invalid or missing skill name"
-  if search_quiet '\[TODO:' "$skill"; then
-    fail "$skill contains an unfinished TODO"
-  fi
-done
 
 gpui_dependencies=(gpui gpui-kit gpui-base gpui-component gpui-component-assets gpui_platform)
 for layer in core data; do

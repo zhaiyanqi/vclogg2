@@ -100,4 +100,4 @@
 - `cargo fmt --all`
 - `cargo check -p vclogg2`
 
-未新增测试用例，未执行 Debug/Release 编译，未自动启动真实窗口，符合仓库 `RULES.md` 的验证限制。
+未新增测试用例，未执行 Debug/Release 编译，未启动真实窗口。

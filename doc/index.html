@@ -3,19 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>VCLogg2 — 大文件日志，清晰掌控</title>
+    <title>VCLogg2 — 跨平台大文件日志查看器 | Windows、macOS、Linux</title>
     <meta
       name="description"
-      content="VCLogg2 是使用 Rust 与 GPUI Component 构建的跨平台桌面日志查看器，专注于大文件浏览、实时跟随、多范围检索、筛选与结果导出。"
+      content="VCLogg2 是免费开源的跨平台大文件日志查看器，支持 Windows、macOS 和 Linux，提供大日志文件浏览、实时跟随、多关键词与正则搜索、跨文件检索和结果导出。"
     />
     <meta name="theme-color" content="#0b1020" />
     <meta property="og:type" content="website" />
     <meta property="og:locale" content="zh_CN" />
     <meta property="og:site_name" content="VCLogg2" />
-    <meta property="og:title" content="VCLogg2 — 大文件日志，清晰掌控" />
+    <meta property="og:title" content="VCLogg2 — 跨平台大文件日志查看器 | Windows、macOS、Linux" />
     <meta
       property="og:description"
-      content="快速打开、检索和分析大型日志文件的原生桌面工具。"
+      content="VCLogg2 是免费开源的跨平台大文件日志查看器，支持 Windows、macOS 和 Linux，提供大日志文件浏览、实时跟随、多关键词与正则搜索、跨文件检索和结果导出。"
     />
     <meta property="og:url" content="https://zhaiyanqi.github.io/vclogg2/" />
     <meta property="og:image" content="https://zhaiyanqi.github.io/vclogg2/assets/og.png" />
@@ -23,15 +23,30 @@
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="VCLogg2，大文件日志，清晰掌控" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="VCLogg2 — 大文件日志，清晰掌控" />
+    <meta name="twitter:title" content="VCLogg2 — 跨平台大文件日志查看器 | Windows、macOS、Linux" />
     <meta
       name="twitter:description"
-      content="快速打开、检索和分析大型日志文件的原生桌面工具。"
+      content="VCLogg2 是免费开源的跨平台大文件日志查看器，支持 Windows、macOS 和 Linux，提供大日志文件浏览、实时跟随、多关键词与正则搜索、跨文件检索和结果导出。"
     />
     <meta name="twitter:image" content="https://zhaiyanqi.github.io/vclogg2/assets/og.png" />
     <link rel="canonical" href="https://zhaiyanqi.github.io/vclogg2/" />
     <link rel="icon" href="assets/vclogg2.png" type="image/png" />
     <link rel="stylesheet" href="assets/styles.css" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareSourceCode",
+        "@id": "https://zhaiyanqi.github.io/vclogg2/#project",
+        "name": "VCLogg2",
+        "description": "VCLogg2 是免费开源的跨平台大文件日志查看器，支持 Windows、macOS 和 Linux，提供大日志文件浏览、实时跟随、多关键词与正则搜索、跨文件检索和结果导出。",
+        "url": "https://zhaiyanqi.github.io/vclogg2/",
+        "codeRepository": "https://github.com/zhaiyanqi/vclogg2",
+        "programmingLanguage": "Rust",
+        "runtimePlatform": "GPUI",
+        "license": "https://github.com/zhaiyanqi/vclogg2/blob/main/LICENSE",
+        "image": "https://zhaiyanqi.github.io/vclogg2/assets/og.png"
+      }
+    </script>
     <script>
       try {
         const savedTheme = localStorage.getItem("vclogg2-site-theme");
@@ -90,10 +105,10 @@
         <div class="hero-grid container">
           <div class="hero-copy">
             <p class="eyebrow"><span></span> Rust × GPUI 原生桌面体验 <b>2026</b></p>
-            <h1>穿过海量日志，<br /><em>看见真正的信号。</em></h1>
+            <h1>大文件日志查看器，<br /><em>看见真正的信号。</em></h1>
             <p class="hero-lede">
-              VCLogg2 为持续增长的日志和复杂排障场景而生。快速打开、灵活检索、稳定浏览，
-              让你把注意力留给真正重要的线索。
+              VCLogg2 是免费开源的跨平台桌面日志查看器，支持 Windows、macOS 和 Linux。
+              浏览大型日志、跟随新增内容，通过多关键词、正则表达式和跨文件搜索定位问题，再导出所需结果。
             </p>
             <div class="hero-actions">
               <a
@@ -301,13 +316,13 @@
               <span class="platform-symbol" aria-hidden="true">▦</span>
               <h3>Windows</h3>
               <p>Windows 10 / 11 · x64</p>
-              <small>便携 ZIP，解压即可使用</small>
+              <small>便携 ZIP 与安装程序</small>
             </article>
             <article data-tilt>
               <span class="platform-symbol" aria-hidden="true">⌘</span>
               <h3>macOS</h3>
               <p>macOS 15 · Apple Silicon</p>
-              <small>原生 App 包与安装脚本</small>
+              <small>DMG 安装包，拖入 Applications</small>
             </article>
             <article data-tilt>
               <span class="platform-symbol" aria-hidden="true">›_</span>
@@ -353,7 +368,7 @@
           <a href="https://github.com/zhaiyanqi/vclogg2" target="_blank" rel="noreferrer">GitHub</a>
           <a href="https://github.com/zhaiyanqi/vclogg2/releases" target="_blank" rel="noreferrer">Releases</a>
           <a href="https://github.com/zhaiyanqi/vclogg2/issues" target="_blank" rel="noreferrer">Issues</a>
-          <a href="https://github.com/zhaiyanqi/vclogg2/blob/main/LICENSE" target="_blank" rel="noreferrer">License</a>
+          <a href="https://github.com/zhaiyanqi/vclogg2/blob/main/LICENSE" target="_blank" rel="noreferrer">Apache-2.0 License</a>
         </div>
       </div>
       <div class="container footer-meta">

@@ -68,7 +68,7 @@ Release 可执行文件位于 Windows 的 `target\release\vclogg2.exe` 或 macOS
 
 [使用指南](usage.md) · [功能状态](migration-status.md) · [架构](architecture.md) · [构建与发布](delivery.md) · [全部文档](README.md)
 
-欢迎提交 Issue 和 Pull Request。参与贡献前请阅读 [RULES.md](../RULES.md)。
+欢迎提交 Issue 和 Pull Request。
 
 ## 致谢
 

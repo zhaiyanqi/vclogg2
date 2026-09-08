@@ -10,14 +10,16 @@ dist/
 .env.*
 !.env.example
 
-# Local AI agent skills and installer metadata
+# Local AI instructions, skills, conversations and working notes
+.local/
 .agent/
-.agents/*
-!.agents/skills/
-.agents/skills/*
-!.agents/skills/vclogg-app/
-!.agents/skills/vclogg-core/
-!.agents/skills/vclogg-data/
+.agents/
+.codex/
+.claude/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+/RULES.md
 skills-lock.json
 
 # Private keys and local application data
