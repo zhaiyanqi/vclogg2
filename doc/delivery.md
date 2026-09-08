@@ -17,17 +17,25 @@ macOS/Linux 可先构建再启动 Debug 二进制：
 ./target/debug/vclogg2
 ```
 
-首次执行需要网络访问来解析 GPUI 与 gpui-component；后续可复用 Cargo 缓存。平台原生依赖见仓库 `README.md` 的“从源码构建”章节。
+首次执行需要网络访问来解析 GPUI 与 gpui-component；后续可复用 Cargo 缓存。平台原生依赖见[中文 README 的“从源码构建”章节](README.zh-CN.md#从源码构建)。
 
 ## 三平台 Release 产物
 
 ### Windows x86_64
 
-Windows 使用 Inno Setup 6.3 或更新的 6.x 版本生成安装向导。安装命令与 `ISCC.exe` 自定义路径见 `README.md`；GitHub `windows-2022` runner 使用镜像预装的 Inno Setup 6。默认 `None` 模式同时生成未签名的便携 ZIP 和安装 EXE，包名不再包含 `unsigned`。
+Windows 使用 Inno Setup 6.3 或更新的 6.x 版本生成安装向导。GitHub `windows-2022` runner 使用镜像预装的 Inno Setup 6。默认 `None` 模式同时生成未签名的便携 ZIP 和安装 EXE，包名不再包含 `unsigned`。
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 ```
+
+打包前可通过 Windows Package Manager 安装 Inno Setup：
+
+```powershell
+winget install --id JRSoftware.InnoSetup --exact --source winget
+```
+
+脚本从 PATH 和 Inno Setup 6 默认目录查找 `ISCC.exe`；自定义位置可通过 `-InnoSetupCompiler "D:\Tools\Inno Setup 6\ISCC.exe"` 指定。
 
 Windows x64 产物输出位于 `dist/windows-x86_64/`：
 

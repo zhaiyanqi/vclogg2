@@ -868,8 +868,8 @@ struct PendingLogScrollFrames {
 
 impl PendingLogScrollFrames {
     fn request(&mut self, key: (u64, WrappedRegion), target: LogScrollFrameTarget) {
-        // Input can arrive faster than GPUI paints. Like klogg's update()/paintEvent path, keep
-        // only the last position and prepare exactly that viewport on the next frame.
+        // Input can arrive faster than GPUI paints. Keep only the last position and
+        // prepare exactly that viewport on the next frame.
         self.targets.insert(key, target);
     }
 

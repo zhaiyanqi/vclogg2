@@ -29,18 +29,6 @@ VCLogg2 支持打开由外部进程持续写入的日志。自动监测只对前
 
 目录搜索保留执行时的快照，本次没有增加目录递归监测、新文件自动发现或未打开文件的持续搜索。
 
-## 与 klogg 的源码对照
-
-参考 `variar/klogg` 的提交 `25c7de6d8f6da2ce6a00882e5af70b4f331af4c5`，按行为独立实现：
-
-- [`LogData::fileChangedOnDisk` / `checkFileChangesFinished`](https://github.com/variar/klogg/blob/25c7de6d8f6da2ce6a00882e5af70b4f331af4c5/src/logdata/src/logdata.cpp#L155)：监测文件身份和路径，轮转时重新打开；把追加与截断分派到增量/全量索引操作队列。
-- [`CheckFileChangesOperation::doCheckFileChanges`](https://github.com/variar/klogg/blob/25c7de6d8f6da2ce6a00882e5af70b4f331af4c5/src/logdata/src/logdataworker.cpp#L843)：使用大小和摘要判断旧内容是否变化。快速检测模式比较头尾摘要，普通模式比较完整已索引范围的摘要。
-- [`UpdateSearchOperation::run`](https://github.com/variar/klogg/blob/25c7de6d8f6da2ce6a00882e5af70b4f331af4c5/src/logdata/src/logfiltereddataworker.cpp#L508)：增量搜索回退到上一轮最后一行，删除该行旧命中，再继续搜索，处理没有换行符的尾行。
-- [`CrawlerWidget` 的索引完成处理](https://github.com/variar/klogg/blob/25c7de6d8f6da2ce6a00882e5af70b4f331af4c5/src/ui/src/crawlerwidget.cpp#L707)：允许自动刷新时，追加更新搜索，截断重新搜索；跟随视图使用独立状态。
-- [`FileWatcher`](https://github.com/variar/klogg/blob/25c7de6d8f6da2ce6a00882e5af70b4f331af4c5/src/filewatch/src/filewatcher.cpp)：通过 efsw 监听父目录并分派文件变化，同时提供轮询模式。
-
-VCLogg2 使用 Rust `notify` 的平台原生监听与低频复核，没有引入 klogg 的 efsw 依赖。自动刷新采用头尾快速判定，并额外复核本轮重扫区间；旧接口保留完整旧前缀校验。固定每轮字节边界是对当前不可变快照架构的适配，不表示 klogg 使用相同的快照实现。
-
 ## 快速追加校验与成本
 
 旧前缀是上一次快照已包含的全部字节，不是文件开头的一小段。文件变大只能证明长度增长，不能证明写入程序没有同时修改旧日志；直接复用旧行索引和搜索命中可能留下错误结果。

@@ -21,7 +21,7 @@ def main():
             target = resources / "windows/vclogg2.ico" if name == "soft" else icons / f"{name}.ico"
             image.save(target, format="ICO", sizes=sizes)
     shutil.copyfile(icons / "soft.png", resources / "windows/vclogg2.png")
-    shutil.copyfile(icons / "soft.png", root / "docs/assets/vclogg2.png")
+    shutil.copyfile(icons / "soft.png", root / "doc/assets/vclogg2.png")
 
 
 if __name__ == "__main__":
