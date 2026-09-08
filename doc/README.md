@@ -1,6 +1,6 @@
 # VCLogg2 文档
 
-[English README](../README.md) · [简体中文 README](README.zh-CN.md) · [官网源码](index.html)
+[English README](../README.md) · [简体中文 README](README.zh-CN.md) · [英文官网源码](index.html) · [中文官网源码](zh.html)
 
 这里集中维护 VCLogg2 的产品状态、架构约束、交付说明与验收记录。项目首页只保留产品介绍和常用入口；需要实现细节、验收边界或发布流程时，从本索引进入对应文档。
 
@@ -43,3 +43,7 @@
 - 图片等配套材料放在 [`assets/`](assets/)；文档使用相对链接，确保 GitHub 和本地预览都可访问。
 - 项目文档、官网页面和配套资源统一放在 `doc/`；GitHub Pages 从此目录发布，官网资源使用 `assets/` 相对路径。
 - 根目录 `README.md` 使用英语，中文版维护在 `doc/README.zh-CN.md`；产品介绍和常用命令变更时同步两种语言。
+
+- 官网默认入口 `index.html` 使用英语，`zh.html` 使用中文；两页文案、章节编号与语言链接同步维护，切换语言保留当前章节。
+- 两种语言分别维护 `lang`、canonical、Open Graph 和 JSON-LD，并通过 `hreflang` 关联；`x-default` 指向英文首页，站点地图包含两个语言入口。
+- 官网共用 `assets/styles.css` 和 `assets/main.js`。英文分享图使用 `assets/readme-hero.jpg`，英文主题预览使用 `assets/ui-polish-acceptance-en.svg`。

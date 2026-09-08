@@ -9,7 +9,7 @@
 
 [项目主页](https://zhaiyanqi.github.io/vclogg2/) · [下载](https://github.com/zhaiyanqi/vclogg2/releases/latest) · [文档](README.md) · [English](../README.md)
 
-![VCLogg2：海量日志，信号清晰](assets/readme-hero.jpg)
+![VCLogg2：海量日志，信号清晰](assets/readme-hero-zh-CN.jpg)
 
 ## 特性
 

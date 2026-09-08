@@ -1,5 +1,7 @@
 (() => {
   const root = document.documentElement;
+  const isChinese = root.lang === "zh-CN";
+  const languageToggle = document.querySelector(".language-toggle");
   const toggle = document.querySelector(".theme-toggle");
   const themeMeta = document.querySelector('meta[name="theme-color"]');
   const header = document.querySelector(".site-header");
@@ -16,7 +18,10 @@
     const isDark = root.dataset.theme !== "light";
     if (toggle) {
       toggle.setAttribute("aria-pressed", String(!isDark));
-      toggle.title = isDark ? "切换到浅色主题" : "切换到深色主题";
+      toggle.title = isChinese
+        ? (isDark ? "切换到浅色主题" : "切换到深色主题")
+        : (isDark ? "Switch to light theme" : "Switch to dark theme");
+      toggle.setAttribute("aria-label", toggle.title);
     }
     if (themeMeta) themeMeta.content = isDark ? "#070811" : "#eff1f8";
   };
@@ -28,6 +33,14 @@
     } catch (_) {}
     syncTheme();
   });
+
+  // Keep the current section when switching between the static language pages.
+  const syncLanguageLink = () => {
+    if (!languageToggle) return;
+    languageToggle.setAttribute("href", `${isChinese ? "./" : "zh.html"}${window.location.hash}`);
+  };
+  window.addEventListener("hashchange", syncLanguageLink);
+  syncLanguageLink();
 
   const revealGroups = [
     ".section-heading",
