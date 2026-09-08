@@ -1,27 +1,27 @@
 //! Persistent AppKit window buttons, independent of the auto-hiding titlebar.
 #![deny(deprecated)]
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use anyhow::{Context as _, Result};
 use gpui::{Pixels, Point, Window, WindowOptions};
 use objc2::{
-    DefinedClass, MainThreadOnly, define_class, msg_send,
+    AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send,
     rc::{Retained, Weak},
     runtime::AnyObject,
     sel,
 };
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSButton, NSEventModifierFlags, NSView, NSWindow, NSWindowButton,
-    NSWindowDidBecomeKeyNotification, NSWindowDidChangeBackingPropertiesNotification,
-    NSWindowDidDeminiaturizeNotification, NSWindowDidEndSheetNotification,
-    NSWindowDidEnterFullScreenNotification, NSWindowDidExitFullScreenNotification,
-    NSWindowDidResignKeyNotification, NSWindowDidResizeNotification, NSWindowDidUpdateNotification,
-    NSWindowOrderingMode, NSWindowStyleMask, NSWindowWillBeginSheetNotification,
-    NSWindowWillCloseNotification,
+    NSAutoresizingMaskOptions, NSButton, NSEvent, NSEventModifierFlags, NSTrackingArea,
+    NSTrackingAreaOptions, NSView, NSWindow, NSWindowButton, NSWindowDidBecomeKeyNotification,
+    NSWindowDidChangeBackingPropertiesNotification, NSWindowDidDeminiaturizeNotification,
+    NSWindowDidEndSheetNotification, NSWindowDidEnterFullScreenNotification,
+    NSWindowDidExitFullScreenNotification, NSWindowDidResignKeyNotification,
+    NSWindowDidResizeNotification, NSWindowDidUpdateNotification, NSWindowOrderingMode,
+    NSWindowStyleMask, NSWindowWillBeginSheetNotification, NSWindowWillCloseNotification,
 };
 use objc2_foundation::{
-    NSNotification, NSNotificationCenter, NSObjectProtocol, NSPoint, NSRect, NSSize,
+    NSNotification, NSNotificationCenter, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
 };
 use raw_window_handle::RawWindowHandle;
 
@@ -31,6 +31,9 @@ struct ControlsState {
     position: NSPoint,
     gap: f64,
     syncing: Cell<bool>,
+    hovered: Cell<bool>,
+    tracking_area: RefCell<Option<Retained<NSTrackingArea>>>,
+    tooltip_state: Cell<Option<(crate::i18n::Language, bool, bool)>>,
 }
 
 define_class!(
@@ -45,6 +48,33 @@ define_class!(
     unsafe impl NSObjectProtocol for WindowControls {}
 
     impl WindowControls {
+        // AppKit's standard window buttons ask their parent for group rollover
+        // state before drawing native glyphs. This is an undocumented AppKit
+        // callback, isolated to our own class: no system method is swizzled.
+        // NSTrackingArea alone cannot make those glyphs appear. If AppKit stops
+        // using this callback, tracking/clicks still work but glyphs need review.
+        #[unsafe(method(_mouseInGroup:))]
+        fn mouse_in_group(&self, button: &NSButton) -> bool {
+            self.ivars().hovered.get() && button.isEnabled()
+        }
+
+        #[unsafe(method(mouseEntered:))]
+        fn mouse_entered(&self, _event: &NSEvent) {
+            self.update_hover_from_pointer();
+        }
+
+        #[unsafe(method(mouseExited:))]
+        fn mouse_exited(&self, _event: &NSEvent) {
+            self.set_hovered(false);
+        }
+
+        #[unsafe(method(updateTrackingAreas))]
+        fn update_tracking_areas(&self) {
+            // SAFETY: Match NSView's no-argument tracking lifecycle method.
+            unsafe { let _: () = msg_send![super(self), updateTrackingAreas]; }
+            self.update_hover_tracking();
+        }
+
         #[unsafe(method(closeWindow:))]
         fn close_window(&self, sender: &AnyObject) {
             if let Some(window) = self.ivars().window.load() {
@@ -86,6 +116,7 @@ define_class!(
         #[unsafe(method(windowStateChanged:))]
         fn window_state_changed(&self, _notification: &NSNotification) {
             self.sync();
+            self.update_hover_from_pointer();
             for button in &self.ivars().buttons {
                 NSView::setNeedsDisplay(button, true);
             }
@@ -101,6 +132,7 @@ define_class!(
 
         #[unsafe(method(windowWillClose:))]
         fn window_will_close(&self, _notification: &NSNotification) {
+            self.set_hovered(false);
             // SAFETY: This exact observer was registered below.
             unsafe { NSNotificationCenter::defaultCenter().removeObserver(self) };
         }
@@ -110,6 +142,7 @@ define_class!(
             // SAFETY: Match NSView's no-argument lifecycle method.
             unsafe { let _: () = msg_send![super(self), viewDidMoveToWindow]; }
             self.sync();
+            self.update_hover_from_pointer();
         }
 
         #[unsafe(method(viewDidChangeEffectiveAppearance))]
@@ -132,6 +165,94 @@ define_class!(
 );
 
 impl WindowControls {
+    fn set_hovered(&self, hovered: bool) {
+        if self.ivars().hovered.replace(hovered) != hovered {
+            // Rollover is shared by all three controls, including the space
+            // between them. Do not turn hover into NSButton's pressed state.
+            for button in &self.ivars().buttons {
+                NSView::setNeedsDisplay(button, true);
+            }
+        }
+    }
+
+    fn button_group_bounds(&self) -> NSRect {
+        let frames = self.ivars().buttons.each_ref().map(|button| button.frame());
+        let left = frames
+            .iter()
+            .map(|frame| frame.origin.x)
+            .fold(f64::INFINITY, f64::min);
+        let bottom = frames
+            .iter()
+            .map(|frame| frame.origin.y)
+            .fold(f64::INFINITY, f64::min);
+        let right = frames
+            .iter()
+            .map(|frame| frame.origin.x + frame.size.width)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let top = frames
+            .iter()
+            .map(|frame| frame.origin.y + frame.size.height)
+            .fold(f64::NEG_INFINITY, f64::max);
+        NSRect::new(
+            NSPoint::new(left, bottom),
+            NSSize::new(right - left, top - bottom),
+        )
+    }
+
+    fn update_hover_from_pointer(&self) {
+        let hovered = self.window().is_some_and(|window| {
+            if self.isHiddenOrHasHiddenAncestor() || !window.isVisible() || window.isMiniaturized()
+            {
+                return false;
+            }
+            let pointer =
+                self.convertPoint_fromView(window.mouseLocationOutsideOfEventStream(), None);
+            let bounds = self.button_group_bounds();
+            pointer.x >= bounds.origin.x
+                && pointer.x < bounds.origin.x + bounds.size.width
+                && pointer.y >= bounds.origin.y
+                && pointer.y < bounds.origin.y + bounds.size.height
+        });
+        self.set_hovered(hovered);
+    }
+
+    fn update_hover_tracking(&self) {
+        let bounds = self.button_group_bounds();
+        let unchanged = self
+            .ivars()
+            .tracking_area
+            .borrow()
+            .as_ref()
+            .is_some_and(|area| area.rect() == bounds);
+        if !unchanged {
+            // Drop the RefCell borrow before calling AppKit. Keep one tracking
+            // area for the complete group across layout/fullscreen changes.
+            let previous = self.ivars().tracking_area.borrow_mut().take();
+            if let Some(previous) = previous {
+                self.removeTrackingArea(&previous);
+            }
+            // SAFETY: Our main-thread NSView implements both requested tracking
+            // selectors with NSEvent arguments. NSTrackingArea does not retain
+            // its owner; NSView retains the area and releases it on teardown.
+            let area = unsafe {
+                NSTrackingArea::initWithRect_options_owner_userInfo(
+                    NSTrackingArea::alloc(),
+                    bounds,
+                    NSTrackingAreaOptions::MouseEnteredAndExited
+                        | NSTrackingAreaOptions::ActiveAlways
+                        | NSTrackingAreaOptions::EnabledDuringMouseDrag,
+                    Some(self),
+                    None,
+                )
+            };
+            self.addTrackingArea(&area);
+            *self.ivars().tracking_area.borrow_mut() = Some(area);
+        }
+        // Resizing or moving into fullscreen can place the group under a
+        // stationary pointer; don't wait for a fresh mouse-enter event.
+        self.update_hover_from_pointer();
+    }
+
     fn sync(&self) {
         if self.ivars().syncing.replace(true) {
             return;
@@ -151,6 +272,24 @@ impl WindowControls {
         };
         let style = window.styleMask();
         let fullscreen = style.contains(NSWindowStyleMask::FullScreen);
+        let option = NSEvent::modifierFlags_class().contains(NSEventModifierFlags::Option);
+        let tooltip_state = (crate::i18n::current_language(), fullscreen, option);
+        if self.ivars().tooltip_state.replace(Some(tooltip_state)) != Some(tooltip_state) {
+            let zoom_tooltip = if fullscreen {
+                crate::tr!("退出全屏幕", "Exit Full Screen")
+            } else if option {
+                crate::tr!("缩放", "Zoom")
+            } else {
+                crate::tr!("进入全屏幕", "Enter Full Screen")
+            };
+            for (button, tooltip) in self.ivars().buttons.iter().zip([
+                crate::tr!("关闭", "Close"),
+                crate::tr!("最小化", "Minimize"),
+                zoom_tooltip,
+            ]) {
+                button.setToolTip(Some(&NSString::from_str(tooltip)));
+            }
+        }
         let has_sheet = window.attachedSheet().is_some();
         let enabled = [
             style.contains(NSWindowStyleMask::Closable) && !has_sheet,
@@ -203,7 +342,8 @@ impl WindowControls {
             ),
             NSSize::new(width, height),
         );
-        if self.frame() != frame {
+        let geometry_changed = self.frame() != frame;
+        if geometry_changed {
             self.setFrame(frame);
         }
         let mut x = state.position.x;
@@ -220,6 +360,9 @@ impl WindowControls {
                 button.setHidden(false);
             }
             x += size.width + state.gap;
+        }
+        if geometry_changed || state.tracking_area.borrow().is_none() {
+            self.update_hover_tracking();
         }
     }
 }
@@ -270,6 +413,9 @@ pub(crate) fn attach(window: &Window, position: Point<Pixels>) -> Result<()> {
         position: NSPoint::new(position.x.to_f64(), position.y.to_f64()),
         gap,
         syncing: Cell::new(false),
+        hovered: Cell::new(false),
+        tracking_area: RefCell::new(None),
+        tooltip_state: Cell::new(None),
     });
     // SAFETY: Initialize the NSView superclass after setting our Rust ivars.
     let controls: Retained<WindowControls> =

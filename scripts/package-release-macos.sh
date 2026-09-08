@@ -104,56 +104,9 @@ output.write_bytes(b"icns" + struct.pack(">I", len(payload) + 8) + payload)
 PY
 rm -rf -- "$iconset_directory"
 
-cat >"$contents_directory/Info.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleDevelopmentRegion</key>
-  <string>en</string>
-  <key>CFBundleDisplayName</key>
-  <string>VCLogg2</string>
-  <key>CFBundleExecutable</key>
-  <string>vclogg2</string>
-  <key>CFBundleIconFile</key>
-  <string>VCLogg2</string>
-  <key>CFBundleIdentifier</key>
-  <string>com.vclogg2.desktop</string>
-  <key>CFBundleInfoDictionaryVersion</key>
-  <string>6.0</string>
-  <key>CFBundleName</key>
-  <string>VCLogg2</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>CFBundleDocumentTypes</key>
-  <array>
-    <dict>
-      <key>CFBundleTypeExtensions</key>
-      <array>
-        <string>log</string>
-        <string>txt</string>
-        <string>out</string>
-        <string>trace</string>
-        <string>csv</string>
-        <string>json</string>
-      </array>
-      <key>CFBundleTypeName</key>
-      <string>Log or text document</string>
-      <key>CFBundleTypeRole</key>
-      <string>Viewer</string>
-      <key>LSHandlerRank</key>
-      <string>Alternate</string>
-    </dict>
-  </array>
-  <key>CFBundleShortVersionString</key>
-  <string>$version</string>
-  <key>CFBundleVersion</key>
-  <string>$version</string>
-  <key>NSHighResolutionCapable</key>
-  <true/>
-</dict>
-</plist>
-EOF
+install -m 644 "$repository_root/crates/vclogg-app/resources/macos/Info.plist" "$contents_directory/Info.plist"
+plutil -replace CFBundleShortVersionString -string "$version" "$contents_directory/Info.plist"
+plutil -replace CFBundleVersion -string "$version" "$contents_directory/Info.plist"
 
 plutil -lint "$contents_directory/Info.plist"
 codesign --force --sign - "$app_directory"

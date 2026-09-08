@@ -3019,10 +3019,17 @@ impl Render for SettingsDialog {
                                         div()
                                             .text_sm()
                                             .text_color(cx.theme().muted_foreground)
-                                            .child(crate::tr!(
-                                                "选择应用界面使用的语言。",
-                                                "Choose the language used by the application interface.",
-                                            )),
+                                            .child(if cfg!(target_os = "macos") {
+                                                crate::tr!(
+                                                    "应用界面即时预览；保存并重启后，系统窗口菜单也会使用所选语言。",
+                                                    "Preview the app language immediately. Save and restart to also change native window menus.",
+                                                )
+                                            } else {
+                                                crate::tr!(
+                                                    "选择应用界面使用的语言。",
+                                                    "Choose the language used by the application interface.",
+                                                )
+                                            }),
                                     ),
                             )
                             .child(

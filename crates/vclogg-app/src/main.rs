@@ -209,6 +209,8 @@ fn main() {
         .into_iter()
         .map(InitialDocument::from_path)
         .collect::<Vec<_>>();
+    #[cfg(target_os = "macos")]
+    i18n::initialize_native_language();
     let platform = gpui_platform::current_platform(false);
     let system_fonts = system_fonts::SystemFonts::new(platform.text_system());
     let app = Application::with_platform(platform).with_assets(gpui_component_assets::Assets);

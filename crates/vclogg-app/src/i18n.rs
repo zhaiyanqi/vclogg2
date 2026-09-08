@@ -56,6 +56,44 @@ pub(crate) fn set_language(language: Language) {
     CURRENT_LANGUAGE.store(value, Ordering::Relaxed);
 }
 
+/// AppKit caches framework localization, so choose it before creating the platform.
+/// The saved application language is authoritative; previews only affect our copy.
+#[cfg(target_os = "macos")]
+#[deny(deprecated)]
+pub(crate) fn initialize_native_language() {
+    use objc2_foundation::{
+        NSArgumentDomain, NSArray, NSMutableCopying, NSUserDefaults, ns_string,
+    };
+
+    let language = match crate::state_store::StateStore::open_default()
+        .and_then(|store| store.load_app_settings())
+    {
+        Ok(settings) => settings.language,
+        Err(error) => {
+            log::warn!("无法读取原生界面语言，使用默认语言：{error:#}");
+            Language::default()
+        }
+    };
+    set_language(language);
+    let identifier = match language {
+        Language::Chinese => ns_string!("zh-Hans"),
+        Language::English => ns_string!("en"),
+    };
+    let languages = NSArray::from_slice(&[identifier]);
+    let defaults = NSUserDefaults::standardUserDefaults();
+    // SAFETY: NSArgumentDomain is an immutable Foundation string. Its mutable
+    // copy preserves other launch preferences, and all values remain property
+    // list objects. This volatile domain changes only this process, never the
+    // system language or persistent preferences of another application.
+    unsafe {
+        let domain = defaults
+            .volatileDomainForName(NSArgumentDomain)
+            .mutableCopy();
+        domain.insert(ns_string!("AppleLanguages"), &languages);
+        defaults.setVolatileDomain_forName(&domain, NSArgumentDomain);
+    }
+}
+
 pub(crate) fn localized(chinese: &'static str, english: &'static str) -> &'static str {
     match current_language() {
         Language::Chinese => chinese,

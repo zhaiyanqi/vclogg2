@@ -9,6 +9,23 @@ const WINDOWS_MAIN_STACK_BYTES: usize = 8 * 1024 * 1024;
 fn main() {
     emit_build_metadata();
 
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        // Cargo-run executables need the same localization declaration as the
+        // packaged app; otherwise AppKit can fall back to English resources.
+        const INFO_PLIST: &str = "resources/macos/Info.plist";
+        println!("cargo:rerun-if-changed={INFO_PLIST}");
+        let plist = Path::new(&std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join(INFO_PLIST);
+        for argument in [
+            "-sectcreate",
+            "__TEXT",
+            "__info_plist",
+            plist.to_str().unwrap(),
+        ] {
+            println!("cargo:rustc-link-arg-bin=vclogg2=-Xlinker");
+            println!("cargo:rustc-link-arg-bin=vclogg2={argument}");
+        }
+    }
+
     if cfg!(target_os = "windows") {
         println!("cargo:rustc-link-arg-bin=vclogg2=/STACK:{WINDOWS_MAIN_STACK_BYTES}");
         embed_windows_resources();
