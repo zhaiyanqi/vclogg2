@@ -688,7 +688,9 @@ impl Workspace {
         let colors = ui_theme::palette(cx);
         TitleBar::new()
             .when(cfg!(target_os = "macos") && window.is_fullscreen(), |bar| {
-                bar.pl_0()
+                // The native controls retain their 80-point lane in fullscreen.
+                // TitleBar adds pl_3 internally there; keep the total inset unchanged.
+                bar.pl(px(80.) - rems(0.75).to_pixels(window.rem_size()))
             })
             .h(px(36.))
             .border_b_0()

@@ -25,6 +25,8 @@ mod keyword_match_style_section;
 mod log_table;
 mod log_tag_layer;
 mod log_tags;
+#[cfg(target_os = "macos")]
+mod macos_window_controls;
 mod modal_event_layer;
 mod notifications;
 mod open_directory;
@@ -107,9 +109,17 @@ fn open_workspace_window_with_options(
         display_id,
         ..TitleBar::window_options()
     };
+    #[cfg(target_os = "macos")]
+    let (window_options, traffic_light_position) = macos_window_controls::configure(window_options);
     let handle = cx.open_window(window_options, |window, cx| {
         window.set_window_title("VCLogg2");
         app_icon::attach_window(window, cx);
+        #[cfg(target_os = "macos")]
+        if let Some(position) = traffic_light_position
+            && let Err(error) = macos_window_controls::attach(window, position)
+        {
+            log::error!("Could not initialize native window controls: {error:#}");
+        }
         let workspace = cx.new(|cx| Workspace::new(primary, initial_documents, window, cx));
         Workspace::register_window(&workspace, window, cx);
         cx.new(|cx| Root::new(workspace, window, cx))
