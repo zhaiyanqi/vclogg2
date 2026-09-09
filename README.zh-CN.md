@@ -1,6 +1,8 @@
 # VCLogg2
 
-使用 Rust 与 GPUI 构建的高性能原生桌面日志查看器，专为大文件设计。
+VCLogg2（VCLogg）是免费开源的大文件日志查看器（log viewer），支持 Windows、macOS 和 Linux，使用 Rust 与 GPUI 构建。
+
+打开应用日志记录器（logger）生成的日志文件，通过多关键词或正则表达式跨文件搜索、跟随新增内容，并导出匹配行。
 
 [![Latest release](https://img.shields.io/github/v/release/zhaiyanqi/vclogg2?label=version)](https://github.com/zhaiyanqi/vclogg2/releases/latest)
 [![Release build](https://github.com/zhaiyanqi/vclogg2/actions/workflows/release-build.yml/badge.svg)](https://github.com/zhaiyanqi/vclogg2/actions/workflows/release-build.yml)

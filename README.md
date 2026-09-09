@@ -1,6 +1,8 @@
 # VCLogg2
 
-A fast, native desktop log viewer for large files, built with Rust and GPUI.
+VCLogg2 (VCLogg) is a free, open-source desktop log viewer for large files on Windows, macOS and Linux, built with Rust and GPUI.
+
+Open log files produced by your application's logger, search across files with keywords or regex, follow live updates and export matching lines.
 
 [![Latest release](https://img.shields.io/github/v/release/zhaiyanqi/vclogg2?label=version)](https://github.com/zhaiyanqi/vclogg2/releases/latest)
 [![Release build](https://github.com/zhaiyanqi/vclogg2/actions/workflows/release-build.yml/badge.svg)](https://github.com/zhaiyanqi/vclogg2/actions/workflows/release-build.yml)
