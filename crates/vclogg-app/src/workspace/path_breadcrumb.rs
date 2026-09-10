@@ -7,10 +7,18 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let frame = h_flex()
+            .flex_1()
+            .min_w_0()
+            .min_h_8()
+            .gap_1()
+            .px_1()
+            .py_0p5()
+            .border_1()
+            .border_color(cx.theme().input)
+            .rounded(cx.theme().radius);
         let Some(tab) = self.active_document() else {
-            return h_flex()
-                .flex_1()
-                .min_w_0()
+            return frame
                 .gap_2()
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
@@ -27,9 +35,7 @@ impl Workspace {
             .map(Path::to_path_buf)
             .collect::<Vec<_>>();
         paths.reverse();
-        let menu_paths = paths.clone();
         let workspace = cx.entity();
-        let menu_workspace = workspace.clone();
         let show_full_path = self.app_settings.show_full_path;
         let document_id = tab.id;
         let scroll_state = window.use_keyed_state(
@@ -136,50 +142,7 @@ impl Workspace {
             );
         }
 
-        h_flex()
-            .flex_1()
-            .min_w_0()
-            .gap_1()
-            .child(
-                crate::button_accessibility::with_label(
-                    Button::new("toolbar-breadcrumb-actions")
-                        .small()
-                        .ghost()
-                        .icon(IconName::FolderOpen)
-                        .tooltip(crate::tr!("路径操作", "Path actions")),
-                    crate::tr!("路径操作", "Path actions"),
-                )
-                .dropdown_menu(move |mut menu, window, cx| {
-                    for item_path in &menu_paths {
-                        let directory = if item_path == menu_paths.last().unwrap() {
-                            item_path.parent().unwrap_or(Path::new("."))
-                        } else {
-                            item_path.as_path()
-                        };
-                        let directory = if directory.as_os_str().is_empty() {
-                            PathBuf::from(".")
-                        } else {
-                            directory.to_path_buf()
-                        };
-                        let workspace = menu_workspace.clone();
-                        menu = menu.submenu(
-                            item_path.display().to_string(),
-                            window,
-                            cx,
-                            move |menu, window, cx| {
-                                Self::build_breadcrumb_menu(
-                                    menu,
-                                    directory.clone(),
-                                    &workspace,
-                                    window,
-                                    cx,
-                                )
-                            },
-                        );
-                    }
-                    menu
-                }),
-            )
+        frame
             .child(trail)
             .child(
                 Clipboard::new(("copy-toolbar-file-path", document_id))
