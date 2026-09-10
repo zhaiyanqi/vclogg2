@@ -43,6 +43,7 @@ pub(crate) enum SelectionRadius {
 #[serde(default)]
 pub(crate) struct SelectionThemeStyle {
     pub(crate) row_background: Option<String>,
+    pub(crate) row_foreground: Option<String>,
     pub(crate) row_border_color: Option<String>,
     pub(crate) row_border: SelectionBorder,
     pub(crate) row_weight: SelectionWeight,
@@ -58,6 +59,7 @@ impl Default for SelectionThemeStyle {
     fn default() -> Self {
         Self {
             row_background: None,
+            row_foreground: None,
             row_border_color: None,
             row_border: SelectionBorder::default(),
             row_weight: SelectionWeight::default(),
@@ -103,6 +105,7 @@ pub(crate) struct ResolvedTextSelectionStyle {
 #[derive(Clone, Copy)]
 pub(crate) struct ResolvedSelectionStyle {
     pub(crate) row_background: Hsla,
+    pub(crate) row_foreground: Option<Hsla>,
     border_color: Hsla,
     border: SelectionBorder,
     border_width: Pixels,
@@ -130,6 +133,11 @@ impl SelectionThemeStyle {
         };
         ResolvedSelectionStyle {
             row_background: color(&self.row_background, colors.row_selected).opacity(opacity),
+            row_foreground: self
+                .row_foreground
+                .as_deref()
+                .and_then(|s| try_parse_color(s).ok())
+                .map(|color| color.opacity(opacity)),
             border_color: color(&self.row_border_color, colors.row_selected_border)
                 .opacity(opacity),
             border: self.row_border,
@@ -160,6 +168,20 @@ impl SelectionThemeStyle {
 }
 
 impl ResolvedSelectionStyle {
+    /// Override selected-row glyph colors while retaining match backgrounds and font metrics.
+    pub(crate) fn row_highlights(
+        self,
+        selected: bool,
+        mut highlights: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>,
+    ) -> Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> {
+        if let Some(color) = self.row_foreground.filter(|_| selected) {
+            for (_, style) in &mut highlights {
+                style.color = Some(color);
+            }
+        }
+        highlights
+    }
+
     /// Borders and fill are paint-only children, shared by actual rows and the preview.
     pub(crate) fn row_overlay(self, top: bool, bottom: bool, cx: &App) -> Div {
         let radius = match self.radius {

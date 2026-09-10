@@ -25,6 +25,7 @@ use gpui_component::{
 #[derive(Clone, Copy)]
 enum Setting {
     RowBackground,
+    RowForeground,
     BorderColor,
     Border,
     Weight,
@@ -40,6 +41,7 @@ impl Setting {
     fn id(self) -> &'static str {
         match self {
             Self::RowBackground => "row-background",
+            Self::RowForeground => "row-foreground",
             Self::BorderColor => "border-color",
             Self::Border => "border",
             Self::Weight => "weight",
@@ -54,7 +56,7 @@ impl Setting {
 }
 
 struct ThemeControls {
-    colors: [Entity<ColorPickerState>; 4],
+    colors: [Entity<ColorPickerState>; 5],
     opacity: Entity<SliderState>,
 }
 
@@ -92,7 +94,8 @@ impl SelectionStyleSection {
                                 0 => style.row_background = value,
                                 1 => style.row_border_color = value,
                                 2 => style.text_background = value,
-                                _ => style.text_foreground = value,
+                                3 => style.text_foreground = value,
+                                _ => style.row_foreground = value,
                             }
                             cx.notify();
                         }
@@ -138,7 +141,7 @@ impl SelectionStyleSection {
         cx.notify();
     }
 
-    fn picker_colors(style: &SelectionThemeStyle, dark: bool) -> [Hsla; 4] {
+    fn picker_colors(style: &SelectionThemeStyle, dark: bool) -> [Hsla; 5] {
         let resolved = style.resolve(dark, true);
         let palette = ui_theme::palette_for_mode(if dark {
             ThemeMode::Dark
@@ -154,6 +157,7 @@ impl SelectionStyleSection {
                 .unwrap_or(palette.row_selected_border),
             resolved.text.background,
             resolved.text.foreground.unwrap_or(palette.log_text),
+            resolved.row_foreground.unwrap_or(palette.log_text),
         ]
     }
 
@@ -177,6 +181,7 @@ impl SelectionStyleSection {
         let defaults = SelectionThemeStyle::default();
         match setting {
             Setting::RowBackground => style.row_background = None,
+            Setting::RowForeground => style.row_foreground = None,
             Setting::BorderColor => style.row_border_color = None,
             Setting::Border => style.row_border = defaults.row_border,
             Setting::Weight => style.row_weight = defaults.row_weight,
@@ -354,6 +359,48 @@ impl SelectionStyleSection {
             }))
     }
 
+    fn foreground_control(&self, row: bool, cx: &mut Context<Self>) -> gpui::Div {
+        let style = self.draft.theme(self.dark);
+        let (index, foreground, scope) = if row {
+            (4, &style.row_foreground, "row")
+        } else {
+            (3, &style.text_foreground, "text")
+        };
+        h_flex()
+            .gap_2()
+            .children([false, true].map(|custom| {
+                Button::new(format!("selection-{scope}-color-{custom}"))
+                    .small()
+                    .label(if custom {
+                        crate::tr!("指定颜色", "Custom color")
+                    } else {
+                        crate::tr!("保留原色", "Original colors")
+                    })
+                    .selected(custom == foreground.is_some())
+                    .disabled(self.saving)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let value = this.controls[usize::from(this.dark)].colors[index]
+                            .read(cx)
+                            .value();
+                        let style = this.draft.theme_mut(this.dark);
+                        let foreground = if row {
+                            &mut style.row_foreground
+                        } else {
+                            &mut style.text_foreground
+                        };
+                        *foreground = if custom {
+                            value.map(|color| format!("#{:08x}", u32::from(Rgba::from(color))))
+                        } else {
+                            None
+                        };
+                        cx.notify();
+                    }))
+            }))
+            .when(foreground.is_some(), |control| {
+                control.child(self.color_picker_control(index, cx))
+            })
+    }
+
     fn render_fields(&self, cx: &mut Context<Self>) -> gpui::Div {
         let style = self.draft.theme(self.dark);
         let rows = v_flex()
@@ -371,6 +418,12 @@ impl SelectionStyleSection {
                 0,
                 crate::tr!("背景色", "Background").into(),
                 Setting::RowBackground,
+                cx,
+            ))
+            .child(self.field(
+                crate::tr!("文字颜色", "Text color"),
+                self.foreground_control(true, cx),
+                Setting::RowForeground,
                 cx,
             ))
             .child(self.field(
@@ -399,41 +452,10 @@ impl SelectionStyleSection {
                 Setting::Radius,
                 cx,
             ));
-        let foreground = h_flex()
-            .gap_2()
-            .children([false, true].map(|custom| {
-                Button::new(if custom {
-                    "selection-custom-color"
-                } else {
-                    "selection-original-color"
-                })
-                .small()
-                .label(if custom {
-                    crate::tr!("指定颜色", "Custom color")
-                } else {
-                    crate::tr!("保留原色", "Original colors")
-                })
-                .selected(custom == style.text_foreground.is_some())
-                .disabled(self.saving)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    let value = this.controls[usize::from(this.dark)].colors[3]
-                        .read(cx)
-                        .value();
-                    this.draft.theme_mut(this.dark).text_foreground = if custom {
-                        value.map(|color| format!("#{:08x}", u32::from(Rgba::from(color))))
-                    } else {
-                        None
-                    };
-                    cx.notify();
-                }))
-            }))
-            .when(style.text_foreground.is_some(), |control| {
-                control.child(self.color_picker_control(3, cx))
-            });
         let text = v_flex().gap_3()
             .child(Self::group(crate::tr!("文字选择", "Selected text").into(), crate::tr!("拖选或双击选词时的外观；保留原色可继续显示搜索和标签颜色。", "Appearance when dragging over text or selecting a word. Original colors preserve search and label colors.").into(), cx))
             .child(self.color_field(2, crate::tr!("背景色", "Background").into(), Setting::TextBackground, cx))
-            .child(self.field(crate::tr!("文字颜色", "Text color"), foreground, Setting::TextForeground, cx))
+            .child(self.field(crate::tr!("文字颜色", "Text color"), self.foreground_control(false, cx), Setting::TextForeground, cx))
             .child(self.field(crate::tr!("下划线", "Underline"), Switch::new("selection-underline").small().checked(style.text_underline).disabled(self.saving)
                 .on_click(cx.listener(|this, checked: &bool, _, cx| { this.draft.theme_mut(this.dark).text_underline = *checked; cx.notify(); })), Setting::Underline, cx));
         let inactive = v_flex().gap_3()
@@ -520,6 +542,8 @@ impl SelectionStyleSection {
                 } else {
                     Vec::new()
                 };
+                let selected = index == 1 || index == 2;
+                let highlights = resolved.row_highlights(selected, highlights);
                 let selection = self.preview_selections.handle(index, &text, window, cx);
                 let styled =
                     StyledText::new(text.display().clone()).with_highlights(highlights.clone());
@@ -543,8 +567,9 @@ impl SelectionStyleSection {
                             row.bg(style.background).text_color(style.foreground)
                         })
                     })
-                    .when(index == 1 || index == 2, |row| {
-                        row.child(resolved.row_overlay(index == 1, index == 2, cx))
+                    .when(selected, |row| {
+                        row.when_some(resolved.row_foreground, |row, color| row.text_color(color))
+                            .child(resolved.row_overlay(index == 1, index == 2, cx))
                     })
                     .child(preview)
             })

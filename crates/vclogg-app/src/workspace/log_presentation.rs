@@ -784,9 +784,12 @@ impl Workspace {
                     };
                     viewport.wrapped_selection(source_row, &row.text, window, cx)
                 };
-                let styled_text = StyledText::new(row.text.display().clone()).with_highlights(
+                let text_highlights = selection_style.row_highlights(
+                    row.selected,
                     self.highlight_styles(&row.highlights, outside_search_range, cx),
                 );
+                let styled_text = StyledText::new(row.text.display().clone())
+                    .with_highlights(text_highlights.clone());
                 let log_level_style = (!source_unavailable && !outside_search_range)
                     .then_some(row.log_level_style)
                     .flatten();
@@ -815,7 +818,7 @@ impl Workspace {
                     if selection_style.text.legacy_overlay {
                         Vec::new()
                     } else {
-                        self.highlight_styles(&row.highlights, outside_search_range, cx)
+                        text_highlights
                     },
                 )
                 .suppress_selection(suppress_text_selection)
@@ -918,11 +921,16 @@ impl Workspace {
                                     cell.text_color(ui_theme::search_excluded_foreground(cx))
                                 })
                                 .when(row.selected, |cell| {
-                                    cell.child(selection_style.row_overlay(
-                                        !selected_above,
-                                        !selected_below,
-                                        cx,
-                                    ))
+                                    cell.when_some(selection_style.row_foreground, |cell, color| {
+                                        cell.text_color(color)
+                                    })
+                                    .child(
+                                        selection_style.row_overlay(
+                                            !selected_above,
+                                            !selected_below,
+                                            cx,
+                                        ),
+                                    )
                                 })
                                 .when(show_row_separators && !row.selected, |cell| {
                                     cell.child(log_row_separator_overlay(false, cx))
@@ -2597,9 +2605,12 @@ impl Workspace {
                             window,
                             cx,
                         );
-                        let styled_text = StyledText::new(text.display().clone()).with_highlights(
+                        let text_highlights = selection_style.row_highlights(
+                            selected,
                             self.highlight_styles(&highlights, outside_search_range, cx),
                         );
+                        let styled_text = StyledText::new(text.display().clone())
+                            .with_highlights(text_highlights.clone());
                         let log_level_style = (!source_unavailable && !outside_search_range)
                             .then_some(log_level_style)
                             .flatten();
@@ -2631,7 +2642,7 @@ impl Workspace {
                             if selection_style.text.legacy_overlay {
                                 Vec::new()
                             } else {
-                                self.highlight_styles(&highlights, outside_search_range, cx)
+                                text_highlights
                             },
                         )
                         .suppress_selection(suppress_text_selection);
@@ -2723,11 +2734,17 @@ impl Workspace {
                                             ))
                                         })
                                         .when(selected, |cell| {
-                                            cell.child(selection_style.row_overlay(
-                                                !selected_above,
-                                                !selected_below,
-                                                cx,
-                                            ))
+                                            cell.when_some(
+                                                selection_style.row_foreground,
+                                                |cell, color| cell.text_color(color),
+                                            )
+                                            .child(
+                                                selection_style.row_overlay(
+                                                    !selected_above,
+                                                    !selected_below,
+                                                    cx,
+                                                ),
+                                            )
                                         })
                                         .when(show_row_separators && !selected, |cell| {
                                             cell.child(log_row_separator_overlay(false, cx))
