@@ -1521,12 +1521,12 @@ impl Workspace {
             .then(|| {
                 self.quick_find.boundary.map(|boundary| match boundary {
                     QuickFindBoundary::Start => crate::tr!(
-                        "已到达开头，没有更早的匹配项",
-                        "Reached the beginning; there are no earlier matches"
+                        "已到达开头，再次向上将从末尾查找",
+                        "Reached the beginning; find previous again to search from the end"
                     ),
                     QuickFindBoundary::End => crate::tr!(
-                        "已到达末尾，没有更多匹配项",
-                        "Reached the end; there are no more matches"
+                        "已到达末尾，再次向下将从开头查找",
+                        "Reached the end; find next again to search from the beginning"
                     ),
                 })
             })
@@ -1552,8 +1552,8 @@ impl Workspace {
             crate::tr!("没有找到匹配项", "No matches found")
         } else if self.quick_find.boundary == Some(QuickFindBoundary::Start) {
             crate::tr!(
-                "已到达开头，没有更早的匹配项",
-                "Reached the beginning; there are no earlier matches"
+                "已到达开头，再次向上将从末尾查找",
+                "Reached the beginning; find previous again to search from the end"
             )
         } else {
             crate::tr!(
@@ -1567,8 +1567,8 @@ impl Workspace {
             crate::tr!("没有找到匹配项", "No matches found")
         } else if self.quick_find.boundary == Some(QuickFindBoundary::End) {
             crate::tr!(
-                "已到达末尾，没有更多匹配项",
-                "Reached the end; there are no more matches"
+                "已到达末尾，再次向下将从开头查找",
+                "Reached the end; find next again to search from the beginning"
             )
         } else {
             crate::tr!("查找下一处（Enter / F3）", "Find next (Enter / F3)")

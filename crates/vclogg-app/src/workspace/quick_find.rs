@@ -342,12 +342,6 @@ impl Workspace {
             QuickFindDirection::Forward => QuickFindBoundary::End,
             QuickFindDirection::Backward => QuickFindBoundary::Start,
         };
-        if !incremental && self.quick_find.boundary == Some(requested_boundary) {
-            self.quick_find.busy = false;
-            self.quick_find.direction = None;
-            return;
-        }
-
         let matched_source_is_current = self
             .quick_find
             .matched_source_version
@@ -355,19 +349,30 @@ impl Workspace {
             .is_some_and(|version| version.is_same_as(&source_version));
         if self.quick_find.matched.is_some() && !matched_source_is_current {
             self.quick_find.clear_match();
+            self.quick_find.boundary = None;
         }
+        let wrap_search = !incremental && self.quick_find.boundary == Some(requested_boundary);
         let current_match = (!incremental)
             .then_some(self.quick_find.matched)
             .flatten()
             .filter(|matched| matched.target == target);
-        let start = match (direction, current_match) {
-            (QuickFindDirection::Forward, Some(matched)) => {
-                (matched.view_row + 1 < row_count).then_some(matched.view_row + 1)
-            }
-            (QuickFindDirection::Backward, Some(matched)) => matched.view_row.checked_sub(1),
-            (QuickFindDirection::Forward, None) => Some(self.quick_find.anchor.min(row_count - 1)),
-            (QuickFindDirection::Backward, None) => {
-                self.quick_find.anchor.min(row_count - 1).checked_sub(1)
+        let start = if wrap_search {
+            Some(match direction {
+                QuickFindDirection::Forward => 0,
+                QuickFindDirection::Backward => row_count - 1,
+            })
+        } else {
+            match (direction, current_match) {
+                (QuickFindDirection::Forward, Some(matched)) => {
+                    (matched.view_row + 1 < row_count).then_some(matched.view_row + 1)
+                }
+                (QuickFindDirection::Backward, Some(matched)) => matched.view_row.checked_sub(1),
+                (QuickFindDirection::Forward, None) => {
+                    Some(self.quick_find.anchor.min(row_count - 1))
+                }
+                (QuickFindDirection::Backward, None) => {
+                    self.quick_find.anchor.min(row_count - 1).checked_sub(1)
+                }
             }
         };
         let Some(start) = start else {
@@ -430,7 +435,7 @@ impl Workspace {
                         this.apply_quick_find_match(matched, cx);
                     }
                     DocumentLineTask::Completed(None) => {
-                        this.quick_find.no_match |= incremental;
+                        this.quick_find.no_match |= incremental || wrap_search;
                         this.quick_find.boundary = Some(match direction {
                             QuickFindDirection::Forward => QuickFindBoundary::End,
                             QuickFindDirection::Backward => QuickFindBoundary::Start,
@@ -596,6 +601,7 @@ impl Workspace {
                 tab.view.auto_follow = false;
                 tab.view.selection_table = SelectionTable::Log;
                 tab.log_table.update(cx, |table, cx| {
+                    table.delegate().settle_table_selection(matched.view_row);
                     table.set_active_log_row(matched.view_row, cx);
                 });
                 tab.log_viewport.center_row(matched.view_row);
@@ -609,6 +615,7 @@ impl Workspace {
                 tab.view.auto_follow = false;
                 tab.view.selection_table = SelectionTable::Results;
                 tab.result_table.update(cx, |table, cx| {
+                    table.delegate().settle_table_selection(matched.view_row);
                     table.set_active_log_row(matched.view_row, cx);
                 });
                 tab.result_viewport.center_row(matched.view_row);
@@ -617,6 +624,7 @@ impl Workspace {
             }
             QuickFindTarget::GlobalResults => {
                 self.global_table.update(cx, |table, cx| {
+                    table.delegate().settle_table_selection(matched.view_row);
                     table.set_active_log_row(matched.view_row, cx);
                 });
                 self.global_viewport.center_row(matched.view_row);
