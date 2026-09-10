@@ -200,8 +200,18 @@ impl Workspace {
         let find_directory = directory;
         Self::popup_menu_with_workspace_action_context(menu, workspace, cx)
             .item(
-                PopupMenuItem::new(crate::tr!("打开目录", "Open folder"))
-                    .on_click(move |_, _, cx| cx.open_with_system(&open_directory)),
+                PopupMenuItem::new(crate::tr!("打开目录", "Open folder")).on_click(
+                    window.listener_for(workspace, move |this, _, window, cx| {
+                        match crate::open_directory::launch_custom_directory(
+                            &this.app_settings.open_directory_command,
+                            &open_directory,
+                        ) {
+                            Ok(true) => {}
+                            Ok(false) => cx.open_with_system(&open_directory),
+                            Err(error) => window.notify_message(error.to_string(), cx),
+                        }
+                    }),
+                ),
             )
             .separator()
             .item(

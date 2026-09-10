@@ -11,8 +11,25 @@ struct OpenDirectoryInvocation {
     directory: PathBuf,
 }
 
+enum OpenDirectoryTarget<'a> {
+    File(&'a Path),
+    Directory(&'a Path),
+}
+
 pub fn launch_custom(command_line: &str, file_path: &Path) -> anyhow::Result<bool> {
-    let Some(invocation) = build_invocation(command_line, file_path)? else {
+    launch_custom_target(command_line, OpenDirectoryTarget::File(file_path))
+}
+
+/// Opens the directory itself; both placeholders refer to this directory.
+pub fn launch_custom_directory(command_line: &str, directory: &Path) -> anyhow::Result<bool> {
+    launch_custom_target(command_line, OpenDirectoryTarget::Directory(directory))
+}
+
+fn launch_custom_target(
+    command_line: &str,
+    target: OpenDirectoryTarget<'_>,
+) -> anyhow::Result<bool> {
+    let Some(invocation) = build_invocation(command_line, target)? else {
         return Ok(false);
     };
     let mut command = Command::new(&invocation.executable);
@@ -40,21 +57,30 @@ pub fn launch_custom(command_line: &str, file_path: &Path) -> anyhow::Result<boo
 
 fn build_invocation(
     command_line: &str,
-    file_path: &Path,
+    target: OpenDirectoryTarget<'_>,
 ) -> anyhow::Result<Option<OpenDirectoryInvocation>> {
     if command_line.trim().is_empty() {
         return Ok(None);
     }
-    let file_path = absolute_path(file_path)?;
-    let directory = file_path
-        .parent()
-        .ok_or_else(|| {
-            anyhow::anyhow!(crate::tr!(
-                "无法确定文件所在目录",
-                "Couldn’t determine the containing folder"
-            ))
-        })?
-        .to_path_buf();
+    let (path, directory) = match target {
+        OpenDirectoryTarget::File(file_path) => {
+            let file_path = absolute_path(file_path)?;
+            let directory = file_path
+                .parent()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(crate::tr!(
+                        "无法确定文件所在目录",
+                        "Couldn’t determine the containing folder"
+                    ))
+                })?
+                .to_path_buf();
+            (file_path, directory)
+        }
+        OpenDirectoryTarget::Directory(directory) => {
+            let directory = absolute_path(directory)?;
+            (directory.clone(), directory)
+        }
+    };
     let mut tokens = split_command_line(command_line)?;
     if tokens.is_empty() {
         bail!(crate::tr!(
@@ -64,7 +90,7 @@ fn build_invocation(
     }
     let executable = tokens.remove(0);
     let directory_text = directory.to_string_lossy();
-    let file_text = file_path.to_string_lossy();
+    let path_text = path.to_string_lossy();
     let mut used_placeholder = false;
     let mut substitute = |value: String| {
         if value.contains("{directory}") || value.contains("{path}") {
@@ -72,7 +98,7 @@ fn build_invocation(
         }
         value
             .replace("{directory}", &directory_text)
-            .replace("{path}", &file_text)
+            .replace("{path}", &path_text)
     };
     let executable = substitute(executable);
     let mut arguments = tokens.into_iter().map(&mut substitute).collect::<Vec<_>>();
