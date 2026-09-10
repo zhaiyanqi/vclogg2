@@ -112,12 +112,21 @@ impl Styled for Sheet {
 }
 
 impl RenderOnce for Sheet {
-    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let viewport = window.viewport_size();
         let request_close = self.request_close;
         let on_close = self.on_close;
         let escape_request = request_close.clone();
         let escape_notify = on_close.clone();
+
+        crate::overlay_dismissal::register_overlay_dismissal("sheet-dismissal", 0, window, cx, {
+            let request = request_close.clone();
+            let notify = on_close.clone();
+            move |window, cx| {
+                close(&request, &notify, window, cx);
+                true
+            }
+        });
 
         anchored().position(point(px(0.), px(0.))).child(
             self.base

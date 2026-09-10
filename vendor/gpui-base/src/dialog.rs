@@ -468,7 +468,7 @@ impl ParentElement for Dialog {
 }
 
 impl RenderOnce for Dialog {
-    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let open = self
             .handle
             .as_ref()
@@ -476,6 +476,36 @@ impl RenderOnce for Dialog {
         if !open {
             return div().into_any_element();
         }
+        crate::overlay_dismissal::register_overlay_dismissal(
+            ("dialog-dismissal", self.layer),
+            10 + self.layer,
+            window,
+            cx,
+            {
+                let cancel = self.on_cancel.clone();
+                let closed = self.on_close.clone();
+                let request_close = self.request_close.clone();
+                let handle = self.handle.clone();
+                let change = self.on_open_change.clone();
+                move |window, cx| {
+                    let event = ClickEvent::default();
+                    if !cancel(&event, window, cx) {
+                        return false;
+                    }
+                    request_open_change(
+                        &handle,
+                        &change,
+                        false,
+                        DialogChangeReason::Cancel,
+                        window,
+                        cx,
+                    );
+                    request_close(false, window, cx);
+                    closed(&event, window, cx);
+                    true
+                }
+            },
+        );
         let request_close = self.request_close;
         let cancel = self.on_cancel.clone();
         let confirm = self.on_ok.clone();

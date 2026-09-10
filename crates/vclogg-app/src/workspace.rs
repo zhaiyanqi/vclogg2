@@ -1694,7 +1694,7 @@ pub struct Workspace {
     color_labels_resolution_task: Option<Task<()>>,
     color_labels_resolution_cancellation: Option<SearchCancellation>,
     color_labels_resolution_revision: u64,
-    file_drop_visible: bool,
+    file_drop_paths: Option<ExternalPaths>,
     cross_window_drop_ix: Option<usize>,
     tab_drop_layout: Rc<RefCell<TabDropLayout>>,
     filter_popover: filter_popover::FilterPopoverState,
@@ -2308,7 +2308,7 @@ impl Workspace {
             color_labels_resolution_task: None,
             color_labels_resolution_cancellation: None,
             color_labels_resolution_revision: 0,
-            file_drop_visible: false,
+            file_drop_paths: None,
             cross_window_drop_ix: None,
             tab_drop_layout: Rc::new(RefCell::new(TabDropLayout::default())),
             search_panel_state,
@@ -2400,25 +2400,28 @@ impl Workspace {
         let _performance_scope =
             crate::ui_performance::scope("Workspace::render_file_drop_observer");
         let workspace = cx.weak_entity();
+        let file_drag_workspace = workspace.clone();
         let row_drag_workspace = workspace.clone();
         let row_drag_mouse_down_workspace = workspace.clone();
         canvas(
             |_, _, _| (),
             move |_, _, window, _cx| {
                 window.on_mouse_event(move |event: &FileDropEvent, phase, _window, cx| {
-                    if !phase.bubble() {
+                    if !phase.capture() {
                         return;
                     }
-                    let next_state = match event {
-                        FileDropEvent::Entered { .. } | FileDropEvent::Pending { .. } => None,
-                        FileDropEvent::Exited
-                        | FileDropEvent::Submit { .. }
-                        | FileDropEvent::Ended => Some(false),
-                    };
-                    if let Some(next_visible) = next_state {
+                    if matches!(event, FileDropEvent::Exited | FileDropEvent::Ended) {
                         _ = workspace.update(cx, |workspace, cx| {
-                            if workspace.file_drop_visible != next_visible {
-                                workspace.file_drop_visible = next_visible;
+                            if workspace.file_drop_paths.take().is_some() {
+                                cx.notify();
+                            }
+                        });
+                    }
+                });
+                window.on_mouse_event(move |_: &MouseMoveEvent, phase, _window, cx| {
+                    if phase.capture() && !cx.has_active_drag() {
+                        _ = file_drag_workspace.update(cx, |workspace, cx| {
+                            if workspace.file_drop_paths.take().is_some() {
                                 cx.notify();
                             }
                         });
@@ -2428,9 +2431,30 @@ impl Workspace {
                     if !phase.capture() {
                         return;
                     }
-                    _ = row_drag_workspace.update(cx, |workspace, cx| {
-                        workspace.end_all_row_drag_selection(window, cx);
-                    });
+                    // GPUI translates FileDropEvent::Submit into MouseUpEvent.
+                    // Accept it before dialogs/popovers can block the workspace hitbox.
+                    let dropped = row_drag_workspace
+                        .update(cx, |workspace, cx| {
+                            let paths = workspace.file_drop_paths.take();
+                            if paths.is_some() {
+                                cx.notify();
+                            }
+                            workspace.end_all_row_drag_selection(window, cx);
+                            paths
+                        })
+                        .ok()
+                        .flatten();
+                    if event.button == MouseButton::Left
+                        && cx.has_active_drag()
+                        && let Some(paths) = dropped
+                    {
+                        cx.stop_active_drag(window);
+                        cx.stop_propagation();
+                        _ = row_drag_workspace.update(cx, |workspace, cx| {
+                            workspace.open_dropped_paths(&paths, window, cx);
+                        });
+                        return;
+                    }
                     Workspace::finish_cross_window_tab_drag(event, window, cx);
                 });
                 window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
@@ -2544,14 +2568,13 @@ impl Render for Workspace {
                     }
                 }),
             )
-            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                this.open_dropped_paths(paths, window, cx);
-            }))
             .on_drag_move::<ExternalPaths>(cx.listener(
                 |this, event: &DragMoveEvent<ExternalPaths>, _, cx| {
-                    let next_visible = event.bounds.contains(&event.event.position);
-                    if this.file_drop_visible != next_visible {
-                        this.file_drop_visible = next_visible;
+                    let inside = event.bounds.contains(&event.event.position);
+                    if inside && this.file_drop_paths.is_none() {
+                        this.file_drop_paths = Some(event.drag(cx).clone());
+                        cx.notify();
+                    } else if !inside && this.file_drop_paths.take().is_some() {
                         cx.notify();
                     }
                 },
@@ -2620,7 +2643,7 @@ impl Render for Workspace {
             )
             .child(self.status_surface.clone())
             .child(self.render_file_drop_observer(cx))
-            .when(self.file_drop_visible, |this| {
+            .when(self.file_drop_paths.is_some(), |this| {
                 this.child(render_shell::deferred_workspace_overlay(
                     div()
                         .id("file-drop-overlay")

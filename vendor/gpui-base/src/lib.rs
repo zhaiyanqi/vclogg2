@@ -39,6 +39,7 @@ mod measure;
 pub mod motion;
 mod number_input;
 mod otp_input;
+mod overlay_dismissal;
 mod pagination;
 mod popover;
 mod popup;
@@ -117,6 +118,7 @@ pub use number_input::{
     step_value,
 };
 pub use otp_input::{OtpInput, OtpState};
+pub use overlay_dismissal::dismiss_window_overlays;
 pub use pagination::{Pagination, PaginationItem, PaginationState};
 pub use popover::{Popover, PopoverState};
 pub use popup::{POPUP_PRIORITY, Popup};

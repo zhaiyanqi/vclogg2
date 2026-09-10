@@ -278,6 +278,21 @@ impl RenderOnce for Popover {
             return popup.into_any_element();
         }
 
+        crate::overlay_dismissal::register_overlay_dismissal(
+            ("popover-dismissal", state.entity_id()),
+            crate::POPUP_PRIORITY,
+            window,
+            cx,
+            {
+                let state = state.downgrade();
+                move |window, cx| {
+                    _ = state.update(cx, |state, cx| state.dismiss(window, cx));
+                    cx.notify(parent_view_id);
+                    true
+                }
+            },
+        );
+
         let content = div()
             .id("content")
             // A popover surface is a non-modal dialog: it takes focus and is

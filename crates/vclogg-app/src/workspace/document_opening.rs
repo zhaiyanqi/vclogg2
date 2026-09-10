@@ -48,7 +48,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.file_drop_visible = false;
         if self.open_task.is_some() {
             window.notify_message(
                 crate::tr!(
@@ -81,7 +80,16 @@ impl Workspace {
                 cx,
             );
         }
-        self.begin_open_paths(files, window, cx);
+        // Cancellation callbacks may update this workspace (settings preview, dialog
+        // subscriptions), so dismiss outside its entity update before starting the load.
+        let workspace = cx.weak_entity();
+        window.defer(cx, move |window, cx| {
+            if gpui_base::dismiss_window_overlays(window, cx) {
+                _ = workspace.update(cx, |workspace, cx| {
+                    workspace.begin_open_paths(files, window, cx);
+                });
+            }
+        });
     }
 
     pub(super) fn restore_last_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
