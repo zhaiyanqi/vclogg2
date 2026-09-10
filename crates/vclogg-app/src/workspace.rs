@@ -1721,6 +1721,7 @@ mod result_export_flow;
 mod row_tags;
 mod search_limits;
 mod search_orchestration;
+mod search_tab_activation;
 mod search_tab_tasks;
 mod search_tab_ui;
 mod search_tabs;

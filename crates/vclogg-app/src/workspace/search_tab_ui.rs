@@ -135,6 +135,12 @@ impl Workspace {
                             this.rename_search_tab_dialog(owner, id, window, cx);
                         }
                     }))
+                    .on_aux_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                        if event.is_middle_click() {
+                            cx.stop_propagation();
+                            this.close_search_tab(owner, id, window, cx);
+                        }
+                    }))
                     .on_drag(dragged, |dragged, _, _, cx| cx.new(|_| dragged.clone()))
                     .drag_over::<DraggedSearchTab>(|this, _, _, cx| {
                         this.border_l_2().border_color(cx.theme().primary)
@@ -291,6 +297,20 @@ impl Workspace {
         if self.search_tab_owner() != Some(owner) || self.search_tabs.state(owner, id).is_none() {
             return;
         }
+        if self.search_tabs.installed == Some((owner, id)) {
+            self.cancel_search_tab_activation();
+            return;
+        }
+        self.prepare_search_tab_activation(owner, id, window, cx);
+    }
+
+    pub(super) fn commit_search_tab_activation(
+        &mut self,
+        owner: SearchTabOwner,
+        id: SearchTabId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.capture_active_search_tab(cx);
         self.search_tabs.groups.get_mut(&owner).unwrap().active = id;
         self.install_search_tab(owner, id, window, cx);

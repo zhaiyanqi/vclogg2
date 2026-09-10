@@ -119,6 +119,10 @@ pub(super) struct SearchTabs {
     pub(super) running: Option<(SearchTabOwner, SearchTabId, u64, SearchCancellation)>,
     pub(super) task: Option<Task<()>>,
     pub(super) syncing: bool,
+    pub(super) activation_revision: u64,
+    pub(super) activation_task: Option<Task<()>>,
+    pub(super) activation_cancellation: Option<Arc<AtomicBool>>,
+    pub(super) prepared_frame: Option<super::search_tab_activation::PreparedSearchTabFrame>,
 }
 
 impl SearchTabs {
@@ -132,6 +136,10 @@ impl SearchTabs {
             running: None,
             task: None,
             syncing: false,
+            activation_revision: 0,
+            activation_task: None,
+            activation_cancellation: None,
+            prepared_frame: None,
         }
     }
     pub(super) fn state(&self, owner: SearchTabOwner, id: SearchTabId) -> Option<&SearchTabState> {
@@ -176,6 +184,9 @@ impl SearchTabs {
 
 impl Drop for SearchTabs {
     fn drop(&mut self) {
+        if let Some(cancel) = &self.activation_cancellation {
+            cancel.store(true, Ordering::Release);
+        }
         if let Some((_, _, _, cancellation)) = &self.running {
             cancellation.cancel();
         }
@@ -475,8 +486,10 @@ impl Workspace {
             }
         }
         self.search_tabs.syncing = true;
+        let previous_owner = self.search_tabs.installed.map(|(owner, _)| owner);
         let changing = self.search_tabs.installed != Some((owner, id));
         if changing {
+            self.cancel_search_tab_activation();
             self.file_refresh_task.take();
             self.quick_find.close();
             self.refresh_quick_find_highlights(cx);
@@ -494,7 +507,9 @@ impl Workspace {
         self.cancel_pending_global_jump_for_search_tab();
         match owner {
             SearchTabOwner::File(document_id) => {
-                if changing {
+                if changing
+                    && previous_owner.is_some_and(|owner| owner.scope() != SearchScope::CurrentFile)
+                {
                     self.global_table.update(cx, |table, cx| {
                         table.delegate_mut().set_groups(Vec::new());
                         table.refresh(cx);
@@ -547,23 +562,49 @@ impl Workspace {
                         )
                     });
                     tab.refresh_search_matcher(self.app_settings.highlight_matches, cx);
-                    let rows = tab.compute_result_rows();
-                    tab.install_result_rows(rows, cx);
-                    let selection = state
-                        .saved
-                        .context
-                        .selection
-                        .first()
-                        .map(PersistedPathSelection::decoded_rows)
-                        .unwrap_or_default();
-                    tab.result_table.update(cx, |table, cx| {
-                        table.delegate_mut().restore_search_tab_selection(
-                            selection,
-                            state.saved.local.selected_source_row,
-                        );
-                        table.refresh(cx);
-                        cx.notify();
-                    });
+                    if let Some(super::search_tab_activation::PreparedSearchTabFrame::File {
+                        rows,
+                        selection,
+                        active,
+                        lines,
+                    }) = self.search_tabs.prepared_frame.take()
+                    {
+                        // Delegate-only restoration emits no SelectRow event to suppress.
+                        tab.restoring_result_selection = false;
+                        tab.result_table.update(cx, |table, cx| {
+                            table
+                                .delegate_mut()
+                                .set_marked_rows(tab.file.marked_rows.clone());
+                            table
+                                .delegate_mut()
+                                .install_search_tab_frame(rows, selection, active, lines);
+                            table.refresh(cx);
+                            cx.notify();
+                        });
+                    } else {
+                        // Different tabs do not inherit one another's selection.
+                        tab.result_table.update(cx, |table, _| {
+                            table.delegate().clear_row_selection();
+                            table.delegate().set_active_log_row(None);
+                        });
+                        let rows = tab.compute_result_rows();
+                        tab.install_result_rows(rows, cx);
+                        let selection = state
+                            .saved
+                            .context
+                            .selection
+                            .first()
+                            .map(PersistedPathSelection::decoded_rows)
+                            .unwrap_or_default();
+                        tab.result_table.update(cx, |table, cx| {
+                            table.delegate_mut().restore_search_tab_selection(
+                                selection,
+                                state.saved.local.selected_source_row,
+                            );
+                            table.refresh(cx);
+                            cx.notify();
+                        });
+                    }
                 }
                 if let Some(tab) = self.documents.iter().find(|tab| tab.id == document_id) {
                     Self::restore_persisted_local_viewport(
@@ -619,7 +660,6 @@ impl Workspace {
             slot.facade_dirty = false;
         }
         self.search_tabs.syncing = false;
-        self.refresh_active_log_search_presentation(cx);
         self.bind_active_display_tables(cx);
         Self::refresh_log_surfaces_atomically(
             [
@@ -638,11 +678,11 @@ impl Workspace {
     }
 
     pub(super) fn persist_search_tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.capture_active_search_tab(cx);
         if let Some(SearchTabOwner::File(id)) = self.search_tab_owner() {
             self.schedule_checkpoint(id, window, cx);
+        } else {
+            self.schedule_workspace_search_state_save(window, cx);
         }
-        self.schedule_workspace_search_state_save(window, cx);
     }
 
     pub(super) fn search_ranges_for_owner(

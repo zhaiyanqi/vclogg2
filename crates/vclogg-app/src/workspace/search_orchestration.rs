@@ -241,7 +241,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn global_result_groups_for_context(
+    pub(super) fn global_result_groups_for_context(
         &self,
         scope: SearchScope,
         context: &SearchSessionState,
@@ -1594,10 +1594,23 @@ impl Workspace {
                     cx,
                 );
             });
-        let groups = self.global_result_groups_for_context(scope, &context);
+        let (groups, staged) = match self.search_tabs.prepared_frame.take() {
+            Some(super::search_tab_activation::PreparedSearchTabFrame::Global {
+                groups,
+                lines,
+            }) => (groups, Some(lines)),
+            _ => (self.global_result_groups_for_context(scope, &context), None),
+        };
         let matcher = self.global_result_matcher();
         self.global_table.update(cx, |table, cx| {
-            if let Some(snapshot) = context.visible_lines.clone() {
+            if let Some(lines) = staged {
+                table.delegate_mut().install_search_tab_frame(
+                    groups,
+                    matcher,
+                    &context.collapsed_document_ids,
+                    lines,
+                );
+            } else if let Some(snapshot) = context.visible_lines.clone() {
                 table.delegate_mut().install_scope_snapshot(
                     groups,
                     matcher,

@@ -1358,6 +1358,23 @@ impl GlobalSearchTableDelegate {
         self.visible_lines.install_staged(loaded);
     }
 
+    pub(crate) fn install_search_tab_frame(
+        &mut self,
+        groups: Vec<GlobalSearchGroup>,
+        matcher: Option<SearchMatcher>,
+        collapsed: &BTreeSet<u64>,
+        loaded: StagedVisibleLineLoadResult<(u64, usize)>,
+    ) {
+        self.interaction.row_selection.borrow_mut().clear();
+        self.interaction.active_row.set(None);
+        *self.interaction.collapsed_rows.borrow_mut() = CollapsedInteractionRows::default();
+        self.interaction.text_selections.clear();
+        self.set_groups(groups);
+        self.restore_collapsed_document_ids(collapsed);
+        self.set_search_matcher(matcher);
+        self.visible_lines.install_staged(loaded);
+    }
+
     pub(crate) fn visible_line_snapshot(&self) -> VisibleLineSnapshot<(u64, usize)> {
         self.visible_lines.snapshot()
     }

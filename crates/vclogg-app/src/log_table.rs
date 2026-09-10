@@ -1426,6 +1426,25 @@ impl LogTableDelegate {
         self.restore_stable_interaction_rows(rows, active, active, false);
     }
 
+    /// A prepared search tab owns its projection and selection; do not remap the outgoing tab.
+    pub(crate) fn install_search_tab_frame(
+        &mut self,
+        rows: CompressedRows,
+        selection: Vec<(usize, usize)>,
+        active: Option<usize>,
+        lines: StagedVisibleLineLoadResult<usize>,
+    ) {
+        self.source.row_projection = LogRowProjection::SourceRows(rows);
+        self.interaction.text_selections.clear();
+        self.interaction.row_bounds.borrow_mut().clear();
+        self.interaction
+            .row_selection
+            .borrow_mut()
+            .replace_ranges_with_anchor(selection, active);
+        self.interaction.active_row.set(active);
+        self.source.visible_lines.install_staged(lines);
+    }
+
     pub fn selected_rows_count(&self) -> usize {
         self.interaction
             .row_selection
