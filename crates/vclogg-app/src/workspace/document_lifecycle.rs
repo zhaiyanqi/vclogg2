@@ -119,7 +119,11 @@ impl Workspace {
         };
 
         let row_height = self.log_row_height();
-        let mut resume = tab.view.pending_resume.clone().unwrap_or_default();
+        let mut resume = tab
+            .view
+            .pending_resume
+            .clone()
+            .unwrap_or_else(|| tab.session_base.resume.clone());
         resume.viewer.viewport =
             Self::capture_persisted_local_viewport(tab, WrappedRegion::Log, row_height, cx)
                 .or(resume.viewer.viewport);
@@ -1173,6 +1177,9 @@ impl Workspace {
         if previous_state == DocumentLoadState::Opening
             && let Some(session) = prepared.session.as_ref()
         {
+            // The opening shell may have no session. Retain the loaded baseline after
+            // apply_tab_resume consumes pending_resume, including every search tab.
+            tab.session_base = session.clone();
             tab.file.custom_title = session
                 .custom_title
                 .as_deref()
