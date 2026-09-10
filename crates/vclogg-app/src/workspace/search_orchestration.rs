@@ -137,6 +137,32 @@ impl Workspace {
         });
     }
 
+    pub(super) fn find_in_directory(
+        &mut self,
+        directory: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Save the outgoing scope before directory-session restoration changes
+        // the shared query input. Reuse directory history and cancellation rules.
+        self.set_search_scope(SearchScope::Directory, window, cx);
+        let options = DirectorySearchOptions {
+            directory: Some(directory),
+            ..self.global_search.directory_options.clone()
+        };
+        self.apply_directory_search_options(options, window, cx);
+        self.view_state.active_search = self
+            .global_search
+            .directory_options
+            .directory
+            .as_deref()
+            .map(normalized_path_match_key)
+            .map(SearchSessionKey::Directory);
+        self.close_search_autocomplete();
+        self.query.focus_handle(cx).focus(window, cx);
+        cx.notify();
+    }
+
     pub(super) fn open_directory_search_dialog(
         &mut self,
         window: &mut Window,

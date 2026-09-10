@@ -1,57 +1,4 @@
 use super::*;
-use gpui_component::clipboard::Clipboard;
-
-#[derive(IntoElement)]
-struct FilePathInput {
-    display: SharedString,
-    source: Option<(u64, SharedString)>,
-}
-
-struct FilePathInputState {
-    display: SharedString,
-    input: Entity<InputState>,
-}
-
-impl gpui::RenderOnce for FilePathInput {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let state = window.use_keyed_state("toolbar-file-path-input", cx, |window, cx| {
-            FilePathInputState {
-                display: self.display.clone(),
-                input: cx.new(|cx| InputState::new(window, cx).default_value(self.display.clone())),
-            }
-        });
-        let input = state.read(cx).input.clone();
-        // This is a read-only presentation of the active document. Preserve focus,
-        // selection and horizontal scrolling across frames with unchanged text.
-        // Compare supplied text, since a single-line Input normalizes line breaks.
-        if state.read(cx).display != self.display {
-            input.update(cx, |state, cx| {
-                state.set_value(self.display.clone(), window, cx);
-            });
-            state.update(cx, |state, _| state.display = self.display);
-        }
-
-        Input::new(&input)
-            .readonly(true)
-            .disabled(self.source.is_none())
-            .aria_label(crate::tr!("当前文件路径", "Current file path"))
-            .flex_1()
-            .min_w_0()
-            .prefix(
-                div()
-                    .text_color(cx.theme().primary)
-                    .child(Icon::new(IconName::File).xsmall()),
-            )
-            .when_some(self.source, |input, (document_id, path)| {
-                input.suffix(
-                    Clipboard::new(("copy-toolbar-file-path", document_id))
-                        .value(path)
-                        .tooltip(crate::tr!("复制文件路径", "Copy file path")),
-                )
-            })
-    }
-}
-
 // Paint after priority-0 table chrome, while staying below component popups and dialogs.
 const WORKSPACE_OVERLAY_PRIORITY: usize = 1;
 const _: () = assert!(WORKSPACE_OVERLAY_PRIORITY < POPUP_PRIORITY);
@@ -734,7 +681,11 @@ impl Workspace {
             )
     }
 
-    pub(super) fn render_file_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_file_toolbar(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let _performance_scope = crate::ui_performance::scope("Workspace::render_file_toolbar");
         let open_files_tooltip = if cfg!(target_os = "macos") {
             crate::tr!("打开日志…（Cmd+O）", "Open log… (Cmd+O)")
@@ -864,24 +815,7 @@ impl Workspace {
                             })),
                     )),
             )
-            .child(FilePathInput {
-                display: self
-                    .active_document()
-                    .map_or_else(
-                        || crate::tr!("未打开文件", "No file open").to_string(),
-                        |tab| {
-                            if self.app_settings.show_full_path {
-                                tab.document.path().display().to_string()
-                            } else {
-                                tab.file.title.to_string()
-                            }
-                        },
-                    )
-                    .into(),
-                source: self
-                    .active_document()
-                    .map(|tab| (tab.id, tab.document.path().display().to_string().into())),
-            })
+            .child(self.render_path_breadcrumb(window, cx))
             .child(
                 h_flex()
                     .h(px(36.))

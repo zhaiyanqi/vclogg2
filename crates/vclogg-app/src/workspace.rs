@@ -1742,6 +1742,7 @@ mod filter_popover;
 mod highlight_preferences;
 mod log_presentation;
 mod log_viewport;
+mod path_breadcrumb;
 mod preferences;
 mod quick_find;
 mod render_shell;
@@ -2628,7 +2629,7 @@ impl Render for Workspace {
             .text_color(cx.theme().foreground)
             .children(ui_theme::ambient_glow_layers(&colors))
             .child(self.render_title_bar(window, cx))
-            .child(self.render_file_toolbar(cx))
+            .child(self.render_file_toolbar(window, cx))
             .child(self.render_tabs(has_other_window, cx))
             .child(
                 div()

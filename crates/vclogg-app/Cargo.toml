@@ -27,6 +27,7 @@ log.workspace = true
 notify.workspace = true
 reqwest.workspace = true
 rayon.workspace = true
+rfd = "0.15.4"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

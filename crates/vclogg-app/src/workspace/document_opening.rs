@@ -1,6 +1,45 @@
 use super::*;
 
 impl Workspace {
+    pub(super) fn open_files_in_directory(
+        &mut self,
+        directory: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.open_task.is_some() {
+            return;
+        }
+        self.file_refresh_task.take();
+
+        // GPUI's PathPromptOptions has no initial-directory option. Keep this
+        // native picker attached to the window and reuse the normal loader slot.
+        let prompt = rfd::AsyncFileDialog::new()
+            .set_parent(window)
+            .set_directory(directory)
+            .set_title(crate::tr!("选择日志文件", "Select log files"))
+            .pick_files();
+        self.open_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let files = prompt.await;
+            _ = this.update_in(cx, |this, window, cx| {
+                this.open_task = None;
+                if let Some(files) = files {
+                    this.begin_open_paths(
+                        files
+                            .into_iter()
+                            .map(|file| file.path().to_path_buf())
+                            .collect(),
+                        window,
+                        cx,
+                    );
+                }
+                this.open_queued_external_paths_if_idle(window, cx);
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
     pub(super) fn open_files(
         &mut self,
         _: &OpenFiles,
