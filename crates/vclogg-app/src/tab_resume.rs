@@ -80,6 +80,7 @@ pub(crate) struct TabResumeState {
     pub viewer: ViewerResumeState,
     pub current_search: CurrentSearchResumeState,
     pub active_region: PersistedLogRegion,
+    pub search_tabs: Option<crate::search_context::PersistedSearchTabGroup>,
 }
 
 impl Default for TabResumeState {
@@ -89,6 +90,7 @@ impl Default for TabResumeState {
             viewer: ViewerResumeState::default(),
             current_search: CurrentSearchResumeState::default(),
             active_region: PersistedLogRegion::Body,
+            search_tabs: None,
         }
     }
 }

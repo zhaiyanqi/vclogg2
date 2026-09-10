@@ -454,18 +454,6 @@ impl PathPreferences {
             .get(&path_match_key(path))
             .map(|(_, selected)| *selected)
     }
-
-    fn insert(&mut self, path: PathBuf, selected: bool) {
-        self.by_path.insert(path_match_key(&path), (path, selected));
-    }
-
-    fn selected_paths(&self) -> Vec<PathBuf> {
-        self.by_path
-            .values()
-            .filter(|(_, selected)| *selected)
-            .map(|(path, _)| path.clone())
-            .collect()
-    }
 }
 
 struct DirectoryDocumentIds {
@@ -495,18 +483,6 @@ impl DirectoryDocumentIds {
             .expect("directory result identity space exhausted");
         self.by_path.insert(key, id);
         id
-    }
-
-    fn retain_paths(&mut self, paths: &BTreeSet<PathBuf>) {
-        let keys = paths
-            .iter()
-            .map(|path| path_match_key(path))
-            .collect::<BTreeSet<_>>();
-        self.by_path.retain(|path, _| keys.contains(path));
-    }
-
-    fn clear(&mut self) {
-        self.by_path.clear();
     }
 }
 
@@ -544,124 +520,6 @@ impl GlobalSearchState {
 
     pub(crate) fn preference_for(&self, path: &Path) -> Option<bool> {
         self.preferences.get(path)
-    }
-
-    pub(crate) fn set_preference(&mut self, path: PathBuf, selected: bool) {
-        self.preferences.insert(path, selected);
-    }
-
-    pub(crate) fn selected_preference_paths(&self) -> Vec<PathBuf> {
-        self.preferences.selected_paths()
-    }
-
-    pub(crate) fn retain_directory_document_paths(&mut self, paths: &BTreeSet<PathBuf>) {
-        self.directory_document_ids.retain_paths(paths);
-    }
-
-    pub(crate) fn clear_directory_document_ids(&mut self) {
-        self.directory_document_ids.clear();
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SearchTarget {
-    Document(u64),
-    AllOpenFiles,
-    Directory,
-}
-
-struct ActiveSearch {
-    target: SearchTarget,
-    revision: u64,
-    cancellation: SearchCancellation,
-}
-
-#[derive(Default)]
-pub(crate) struct SearchController {
-    active: Option<ActiveSearch>,
-    task: Option<Task<()>>,
-}
-
-impl SearchController {
-    pub(crate) fn begin(
-        &mut self,
-        target: SearchTarget,
-        revision: u64,
-        cancellation: SearchCancellation,
-    ) {
-        self.cancel();
-        self.active = Some(ActiveSearch {
-            target,
-            revision,
-            cancellation,
-        });
-    }
-
-    pub(crate) fn is_active(&self) -> bool {
-        self.active.is_some()
-    }
-
-    pub(crate) fn is_current(&self, target: SearchTarget, revision: u64) -> bool {
-        self.active
-            .as_ref()
-            .is_some_and(|search| search.target == target && search.revision == revision)
-    }
-
-    pub(crate) fn has_target(&self, target: SearchTarget) -> bool {
-        self.active
-            .as_ref()
-            .is_some_and(|search| search.target == target)
-    }
-
-    pub(crate) fn is_affected_by_removed_documents(&self, document_ids: &BTreeSet<u64>) -> bool {
-        self.active
-            .as_ref()
-            .is_some_and(|search| match search.target {
-                SearchTarget::Document(document_id) => document_ids.contains(&document_id),
-                SearchTarget::AllOpenFiles => !document_ids.is_empty(),
-                SearchTarget::Directory => !document_ids.is_empty(),
-            })
-    }
-
-    pub(crate) fn is_affected_by_added_documents(&self) -> bool {
-        self.active.as_ref().is_some_and(|search| {
-            matches!(
-                search.target,
-                SearchTarget::AllOpenFiles | SearchTarget::Directory
-            )
-        })
-    }
-
-    pub(crate) fn cancel_for_document(&mut self, document_id: u64) -> bool {
-        let should_cancel = self.active.as_ref().is_some_and(|search| {
-            matches!(search.target, SearchTarget::Document(id) if id == document_id)
-                || search.target == SearchTarget::AllOpenFiles
-        });
-        should_cancel && self.cancel()
-    }
-
-    pub(crate) fn set_task(&mut self, task: Task<()>) {
-        self.task = Some(task);
-    }
-
-    pub(crate) fn finish(&mut self, target: SearchTarget, revision: u64) -> bool {
-        if !self.is_current(target, revision) {
-            return false;
-        }
-        self.active = None;
-        self.task = None;
-        true
-    }
-
-    pub(crate) fn cancel(&mut self) -> bool {
-        let was_active = if let Some(search) = self.active.take() {
-            search.cancellation.cancel();
-            true
-        } else {
-            false
-        };
-        self.task = None;
-        was_active
     }
 }
 
@@ -933,11 +791,6 @@ mod state_controller_tests {
             identities.id_for_path(Path::new("LOGS/A.LOG")) == first,
             cfg!(windows)
         );
-
-        identities.retain_paths(&BTreeSet::from([PathBuf::from("logs/b.log")]));
-        assert_eq!(identities.by_path.len(), 1);
-        assert_eq!(identities.id_for_path(Path::new("logs/b.log")), second);
-        assert_ne!(identities.id_for_path(Path::new("logs/a.log")), first);
     }
 
     #[test]
@@ -953,60 +806,6 @@ mod state_controller_tests {
             preferences.get(Path::new("LOGS/A.LOG")),
             cfg!(windows).then_some(false)
         );
-        assert_eq!(preferences.selected_paths(), [PathBuf::from("logs/b.log")]);
-    }
-
-    #[test]
-    fn document_reload_cancels_open_file_searches_but_not_directory_searches() {
-        let mut controller = SearchController::default();
-        let directory_cancellation = SearchCancellation::default();
-        controller.begin(SearchTarget::Directory, 1, directory_cancellation.clone());
-
-        assert!(!controller.cancel_for_document(7));
-        assert!(!directory_cancellation.is_cancelled());
-        assert!(controller.is_current(SearchTarget::Directory, 1));
-
-        let open_files_cancellation = SearchCancellation::default();
-        controller.begin(
-            SearchTarget::AllOpenFiles,
-            2,
-            open_files_cancellation.clone(),
-        );
-
-        assert!(directory_cancellation.is_cancelled());
-        assert!(controller.cancel_for_document(7));
-        assert!(open_files_cancellation.is_cancelled());
-    }
-
-    #[test]
-    fn removing_documents_affects_every_search_that_captured_workspace_membership() {
-        let removed = BTreeSet::from([7]);
-        let mut controller = SearchController::default();
-
-        controller.begin(SearchTarget::Directory, 1, SearchCancellation::default());
-        assert!(controller.is_affected_by_removed_documents(&removed));
-
-        controller.begin(SearchTarget::AllOpenFiles, 2, SearchCancellation::default());
-        assert!(controller.is_affected_by_removed_documents(&removed));
-
-        controller.begin(SearchTarget::Document(8), 3, SearchCancellation::default());
-        assert!(!controller.is_affected_by_removed_documents(&removed));
-        controller.begin(SearchTarget::Document(7), 4, SearchCancellation::default());
-        assert!(controller.is_affected_by_removed_documents(&removed));
-    }
-
-    #[test]
-    fn adding_documents_only_affects_workspace_wide_searches() {
-        let mut controller = SearchController::default();
-
-        controller.begin(SearchTarget::Directory, 1, SearchCancellation::default());
-        assert!(controller.is_affected_by_added_documents());
-
-        controller.begin(SearchTarget::AllOpenFiles, 2, SearchCancellation::default());
-        assert!(controller.is_affected_by_added_documents());
-
-        controller.begin(SearchTarget::Document(7), 3, SearchCancellation::default());
-        assert!(!controller.is_affected_by_added_documents());
     }
 
     #[test]
@@ -1031,17 +830,5 @@ mod state_controller_tests {
         );
         assert_eq!(tasks.remove(2), Some("second"));
         assert!(tasks.tasks.is_empty());
-    }
-
-    #[test]
-    fn stale_completion_cannot_replace_the_current_search() {
-        let mut controller = SearchController::default();
-        let target = SearchTarget::Document(7);
-        controller.begin(target, 2, SearchCancellation::default());
-
-        assert!(!controller.finish(target, 1));
-        assert!(controller.is_current(target, 2));
-        assert!(controller.finish(target, 2));
-        assert!(!controller.is_active());
     }
 }

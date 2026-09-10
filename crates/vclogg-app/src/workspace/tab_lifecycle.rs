@@ -55,6 +55,7 @@ impl Workspace {
         if !self.tabs.contains(&tab_id) {
             return;
         }
+        self.capture_active_search_tab(cx);
         let active_tab_changed = self.active_tab_id != tab_id;
         if active_tab_changed && let Some(active) = self.active_document() {
             let path = active.document.path().to_path_buf();
@@ -388,7 +389,7 @@ impl Workspace {
     }
 
     pub(super) fn sync_active_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (title, query, selected_row) = self
+        let (title, _query, selected_row) = self
             .active_document()
             .map(|tab| {
                 (
@@ -411,16 +412,7 @@ impl Workspace {
             });
 
         window.set_window_title(&title);
-        if self.global_search.scope == SearchScope::CurrentFile {
-            self.reset_search_history_navigation();
-            self.view_state.active_search = self
-                .active_document()
-                .map(|tab| SearchSessionKey::CurrentFile(tab.id));
-            self.case_sensitive = self.app_settings.default_case_sensitive;
-            self.regex = self.app_settings.default_use_regex;
-            self.query
-                .update(cx, |state, cx| state.set_value(query, window, cx));
-        }
+        self.sync_search_tab(window, cx);
         self.selected_source_row = selected_row;
         self.file_watch_window_active = window.is_window_active();
         self.sync_file_watch(window.window_handle(), cx);
@@ -577,15 +569,13 @@ impl Workspace {
             .collect::<Vec<_>>();
 
         for document_id in &document_ids {
+            self.cancel_search_for(*document_id);
+            self.search_tabs
+                .groups
+                .remove(&search_tabs::SearchTabOwner::File(*document_id));
             self.persistence.checkpoint_tasks.remove(*document_id);
         }
 
-        if self
-            .searches
-            .is_affected_by_removed_documents(&document_ids)
-        {
-            self.cancel_search();
-        }
         for (path, base, session) in sessions {
             self.save_file_session(path, base, session, window, cx);
         }

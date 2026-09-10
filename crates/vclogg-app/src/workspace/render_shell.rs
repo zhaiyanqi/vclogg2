@@ -1915,15 +1915,7 @@ impl Workspace {
                         !self.global_search.results_visible
                     }
                 });
-        let active_document_id = self.active_document().map(|tab| tab.id);
-        let searching_current_scope = match self.global_search.scope {
-            SearchScope::CurrentFile => active_document_id.is_some_and(|document_id| {
-                self.searches
-                    .has_target(SearchTarget::Document(document_id))
-            }),
-            SearchScope::AllOpenFiles => self.searches.has_target(SearchTarget::AllOpenFiles),
-            SearchScope::Directory => self.searches.has_target(SearchTarget::Directory),
-        };
+        let searching_current_scope = self.search_tab_is_searching();
         let search_scope_control =
             self.render_search_scope_control(has_document, search_scope_tooltip, cx);
 

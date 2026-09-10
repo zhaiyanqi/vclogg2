@@ -130,6 +130,9 @@ impl Workspace {
         resume.current_search.viewport =
             Self::capture_persisted_local_viewport(tab, WrappedRegion::Results, row_height, cx)
                 .or(resume.current_search.viewport);
+        resume.search_tabs = self
+            .persisted_file_search_tabs(tab.id, cx)
+            .or(resume.search_tabs);
         resume.active_region = match tab.view.selection_table {
             SelectionTable::Log => PersistedLogRegion::Body,
             SelectionTable::Results => PersistedLogRegion::CurrentResults,
@@ -153,6 +156,7 @@ impl Workspace {
 
     pub(super) fn take_quit_snapshot(&mut self, cx: &mut Context<Self>) -> QuitWorkspaceSnapshot {
         self.persistence.checkpoint_tasks.clear();
+        self.capture_active_search_tab(cx);
         self.capture_retained_global_context(self.global_search.scope, cx);
         let search_state = self.primary_window.then(|| self.workspace_search_state());
         let store = self.persistence.store.clone();
@@ -297,6 +301,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.capture_active_search_tab(cx);
         let adds_document = opened.iter().any(|(path, result)| {
             result.is_ok()
                 && !self
@@ -304,9 +309,6 @@ impl Workspace {
                     .iter()
                     .any(|tab| paths_match(tab.document.path(), path))
         });
-        if adds_document && self.searches.is_affected_by_added_documents() {
-            self.cancel_search();
-        }
         if adds_document {
             self.global_search.revision = self.global_search.revision.saturating_add(1);
         }
@@ -1427,7 +1429,7 @@ impl Workspace {
         if tab.search_revision != revision
             || !Arc::ptr_eq(&tab.document, &previous_document)
             || self.global_search.revision != global_revision
-            || self.searches.is_active()
+            || self.search_tabs.busy()
         {
             return None;
         }
@@ -1555,7 +1557,7 @@ impl Workspace {
                 && (!window.is_window_active()
                     || self.active_tab_id != WorkspaceTabId::Document(plan.document_id)))
             || self.global_search.revision != plan.global_revision
-            || self.searches.is_active()
+            || self.search_tabs.busy()
             || plan.follow_end != self.documents[tab_ix].view.auto_follow
             || prepared.log_lines.has_unavailable_lines()
             || prepared.result_lines.has_unavailable_lines()
@@ -1573,11 +1575,13 @@ impl Workspace {
         }
         tab.result_replace_task.take();
         tab.result_replace_revision = tab.result_replace_revision.saturating_add(1);
-        self.search_ranges.completed(
-            plan.document.path(),
-            self.search_ranges.get(plan.document.path()),
-            false,
-        );
+        if self.global_search.scope == SearchScope::CurrentFile {
+            self.search_ranges.completed(
+                plan.document.path(),
+                self.search_ranges.get(plan.document.path()),
+                false,
+            );
+        }
         tab.document = plan.document;
         tab.search_query = plan.query;
         tab.search_result = plan.search_result;
@@ -1697,6 +1701,7 @@ impl Workspace {
         }
         self.refresh_global_result_rows(window, cx);
         self.refresh_active_log_search_presentation(cx);
+        self.search_tabs_document_refreshed(plan.document_id, cx);
         self.finish_reload(strategy);
         self.open_queued_external_paths_if_idle(window, cx);
         cx.notify();
@@ -1715,7 +1720,7 @@ impl Workspace {
         if matches!(strategy, ReloadStrategy::ExtendAppend)
             && (self.file_refresh_task.is_some()
                 || self.row_tag_interaction_active()
-                || self.searches.is_active()
+                || self.search_tabs.busy()
                 || !window.is_window_active()
                 || self.active_tab_id != WorkspaceTabId::Document(document_id))
         {
@@ -1730,12 +1735,13 @@ impl Workspace {
         self.cancel_search_for(document_id);
         let global_revision = self.global_search.revision;
         let global_search = self.all_open_result_for_reload(document_id);
-        let range = self
-            .search_ranges
-            .get(self.documents[document_ix].document.path());
-        let range_unchanged = self
-            .search_ranges
-            .can_extend(self.documents[document_ix].document.path(), false);
+        let local_ranges =
+            self.search_ranges_for_owner(search_tabs::SearchTabOwner::File(document_id));
+        let global_ranges = self.search_ranges_for_owner(search_tabs::SearchTabOwner::AllOpen);
+        let path = self.documents[document_ix].document.path();
+        let range = local_ranges.get(path);
+        let global_range = global_ranges.get(path);
+        let range_unchanged = local_ranges.can_extend(path, false);
         let tab = &mut self.documents[document_ix];
         tab.search_revision += 1;
         let revision = tab.search_revision;
@@ -1810,7 +1816,7 @@ impl Workspace {
                                 &global.query,
                                 global.matcher.as_ref(),
                                 &background_cancellation,
-                                range,
+                                global_range,
                             )?;
                             global.document = document.clone();
                             Ok(global)

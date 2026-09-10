@@ -600,26 +600,6 @@ fn persisted_all_open_search_restores_an_unopened_source() {
 }
 
 #[test]
-fn persisted_search_restore_prioritizes_active_scope_then_restores_the_other_scope() {
-    assert_eq!(
-        next_persisted_search_restore_scope(SearchScope::Directory, true, true),
-        Some(SearchScope::Directory)
-    );
-    assert_eq!(
-        next_persisted_search_restore_scope(SearchScope::Directory, true, false),
-        Some(SearchScope::AllOpenFiles)
-    );
-    assert_eq!(
-        next_persisted_search_restore_scope(SearchScope::CurrentFile, true, true),
-        Some(SearchScope::AllOpenFiles)
-    );
-    assert_eq!(
-        next_persisted_search_restore_scope(SearchScope::AllOpenFiles, false, true),
-        Some(SearchScope::Directory)
-    );
-}
-
-#[test]
 fn directory_group_activation_waits_for_a_complete_target_frame() {
     let pending = Path::new("logs/a.log");
 

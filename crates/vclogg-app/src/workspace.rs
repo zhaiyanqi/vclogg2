@@ -49,7 +49,6 @@ use gpui_component::{
     theme::ThemeMode,
     v_flex,
 };
-use rayon::prelude::{IntoParallelIterator as _, ParallelIterator as _};
 use vclogg_core::{
     CompressedRows, DocumentRefreshKind, LinePreviewReader, LineReader, LogDocument,
     PendingIndexCacheWrite, RefreshValidation, SearchCancellation, SearchMatcher, SearchQuery,
@@ -132,8 +131,7 @@ use crate::{
         CloudController, GlobalSearchDocumentResult, GlobalSearchResults, GlobalSearchState,
         PersistenceController, QuickFindBoundary, QuickFindDirection, QuickFindMatch,
         QuickFindSource, QuickFindSourceVersion, QuickFindState, QuickFindTarget, ResultMode,
-        RowViewportAnchor, SearchController, SearchScope, SearchSessionState, SearchTarget,
-        ViewportAnchor,
+        RowViewportAnchor, SearchScope, SearchSessionState, ViewportAnchor,
     },
 };
 
@@ -302,24 +300,6 @@ fn should_defer_directory_group_activation(
 ) -> bool {
     load_state != DocumentLoadState::Ready
         && pending_path.is_some_and(|pending_path| paths_match(pending_path, candidate_path))
-}
-
-fn next_persisted_search_restore_scope(
-    active_scope: SearchScope,
-    has_all_open: bool,
-    has_directory: bool,
-) -> Option<SearchScope> {
-    [
-        active_scope,
-        SearchScope::AllOpenFiles,
-        SearchScope::Directory,
-    ]
-    .into_iter()
-    .find(|scope| match scope {
-        SearchScope::AllOpenFiles => has_all_open,
-        SearchScope::Directory => has_directory,
-        SearchScope::CurrentFile => false,
-    })
 }
 
 #[derive(Default)]
@@ -1280,7 +1260,6 @@ impl DocumentTab {
 enum Activity {
     Ready,
     Opening,
-    Searching,
     Error,
 }
 
@@ -1619,14 +1598,6 @@ fn should_defer_search_result_jump(load_state: Option<DocumentLoadState>) -> boo
     load_state != Some(DocumentLoadState::Ready)
 }
 
-struct CompletedGlobalSearch {
-    scope: SearchScope,
-    query: SearchQuery,
-    results: GlobalSearchResults,
-    matcher: Option<SearchMatcher>,
-    preserve_viewport: bool,
-}
-
 pub struct Workspace {
     primary_window: bool,
     focus_handle: FocusHandle,
@@ -1645,6 +1616,7 @@ pub struct Workspace {
     row_tags: row_tags::TagInteractionState,
     global_search: GlobalSearchState,
     search_ranges: search_limits::FileSearchRanges,
+    search_tabs: search_tabs::SearchTabs,
     global_table: Entity<VirtualLogListState<GlobalSearchTableDelegate, LogRowKey>>,
     log_viewer: SharedDisplayState,
     search_results_viewer: SharedDisplayState,
@@ -1682,7 +1654,6 @@ pub struct Workspace {
     open_task: Option<Task<()>>,
     file_refresh_task: Option<FileRefreshTask>,
     pending_external_paths: Vec<PathBuf>,
-    searches: SearchController,
     result_export_task: Option<Task<()>>,
     result_export_operation: Option<ResultExportOperation>,
     line_copy_task: Option<Task<()>>,
@@ -1750,6 +1721,9 @@ mod result_export_flow;
 mod row_tags;
 mod search_limits;
 mod search_orchestration;
+mod search_tab_tasks;
+mod search_tab_ui;
+mod search_tabs;
 mod tab_lifecycle;
 mod view_state;
 mod viewport_orchestration;
@@ -1847,6 +1821,9 @@ impl Workspace {
                         InputEvent::Change => {
                             this.reset_search_history_navigation();
                             this.refresh_search_autocomplete(cx);
+                            if !this.search_tabs.syncing {
+                                this.persist_search_tabs(window, cx);
+                            }
                         }
                         InputEvent::PressEnter { .. }
                             if !this.accept_active_search_suggestion(window, cx) =>
@@ -2260,6 +2237,7 @@ impl Workspace {
             row_tags: row_tags::TagInteractionState::default(),
             global_search: GlobalSearchState::new(global_result_mode_select),
             search_ranges: search_limits::FileSearchRanges::default(),
+            search_tabs: search_tabs::SearchTabs::new(cx),
             global_table,
             log_viewer,
             search_results_viewer,
@@ -2297,7 +2275,6 @@ impl Workspace {
             open_task: None,
             file_refresh_task: None,
             pending_external_paths: Vec::new(),
-            searches: SearchController::default(),
             result_export_task: None,
             result_export_operation: None,
             line_copy_task: None,

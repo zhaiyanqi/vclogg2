@@ -1413,6 +1413,19 @@ impl LogTableDelegate {
             .selected_source_rows(selection.selected_ranges())
     }
 
+    pub(crate) fn restore_search_tab_selection(
+        &mut self,
+        rows: CompressedRows,
+        active: Option<usize>,
+    ) {
+        self.interaction.text_selections.clear();
+        let active = active.map(|source_row| LogRowKey::Row {
+            document_id: self.source.document_id,
+            source_row,
+        });
+        self.restore_stable_interaction_rows(rows, active, active, false);
+    }
+
     pub fn selected_rows_count(&self) -> usize {
         self.interaction
             .row_selection

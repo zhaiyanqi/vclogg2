@@ -1057,8 +1057,10 @@ impl Workspace {
     pub(super) fn apply_global_search_options(&mut self, case_sensitive: bool, regex: bool) {
         self.app_settings.default_case_sensitive = case_sensitive;
         self.app_settings.default_use_regex = regex;
-        self.case_sensitive = case_sensitive;
-        self.regex = regex;
+        if self.search_tabs.installed.is_none() {
+            self.case_sensitive = case_sensitive;
+            self.regex = regex;
+        }
         self.search_options_modified = true;
     }
 

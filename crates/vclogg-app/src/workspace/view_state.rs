@@ -39,6 +39,10 @@ pub(super) struct FileViewState {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum SearchSessionKey {
+    SearchTab(
+        super::search_tabs::SearchTabOwner,
+        super::search_tabs::SearchTabId,
+    ),
     CurrentFile(u64),
     AllOpenFiles,
     Directory(PathMatchKey),
@@ -72,10 +76,9 @@ impl WorkspaceViewState {
         self.prune_directory_sessions();
     }
 
-    pub(super) fn remember_directory_session(
-        &mut self,
-        mut session: PersistedDirectorySearchSession,
-    ) {
+    // Legacy-session fixtures use this to exercise migration and recency rules.
+    #[cfg(test)]
+    fn remember_directory_session(&mut self, mut session: PersistedDirectorySearchSession) {
         if session.directory.is_empty() {
             return;
         }

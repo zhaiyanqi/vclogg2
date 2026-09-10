@@ -33,6 +33,48 @@ pub(crate) struct PersistedSearchQuery {
     pub text: String,
 }
 
+/// Options and editable text are distinct from the query that produced the installed result.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct SearchTabQuery {
+    pub text: String,
+    pub case_sensitive: bool,
+    pub regex: bool,
+    pub max_results: Option<usize>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct SearchTabRange {
+    pub path: String,
+    pub start: usize,
+    pub end: Option<usize>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct PersistedSearchTab {
+    pub id: u64,
+    pub name: Option<String>,
+    pub draft: SearchTabQuery,
+    pub completed: Option<SearchTabQuery>,
+    pub context: PersistedGlobalSearchContext,
+    pub local: crate::tab_resume::CurrentSearchResumeState,
+    pub directory: PersistedDirectorySearchOptions,
+    pub selected_paths: Vec<String>,
+    pub targets_configured: bool,
+    pub ranges: Vec<SearchTabRange>,
+    pub submitted: Option<SearchTabQuery>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct PersistedSearchTabGroup {
+    pub active: u64,
+    pub next_id: u64,
+    pub tabs: Vec<PersistedSearchTab>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct PersistedRowRange {
@@ -203,6 +245,8 @@ pub(crate) struct WorkspaceSearchState {
     pub directory_options: PersistedDirectorySearchOptions,
     pub active_directory: Option<String>,
     pub directories: Vec<PersistedDirectorySearchSession>,
+    pub all_open_tabs: Option<PersistedSearchTabGroup>,
+    pub directory_tabs: Option<PersistedSearchTabGroup>,
 }
 
 impl Default for WorkspaceSearchState {
@@ -215,6 +259,8 @@ impl Default for WorkspaceSearchState {
             directory_options: PersistedDirectorySearchOptions::default(),
             active_directory: None,
             directories: Vec::new(),
+            all_open_tabs: None,
+            directory_tabs: None,
         }
     }
 }

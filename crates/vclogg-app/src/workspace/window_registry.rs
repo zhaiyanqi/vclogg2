@@ -144,7 +144,7 @@ impl Workspace {
                 self.open_task.is_some()
                     || self.file_refresh_task.is_some()
                     || self.row_tag_interaction_active()
-                    || self.searches.is_active(),
+                    || self.search_tabs.busy(),
             );
         }
     }
@@ -165,7 +165,7 @@ impl Workspace {
                         || this.open_task.is_some()
                         || this.file_refresh_task.is_some()
                         || this.row_tag_interaction_active()
-                        || this.searches.is_active()
+                        || this.search_tabs.busy()
                     {
                         return None;
                     }
@@ -210,7 +210,7 @@ impl Workspace {
                         }
                     }
                     Ok(true) => {
-                        let started = !this.searches.is_active()
+                        let started = !this.search_tabs.busy()
                             && this.reload_document(
                                 document_id,
                                 ReloadStrategy::ExtendAppend,

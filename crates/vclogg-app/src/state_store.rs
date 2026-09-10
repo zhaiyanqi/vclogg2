@@ -536,10 +536,6 @@ impl StateStore {
         self.repository.global_search_preferences()
     }
 
-    pub fn save_global_search_preferences(&self, preferences: &[(PathBuf, bool)]) -> Result<()> {
-        self.repository.save_global_search_preferences(preferences)
-    }
-
     pub fn load_search_history(&self) -> Result<Vec<String>> {
         self.repository
             .load_search_history()
@@ -1154,6 +1150,7 @@ mod session_load_tests {
             ])
             .expect("应能保存非 UTF-8 路径会话");
         store
+            .repository
             .save_global_search_preferences(&[(first.clone(), true), (second.clone(), false)])
             .expect("应能保存非 UTF-8 路径搜索偏好");
         drop(store);

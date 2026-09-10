@@ -3368,10 +3368,14 @@ impl Workspace {
 
         StatusBar::new()
             .h(px(30.))
+            .py_0()
+            .border_t_0()
             .px(px(12.))
             .gap(px(8.))
             .text_size(px(11.))
             .bg(ui_theme::footer_material(&ui_theme::palette(cx)))
+            .left(self.render_add_search_tab(cx))
+            .child(self.render_search_tabs(cx))
             .right(
                 h_flex()
                     .gap_2()

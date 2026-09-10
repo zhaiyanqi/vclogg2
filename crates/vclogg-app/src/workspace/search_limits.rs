@@ -1,10 +1,11 @@
 use super::*;
 
-/// One range per file, shared by the three search scopes in this workspace.
+/// One range per file in a search tab. The workspace holds only the installed tab's ranges.
 /// Completed ranges only track whether an append may reuse the installed results.
 #[derive(Clone, Default)]
 pub(super) struct FileSearchRanges {
     limits: BTreeMap<PathMatchKey, SearchRange>,
+    paths: BTreeMap<PathMatchKey, PathBuf>,
     local_results: BTreeMap<PathMatchKey, SearchRange>,
     global_results: BTreeMap<PathMatchKey, SearchRange>,
 }
@@ -12,6 +13,34 @@ pub(super) struct FileSearchRanges {
 impl FileSearchRanges {
     pub(super) fn set(&mut self, path: &Path, range: SearchRange) {
         self.limits.insert(path_match_key(path), range);
+        self.paths.insert(path_match_key(path), path.to_path_buf());
+    }
+
+    pub(super) fn persisted(&self) -> Vec<crate::search_context::SearchTabRange> {
+        self.paths
+            .iter()
+            .filter_map(|(key, path)| {
+                self.limits
+                    .get(key)
+                    .map(|range| crate::search_context::SearchTabRange {
+                        path: crate::path_identity::encode_persisted_path(path),
+                        start: range.start(),
+                        end: range.end(),
+                    })
+            })
+            .collect()
+    }
+
+    pub(super) fn restored(ranges: &[crate::search_context::SearchTabRange]) -> Self {
+        let mut state = Self::default();
+        for range in ranges {
+            let mut value = SearchRange::default().with_start(range.start);
+            if let Some(end) = range.end {
+                value = value.with_end(end);
+            }
+            state.set(&decode_persisted_path(&range.path), value);
+        }
+        state
     }
 
     pub(super) fn get(&self, path: &Path) -> SearchRange {
@@ -93,6 +122,7 @@ impl Workspace {
         let Some((path, row)) = workspace.read(cx).search_limit_target(region, cx) else {
             return menu;
         };
+        let search_tab = workspace.read(cx).active_search_tab_key();
         let range = workspace.read(cx).search_ranges.get(&path);
         let loading = workspace.read(cx).documents.iter().any(|tab| {
             paths_match(tab.document.path(), &path) && tab.load_state != DocumentLoadState::Ready
@@ -133,7 +163,9 @@ impl Workspace {
             let path = path.clone();
             menu = menu.item(PopupMenuItem::new(label).disabled(disabled).on_click(
                 window.listener_for(&workspace, move |this, _, window, cx| {
-                    this.set_search_boundary(&path, row, boundary, window, cx);
+                    if this.active_search_tab_key() == search_tab {
+                        this.set_search_boundary(&path, row, boundary, window, cx);
+                    }
                 }),
             ));
         }
@@ -185,6 +217,7 @@ impl Workspace {
             )
             .to_string()
         };
+        self.persist_search_tabs(window, cx);
         window.notify_message(message, cx);
         cx.notify();
     }
