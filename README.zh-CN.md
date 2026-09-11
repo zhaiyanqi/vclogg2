@@ -37,6 +37,8 @@ VCLogg2（VCLogg）是免费开源的大文件日志查看器（log viewer），
 
 [源码构建指南](https://github.com/zhaiyanqi/vclogg2/wiki/Building)提供 Rust 与平台依赖、完整环境配置、Debug/Release 命令和验证说明。构建与打包脚本统一保留在 `scripts/`，使用仓库中的 `Cargo.lock`。
 
+可选的云端过滤器服务端位于 [`server/`](server/README.md)。标签发布会附带 Windows/Linux 服务端包；本地通过 `scripts/package-server-release.sh` 或 `scripts/package-server-release.ps1` 打包。
+
 ## 文档与贡献
 
 详细文档统一维护在 [GitHub Wiki](https://github.com/zhaiyanqi/vclogg2/wiki)。

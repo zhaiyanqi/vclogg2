@@ -1,0 +1,41 @@
+# HTTP 监听地址与 SQLite 数据目录。
+listen: 127.0.0.1:8787
+data_dir: ./data
+
+# 仅当所有请求都必须经过可信 TLS 反向代理时启用。
+trusted_proxy: false
+
+# 两代客户端共用后台，但使用并列且隔离的更新目录。
+updates:
+  enabled: true
+  # VCLogg：latest.yml、NSIS 安装包和 .blockmap。
+  directory: ./data/updates
+  # VCLogg2：latest.json、便携 ZIP 和 .blockmap.json。
+  vclogg2_directory: ./data/updates-vclogg2
+
+# 注册与未登录版本查询使用 Ed25519 签名；授权后使用 Cookie。
+client_auth:
+  enabled: true
+  # 标准发行版默认接受随 server 二进制内置的官方客户端公钥。
+  # 严格环境可关闭，并只使用下方 public_keys 中的自定义公钥。
+  accept_bundled_public_keys: true
+  max_clock_skew_seconds: 300
+  nonce_ttl_seconds: 600
+  session_ttl_hours: 720
+  max_sessions_per_identity: 5
+  public_keys: []
+  # 使用 vclogg-server client-key generate 生成密钥对。
+  # 将上面的空列表替换为公钥；私钥只能在构建 Rust 客户端时注入：
+  # public_keys:
+  #   - id: production-v1
+  #     public_key: PASTE_THE_GENERATED_PUBLIC_KEY
+
+# 每个身份的上传限制。更新现有过滤器不增加过滤器数量，
+# 但当前版本的内容仍计入存储字节数。
+uploads:
+  window_seconds: 60
+  max_requests_per_window: 10
+  max_filters_per_user: 1000
+  max_bytes_per_user: 10485760
+  max_items_per_request: 100
+  max_request_body_bytes: 524288

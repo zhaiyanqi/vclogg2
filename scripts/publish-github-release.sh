@@ -11,7 +11,7 @@ tag_name=""
 print_usage() {
   echo "Usage: ./scripts/publish-github-release.sh <TAG> [--remote NAME] [--yes]"
   echo
-  echo "Validate and push an existing v<semver> tag; GitHub Actions publishes the Release."
+  echo "Validate and push an existing v<semver> tag; GitHub Actions publishes desktop and server packages."
 }
 
 while (($# > 0)); do
@@ -163,4 +163,4 @@ if ! git push "$remote_name" "refs/tags/$tag_name"; then
   exit 1
 fi
 
-echo "Pushed $tag_name. GitHub Actions will build all platforms and publish the Release."
+echo "Pushed $tag_name. GitHub Actions will build desktop and server packages and publish the Release."

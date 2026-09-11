@@ -1,0 +1,9 @@
+<script setup lang="ts">
+import { reactive, ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { api, jsonBody } from '../api'
+import { useSessionStore } from '../store'
+const session=useSessionStore(),saving=ref(false),form=reactive({currentPassword:'',newPassword:'',confirmPassword:''})
+async function save(){if(form.newPassword!==form.confirmPassword){ElMessage.warning('两次输入的新密码不一致');return}saving.value=true;try{await api('/admin/api/password',{method:'PUT',body:jsonBody({currentPassword:form.currentPassword,newPassword:form.newPassword})});Object.assign(form,{currentPassword:'',newPassword:'',confirmPassword:''});ElMessage.success('密码已修改，其他登录会话已撤销')}finally{saving.value=false}}
+</script>
+<template><div class="page-stack"><div class="page-title-row"><div><h1>账户安全</h1><p>管理当前管理员的登录密码与会话安全。</p></div></div><section class="panel"><header class="panel-header"><div><h2>{{session.session?.username}}</h2><span class="cell-sub">当前管理员账户</span></div><el-tag :type="session.session?.superAdmin?'danger':'info'">{{session.session?.superAdmin?'超级管理员':`${session.session?.roleIds.length||0} 个角色`}}</el-tag></header><div class="panel-body"><el-form label-position="top" style="max-width:520px"><el-form-item label="当前密码"><el-input v-model="form.currentPassword" type="password" show-password autocomplete="current-password"/></el-form-item><el-form-item label="新密码"><el-input v-model="form.newPassword" type="password" show-password autocomplete="new-password"/><span class="cell-sub">至少 10 个字符</span></el-form-item><el-form-item label="确认新密码"><el-input v-model="form.confirmPassword" type="password" show-password autocomplete="new-password"/></el-form-item><el-button type="primary" :loading="saving" :disabled="!form.currentPassword||form.newPassword.length<10||!form.confirmPassword" @click="save">修改密码</el-button></el-form></div></section></div></template>

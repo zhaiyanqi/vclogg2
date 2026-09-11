@@ -37,6 +37,8 @@ See [installation](https://github.com/zhaiyanqi/vclogg2/wiki/Installation) for d
 
 See the [source build guide](https://github.com/zhaiyanqi/vclogg2/wiki/Building) for Rust and platform prerequisites, environment setup, Debug/Release commands, and validation. Build and packaging scripts are maintained in `scripts/` and use the committed `Cargo.lock`.
 
+The optional cloud filter server lives in [`server/`](server/README.md). Its Windows/Linux packages are included in tagged releases; local packaging uses `scripts/package-server-release.sh` or `scripts/package-server-release.ps1`.
+
 ## Documentation & contributing
 
 Detailed documentation is maintained in the [GitHub Wiki](https://github.com/zhaiyanqi/vclogg2/wiki), primarily in Chinese.

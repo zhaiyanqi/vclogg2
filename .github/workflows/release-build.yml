@@ -4,6 +4,15 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      component:
+        description: Packages to build (manual runs upload artifacts only)
+        type: choice
+        default: all
+        options:
+          - all
+          - desktop
+          - server
 
 permissions:
   contents: read
@@ -20,6 +29,7 @@ env:
 jobs:
   windows:
     name: Windows x64
+    if: github.event_name != 'workflow_dispatch' || inputs.component != 'server'
     runs-on: windows-2022
     timeout-minutes: 90
     env:
@@ -226,6 +236,7 @@ jobs:
 
   macos:
     name: macOS AArch64
+    if: github.event_name != 'workflow_dispatch' || inputs.component != 'server'
     runs-on: macos-15
     timeout-minutes: 90
 
@@ -257,6 +268,7 @@ jobs:
 
   linux:
     name: Linux x86_64
+    if: github.event_name != 'workflow_dispatch' || inputs.component != 'server'
     runs-on: ubuntu-22.04
     timeout-minutes: 90
 
@@ -304,9 +316,73 @@ jobs:
           compression-level: 0
           retention-days: 14
 
+  server:
+    name: Server Windows/Linux x64
+    if: github.event_name != 'workflow_dispatch' || inputs.component != 'desktop'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install pinned pnpm
+        run: npm install --global "$(node -p "require('./server/package.json').packageManager")"
+
+      - name: Check Go formatting
+        run: |
+          unformatted="$(gofmt -l server/cmd server/internal)"
+          if [[ -n "$unformatted" ]]; then
+            printf '%s\n' "$unformatted"
+            exit 1
+          fi
+
+      - name: Check and test the server
+        run: |
+          go -C server vet ./...
+          go -C server test ./...
+
+      - name: Package Windows and Linux servers
+        env:
+          VCLOGG_CLIENT_KEY_ID: ${{ vars.VCLOGG_CLIENT_KEY_ID }}
+          VCLOGG_CLIENT_PUBLIC_KEY: ${{ vars.VCLOGG_CLIENT_PUBLIC_KEY }}
+        run: ./scripts/package-server-release.sh
+
+      - name: Check embedded admin assets match their sources
+        run: |
+          changes="$(git status --porcelain --untracked-files=all -- server/internal/app/admin)"
+          if [[ -n "$changes" ]]; then
+            printf '%s\n' "$changes"
+            echo 'Rebuild and commit the embedded administrator console assets.' >&2
+            exit 1
+          fi
+
+      - name: Upload server packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: vclogg-server-windows-linux-amd64
+          path: |
+            dist/server/vclogg-server-*-windows-amd64.zip
+            dist/server/vclogg-server-*-linux-amd64.tar.gz
+            dist/server/vclogg-server-*-SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
   release:
     name: Publish GitHub Release
-    needs: [windows, macos, linux]
+    needs: [windows, macos, linux, server]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-22.04
     timeout-minutes: 10
@@ -344,6 +420,12 @@ jobs:
           name: vclogg2-linux-x86_64
           path: release-assets/linux-x86_64
 
+      - name: Download server packages
+        uses: actions/download-artifact@v8
+        with:
+          name: vclogg-server-windows-linux-amd64
+          path: release-assets/server
+
       - name: Validate GitHub Release packages
         shell: bash
         run: |
@@ -353,10 +435,15 @@ jobs:
             "release-assets/windows-x86_64/vclogg-${version}-windows-x86_64-setup.exe"
             "release-assets/macos-aarch64/vclogg2-${version}-macos-aarch64.dmg"
             "release-assets/linux-x86_64/vclogg2-${version}-linux-x86_64.tar.gz"
+            "release-assets/server/vclogg-server-${version}-windows-amd64.zip"
+            "release-assets/server/vclogg-server-${version}-linux-amd64.tar.gz"
+            "release-assets/server/vclogg-server-${version}-SHA256SUMS.txt"
           )
           for package in "${packages[@]}"; do
             test -s "$package"
           done
+          cd release-assets/server
+          sha256sum --check "vclogg-server-${version}-SHA256SUMS.txt"
 
       - name: Generate release notes from commits
         shell: bash
@@ -404,4 +491,7 @@ jobs:
             release-assets/windows-x86_64/vclogg-*-windows-x86_64-setup.exe \
             release-assets/macos-aarch64/vclogg2-*-macos-aarch64.dmg \
             release-assets/linux-x86_64/vclogg2-*-linux-x86_64.tar.gz \
+            release-assets/server/vclogg-server-*-windows-amd64.zip \
+            release-assets/server/vclogg-server-*-linux-amd64.tar.gz \
+            release-assets/server/vclogg-server-*-SHA256SUMS.txt \
             "${release_options[@]}"

@@ -1,3 +1,5 @@
+mod cloud_edit;
+
 use chrono::{DateTime, Local};
 use gpui_base::Button as BaseButton;
 use std::{
@@ -516,6 +518,9 @@ impl PredefinedFiltersDialog {
     }
 
     fn add_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.secondary_route.is_some() {
+            return;
+        }
         let existing = self
             .rows
             .iter()
@@ -548,6 +553,9 @@ impl PredefinedFiltersDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.secondary_route.is_some() {
+            return;
+        }
         self.local_selected = Some(id);
         self.secondary_route = Some(FilterSecondaryRoute::LocalDetail(id));
         let focus = self
@@ -599,14 +607,18 @@ impl PredefinedFiltersDialog {
     ) {
         let owner = cx.entity();
         let detail_surface = cx.new(|cx| PredefinedFilterSecondarySurface::new(owner.clone(), cx));
-        let dialog_size = predefined_filters_dialog_size(window);
-        let margin_top = window.rem_size() * 2.;
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, window, _| {
+            let dialog_size = predefined_filters_dialog_size(window);
+            // gpui-component 38b2f65 adds 16 px for this second dialog layer.
+            // Cancel that offset so its bounds coincide with the parent dialog.
+            let margin_top =
+                ((window.viewport_size().height - dialog_size.height) / 2.).max(px(0.)) - px(16.);
             let content = detail_surface.clone();
             let owner = owner.clone();
             dialog
                 .w(dialog_size.width)
                 .h(dialog_size.height)
+                .pb_0()
                 .margin_top(margin_top)
                 .title(title.clone())
                 .close_button(false)
@@ -1474,6 +1486,9 @@ impl PredefinedFiltersDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.secondary_route.is_some() {
+            return;
+        }
         if !self.open_cloud_share(cx) {
             return;
         }
@@ -4105,7 +4120,7 @@ impl PredefinedFiltersDialog {
             .cloud_connection
             .as_ref()
             .is_some_and(CloudConnectionProfile::supports_uuid_filter_branches);
-        let editable = false;
+        let editable = detail.can_edit && online && protocol_supported && !busy;
         let local_filters = self.draft_filters(cx);
         let server_url = self
             .cloud_connection
@@ -4855,6 +4870,18 @@ impl PredefinedFiltersDialog {
                                     )
                                 }),
                         )
+                        .when(detail.can_edit && online, |footer| {
+                            footer.child(
+                                Button::new("cloud-detail-save")
+                                    .large()
+                                    .outline()
+                                    .label(crate::tr!("保存云端修改", "Save cloud changes"))
+                                    .disabled(!editable || !self.cloud_detail_has_changes(detail, cx))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.save_cloud_detail(window, cx)
+                                    })),
+                            )
+                        })
                         .child(crate::dialog_focus::dialog_cancel_action(
                             "cloud-detail-finish-action",
                             Button::new("cloud-detail-finish")

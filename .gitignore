@@ -4,6 +4,15 @@ debug/
 target/
 dist/
 
+# Server dependencies, build caches and runtime configuration
+/server/node_modules/
+/server/admin-web/node_modules/
+/server/tmp/
+/server/release/
+/server/data/
+/server/config.yaml
+/server/config.yml
+
 # Local release credentials and environment overrides
 .vclogg-release/
 .env
