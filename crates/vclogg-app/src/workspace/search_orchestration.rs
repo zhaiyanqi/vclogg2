@@ -751,6 +751,12 @@ impl Workspace {
     }
 
     pub(super) fn refresh_search_autocomplete(&mut self, cx: &mut Context<Self>) {
+        // Only input changes open automatic matches. Background history/filter
+        // updates may refresh an open list, but must not reopen a closed one.
+        if self.search_autocomplete_mode != SearchAutocompleteMode::Matches {
+            cx.notify();
+            return;
+        }
         let query = self.query.read(cx).value().to_string();
         let has_input = !search_autocomplete_needle(&query).is_empty();
         let has_suggestions = has_input

@@ -1821,6 +1821,12 @@ impl Workspace {
                     match event {
                         InputEvent::Change => {
                             this.reset_search_history_navigation();
+                            this.search_autocomplete_mode =
+                                if this.query.focus_handle(cx).is_focused(window) {
+                                    SearchAutocompleteMode::Matches
+                                } else {
+                                    SearchAutocompleteMode::Closed
+                                };
                             this.refresh_search_autocomplete(cx);
                             if !this.search_tabs.syncing {
                                 this.persist_search_tabs(window, cx);
@@ -1832,6 +1838,10 @@ impl Workspace {
                             this.start_search(window, cx);
                         }
                         InputEvent::PressEnter { .. } => {}
+                        InputEvent::Blur => {
+                            this.close_search_autocomplete();
+                            cx.notify();
+                        }
                         _ => {}
                     }
                 }),

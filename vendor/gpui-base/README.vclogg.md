@@ -32,4 +32,14 @@ search toolbar dimensions, styling, focus, or keyboard dispatch.
 
 When upgrading the dependency, compare these two paths with the new upstream
 revision. Remove this vendor directory and the Cargo patch once upstream enforces
-the invariant both when producing the target and before painting.
+the invariant both when producing the target and before painting, and includes
+the end-of-text word-selection behavior below.
+
+## Double-click selection at the end of text
+
+`src/input/base/selection.rs` resolves an end-of-text double-click to the last
+character before computing its word range. This lets a double-click in the blank
+area after `log|abc|test|sss` select `sss`. The offset is clipped to a UTF-8
+character boundary, and empty text still produces no selection. Single-click
+caret placement is unchanged. This applies to the shared input editing engine;
+preserve this behavior when upgrading the dependency.
