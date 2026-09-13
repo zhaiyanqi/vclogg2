@@ -1090,11 +1090,15 @@ impl Workspace {
         .map(|tabs| {
             div()
                 .id("document-tab-scroll-wheel")
+                .relative()
                 .w_full()
                 .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
                     this.scroll_document_tabs_from_wheel(event, window, cx);
                 }))
                 .child(tabs)
+                .child(deferred_workspace_overlay(ui_theme::tab_bar_bottom_shadow(
+                    cx,
+                )))
         })
     }
 

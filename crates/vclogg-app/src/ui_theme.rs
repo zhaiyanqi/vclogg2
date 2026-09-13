@@ -1,7 +1,36 @@
 use gpui::{
-    App, Background, Div, Hsla, Styled as _, div, hsla, linear_color_stop, linear_gradient, px, rgb,
+    App, Axis, Background, Div, Hsla, InteractiveElement as _, ParentElement as _, Pixels,
+    Styled as _, div, hsla, linear_color_stop, linear_gradient, px, rems, rgb,
 };
+use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_component::theme::{Theme, ThemeMode, ThemeTokens, try_parse_color};
+
+/// Shared by the log scrollbar's painted track and its reserved layout space.
+pub(crate) const LOG_SCROLLBAR_WIDTH: Pixels = px(12.);
+
+pub(crate) fn persistent_log_scrollbar(scrollbar: Scrollbar, background: Hsla) -> Scrollbar {
+    scrollbar.mode(ScrollbarMode::Always).styles(|styles| {
+        styles
+            .track(|track| track.bg(background).width(LOG_SCROLLBAR_WIDTH))
+            .thumb(|thumb| thumb.width(px(4.)).inset(px(4.)))
+            .thumb_hover(|thumb| thumb.width(px(6.)).inset(px(3.)))
+            .thumb_active(|thumb| thumb.width(px(6.)).inset(px(3.)))
+    })
+}
+
+/// A full-length, muted thumb indicates no horizontal range. No scroll handle is
+/// attached, so wrapped content cannot be moved by clicking or dragging this track.
+pub(crate) fn disabled_horizontal_log_scrollbar(cx: &App) -> Div {
+    div().relative().size_full().occlude().child(
+        div()
+            .absolute()
+            .left(px(4.))
+            .right(px(4.))
+            .top(px(4.))
+            .h(px(4.))
+            .bg(palette(cx).scrollbar_thumb.opacity(0.35)),
+    )
+}
 
 /// 界面表面使用叠在环境背景上的半透明材质。GPUI 没有元素级背景模糊，
 /// 因此这里同时保存按
@@ -61,6 +90,7 @@ pub(crate) struct ProductColors {
     pub(crate) info_foreground: Hsla,
     pub(crate) scrollbar_thumb: Hsla,
     pub(crate) scrollbar_thumb_hover: Hsla,
+    pub(crate) content_edge_shadow: Hsla,
 
     // 日志内容配色独立于 gpui-component 语义色，避免主题按钮或危险色的调整
     // 意外改变正文的命中与级别呈现。
@@ -138,6 +168,7 @@ fn product_colors(mode: ThemeMode) -> ProductColors {
             info_foreground: color(0x071522),
             scrollbar_thumb: color(0x526079),
             scrollbar_thumb_hover: color(0x71809b),
+            content_edge_shadow: hsla(0., 0., 0., 0.18),
 
             search_match: color(0x3b6732),
             search_match_foreground: color(0xeff9e8),
@@ -198,6 +229,7 @@ fn product_colors(mode: ThemeMode) -> ProductColors {
             info_foreground: color(0xffffff),
             scrollbar_thumb: color(0xa1a7b3),
             scrollbar_thumb_hover: color(0x717b8e),
+            content_edge_shadow: hsla(0., 0., 0., 0.08),
 
             search_match: color(0xc8efa8),
             search_match_foreground: color(0x10200d),
@@ -435,6 +467,40 @@ pub(crate) fn material_highlight_line(colors: &ProductColors) -> Div {
         .right_0()
         .h(px(1.))
         .bg(colors.material_highlight)
+}
+
+/// Paint only the content-facing edge of a scrollbar gutter, without taking layout space
+/// or installing pointer handlers. The gutter owns positioning and visibility.
+pub(crate) fn log_scrollbar_edge_shadow(axis: Axis, cx: &App) -> Div {
+    let color = palette(cx).content_edge_shadow;
+    let depth = rems(0.25);
+    let (edge, angle) = match axis {
+        Axis::Horizontal => (div().left_0().right_0().top(-depth).h(depth), 180.),
+        Axis::Vertical => (div().top_0().bottom_0().left(-depth).w(depth), 90.),
+    };
+    edge.absolute().bg(linear_gradient(
+        angle,
+        linear_color_stop(color.opacity(0.), 0.),
+        linear_color_stop(color, 1.),
+    ))
+}
+
+/// Extend the tab bar's bottom edge into the content below. The caller defers painting
+/// so the following content surface cannot cover this non-interactive shadow.
+pub(crate) fn tab_bar_bottom_shadow(cx: &App) -> Div {
+    let color = palette(cx).content_edge_shadow;
+    let depth = rems(0.25);
+    div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .bottom(-depth)
+        .h(depth)
+        .bg(linear_gradient(
+            180.,
+            linear_color_stop(color, 0.),
+            linear_color_stop(color.opacity(0.), 1.),
+        ))
 }
 
 /// Fade excluded text into its actual background in both light and dark themes.

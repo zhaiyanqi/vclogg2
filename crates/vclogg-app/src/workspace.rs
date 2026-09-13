@@ -26,8 +26,7 @@ use gpui::{
     prelude::FluentBuilder as _, px, relative, rems, size, svg, uniform_list,
 };
 use gpui_base::{
-    GlobalState, POPUP_PRIORITY, Scrollbar, ScrollbarHandle, ScrollbarMode, TextSelection,
-    TextSelectionScopeId,
+    GlobalState, POPUP_PRIORITY, Scrollbar, ScrollbarHandle, TextSelection, TextSelectionScopeId,
     actions::{SelectDown, SelectFirst, SelectLast, SelectPageDown, SelectPageUp, SelectUp},
 };
 use gpui_component::{
@@ -184,12 +183,6 @@ fn management_dialog_geometry(window: &Window) -> (Size<Pixels>, Pixels) {
     let dialog_size = large_dialog_size(window);
     let margin_top = centered_dialog_margin_top(window.viewport_size().height, dialog_size.height);
     (dialog_size, margin_top)
-}
-
-fn persistent_log_scrollbar(scrollbar: Scrollbar, background: gpui::Hsla) -> Scrollbar {
-    scrollbar
-        .mode(ScrollbarMode::Always)
-        .styles(|styles| styles.track(|track| track.bg(background)))
 }
 
 struct PreparedDocument {

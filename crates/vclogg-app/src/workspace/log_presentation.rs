@@ -989,12 +989,6 @@ impl Workspace {
                 .child(delegate.empty_message())
                 .into_any_element();
         }
-        let fixed_columns_width = line_marker_column_width()
-            + if delegate.show_line_numbers() {
-                px(delegate.line_number_width() as f32)
-            } else {
-                px(0.)
-            };
         let content_width = if (if region == WrappedRegion::Results {
             &tab.result_viewport
         } else {
@@ -1057,7 +1051,7 @@ impl Workspace {
                             },
                         )
                         .size_full()
-                        .when(!word_wrap, |list| list.pb(Scrollbar::width())),
+                        .pb(ui_theme::LOG_SCROLLBAR_WIDTH),
                     ))
                     .child(
                         div()
@@ -1065,10 +1059,14 @@ impl Workspace {
                             .top_0()
                             .right_0()
                             .bottom_0()
-                            .w(Scrollbar::width())
+                            .w(ui_theme::LOG_SCROLLBAR_WIDTH)
                             .bg(scrollbar_background)
+                            .child(ui_theme::log_scrollbar_edge_shadow(
+                                gpui::Axis::Vertical,
+                                cx,
+                            ))
                             .child(
-                                persistent_log_scrollbar(
+                                ui_theme::persistent_log_scrollbar(
                                     Scrollbar::vertical(&logical_scroll)
                                         .id(format!(
                                             "wrapped-log-vertical-scrollbar-{document_id}-{}",
@@ -1081,17 +1079,24 @@ impl Workspace {
                             ),
                     ),
             )
-            .when(!word_wrap, |container| {
-                container.child(
-                    div()
-                        .absolute()
-                        .left(fixed_columns_width)
-                        .right(Scrollbar::width())
-                        .bottom_0()
-                        .h(Scrollbar::width())
-                        .bg(scrollbar_background)
-                        .child(
-                            persistent_log_scrollbar(
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right(ui_theme::LOG_SCROLLBAR_WIDTH)
+                    .bottom_0()
+                    .h(ui_theme::LOG_SCROLLBAR_WIDTH)
+                    .bg(scrollbar_background)
+                    .child(ui_theme::log_scrollbar_edge_shadow(
+                        gpui::Axis::Horizontal,
+                        cx,
+                    ))
+                    .when(word_wrap, |track| {
+                        track.child(ui_theme::disabled_horizontal_log_scrollbar(cx))
+                    })
+                    .when(!word_wrap, |track| {
+                        track.child(
+                            ui_theme::persistent_log_scrollbar(
                                 Scrollbar::horizontal(&logical_scroll)
                                     .id(format!(
                                         "log-horizontal-scrollbar-{document_id}-{}",
@@ -1101,9 +1106,9 @@ impl Workspace {
                                 scrollbar_background,
                             )
                             .max_fps(60),
-                        ),
-                )
-            });
+                        )
+                    }),
+            );
         crate::ui_performance::element(
             "WrappedLogTable::request_layout",
             "WrappedLogTable::prepaint",
@@ -2795,8 +2800,6 @@ impl Workspace {
                 .child(crate::tr!("尚未执行全局搜索", "Global search has not run"))
                 .into_any_element();
         }
-        let fixed_columns_width =
-            line_marker_column_width() + px(delegate.line_number_width() as f32);
         let content_width = if self.global_viewport.is_wrapped() {
             px(0.)
         } else {
@@ -2840,9 +2843,7 @@ impl Workspace {
                             },
                         )
                         .size_full()
-                        .when(!self.global_viewport.is_wrapped(), |list| {
-                            list.pb(Scrollbar::width())
-                        }),
+                        .pb(ui_theme::LOG_SCROLLBAR_WIDTH),
                     )
                     .child(
                         div()
@@ -2850,10 +2851,14 @@ impl Workspace {
                             .top_0()
                             .right_0()
                             .bottom_0()
-                            .w(Scrollbar::width())
+                            .w(ui_theme::LOG_SCROLLBAR_WIDTH)
                             .bg(scrollbar_background)
+                            .child(ui_theme::log_scrollbar_edge_shadow(
+                                gpui::Axis::Vertical,
+                                cx,
+                            ))
                             .child(
-                                persistent_log_scrollbar(
+                                ui_theme::persistent_log_scrollbar(
                                     Scrollbar::vertical(&logical_scroll)
                                         .id("wrapped-global-results-vertical-scrollbar")
                                         .viewport_from_layout(),
@@ -2863,26 +2868,33 @@ impl Workspace {
                             ),
                     ),
             )
-            .when(!self.global_viewport.is_wrapped(), |container| {
-                container.child(
-                    div()
-                        .absolute()
-                        .left(fixed_columns_width)
-                        .right(Scrollbar::width())
-                        .bottom_0()
-                        .h(Scrollbar::width())
-                        .bg(scrollbar_background)
-                        .child(
-                            persistent_log_scrollbar(
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right(ui_theme::LOG_SCROLLBAR_WIDTH)
+                    .bottom_0()
+                    .h(ui_theme::LOG_SCROLLBAR_WIDTH)
+                    .bg(scrollbar_background)
+                    .child(ui_theme::log_scrollbar_edge_shadow(
+                        gpui::Axis::Horizontal,
+                        cx,
+                    ))
+                    .when(self.global_viewport.is_wrapped(), |track| {
+                        track.child(ui_theme::disabled_horizontal_log_scrollbar(cx))
+                    })
+                    .when(!self.global_viewport.is_wrapped(), |track| {
+                        track.child(
+                            ui_theme::persistent_log_scrollbar(
                                 Scrollbar::horizontal(&logical_scroll)
                                     .id("global-results-horizontal-scrollbar")
                                     .viewport_from_layout(),
                                 scrollbar_background,
                             )
                             .max_fps(60),
-                        ),
-                )
-            })
+                        )
+                    }),
+            )
             .into_any_element()
     }
 
@@ -3205,7 +3217,7 @@ impl Workspace {
         let search_panel_height = self
             .search_panel_height
             .unwrap_or(cx.theme().font_size * 16.);
-        let scrollbar_overlap = Scrollbar::width() / 3.;
+        let scrollbar_overlap = ui_theme::LOG_SCROLLBAR_WIDTH / 3.;
         let resize_bounds = self.search_panel_resize_bounds.clone();
         let search_panel_resize_hit_area = div()
             .id("search-panel-resize-hit-area")
