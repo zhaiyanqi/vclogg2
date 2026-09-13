@@ -692,9 +692,11 @@ pub(super) fn prepare_document_in_range(
         } else {
             search_reloaded_document_in_range(
                 &document,
-                &document,
+                PreviousDocumentSearch {
+                    document: &document,
+                    result: &SearchResult::default(),
+                },
                 DocumentRefreshKind::Rebuilt,
-                &SearchResult::default(),
                 &query,
                 matcher.as_ref(),
                 &SearchCancellation::default(),
@@ -806,11 +808,15 @@ pub(super) fn prepare_document_shell(
     }
 }
 
+pub(super) struct PreviousDocumentSearch<'a> {
+    pub(super) document: &'a LogDocument,
+    pub(super) result: &'a SearchResult,
+}
+
 pub(super) fn search_reloaded_document_in_range(
     document: &LogDocument,
-    previous_document: &LogDocument,
+    previous: PreviousDocumentSearch<'_>,
     kind: DocumentRefreshKind,
-    previous_result: &SearchResult,
     query: &SearchQuery,
     matcher: Option<&SearchMatcher>,
     cancellation: &SearchCancellation,
@@ -819,8 +825,8 @@ pub(super) fn search_reloaded_document_in_range(
     let run = match kind {
         DocumentRefreshKind::Appended => search_appended_with_compiled_matcher_in_range(
             document,
-            previous_document.line_count(),
-            previous_result,
+            previous.document.line_count(),
+            previous.result,
             matcher,
             query.max_results,
             cancellation,

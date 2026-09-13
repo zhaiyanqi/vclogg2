@@ -48,11 +48,11 @@ impl SidebarState {
             return;
         }
         let mut structure_changed = false;
-        if let Some(root) = path.ancestors().find(|path| path.parent().is_none()) {
-            if !self.roots.iter().any(|known| known == root) {
-                self.roots.push(root.to_path_buf());
-                structure_changed = true;
-            }
+        if let Some(root) = path.ancestors().find(|path| path.parent().is_none())
+            && !self.roots.iter().any(|known| known == root)
+        {
+            self.roots.push(root.to_path_buf());
+            structure_changed = true;
         }
         for ancestor in path.ancestors().skip(usize::from(!directory)) {
             if !ancestor.as_os_str().is_empty() {
@@ -64,16 +64,15 @@ impl SidebarState {
             && !self.tree_dirty
             && self.hidden_tree_paths() == self.tree_exceptions
             && self.is_showing(SidebarPanelId::Files)
+            && let Some(ix) = self.tree.read(cx).index_of(&id)
         {
-            if let Some(ix) = self.tree.read(cx).index_of(&id) {
-                self.tree.update(cx, |tree, cx| {
-                    tree.set_selected_index(Some(ix), cx);
-                    tree.scroll_to_item(ix, ScrollStrategy::Nearest);
-                });
-                self.tree_reveal_active = false;
-                cx.notify();
-                return;
-            }
+            self.tree.update(cx, |tree, cx| {
+                tree.set_selected_index(Some(ix), cx);
+                tree.scroll_to_item(ix, ScrollStrategy::Nearest);
+            });
+            self.tree_reveal_active = false;
+            cx.notify();
+            return;
         }
         // A new target can expose a previously filtered hidden path.
         self.rebuild_tree(cx);
@@ -125,14 +124,12 @@ impl SidebarState {
                 match result {
                     Ok(Some(mut roots)) => {
                         // Keep explicit roots (notably UNC shares) without enumerating the network.
-                        if let Some(target) = &this.tree_target {
-                            if let Some(root) =
+                        if let Some(target) = &this.tree_target
+                            && let Some(root) =
                                 target.path.ancestors().find(|path| path.parent().is_none())
-                            {
-                                if !roots.iter().any(|known| known == root) {
-                                    roots.push(root.to_path_buf());
-                                }
-                            }
+                            && !roots.iter().any(|known| known == root)
+                        {
+                            roots.push(root.to_path_buf());
                         }
                         for root in &this.roots {
                             if this.expanded.contains(root) && !roots.contains(root) {

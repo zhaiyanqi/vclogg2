@@ -1794,13 +1794,15 @@ impl Workspace {
                     let search_matcher = SearchMatcher::new(&query)?;
                     let search_result = search_reloaded_document_in_range(
                         &document,
-                        &reload_source,
+                        PreviousDocumentSearch {
+                            document: &reload_source,
+                            result: &previous_result,
+                        },
                         if previous_search_complete {
                             refresh_kind
                         } else {
                             DocumentRefreshKind::Rebuilt
                         },
-                        &previous_result,
                         &query,
                         search_matcher.as_ref(),
                         &background_cancellation,
@@ -1817,9 +1819,11 @@ impl Workspace {
                             };
                             global.result = search_reloaded_document_in_range(
                                 &document,
-                                &global.document,
+                                PreviousDocumentSearch {
+                                    document: &global.document,
+                                    result: &global.result,
+                                },
                                 kind,
-                                &global.result,
                                 &global.query,
                                 global.matcher.as_ref(),
                                 &background_cancellation,
