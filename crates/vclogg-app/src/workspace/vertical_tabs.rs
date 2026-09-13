@@ -4,6 +4,12 @@ use super::*;
 const VERTICAL_TAB_HEIGHT: Pixels = px(36.);
 const VERTICAL_TAB_INDICATOR_HEIGHT: Pixels = px(28.);
 
+#[derive(Clone, Copy)]
+enum VerticalTabMenuTarget {
+    Tab(WorkspaceTabId),
+    End,
+}
+
 #[derive(Default)]
 pub(super) struct VerticalTabState {
     scroll: UniformListScrollHandle,
@@ -104,10 +110,6 @@ impl Workspace {
                 .set(Some(self.active_tab_id));
             self.pending_document_tab_reveal.set(None);
         }
-        let has_other_window = cx
-            .global::<WorkspaceWindowRegistry>()
-            .previous_window(window.window_handle())
-            .is_some();
         let layout = self.tab_drop_layout.clone();
         {
             let mut layout = layout.borrow_mut();
@@ -118,6 +120,10 @@ impl Workspace {
             layout.viewport = None;
         }
         let viewport_layout = layout.clone();
+        let menu_target = Rc::new(Cell::new(None));
+        let clicked_target = menu_target.clone();
+        let rendered_tabs = self.tabs.clone();
+        let menu_workspace = cx.entity();
         v_flex()
             .id("vertical-document-tabs")
             .role(gpui::Role::TabList)
@@ -129,6 +135,28 @@ impl Workspace {
             .border_1()
             .border_color(cx.theme().transparent)
             .focus_visible(|style| style.border_color(cx.theme().ring))
+            .on_mouse_down(MouseButton::Right, move |event, _, _| {
+                let layout = layout.borrow();
+                let target = layout
+                    .viewport
+                    .filter(|viewport| viewport.contains(&event.position))
+                    .and_then(|_| {
+                        layout
+                            .tabs
+                            .iter()
+                            .position(|bounds| bounds.contains(&event.position))
+                            .and_then(|ix| rendered_tabs.get(ix).copied())
+                            .map(VerticalTabMenuTarget::Tab)
+                            .or_else(|| {
+                                layout
+                                    .end
+                                    .contains(&event.position)
+                                    .then_some(VerticalTabMenuTarget::End)
+                            })
+                    });
+                // Capture the clicked domain identity before the deferred menu builder runs.
+                clicked_target.set(target);
+            })
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.modifiers.control
                     || event.keystroke.modifiers.platform
@@ -168,12 +196,7 @@ impl Workspace {
                                         if ix == this.tabs.len() {
                                             this.render_vertical_tab_end(cx)
                                         } else {
-                                            this.render_vertical_tab_row(
-                                                ix,
-                                                has_other_window,
-                                                indicator_y,
-                                                cx,
-                                            )
+                                            this.render_vertical_tab_row(ix, indicator_y, cx)
                                         }
                                     })
                                     .collect::<Vec<_>>()
@@ -184,13 +207,65 @@ impl Workspace {
                     )
                     .vertical_scrollbar(&scroll),
             )
+            // UniformList lays out visible rows during prepaint. A row-owned ContextMenu
+            // would change focus after another node has claimed the frame's a11y focus.
+            // Keep the host outside the list so it focuses the menu during root layout.
+            .context_menu(move |menu, window, cx| {
+                Self::build_vertical_tab_menu(
+                    menu,
+                    menu_target.get(),
+                    menu_workspace.clone(),
+                    window,
+                    cx,
+                )
+            })
             .into_any_element()
+    }
+
+    fn build_vertical_tab_menu(
+        menu: PopupMenu,
+        target: Option<VerticalTabMenuTarget>,
+        workspace: Entity<Self>,
+        window: &mut Window,
+        cx: &mut Context<PopupMenu>,
+    ) -> PopupMenu {
+        let tab_id = match target {
+            Some(VerticalTabMenuTarget::Tab(tab_id)) => tab_id,
+            Some(VerticalTabMenuTarget::End) => {
+                return Self::tab_orientation_menu(menu, true, workspace, window);
+            }
+            None => return menu,
+        };
+        let this = workspace.read(cx);
+        let Some(tab_ix) = this.tabs.iter().position(|id| *id == tab_id) else {
+            return menu;
+        };
+        let document_id = tab_id.document_id();
+        let state = TabMenuState {
+            tab_ix,
+            tab_count: this.tabs.len(),
+            can_restore_title: document_id.is_some_and(|id| {
+                this.documents
+                    .iter()
+                    .find(|tab| tab.id == id)
+                    .is_some_and(|tab| tab.file.custom_title.is_some())
+            }),
+            has_other_window: cx
+                .global::<WorkspaceWindowRegistry>()
+                .previous_window(window.window_handle())
+                .is_some(),
+            vertical_tabs: this.vertical_tabs_enabled(cx),
+            vertical: true,
+        };
+        match document_id {
+            Some(id) => Self::build_tab_menu(menu, id, state, workspace, window),
+            None => Self::build_new_tab_menu(menu, tab_id, state, workspace, window),
+        }
     }
 
     fn render_vertical_tab_end(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let tab_count = self.tabs.len();
         let layout = self.tab_drop_layout.clone();
-        let menu_workspace = cx.entity();
         h_flex()
             .id("vertical-document-tab-end-drop")
             .w_full()
@@ -207,9 +282,6 @@ impl Workspace {
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
                 this.reorder_tab(dragged.tab_id, tab_count, window, cx);
             }))
-            .context_menu(move |menu, window, _| {
-                Self::tab_orientation_menu(menu, true, menu_workspace.clone(), window)
-            })
             .child(
                 Button::new("vertical-new-workspace-tab")
                     .small()
@@ -229,7 +301,6 @@ impl Workspace {
     fn render_vertical_tab_row(
         &mut self,
         ix: usize,
-        has_other_window: bool,
         indicator_y: Option<Pixels>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -265,7 +336,7 @@ impl Workspace {
                         .shadow_sm(),
                 )
             })
-            .child(self.render_vertical_tab_shell(ix, has_other_window, cx))
+            .child(self.render_vertical_tab_shell(ix, cx))
             .into_any_element()
     }
 
@@ -380,48 +451,20 @@ impl Workspace {
             )
     }
 
-    fn render_vertical_tab_shell(
-        &self,
-        ix: usize,
-        has_other_window: bool,
-        cx: &mut Context<Self>,
-    ) -> gpui_base::Tab {
+    fn render_vertical_tab_shell(&self, ix: usize, cx: &mut Context<Self>) -> gpui_base::Tab {
         let tab_id = self.tabs[ix];
         let tab_count = self.tabs.len();
-        let workspace = cx.entity();
         let source_workspace = cx.weak_entity();
         let tab_drop_layout = self.tab_drop_layout.clone();
-        let document_id = tab_id.document_id();
         let tab_title = self.workspace_tab_title(tab_id);
-        let can_restore_title = document_id.is_some_and(|document_id| {
-            self.documents
-                .iter()
-                .find(|tab| tab.id == document_id)
-                .is_some_and(|tab| tab.file.custom_title.is_some())
-        });
         let dragged_tab = DraggedTab::new(tab_id, tab_title.clone(), source_workspace.clone());
-        let tab_menu_state = TabMenuState {
-            tab_ix: ix,
-            tab_count,
-            can_restore_title,
-            has_other_window,
-            vertical_tabs: self.vertical_tabs_enabled(cx),
-            vertical: true,
-        };
-        let context_workspace = workspace.clone();
         let tab_layout = tab_drop_layout.clone();
         let selected = self.active_tab_id == tab_id;
-        let (_, context_target_id) = match tab_id {
-            WorkspaceTabId::Document(id) => (
-                ElementId::from(("close-document-tab", id)),
-                ElementId::from(("document-tab-context-target", id)),
-            ),
-            WorkspaceTabId::New(id) => (
-                ElementId::from(("close-new-tab", id)),
-                ElementId::from(("new-tab-context-target", id)),
-            ),
+        let shell_id = match tab_id {
+            WorkspaceTabId::Document(id) => ElementId::from(("document-tab-context-target", id)),
+            WorkspaceTabId::New(id) => ElementId::from(("new-tab-context-target", id)),
         };
-        gpui_base::Tab::new(context_target_id.clone())
+        gpui_base::Tab::new(shell_id)
             .relative()
             .flex()
             .items_center()
@@ -466,31 +509,6 @@ impl Workspace {
                     this.request_close_workspace_tabs(BTreeSet::from([tab_id]), window, cx);
                 }
             }))
-            .child(
-                div()
-                    .id(context_target_id)
-                    .absolute()
-                    .top_0()
-                    .right_0()
-                    .bottom_0()
-                    .left_0()
-                    .context_menu(move |menu, window, _| match document_id {
-                        Some(document_id) => Self::build_tab_menu(
-                            menu,
-                            document_id,
-                            tab_menu_state,
-                            context_workspace.clone(),
-                            window,
-                        ),
-                        None => Self::build_new_tab_menu(
-                            menu,
-                            tab_id,
-                            tab_menu_state,
-                            context_workspace.clone(),
-                            window,
-                        ),
-                    }),
-            )
             .child(self.render_workspace_tab_body(tab_id, true, cx))
     }
 
