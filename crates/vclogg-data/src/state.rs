@@ -93,6 +93,7 @@ pub struct AppSettingsRecord {
     pub default_show_row_separators: bool,
     pub highlight_log_levels: bool,
     pub log_level_color_rules: String,
+    pub log_coloring: String,
     pub selection_styles: String,
     pub keyword_match_styles: String,
     pub log_font_size: i64,

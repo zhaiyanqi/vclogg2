@@ -14,17 +14,19 @@ pub(super) enum SidebarPanelId {
     History,
     Minutes,
     Colors,
+    LogColoring,
     Minimap,
     Tabs,
 }
 
 impl SidebarPanelId {
-    pub(super) const ALL: [Self; 7] = [
+    pub(super) const ALL: [Self; 8] = [
         Self::Files,
         Self::Favorites,
         Self::History,
         Self::Minutes,
         Self::Colors,
+        Self::LogColoring,
         Self::Minimap,
         Self::Tabs,
     ];
@@ -34,6 +36,7 @@ impl SidebarPanelId {
             Self::Favorites => crate::tr!("收藏", "Favorites"),
             Self::History => crate::tr!("历史", "History"),
             Self::Minutes => crate::tr!("时间分组", "Time groups"),
+            Self::LogColoring => crate::tr!("日志着色", "Log coloring"),
             Self::Colors => crate::tr!("颜色标签", "Color labels"),
             Self::Minimap => crate::tr!("文件缩略图", "Minimap"),
             Self::Tabs => crate::tr!("标签页", "Tabs"),
@@ -51,6 +54,7 @@ impl SidebarPanelId {
             Self::History => unreachable!("history uses its own icon"),
             Self::Minutes => IconName::Calendar,
             Self::Colors => IconName::Palette,
+            Self::LogColoring => IconName::Palette,
             Self::Minimap => IconName::Map,
             Self::Tabs => IconName::File,
         })
@@ -97,7 +101,7 @@ pub(in super::super) struct SidebarLayout {
 impl Default for SidebarLayout {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: 2,
             vertical_tabs: false,
             sides: [
                 SidebarPlacement {
@@ -105,6 +109,7 @@ impl Default for SidebarLayout {
                         SidebarPanelId::Files,
                         SidebarPanelId::Favorites,
                         SidebarPanelId::History,
+                        SidebarPanelId::LogColoring,
                     ],
                     active: Some(SidebarPanelId::Files),
                     visible: false,
@@ -130,13 +135,23 @@ impl SidebarLayout {
         let Ok(mut layout) = serde_json::from_str::<Self>(value) else {
             return Self::default();
         };
+        if layout.version == 1 {
+            if !layout
+                .sides
+                .iter()
+                .any(|side| side.panels.contains(&SidebarPanelId::LogColoring))
+            {
+                layout.sides[0].panels.push(SidebarPanelId::LogColoring);
+            }
+            layout.version = 2;
+        }
         let panels = layout
             .sides
             .iter()
             .flat_map(|side| side.panels.iter().copied())
             .collect::<BTreeSet<_>>();
-        let expected = if layout.vertical_tabs { 7 } else { 6 };
-        if layout.version != 1
+        let expected = if layout.vertical_tabs { 8 } else { 7 };
+        if layout.version != 2
             || panels.len() != expected
             || panels.contains(&SidebarPanelId::Tabs) != layout.vertical_tabs
             || layout

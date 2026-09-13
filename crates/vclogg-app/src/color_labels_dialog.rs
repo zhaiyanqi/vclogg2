@@ -10,17 +10,27 @@ use gpui_component::{
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     h_flex,
     input::{Input, InputEvent, InputState},
-    scroll::{Scrollbar, ScrollbarMode},
+    menu::{DropdownMenu, PopupMenuItem},
+    scroll::{ScrollableElement as _, Scrollbar, ScrollbarMode},
     switch::Switch,
     tab::{Tab, TabBar},
     v_flex,
 };
 
 use crate::color_labels::{
-    ColorLabel, LogLevelColorRule, color_with_alpha, default_color_labels, default_log_level_rules,
+    ColorLabel, LogLevelColorRule, LogRuleMatch, color_with_alpha, default_color_labels,
+    default_log_level_rules,
 };
 
+mod groups;
+use crate::log_coloring::{LogColoringGroup, LogColoringSettings};
+use groups::LogGroupDraft;
+
 struct LogLevelDraft {
+    match_kind: LogRuleMatch,
+    resolved_config: LogLevelColorRule,
+    resolved: std::sync::Arc<crate::color_labels::ResolvedLogLevelRules>,
+    match_error: Option<String>,
     id: String,
     keyword: Entity<InputState>,
     keyword_only: bool,
@@ -42,7 +52,7 @@ pub struct LogColoringConfig {
     pub(crate) keyword_match_styles: crate::keyword_match_style::KeywordMatchStyles,
     pub(crate) selection_styles: crate::selection_style::SelectionStyles,
     pub highlight_log_levels: bool,
-    pub log_level_rules: Vec<LogLevelColorRule>,
+    pub(crate) log_coloring: LogColoringSettings,
     pub labels: Vec<ColorLabel>,
 }
 
@@ -62,9 +72,11 @@ pub struct ColorLabelsDialog {
     error: Option<String>,
     active_section: LogColoringSection,
     highlight_log_levels: bool,
-    log_level_rows: Vec<LogLevelDraft>,
+    groups: Vec<LogGroupDraft>,
+    selected_group: usize,
+    active_group_id: String,
+    group_scroll: ScrollHandle,
     label_rows: Vec<ColorLabelDraft>,
-    log_level_scroll: ScrollHandle,
     label_scroll: ScrollHandle,
     next_log_level_id: u64,
     next_custom_label_id: u64,
@@ -73,7 +85,7 @@ pub struct ColorLabelsDialog {
 impl ColorLabelsDialog {
     pub fn new(
         highlight_log_levels: bool,
-        log_level_rules: Vec<LogLevelColorRule>,
+        log_coloring: LogColoringSettings,
         labels: Vec<ColorLabel>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -99,19 +111,27 @@ impl ColorLabelsDialog {
             error: None,
             active_section: LogColoringSection::default(),
             highlight_log_levels,
-            log_level_rows: Vec::with_capacity(log_level_rules.len()),
+            groups: Vec::new(),
+            selected_group: 0,
+            active_group_id: log_coloring.active_group_id.clone(),
+            group_scroll: ScrollHandle::new(),
             label_rows: Vec::with_capacity(labels.len()),
-            log_level_scroll: ScrollHandle::new(),
             label_scroll: ScrollHandle::new(),
             next_log_level_id: 1,
             next_custom_label_id: 1,
         };
-        for rule in log_level_rules {
-            this.push_log_level_rule(rule, window, cx);
+        for group in log_coloring.groups {
+            this.push_group(group, window, cx);
         }
+        this.selected_group = this
+            .groups
+            .iter()
+            .position(|group| group.id == this.active_group_id)
+            .unwrap_or(0);
         for label in labels {
             this.push_label(label, window, cx);
         }
+        this.refresh_rule_previews(cx);
         this
     }
 
@@ -164,45 +184,18 @@ impl ColorLabelsDialog {
     }
 
     pub fn config(&self, cx: &gpui::App) -> Result<LogColoringConfig, String> {
-        let log_level_rules = self
-            .log_level_rows
+        let groups = self
+            .groups
             .iter()
-            .map(|row| {
-                let keyword = row.keyword.read(cx).value().trim().to_string();
-                if keyword.is_empty() {
-                    return Err(crate::tr!(
-                        "日志级别关键词不能为空",
-                        "Log-level keyword can’t be empty"
-                    )
-                    .to_string());
-                }
-                let (text_color, text_alpha) = picker_value(
-                    &row.text_color,
-                    crate::tr_args!(
-                        "“{keyword}”尚未选择文字颜色",
-                        "No text color is selected for “{keyword}”"
-                    ),
-                    cx,
-                )?;
-                let (background_color, background_alpha) = picker_value(
-                    &row.background_color,
-                    crate::tr_args!(
-                        "“{keyword}”尚未选择背景色",
-                        "No background color is selected for “{keyword}”"
-                    ),
-                    cx,
-                )?;
-                Ok(LogLevelColorRule {
-                    id: row.id.clone(),
-                    keyword,
-                    keyword_only: row.keyword_only,
-                    text_color,
-                    text_alpha,
-                    background_color,
-                    background_alpha,
-                })
+            .map(|group| {
+                self.group_config(group, cx)
+                    .map_err(|error| format!("{}: {error}", group.name.read(cx).value()))
             })
-            .collect::<Result<Vec<_>, String>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
+        let log_coloring = LogColoringSettings {
+            groups,
+            active_group_id: self.active_group_id.clone(),
+        };
         let labels = self
             .label_rows
             .iter()
@@ -245,8 +238,69 @@ impl ColorLabelsDialog {
             keyword_match_styles: self.keyword_match.read(cx).draft(),
             selection_styles: self.selection_style.read(cx).draft(),
             highlight_log_levels: self.highlight_log_levels,
-            log_level_rules,
+            log_coloring,
             labels,
+        })
+    }
+
+    fn group_config(
+        &self,
+        group: &LogGroupDraft,
+        cx: &gpui::App,
+    ) -> Result<LogColoringGroup, String> {
+        let rules = group
+            .rows
+            .iter()
+            .map(|row| {
+                let keyword = row.keyword.read(cx).value().trim().to_string();
+                if keyword.is_empty() {
+                    return Err(crate::tr!(
+                        "日志级别关键词不能为空",
+                        "Log-level keyword can’t be empty"
+                    )
+                    .to_string());
+                }
+                let (text_color, text_alpha) = picker_value(
+                    &row.text_color,
+                    crate::tr_args!(
+                        "“{keyword}”尚未选择文字颜色",
+                        "No text color is selected for “{keyword}”"
+                    ),
+                    cx,
+                )?;
+                let (background_color, background_alpha) = picker_value(
+                    &row.background_color,
+                    crate::tr_args!(
+                        "“{keyword}”尚未选择背景色",
+                        "No background color is selected for “{keyword}”"
+                    ),
+                    cx,
+                )?;
+                if row.match_kind == LogRuleMatch::Regex {
+                    regex::Regex::new(&keyword).map_err(|error| format!("{keyword}: {error}"))?;
+                }
+                Ok(LogLevelColorRule {
+                    match_kind: row.match_kind,
+                    id: row.id.clone(),
+                    keyword,
+                    keyword_only: row.keyword_only,
+                    text_color,
+                    text_alpha,
+                    background_color,
+                    background_alpha,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let name = group.name.read(cx).value().trim().to_string();
+        if name.is_empty() {
+            return Err(crate::tr!("分组名称不能为空", "Group name cannot be empty").into());
+        }
+        Ok(LogColoringGroup {
+            id: group.id.clone(),
+            name,
+            preset: group.preset.clone(),
+            example: group.example.clone(),
+            rules,
         })
     }
 
@@ -256,6 +310,15 @@ impl ColorLabelsDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let resolved_config = rule.clone();
+        let match_error = if rule.match_kind == LogRuleMatch::Regex {
+            regex::Regex::new(&rule.keyword)
+                .err()
+                .map(|error| error.to_string())
+        } else {
+            None
+        };
+        let resolved = crate::color_labels::resolve_log_level_rules(std::slice::from_ref(&rule));
         let keyword = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(crate::tr!("关键词", "Keyword"))
@@ -269,7 +332,11 @@ impl ColorLabelsDialog {
             Self::subscribe_color(&text_color, window, cx),
             Self::subscribe_color(&background_color, window, cx),
         ];
-        self.log_level_rows.push(LogLevelDraft {
+        self.groups[self.selected_group].rows.push(LogLevelDraft {
+            match_kind: rule.match_kind,
+            resolved_config,
+            resolved,
+            match_error,
             id: rule.id,
             keyword,
             keyword_only: rule.keyword_only,
@@ -303,8 +370,18 @@ impl ColorLabelsDialog {
     }
 
     fn subscribe_input(input: &Entity<InputState>, cx: &mut Context<Self>) -> Subscription {
-        cx.subscribe(input, |_, _, event: &InputEvent, cx| {
+        cx.subscribe(input, |this, input, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
+                for group in &mut this.groups {
+                    if let Some(row) = group
+                        .rows
+                        .iter()
+                        .find(|row| row.keyword.entity_id() == input.entity_id())
+                    {
+                        group.preview_rule_id = Some(row.id.clone());
+                    }
+                }
+                this.refresh_rule_previews(cx);
                 cx.notify();
             }
         })
@@ -318,8 +395,9 @@ impl ColorLabelsDialog {
         cx.subscribe_in(
             color,
             window,
-            |_, picker, _: &ColorPickerEvent, window, cx| {
+            |this, picker, _: &ColorPickerEvent, window, cx| {
                 crate::dialog_focus::restore_color_picker_trigger(picker, window, cx);
+                this.refresh_rule_previews(cx);
                 cx.notify();
             },
         )
@@ -329,16 +407,21 @@ impl ColorLabelsDialog {
         let id = loop {
             let candidate = format!("log-level-custom-{}", self.next_log_level_id);
             self.next_log_level_id = self.next_log_level_id.saturating_add(1);
-            if self.log_level_rows.iter().all(|row| row.id != candidate) {
+            if self.groups[self.selected_group]
+                .rows
+                .iter()
+                .all(|row| row.id != candidate)
+            {
                 break candidate;
             }
         };
         let defaults = default_log_level_rules();
-        let mut rule = defaults[self.log_level_rows.len() % defaults.len()].clone();
+        let mut rule =
+            defaults[self.groups[self.selected_group].rows.len() % defaults.len()].clone();
         rule.id = id;
         rule.keyword.clear();
         self.push_log_level_rule(rule, window, cx);
-        if let Some(row) = self.log_level_rows.last() {
+        if let Some(row) = self.groups[self.selected_group].rows.last() {
             let focus = row.keyword.read(cx).focus_handle(cx);
             window.defer(cx, move |window, cx| focus.focus(window, cx));
         }
@@ -428,7 +511,7 @@ impl ColorLabelsDialog {
         }
     }
 
-    fn render_log_levels(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_log_rules(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let dialog = cx.entity();
         v_flex()
             .w_full()
@@ -456,8 +539,8 @@ impl ColorLabelsDialog {
                                     .text_sm()
                                     .text_color(cx.theme().muted_foreground)
                                     .child(crate::tr!(
-                                        "按 ASCII 单词匹配关键词；靠后的规则优先。",
-                                        "Keywords match ASCII words; later rules take precedence."
+                                        "关键词按 ASCII 单词匹配；正则可用 (?P<highlight>…) 指定着色范围。",
+                                        "Keywords match ASCII words; regex may use (?P<highlight>…) to select the colored range."
                                     )),
                             ),
                     )
@@ -488,8 +571,10 @@ impl ColorLabelsDialog {
                             ),
                     ),
             )
-            .child(
-                v_flex()
+            .child(div().id("log-coloring-table-horizontal").relative().flex_1().min_h_0().min_w_0()
+                .overflow_x_scroll().track_scroll(&self.groups[self.selected_group].horizontal_scroll)
+                .child(
+                v_flex().min_w(rems(42.)).h_full()
                     .flex_1()
                     .min_h_0()
                     .overflow_hidden()
@@ -550,8 +635,8 @@ impl ColorLabelsDialog {
                             .min_w_0()
                             .min_h_0()
                             .overflow_y_scroll()
-                            .track_scroll(&self.log_level_scroll)
-                            .when(self.log_level_rows.is_empty(), |this| {
+                            .track_scroll(&self.groups[self.selected_group].scroll)
+                            .when(self.groups[self.selected_group].rows.is_empty(), |this| {
                                 this.child(
                                     v_flex()
                                         .size_full()
@@ -569,36 +654,19 @@ impl ColorLabelsDialog {
                                         ))),
                                 )
                             })
-                            .children(self.log_level_rows.iter().map(|row| {
-                                let row_id = row.id.clone();
+                            .children(self.groups[self.selected_group].rows.iter().map(|row| {
+                                let row_id = format!("{}-{}", self.groups[self.selected_group].id, row.id);
+                                let mode_id = row.id.clone();
                                 let keyword_only_id = row.id.clone();
                                 let remove_id = row.id.clone();
                                 let dialog = dialog.clone();
-                                let text_color = row
-                                    .text_color
-                                    .read(cx)
-                                    .displayed_color()
-                                    .unwrap_or_else(|| rgb(0).into());
-                                let background = row
-                                    .background_color
-                                    .read(cx)
-                                    .displayed_color()
-                                    .unwrap_or_else(|| rgb(0).into());
-                                let keyword = row.keyword.read(cx).value();
-                                let keyword = keyword.trim();
-                                let preview = format!("{keyword} {}", crate::tr!("日志", "log"));
-                                let preview_highlights = if row.keyword_only && !keyword.is_empty() {
-                                    vec![(
-                                        0..keyword.len(),
-                                        HighlightStyle {
-                                            color: Some(text_color),
-                                            background_color: Some(background),
-                                            ..Default::default()
-                                        },
-                                    )]
-                                } else {
-                                    Vec::new()
-                                };
+                                let preview = self.rule_example(row, cx);
+                                let style = row.resolved.matching_style(&preview);
+                                let preview_highlights = row.resolved.matching_keyword_ranges(&preview)
+                                    .into_iter().map(|(range, style)| (range, HighlightStyle {
+                                        color: Some(style.foreground), background_color: Some(style.background),
+                                        ..Default::default()
+                                    })).collect::<Vec<_>>();
                                 h_flex()
                                     .id(format!("log-level-color-row-{row_id}"))
                                     .flex_none()
@@ -608,7 +676,19 @@ impl ColorLabelsDialog {
                                     .border_t_1()
                                     .border_color(cx.theme().border)
                                     .child(div().min_w_0().flex_1().child(
-                                        Input::new(&row.keyword).small().disabled(self.saving),
+                                        v_flex().gap_1().child(h_flex().gap_1()
+                                            .child(Button::new(format!("rule-mode-{row_id}")).small()
+                                                .disabled(self.saving).label(if row.match_kind == LogRuleMatch::Regex { "Regex" } else { crate::tr!("关键词", "Keyword") })
+                                                .tooltip(crate::tr!("切换关键词 / 正则匹配", "Switch keyword / regex matching"))
+                                                .on_click(cx.listener({ let id = mode_id.clone(); move |this, _, _, cx| {
+                                                    if let Some(row) = this.groups[this.selected_group].rows.iter_mut().find(|row| row.id == id) {
+                                                        row.match_kind = if row.match_kind == LogRuleMatch::Regex { LogRuleMatch::Keyword } else { LogRuleMatch::Regex };
+                                                    }
+                                                    this.groups[this.selected_group].preview_rule_id = Some(id.clone());
+                                                    this.refresh_rule_previews(cx); cx.notify();
+                                                }})))
+                                            .child(div().flex_1().min_w_0().child(Input::new(&row.keyword).small().disabled(self.saving))))
+                                            .when_some(row.match_error.clone(), |view, error| view.child(div().text_xs().text_color(cx.theme().danger).child(error))),
                                     ))
                                     .child(
                                         h_flex().w_24().flex_none().justify_center().child(
@@ -621,8 +701,8 @@ impl ColorLabelsDialog {
                                                 .border_color(cx.theme().border)
                                                 .bg(cx.theme().background)
                                                 .text_color(cx.theme().foreground)
-                                                .when(!row.keyword_only, |preview| {
-                                                    preview.bg(background).text_color(text_color)
+                                                .when_some(style, |preview, style| {
+                                                    preview.bg(style.background).text_color(style.foreground)
                                                 })
                                                 .text_sm()
                                                 .child(
@@ -655,12 +735,13 @@ impl ColorLabelsDialog {
                                                 ))
                                                 .on_click(cx.listener(
                                                     move |this, checked: &bool, _, cx| {
-                                                        if let Some(row) = this
-                                                            .log_level_rows
+                                                        if let Some(row) = this.groups[this.selected_group].rows
                                                             .iter_mut()
                                                             .find(|row| row.id == keyword_only_id)
                                                         {
                                                             row.keyword_only = *checked;
+                                                            this.groups[this.selected_group].preview_rule_id = Some(keyword_only_id.clone());
+                                                            this.refresh_rule_previews(cx);
                                                             cx.notify();
                                                         }
                                                     },
@@ -694,8 +775,9 @@ impl ColorLabelsDialog {
                                                 ))
                                                 .on_click(move |_, _, cx| {
                                                     dialog.update(cx, |this, cx| {
-                                                        this.log_level_rows
+                                                        this.groups[this.selected_group].rows
                                                             .retain(|row| row.id != remove_id);
+                                                        this.refresh_rule_previews(cx);
                                                         cx.notify();
                                                     });
                                                 }),
@@ -706,11 +788,11 @@ impl ColorLabelsDialog {
                                 color_rule_list(
                                     list,
                                     "log-level-rules-scroll-scrollbar",
-                                    &self.log_level_scroll,
+                                    &self.groups[self.selected_group].scroll,
                                 )
                             }),
                     ),
-            )
+            ).horizontal_scrollbar(&self.groups[self.selected_group].horizontal_scroll))
     }
 
     fn render_color_labels(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -928,6 +1010,7 @@ fn color_rule_list(
     scroll_handle: &ScrollHandle,
 ) -> impl IntoElement {
     h_flex()
+        .items_stretch()
         .w_full()
         .flex_1()
         .min_h_0()
@@ -1008,14 +1091,14 @@ mod tests {
         let (dialog, cx) = cx.add_window_view(|window, cx| {
             ColorLabelsDialog::new(
                 false,
-                default_log_level_rules(),
+                LogColoringSettings::default(),
                 default_color_labels(),
                 window,
                 cx,
             )
         });
 
-        let picker = dialog.read_with(cx, |dialog, _| dialog.log_level_rows[0].text_color.clone());
+        let picker = dialog.read_with(cx, |dialog, _| dialog.groups[0].rows[0].text_color.clone());
         let popup_input = picker.read_with(cx, |picker, _| picker.hex_input().clone());
 
         cx.update(|window, cx| {

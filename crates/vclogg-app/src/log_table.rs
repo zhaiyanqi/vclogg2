@@ -963,6 +963,11 @@ impl LogTableDelegate {
         self.presenter.highlight_log_levels = enabled;
     }
 
+    pub(crate) fn set_log_coloring(&mut self, enabled: bool, rules: Arc<ResolvedLogLevelRules>) {
+        self.presenter.highlight_log_levels = enabled;
+        self.presenter.log_level_rules = rules;
+    }
+
     pub fn set_appearance(&mut self, settings: &AppSettings) {
         self.presenter.log_font_family = settings.log_font_family.clone();
         self.presenter.log_font_size = settings.log_font_size.clamp(8, 32);
@@ -983,7 +988,8 @@ impl LogTableDelegate {
             .log_text_color(true)
             .and_then(|value| try_parse_color(value).ok());
         self.presenter.show_line_number_row_separators = settings.show_line_number_row_separators;
-        self.presenter.log_level_rules = resolve_log_level_rules(&settings.log_level_color_rules);
+        self.presenter.log_level_rules =
+            resolve_log_level_rules(settings.log_coloring.active_rules());
     }
 
     pub fn set_word_boundary_characters(&mut self, characters: impl Into<SharedString>) {

@@ -11,6 +11,7 @@ use vclogg_core::{CancellationToken, DirectoryEntry, NavigationSummary};
 
 mod file_tree;
 mod layout;
+mod log_coloring;
 mod minimap;
 mod overview;
 mod tasks;
@@ -49,6 +50,9 @@ enum DirectoryLoad {
 }
 
 pub(super) struct SidebarState {
+    log_coloring: crate::log_coloring::LogColoringSettings,
+    log_coloring_enabled: bool,
+    log_coloring_saving: bool,
     workspace: WeakEntity<Workspace>,
     layout: SidebarLayout,
     layout_loaded: bool,
@@ -149,6 +153,9 @@ impl SidebarState {
             }),
         ];
         Self {
+            log_coloring: Default::default(),
+            log_coloring_enabled: false,
+            log_coloring_saving: false,
             workspace,
             layout: SidebarLayout::default(),
             layout_loaded: false,
@@ -236,6 +243,13 @@ impl SidebarState {
 
     fn sync(&mut self, owner: &Entity<Workspace>, cx: &mut Context<Self>) {
         let workspace = owner.read(cx);
+        if self.log_coloring.groups != workspace.app_settings.log_coloring.groups {
+            self.log_coloring = workspace.app_settings.log_coloring.clone();
+        }
+        let (active_group_id, enabled) = workspace.log_coloring_selection();
+        self.log_coloring.active_group_id = active_group_id.to_owned();
+        self.log_coloring_enabled = enabled;
+        self.log_coloring_saving = workspace.color_labels_saving;
         let source = workspace
             .active_document()
             .map(|tab| (tab.id, tab.document.clone()));

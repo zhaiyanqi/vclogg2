@@ -20,7 +20,7 @@ use crate::{
 };
 
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
-pub const STATE_SCHEMA_VERSION: u32 = 16;
+pub const STATE_SCHEMA_VERSION: u32 = 17;
 
 /// Owns SQLite access for durable file-history and workspace records.
 pub struct StateRepository {
@@ -525,7 +525,7 @@ impl StateRepository {
                         dark_log_text_color, dark_log_background_color, log_level_color_rules, selection_styles,
                         search_toolbar_height, search_toolbar_font_size,
                         search_input_height, search_input_font_size, shortcut_add_text_mark, app_icon, keyword_match_styles,
-                        show_horizontal_scrollbar
+                        show_horizontal_scrollbar, log_coloring
                  FROM app_settings WHERE id = 1",
                 [],
                 |row| {
@@ -580,11 +580,33 @@ impl StateRepository {
                         app_icon: row.get(47)?,
                         keyword_match_styles: row.get(48)?,
                         show_horizontal_scrollbar: row.get::<_, i64>(49)? != 0,
+                        log_coloring: row.get(50)?,
                     })
                 },
             )
             .optional()
             .context("无法读取应用设置")
+    }
+
+    /// Update only the global coloring switch and selected group payload.
+    pub fn save_log_coloring(&self, settings: &AppSettingsRecord) -> Result<()> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction()?;
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM app_settings WHERE id = 1)",
+            [],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            Self::write_app_settings(&transaction, settings, false)?;
+        }
+        transaction
+            .execute(
+                "UPDATE app_settings SET highlight_log_levels = ?1, log_coloring = ?2 WHERE id = 1",
+                params![settings.highlight_log_levels, settings.log_coloring],
+            )
+            .context("无法保存日志着色")?;
+        transaction.commit().context("无法提交日志着色")
     }
 
     pub fn save_app_settings(&self, settings: &AppSettingsRecord) -> Result<()> {
@@ -603,11 +625,10 @@ impl StateRepository {
             "selection_styles = excluded.selection_styles,
              keyword_match_styles = excluded.keyword_match_styles,
              highlight_log_levels = excluded.highlight_log_levels,
-             log_level_color_rules = excluded.log_level_color_rules"
+             log_coloring = excluded.log_coloring"
         } else {
             "default_show_line_numbers = excluded.default_show_line_numbers,
                      default_show_row_separators = excluded.default_show_row_separators,
-                     highlight_log_levels = excluded.highlight_log_levels,
                      log_font_size = excluded.log_font_size,
                      search_toolbar_height = excluded.search_toolbar_height,
                      search_toolbar_font_size = excluded.search_toolbar_font_size,
@@ -652,7 +673,7 @@ impl StateRepository {
                      light_log_background_color = excluded.light_log_background_color,
                      dark_log_text_color = excluded.dark_log_text_color,
                      dark_log_background_color = excluded.dark_log_background_color,
-                     log_level_color_rules = excluded.log_level_color_rules"
+                     log_coloring = CASE WHEN app_settings.log_coloring = '' THEN excluded.log_coloring ELSE app_settings.log_coloring END"
         };
         let sql = format!("INSERT INTO app_settings(
                      id, default_show_line_numbers, default_show_row_separators,
@@ -673,8 +694,8 @@ impl StateRepository {
                      dark_log_text_color, dark_log_background_color, log_level_color_rules, selection_styles,
                      search_toolbar_height, search_toolbar_font_size,
                      search_input_height, search_input_font_size, shortcut_add_text_mark, app_icon, keyword_match_styles,
-                     show_horizontal_scrollbar
-                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50)
+                     show_horizontal_scrollbar, log_coloring
+                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51)
                  ON CONFLICT(id) DO UPDATE SET {update}");
         connection
             .execute(
@@ -730,6 +751,7 @@ impl StateRepository {
                     settings.app_icon,
                     settings.keyword_match_styles,
                     settings.show_horizontal_scrollbar,
+                    settings.log_coloring,
                 ],
             )
             .context("无法保存应用设置")?;
@@ -1303,6 +1325,7 @@ fn initialize_schema(connection: &Connection, defaults: &StateMigrationDefaults)
                  default_show_row_separators INTEGER NOT NULL DEFAULT 0,
                  highlight_log_levels INTEGER NOT NULL DEFAULT 0,
                  log_level_color_rules TEXT NOT NULL DEFAULT '',
+                 log_coloring TEXT NOT NULL DEFAULT '',
                  selection_styles TEXT NOT NULL DEFAULT '',
                  keyword_match_styles TEXT NOT NULL DEFAULT '',
                  log_font_size INTEGER NOT NULL DEFAULT 13,
@@ -1472,6 +1495,7 @@ fn ensure_app_settings_columns(connection: &Connection, default_log_level: &str)
         ("app_icon", "TEXT NOT NULL DEFAULT 'soft'"),
         ("highlight_log_levels", "INTEGER NOT NULL DEFAULT 0"),
         ("log_level_color_rules", "TEXT NOT NULL DEFAULT ''"),
+        ("log_coloring", "TEXT NOT NULL DEFAULT ''"),
         ("selection_styles", "TEXT NOT NULL DEFAULT ''"),
         ("keyword_match_styles", "TEXT NOT NULL DEFAULT ''"),
         ("log_font_size", "INTEGER NOT NULL DEFAULT 13"),

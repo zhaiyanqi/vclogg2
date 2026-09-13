@@ -79,7 +79,7 @@ impl Workspace {
         };
         let show_full_path = self.app_settings.show_full_path;
         let show_horizontal_scrollbar = self.app_settings.show_horizontal_scrollbar;
-        let highlight_log_levels = self.app_settings.highlight_log_levels;
+        let highlight_log_levels = self.log_coloring_selection().1;
         let highlight_matches = self.app_settings.highlight_matches;
         let case_sensitive = self.case_sensitive;
         let regex = self.regex;
@@ -447,10 +447,8 @@ impl Workspace {
                         });
                     let toggle_levels =
                         window.listener_for(&highlight_workspace, |this, _, window, cx| {
-                            this.update_app_setting(
-                                |settings| {
-                                    settings.highlight_log_levels = !settings.highlight_log_levels
-                                },
+                            this.set_log_coloring_enabled(
+                                !this.log_coloring_selection().1,
                                 window,
                                 cx,
                             );

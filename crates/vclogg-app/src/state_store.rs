@@ -14,8 +14,8 @@ pub use vclogg_data::{CloudSettings, DatabaseInfo, HistorySession, LastWorkspace
 
 use crate::app_log::AppLogLevel;
 use crate::color_labels::{
-    ColorLabel, KeywordColorRule, LogLevelColorRule, decode_rules, default_color_labels,
-    default_log_level_rules, encode_rules,
+    ColorLabel, KeywordColorRule, decode_rules, default_color_labels, default_log_level_rules,
+    encode_rules,
 };
 use crate::i18n::Language;
 use crate::predefined_filters::{
@@ -247,7 +247,7 @@ pub struct AppSettings {
     pub dark_log_text_color: Option<String>,
     pub dark_log_background_color: Option<String>,
     pub highlight_log_levels: bool,
-    pub log_level_color_rules: Vec<LogLevelColorRule>,
+    pub(crate) log_coloring: crate::log_coloring::LogColoringSettings,
     pub(crate) keyword_match_styles: crate::keyword_match_style::KeywordMatchStyles,
     pub(crate) selection_styles: crate::selection_style::SelectionStyles,
     pub log_font_size: u16,
@@ -294,7 +294,7 @@ impl Default for AppSettings {
             dark_log_text_color: None,
             dark_log_background_color: None,
             highlight_log_levels: false,
-            log_level_color_rules: default_log_level_rules(),
+            log_coloring: Default::default(),
             selection_styles: Default::default(),
             keyword_match_styles: Default::default(),
             log_font_size: 13,
@@ -447,6 +447,11 @@ impl StateStore {
             .collect::<Vec<_>>();
         self.repository
             .save_highlight_settings(&app_settings_to_record(settings), &labels)
+    }
+
+    pub(crate) fn save_log_coloring(&self, settings: AppSettings) -> Result<()> {
+        self.repository
+            .save_log_coloring(&app_settings_to_record(settings))
     }
 
     pub fn save_app_settings(&self, settings: AppSettings) -> Result<()> {
@@ -779,11 +784,16 @@ fn app_settings_from_record(record: AppSettingsRecord) -> AppSettings {
         selection_styles: serde_json::from_str(&record.selection_styles).unwrap_or_default(),
         keyword_match_styles: serde_json::from_str(&record.keyword_match_styles)
             .unwrap_or_default(),
-        log_level_color_rules: if record.log_level_color_rules.trim().is_empty() {
-            default_log_level_rules()
+        log_coloring: if record.log_coloring.trim().is_empty() {
+            let legacy = if record.log_level_color_rules.trim().is_empty() {
+                default_log_level_rules()
+            } else {
+                serde_json::from_str(&record.log_level_color_rules)
+                    .unwrap_or_else(|_| default_log_level_rules())
+            };
+            crate::log_coloring::LogColoringSettings::from_legacy(legacy)
         } else {
-            serde_json::from_str(&record.log_level_color_rules)
-                .unwrap_or_else(|_| default_log_level_rules())
+            crate::log_coloring::LogColoringSettings::from_initialized_json(&record.log_coloring)
         },
         log_font_size: bounded_u16(record.log_font_size, 8, 32),
         search_toolbar_height: bounded_u16(
@@ -847,7 +857,8 @@ fn app_settings_to_record(settings: AppSettings) -> AppSettingsRecord {
         selection_styles: serde_json::to_string(&settings.selection_styles).unwrap_or_default(),
         keyword_match_styles: serde_json::to_string(&settings.keyword_match_styles)
             .unwrap_or_default(),
-        log_level_color_rules: serde_json::to_string(&settings.log_level_color_rules)
+        log_level_color_rules: String::new(),
+        log_coloring: serde_json::to_string(&settings.log_coloring)
             .unwrap_or_else(|_| "[]".to_string()),
         log_font_size: i64::from(settings.log_font_size),
         search_toolbar_height: i64::from(settings.search_toolbar_control_height()),

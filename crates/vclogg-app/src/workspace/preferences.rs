@@ -626,6 +626,7 @@ impl Workspace {
             let workspace_for_cancel = workspace.clone();
             let workspace_for_close = workspace.clone();
             let original_settings = original_settings.clone();
+            let original_coloring_enabled = original_settings.highlight_log_levels;
             let original_search_history = original_search_history.clone();
             dialog
                 .w(settings_dialog_size.width)
@@ -679,6 +680,10 @@ impl Workspace {
                         .cloned()
                         .collect::<Vec<_>>();
                     workspace_for_save.update(cx, |this, cx| {
+                        let mut draft = draft;
+                        if draft.highlight_log_levels == original_coloring_enabled {
+                            draft.highlight_log_levels = this.app_settings.highlight_log_levels;
+                        }
                         this.save_app_settings(draft, window, cx);
                         this.save_cloud_settings(network_settings, window, cx);
                         this.remove_search_history_entries(&removed, window, cx);
@@ -1170,6 +1175,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         // General settings drafts do not own the independently committed highlight styles.
+        settings.highlight_log_levels = self.app_settings.highlight_log_levels;
+        settings.log_coloring = self.app_settings.log_coloring.clone();
         settings.selection_styles = self.app_settings.selection_styles.clone();
         settings.keyword_match_styles = self.app_settings.keyword_match_styles.clone();
         if self.app_settings.search_result_limit() != settings.search_result_limit() {
@@ -1335,6 +1342,9 @@ impl Workspace {
                 cx,
             );
             return;
+        }
+        if settings.highlight_log_levels != self.app_settings.highlight_log_levels {
+            self.set_log_coloring_enabled(settings.highlight_log_levels, window, cx);
         }
         self.apply_app_settings(settings.clone(), window, cx);
         self.queue_app_settings_save(settings, true, window, cx);

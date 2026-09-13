@@ -74,8 +74,18 @@ pub struct KeywordColorRule {
     pub enabled: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogRuleMatch {
+    #[default]
+    Keyword,
+    Regex,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LogLevelColorRule {
+    #[serde(default)]
+    pub match_kind: LogRuleMatch,
     pub id: String,
     pub keyword: String,
     #[serde(default)]
@@ -96,11 +106,14 @@ pub struct LogColorStyle {
 
 #[derive(Clone, Default)]
 pub struct ResolvedLogLevelRules {
+    has_regex: bool,
+    has_keywords: bool,
     rules: Arc<[ResolvedLogLevelRule]>,
 }
 
 #[derive(Clone)]
 struct ResolvedLogLevelRule {
+    regex: Option<regex::Regex>,
     keyword: Arc<str>,
     keyword_only: bool,
     style: LogColorStyle,
@@ -222,46 +235,102 @@ impl ResolvedColorRuleMetadata {
 }
 
 impl ResolvedLogLevelRules {
-    pub fn matching_style(&self, text: &str) -> Option<LogColorStyle> {
-        let mut matched = None;
-        for word in
-            text.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
-        {
-            if let Some(rule) = self.matching_rule(word)
-                && !rule.keyword_only
-            {
-                matched = Some(rule.style);
+    fn matches(&self, text: &str) -> Vec<(Range<usize>, usize)> {
+        let mut matches = Vec::new();
+        if self.has_keywords {
+            let mut offset = 0;
+            for segment in text.split_inclusive(|c: char| !c.is_ascii_alphanumeric() && c != '_') {
+                let word =
+                    segment.trim_end_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_');
+                if !word.is_empty()
+                    && let Some((ix, _)) = self.rules.iter().enumerate().rfind(|(_, rule)| {
+                        rule.regex.is_none() && word.eq_ignore_ascii_case(&rule.keyword)
+                    })
+                {
+                    matches.push((offset..offset + word.len(), ix));
+                }
+                offset += segment.len();
             }
         }
-        matched
+        for (ix, rule) in self.rules.iter().enumerate() {
+            if let Some(regex) = &rule.regex {
+                for captures in regex.captures_iter(text) {
+                    if let Some(found) = captures.name("highlight").or_else(|| captures.get(0))
+                        && !found.is_empty()
+                    {
+                        matches.push((found.range(), ix));
+                    }
+                }
+            }
+        }
+        matches.sort_by_key(|(range, ix)| (range.start, *ix));
+        // A later rule owns a shared start position, including its whole-line/keyword mode.
+        matches.reverse();
+        matches.dedup_by_key(|(range, _)| range.start);
+        matches.reverse();
+        matches
+    }
+
+    pub fn matching_style(&self, text: &str) -> Option<LogColorStyle> {
+        if !self.has_regex {
+            let mut style = None;
+            for word in text.split(|c: char| !c.is_ascii_alphanumeric() && c != '_') {
+                if let Some(rule) = self
+                    .rules
+                    .iter()
+                    .rfind(|rule| word.eq_ignore_ascii_case(&rule.keyword))
+                    && !rule.keyword_only
+                {
+                    style = Some(rule.style);
+                }
+            }
+            return style;
+        }
+        self.matches(text).into_iter().rev().find_map(|(_, ix)| {
+            let rule = &self.rules[ix];
+            (!rule.keyword_only).then_some(rule.style)
+        })
     }
 
     pub(crate) fn matching_keyword_ranges(&self, text: &str) -> Vec<(Range<usize>, LogColorStyle)> {
         if !self.rules.iter().any(|rule| rule.keyword_only) {
             return Vec::new();
         }
-        let mut ranges = Vec::new();
-        let mut offset = 0;
-        for segment in text.split_inclusive(|character: char| {
-            !character.is_ascii_alphanumeric() && character != '_'
-        }) {
-            let word = segment.trim_end_matches(|character: char| {
-                !character.is_ascii_alphanumeric() && character != '_'
-            });
-            if let Some(rule) = self.matching_rule(word)
-                && rule.keyword_only
-            {
-                ranges.push((offset..offset + word.len(), rule.style));
-            }
-            offset += segment.len();
+        // Split overlaps into disjoint UTF-8 ranges, with later matches winning.
+        let matches = self.matches(text);
+        if !self.has_regex {
+            return matches
+                .into_iter()
+                .filter_map(|(range, ix)| {
+                    let rule = &self.rules[ix];
+                    rule.keyword_only.then_some((range, rule.style))
+                })
+                .collect();
         }
+        let mut ranges: Vec<(Range<usize>, LogColorStyle)> = Vec::new();
+        for (range, ix) in matches {
+            let rule = &self.rules[ix];
+            if !rule.keyword_only {
+                continue;
+            }
+            let mut next = Vec::new();
+            for (old, style) in ranges {
+                if old.end <= range.start || old.start >= range.end {
+                    next.push((old, style));
+                } else {
+                    if old.start < range.start {
+                        next.push((old.start..range.start, style));
+                    }
+                    if old.end > range.end {
+                        next.push((range.end..old.end, style));
+                    }
+                }
+            }
+            next.push((range, rule.style));
+            ranges = next;
+        }
+        ranges.sort_by_key(|(range, _)| range.start);
         ranges
-    }
-
-    fn matching_rule(&self, word: &str) -> Option<&ResolvedLogLevelRule> {
-        self.rules
-            .iter()
-            .rfind(|rule| word.eq_ignore_ascii_case(rule.keyword.as_ref()))
     }
 }
 
@@ -287,6 +356,7 @@ pub fn default_color_labels() -> Vec<ColorLabel> {
 pub fn default_log_level_rules() -> Vec<LogLevelColorRule> {
     vec![
         LogLevelColorRule {
+            match_kind: LogRuleMatch::Keyword,
             id: "log-level-info".to_string(),
             keyword: "INFO".to_string(),
             keyword_only: false,
@@ -296,6 +366,7 @@ pub fn default_log_level_rules() -> Vec<LogLevelColorRule> {
             background_alpha: u8::MAX,
         },
         LogLevelColorRule {
+            match_kind: LogRuleMatch::Keyword,
             id: "log-level-error".to_string(),
             keyword: "ERROR".to_string(),
             keyword_only: false,
@@ -308,11 +379,17 @@ pub fn default_log_level_rules() -> Vec<LogLevelColorRule> {
 }
 
 pub fn resolve_log_level_rules(rules: &[LogLevelColorRule]) -> Arc<ResolvedLogLevelRules> {
-    Arc::new(ResolvedLogLevelRules {
-        rules: rules
-            .iter()
-            .filter(|rule| !rule.keyword.trim().is_empty())
-            .map(|rule| ResolvedLogLevelRule {
+    let rules: Arc<[ResolvedLogLevelRule]> = rules
+        .iter()
+        .filter(|rule| !rule.keyword.trim().is_empty())
+        .filter_map(|rule| {
+            let regex = if rule.match_kind == LogRuleMatch::Regex {
+                Some(regex::Regex::new(&rule.keyword).ok()?)
+            } else {
+                None
+            };
+            Some(ResolvedLogLevelRule {
+                regex,
                 keyword: Arc::from(rule.keyword.trim()),
                 keyword_only: rule.keyword_only,
                 style: LogColorStyle {
@@ -320,7 +397,12 @@ pub fn resolve_log_level_rules(rules: &[LogLevelColorRule]) -> Arc<ResolvedLogLe
                     background: color_with_alpha(rule.background_color, rule.background_alpha),
                 },
             })
-            .collect(),
+        })
+        .collect();
+    Arc::new(ResolvedLogLevelRules {
+        has_regex: rules.iter().any(|rule| rule.regex.is_some()),
+        has_keywords: rules.iter().any(|rule| rule.regex.is_none()),
+        rules,
     })
 }
 

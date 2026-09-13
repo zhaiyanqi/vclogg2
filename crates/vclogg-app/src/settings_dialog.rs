@@ -2734,7 +2734,7 @@ impl Render for SettingsDialog {
                                 div()
                                     .text_sm()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(crate::tr!("按“高亮 → 高亮配置… → 日志着色”中的关键词与颜色突出整行日志", "Highlight complete lines using keywords and colors from Highlight → Highlight settings… → Log coloring")),
+                                    .child(crate::tr!("使用“高亮 → 高亮配置… → 日志着色”中的当前分组；保存后应用到所有窗口", "Use the current group in Highlight → Highlight settings… → Log coloring; applies to all windows after saving")),
                             ),
                     )
                     .child(

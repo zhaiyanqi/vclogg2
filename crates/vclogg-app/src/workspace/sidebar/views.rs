@@ -342,6 +342,9 @@ impl SidebarState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if panel == SidebarPanelId::LogColoring {
+            return self.render_log_coloring(cx);
+        }
         if panel == SidebarPanelId::Files {
             return self.render_files(cx);
         }
@@ -443,6 +446,13 @@ impl SidebarState {
             .border_1()
             .border_color(cx.theme().transparent)
             .focus_visible(|style| style.border_color(cx.theme().ring))
+            .capture_any_mouse_down(|event, window, cx| {
+                // Suppress default focus transfer for rows and blank space in every shared list.
+                if event.button != MouseButton::Left {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                }
+            })
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                 this.list_key(panel, event, window, cx)
             }))
@@ -468,6 +478,8 @@ impl SidebarState {
                     }),
                 )
                 .track_scroll(&scroll)
+                // Keep each edge of a focused row inside UniformList's content mask.
+                .p_1()
                 .size_full(),
             )
             .vertical_scrollbar(&scroll)
@@ -476,6 +488,7 @@ impl SidebarState {
 
     fn item_count(&self, panel: SidebarPanelId) -> usize {
         match panel {
+            SidebarPanelId::LogColoring => self.log_coloring.groups.len(),
             SidebarPanelId::Favorites => self.favorites.len(),
             SidebarPanelId::History => self.history.len(),
             SidebarPanelId::Minutes => self
@@ -489,6 +502,11 @@ impl SidebarState {
 
     fn item_key(&self, panel: SidebarPanelId, ix: usize) -> Option<String> {
         match panel {
+            SidebarPanelId::LogColoring => self
+                .log_coloring
+                .groups
+                .get(ix)
+                .map(|group| group.id.clone()),
             SidebarPanelId::Favorites => self
                 .favorites
                 .get(ix)
@@ -516,6 +534,11 @@ impl SidebarState {
 
     fn item_index(&self, panel: SidebarPanelId, key: &str) -> Option<usize> {
         match panel {
+            SidebarPanelId::LogColoring => self
+                .log_coloring
+                .groups
+                .iter()
+                .position(|group| group.id == key),
             SidebarPanelId::Minutes => {
                 let row = key.strip_prefix("minute-")?.parse::<usize>().ok()?;
                 self.summary
@@ -571,6 +594,15 @@ impl SidebarState {
             self.selected.insert(panel, key);
         }
         match panel {
+            SidebarPanelId::LogColoring => {
+                if let Some(group) = self.log_coloring.groups.get(ix) {
+                    let id = group.id.clone();
+                    _ = self.workspace.update(cx, |workspace, cx| {
+                        workspace.select_log_coloring_group(id, window, cx)
+                    });
+                }
+            }
+
             SidebarPanelId::Favorites | SidebarPanelId::History => {
                 let path = if panel == SidebarPanelId::Favorites {
                     self.favorites.get(ix).map(|file| file.path.clone())
@@ -615,7 +647,7 @@ impl SidebarState {
         });
     }
 
-    fn list_key(
+    pub(super) fn list_key(
         &mut self,
         panel: SidebarPanelId,
         event: &KeyDownEvent,
@@ -750,7 +782,6 @@ impl SidebarState {
             }
             _ => return div().into_any_element(),
         };
-        let tooltip = detail.clone();
         let generation = self.generation;
         let item_key = key.clone();
         Button::new(SharedString::from(format!("sidebar-item-{panel:?}-{key}")))
@@ -760,7 +791,6 @@ impl SidebarState {
             .py_1()
             .selected(selected)
             .justify_start()
-            .tooltip(tooltip)
             .child(
                 h_flex()
                     .w_full()
@@ -800,7 +830,10 @@ impl SidebarState {
                             ),
                     ),
             )
-            .on_click(cx.listener(move |this, _, window, cx| {
+            .on_click(cx.listener(move |this, event, window, cx| {
+                if matches!(event, ClickEvent::Mouse(event) if event.down.button != MouseButton::Left || event.up.button != MouseButton::Left) {
+                    return;
+                }
                 if matches!(panel, SidebarPanelId::Minutes | SidebarPanelId::Colors)
                     && this.generation != generation
                 {
@@ -961,6 +994,8 @@ impl SidebarState {
                     this.child(
                         h_flex()
                             .px_2()
+                            .py_1()
+                            .flex_none()
                             .gap_1()
                             .child(
                                 div()
