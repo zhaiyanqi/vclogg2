@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use gpui::{App, FontWeight, Hsla, Pixels, Styled as _, px};
 use gpui_component::ColorName;
@@ -8,7 +8,7 @@ use sha2::{Digest as _, Sha256};
 
 /// File-owned annotations, indexed by source row so rendering never scans every tag.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct RowTags(BTreeMap<usize, BTreeMap<String, RowTag>>);
+pub(crate) struct RowTags(Arc<BTreeMap<usize, BTreeMap<String, RowTag>>>);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct RowTag {
@@ -195,12 +195,21 @@ impl TagColor {
 }
 
 impl RowTags {
+    /// Source identities, independent of whether the row is also marked.
+    pub(crate) fn source_rows(&self) -> impl Iterator<Item = usize> + '_ {
+        self.0.keys().copied()
+    }
+
+    pub(crate) fn shares_storage(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
     pub(crate) fn clear(&mut self) {
-        self.0.clear();
+        self.0 = Arc::default();
     }
 
     pub(crate) fn row(&self, row: usize) -> impl Iterator<Item = (&String, &RowTag)> {
@@ -212,14 +221,18 @@ impl RowTags {
     }
 
     pub(crate) fn insert(&mut self, id: String, tag: RowTag) {
-        self.0.entry(tag.source_row).or_default().insert(id, tag);
+        Arc::make_mut(&mut self.0)
+            .entry(tag.source_row)
+            .or_default()
+            .insert(id, tag);
     }
 
     pub(crate) fn remove(&mut self, row: usize, id: &str) -> Option<RowTag> {
-        let tags = self.0.get_mut(&row)?;
+        let rows = Arc::make_mut(&mut self.0);
+        let tags = rows.get_mut(&row)?;
         let removed = tags.remove(id);
         if tags.is_empty() {
-            self.0.remove(&row);
+            rows.remove(&row);
         }
         removed
     }

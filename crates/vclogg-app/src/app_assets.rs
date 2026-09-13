@@ -3,24 +3,28 @@ use std::borrow::Cow;
 use gpui::{AssetSource, Result, SharedString};
 use gpui_component::IconNamed;
 
-/// Additional Lucide 1.27.0 icons, rendered by the standard Icon component.
-/// Unmodified SVGs from https://github.com/lucide-icons/lucide/tree/1.27.0/icons.
+/// Additional icons rendered by the standard Icon component.
+/// Lucide 1.27.0 SVGs: https://github.com/lucide-icons/lucide/tree/1.27.0/icons.
 /// License: assets/icons/lucide-LICENSE.txt.
+/// Tabler Letter M: https://github.com/tabler/tabler-icons.
+/// License: assets/icons/tabler-LICENSE.txt.
 #[derive(Clone, Copy)]
 pub(crate) enum AppIcon {
     History,
     Refresh,
     FollowEnd,
+    LetterM,
 }
 
 impl AppIcon {
-    const ALL: [Self; 3] = [Self::History, Self::Refresh, Self::FollowEnd];
+    const ALL: [Self; 4] = [Self::History, Self::Refresh, Self::FollowEnd, Self::LetterM];
 
     fn asset_path(self) -> &'static str {
         match self {
             Self::History => "vclogg/icons/history.svg",
             Self::Refresh => "vclogg/icons/refresh-cw.svg",
             Self::FollowEnd => "vclogg/icons/arrow-down-to-line.svg",
+            Self::LetterM => "vclogg/icons/letter-m.svg",
         }
     }
 
@@ -29,6 +33,7 @@ impl AppIcon {
             Self::History => include_bytes!("../assets/icons/history.svg"),
             Self::Refresh => include_bytes!("../assets/icons/refresh-cw.svg"),
             Self::FollowEnd => include_bytes!("../assets/icons/arrow-down-to-line.svg"),
+            Self::LetterM => include_bytes!("../assets/icons/letter-m.svg"),
         }
     }
 }

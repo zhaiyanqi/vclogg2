@@ -26,7 +26,7 @@ pub(crate) enum LogRowProjection {
     SourceRows(CompressedRows),
 }
 
-const DEFAULT_MAX_LINE_SOURCE_BYTES: usize = 64 * 1024;
+pub(crate) const DEFAULT_MAX_LINE_SOURCE_BYTES: usize = 64 * 1024;
 const DEFAULT_MAX_CACHE_RETAINED_BYTES: usize = 32 * 1024 * 1024;
 const MIN_TRUNCATED_PREVIEW_RETAINED_BYTES: usize = '…'.len_utf8();
 /// A source byte can expand to at most one full eight-column tab stop in [`LogText`].

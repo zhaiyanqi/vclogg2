@@ -12,6 +12,7 @@ pub(super) enum SidebarPanelId {
     Files,
     Favorites,
     History,
+    Marks,
     Minutes,
     Colors,
     LogColoring,
@@ -20,10 +21,11 @@ pub(super) enum SidebarPanelId {
 }
 
 impl SidebarPanelId {
-    pub(super) const ALL: [Self; 8] = [
+    pub(super) const ALL: [Self; 9] = [
         Self::Files,
         Self::Favorites,
         Self::History,
+        Self::Marks,
         Self::Minutes,
         Self::Colors,
         Self::LogColoring,
@@ -35,6 +37,7 @@ impl SidebarPanelId {
             Self::Files => crate::tr!("文件", "Files"),
             Self::Favorites => crate::tr!("收藏", "Favorites"),
             Self::History => crate::tr!("历史", "History"),
+            Self::Marks => crate::tr!("标记", "Marks"),
             Self::Minutes => crate::tr!("时间分组", "Time groups"),
             Self::LogColoring => crate::tr!("日志着色", "Log coloring"),
             Self::Colors => crate::tr!("颜色标签", "Color labels"),
@@ -43,6 +46,11 @@ impl SidebarPanelId {
         }
     }
     pub(super) fn icon(self) -> AnyElement {
+        if self == Self::Marks {
+            return Icon::new(crate::app_assets::AppIcon::LetterM)
+                .small()
+                .into_any_element();
+        }
         if self == Self::History {
             return Icon::new(crate::app_assets::AppIcon::History)
                 .small()
@@ -52,6 +60,7 @@ impl SidebarPanelId {
             Self::Files => IconName::Folder,
             Self::Favorites => IconName::Star,
             Self::History => unreachable!("history uses its own icon"),
+            Self::Marks => unreachable!("marks use the Letter M icon"),
             Self::Minutes => IconName::Calendar,
             Self::Colors => IconName::Palette,
             Self::LogColoring => IconName::Palette,
@@ -101,7 +110,7 @@ pub(in super::super) struct SidebarLayout {
 impl Default for SidebarLayout {
     fn default() -> Self {
         Self {
-            version: 2,
+            version: 3,
             vertical_tabs: false,
             sides: [
                 SidebarPlacement {
@@ -109,6 +118,7 @@ impl Default for SidebarLayout {
                         SidebarPanelId::Files,
                         SidebarPanelId::Favorites,
                         SidebarPanelId::History,
+                        SidebarPanelId::Marks,
                         SidebarPanelId::LogColoring,
                     ],
                     active: Some(SidebarPanelId::Files),
@@ -145,13 +155,28 @@ impl SidebarLayout {
             }
             layout.version = 2;
         }
+        if layout.version == 2 {
+            if !layout
+                .sides
+                .iter()
+                .any(|side| side.panels.contains(&SidebarPanelId::Marks))
+            {
+                let left = &mut layout.sides[0].panels;
+                let ix = left
+                    .iter()
+                    .position(|panel| *panel == SidebarPanelId::History)
+                    .map_or(left.len(), |ix| ix + 1);
+                left.insert(ix, SidebarPanelId::Marks);
+            }
+            layout.version = 3;
+        }
         let panels = layout
             .sides
             .iter()
             .flat_map(|side| side.panels.iter().copied())
             .collect::<BTreeSet<_>>();
-        let expected = if layout.vertical_tabs { 8 } else { 7 };
-        if layout.version != 2
+        let expected = if layout.vertical_tabs { 9 } else { 8 };
+        if layout.version != 3
             || panels.len() != expected
             || panels.contains(&SidebarPanelId::Tabs) != layout.vertical_tabs
             || layout

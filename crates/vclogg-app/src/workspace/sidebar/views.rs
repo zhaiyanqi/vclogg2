@@ -350,7 +350,10 @@ impl SidebarState {
         }
         if matches!(
             panel,
-            SidebarPanelId::Minutes | SidebarPanelId::Colors | SidebarPanelId::Minimap
+            SidebarPanelId::Minutes
+                | SidebarPanelId::Colors
+                | SidebarPanelId::Minimap
+                | SidebarPanelId::Marks
         ) {
             let Some((_, document)) = &self.document else {
                 return self.empty(
@@ -422,6 +425,10 @@ impl SidebarState {
                     "No favorites. Use the toolbar star to favorite the current file"
                 ),
                 SidebarPanelId::History => crate::tr!("暂无历史记录", "No history yet"),
+                SidebarPanelId::Marks => crate::tr!(
+                    "暂无标记，可在日志行添加行标记或文字标记",
+                    "No marks. Add a row mark or text mark to a log line"
+                ),
                 SidebarPanelId::Colors => {
                     crate::tr!(
                         "当前文件未应用颜色标签",
@@ -468,7 +475,10 @@ impl SidebarState {
                 uniform_list(
                     SharedString::from(format!("sidebar-rows-{panel:?}")),
                     count,
-                    cx.processor(move |this, range: Range<usize>, _, cx| {
+                    cx.processor(move |this, range: Range<usize>, window, cx| {
+                        if panel == SidebarPanelId::Marks {
+                            this.defer_mark_previews(range.clone(), window, cx);
+                        }
                         if panel == SidebarPanelId::Colors {
                             this.color_visible_start = range.start;
                         }
@@ -488,6 +498,7 @@ impl SidebarState {
 
     fn item_count(&self, panel: SidebarPanelId) -> usize {
         match panel {
+            SidebarPanelId::Marks => self.marks.rows.len(),
             SidebarPanelId::LogColoring => self.log_coloring.groups.len(),
             SidebarPanelId::Favorites => self.favorites.len(),
             SidebarPanelId::History => self.history.len(),
@@ -502,6 +513,7 @@ impl SidebarState {
 
     fn item_key(&self, panel: SidebarPanelId, ix: usize) -> Option<String> {
         match panel {
+            SidebarPanelId::Marks => self.mark_key(ix),
             SidebarPanelId::LogColoring => self
                 .log_coloring
                 .groups
@@ -534,6 +546,7 @@ impl SidebarState {
 
     fn item_index(&self, panel: SidebarPanelId, key: &str) -> Option<usize> {
         match panel {
+            SidebarPanelId::Marks => self.mark_index(key),
             SidebarPanelId::LogColoring => self
                 .log_coloring
                 .groups
@@ -583,7 +596,7 @@ impl SidebarState {
         }
     }
 
-    fn activate_item(
+    pub(super) fn activate_item(
         &mut self,
         panel: SidebarPanelId,
         ix: usize,
@@ -594,6 +607,7 @@ impl SidebarState {
             self.selected.insert(panel, key);
         }
         match panel {
+            SidebarPanelId::Marks => self.activate_mark(ix, window, cx),
             SidebarPanelId::LogColoring => {
                 if let Some(group) = self.log_coloring.groups.get(ix) {
                     let id = group.id.clone();
@@ -695,6 +709,9 @@ impl SidebarState {
         ix: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if panel == SidebarPanelId::Marks {
+            return self.render_mark(ix, cx);
+        }
         let Some(key) = self.item_key(panel, ix) else {
             return div().into_any_element();
         };

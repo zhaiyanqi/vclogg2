@@ -34,6 +34,12 @@ impl CompressedRows {
         self.rows.is_empty()
     }
 
+    /// Whether two handles share the same immutable, copy-on-write snapshot.
+    /// Different storage does not imply different row contents.
+    pub fn shares_storage(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.rows, &other.rows)
+    }
+
     pub fn get(&self, index: usize) -> Option<usize> {
         self.rows
             .select(u64::try_from(index).ok()?)

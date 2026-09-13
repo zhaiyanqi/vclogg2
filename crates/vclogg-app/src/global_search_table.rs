@@ -743,6 +743,24 @@ impl GlobalSearchTableDelegate {
             })
     }
 
+    /// Resolve against the installed result snapshot, including directory results whose
+    /// document ID can differ from the ID of an open tab.
+    pub(crate) fn source_row_key_for_document(
+        &self,
+        document: &LogDocument,
+        source_row: usize,
+    ) -> Option<LogRowKey> {
+        self.projection.groups.iter().find_map(|group| {
+            (crate::path_identity::paths_match(&group.source.path, document.path())
+                && group.source.document.same_source_snapshot(document)
+                && group.projection.rows.contains(source_row))
+            .then_some(LogRowKey::Row {
+                document_id: group.source.document_id,
+                source_row,
+            })
+        })
+    }
+
     pub(crate) fn row_ix_for_key(&self, key: LogRowKey) -> Option<usize> {
         let document_id = match key {
             LogRowKey::FileGroup { document_id } | LogRowKey::Row { document_id, .. } => {

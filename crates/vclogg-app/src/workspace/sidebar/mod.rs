@@ -12,6 +12,7 @@ use vclogg_core::{CancellationToken, DirectoryEntry, NavigationSummary};
 mod file_tree;
 mod layout;
 mod log_coloring;
+pub(super) mod marks;
 mod minimap;
 mod overview;
 mod tasks;
@@ -119,6 +120,7 @@ pub(super) struct SidebarState {
     scrolls: BTreeMap<SidebarPanelId, UniformListScrollHandle>,
     focus: BTreeMap<SidebarPanelId, FocusHandle>,
     selected: BTreeMap<SidebarPanelId, String>,
+    marks: marks::MarksState,
     minimap_drag: Option<f32>,
     minimap_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     _subscriptions: Vec<Subscription>,
@@ -228,6 +230,7 @@ impl SidebarState {
                 .map(|id| (id, cx.focus_handle().tab_stop(true)))
                 .collect(),
             selected: BTreeMap::new(),
+            marks: marks::MarksState::default(),
             minimap_drag: None,
             minimap_bounds: Rc::default(),
             _subscriptions: subscriptions,
@@ -296,7 +299,15 @@ impl SidebarState {
         let history_changed = signature != self.history_signature;
         self.history_signature = signature;
         let store = workspace.persistence.store.clone();
+        let marks = workspace.active_document().map(|tab| {
+            (
+                tab.id,
+                tab.file.marked_rows.clone(),
+                tab.file.row_tags.clone(),
+            )
+        });
         let table = workspace.active_document().map(|tab| tab.log_table.clone());
+        self.sync_marks(marks, changed, cx);
         if changed {
             self.generation += 1;
             self.summary_job.take();
@@ -365,6 +376,9 @@ impl SidebarState {
     }
 
     fn ensure_visible_data(&mut self, cx: &mut Context<Self>) {
+        if !self.is_showing(SidebarPanelId::Marks) {
+            self.marks.release_previews();
+        }
         let need_summary =
             self.is_showing(SidebarPanelId::Minutes) || self.is_showing(SidebarPanelId::Minimap);
         let need_colors =
