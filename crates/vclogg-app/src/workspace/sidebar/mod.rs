@@ -750,12 +750,7 @@ impl Workspace {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .when(self.active_document().is_none(), |this| {
-                        this.child(self.render_new_tab_workspace(cx))
-                    })
-                    .when(self.active_document().is_some(), |this| {
-                        this.child(self.render_document_workspace(window, cx))
-                    }),
+                    .child(self.render_tab_workspace(window, cx)),
             );
         h_resizable("workspace-sidebars")
             .with_state(&self.sidebar_split)

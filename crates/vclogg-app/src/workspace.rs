@@ -1681,6 +1681,7 @@ pub struct Workspace {
     tab_drop_layout: Rc<RefCell<TabDropLayout>>,
     filter_popover: filter_popover::FilterPopoverState,
     search_panel_state: Entity<ResizableState>,
+    empty_result_mode_select: Entity<SelectState<Vec<ResultMode>>>,
     search_panel_height: Option<Pixels>,
     search_panel_height_modified: bool,
     search_panel_resize_gesture: Option<SearchPanelResizeGesture>,
@@ -1822,6 +1823,14 @@ impl Workspace {
             focus_handle: search_results_focus_handle,
             text_selection_scope: search_results_text_selection_scope,
         };
+        let empty_result_mode_select = cx.new(|cx| {
+            SelectState::new(
+                ResultMode::ALL.to_vec(),
+                Some(IndexPath::new(ResultMode::MatchesAndMarks.select_index())),
+                window,
+                cx,
+            )
+        });
         let global_result_mode_select = cx.new(|cx| {
             SelectState::new(
                 ResultMode::ALL.to_vec(),
@@ -2321,6 +2330,7 @@ impl Workspace {
             cross_window_drop_ix: None,
             tab_drop_layout: Rc::new(RefCell::new(TabDropLayout::default())),
             search_panel_state,
+            empty_result_mode_select,
             filter_popover: filter_popover::FilterPopoverState::default(),
             search_panel_height: None,
             search_panel_height_modified: false,
@@ -2516,9 +2526,6 @@ impl Render for LogRegionSurface {
         let surface = cx.entity();
         let element = workspace
             .update(cx, |workspace, cx| {
-                let Some(document_id) = workspace.active_document().map(|tab| tab.id) else {
-                    return div().into_any_element();
-                };
                 let region = match role {
                     DisplayRegion::Log => WrappedRegion::Log,
                     DisplayRegion::SearchResults => match workspace.global_search.scope {
@@ -2530,8 +2537,10 @@ impl Render for LogRegionSurface {
                 };
                 let document_id = if region == WrappedRegion::GlobalResults {
                     0
+                } else if let Some(tab) = workspace.active_document() {
+                    tab.id
                 } else {
-                    document_id
+                    return div().into_any_element();
                 };
                 workspace.render_log_region_surface(document_id, region, surface, window, cx)
             })

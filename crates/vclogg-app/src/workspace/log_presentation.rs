@@ -2993,23 +2993,23 @@ impl Workspace {
             )
     }
 
-    pub(super) fn render_document_workspace(
+    pub(super) fn render_tab_workspace(
         &self,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let _performance_scope =
-            crate::ui_performance::scope("Workspace::render_document_workspace");
-        let tab = self.active_document().expect("active document must exist");
+        let _performance_scope = crate::ui_performance::scope("Workspace::render_tab_workspace");
+        let tab = self.active_document();
         let results_visible = match self.global_search.scope {
-            SearchScope::CurrentFile => tab.results_visible,
+            SearchScope::CurrentFile => tab.is_some_and(|tab| tab.results_visible),
             SearchScope::AllOpenFiles | SearchScope::Directory => {
                 self.global_search.results_visible
             }
         };
         let result_menu_busy = self.result_export_task.is_some();
-        let local_result_menu_disabled =
-            tab.result_row_count(cx) == 0 || result_menu_busy || self.open_task.is_some();
+        let local_result_menu_disabled = tab.is_none_or(|tab| tab.result_row_count(cx) == 0)
+            || result_menu_busy
+            || self.open_task.is_some();
         let global_result_menu_disabled = self.global_table.read(cx).delegate().results_count()
             == 0
             || result_menu_busy
@@ -3023,13 +3023,13 @@ impl Workspace {
         let local_result_context_workspace = cx.entity();
         let global_result_context_workspace = cx.entity();
         let log_context_workspace = cx.entity();
-        let document_id = tab.id;
+        let document_id = tab.map_or(0, |tab| tab.id);
         let marker_width = line_marker_column_width();
-        let local_line_number_width = if tab.view.show_line_numbers {
-            px(tab.log_table.read(cx).delegate().line_number_width() as f32)
-        } else {
-            px(0.)
-        };
+        let local_line_number_width = tab
+            .filter(|tab| tab.view.show_line_numbers)
+            .map_or(px(0.), |tab| {
+                px(tab.log_table.read(cx).delegate().line_number_width() as f32)
+            });
         let global_line_number_width =
             px(self.global_table.read(cx).delegate().line_number_width() as f32);
         let result_content = match self.global_search.scope {
@@ -3258,83 +3258,94 @@ impl Workspace {
                         });
                     })
                     .child(
-                        resizable_panel().child(
-                            div()
-                                .relative()
-                                .size_full()
-                                .min_h_0()
-                                .key_context(LOG_TABLE_CONTEXT)
-                                .track_focus(&self.log_viewer.focus_handle)
-                                .tab_index(0)
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                                        this.log_viewer.focus_handle.focus(window, cx);
-                                        this.remember_user_log_region(LogRegion::Body);
-                                    }),
-                                )
-                                .on_mouse_down(
-                                    MouseButton::Right,
-                                    cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                                        this.log_viewer.focus_handle.focus(window, cx);
-                                        this.remember_user_log_region(LogRegion::Body);
-                                    }),
-                                )
-                                .on_prepaint(move |bounds, window, cx| {
-                                    log_drag_workspace.update(cx, |workspace, cx| {
-                                        workspace
-                                            .row_drag_bounds
-                                            .insert((document_id, WrappedRegion::Log), bounds);
-                                        workspace.update_wrapped_layout(
+                        resizable_panel()
+                            .when(tab.is_none(), |panel| {
+                                panel.child(self.render_new_tab_workspace(cx))
+                            })
+                            .when_some(tab, |panel, _| {
+                                panel.child(
+                                    div()
+                                        .relative()
+                                        .size_full()
+                                        .min_h_0()
+                                        .key_context(LOG_TABLE_CONTEXT)
+                                        .track_focus(&self.log_viewer.focus_handle)
+                                        .tab_index(0)
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                                                this.log_viewer.focus_handle.focus(window, cx);
+                                                this.remember_user_log_region(LogRegion::Body);
+                                            }),
+                                        )
+                                        .on_mouse_down(
+                                            MouseButton::Right,
+                                            cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                                                this.log_viewer.focus_handle.focus(window, cx);
+                                                this.remember_user_log_region(LogRegion::Body);
+                                            }),
+                                        )
+                                        .on_prepaint(move |bounds, window, cx| {
+                                            log_drag_workspace.update(cx, |workspace, cx| {
+                                                workspace.row_drag_bounds.insert(
+                                                    (document_id, WrappedRegion::Log),
+                                                    bounds,
+                                                );
+                                                workspace.update_wrapped_layout(
+                                                    document_id,
+                                                    WrappedRegion::Log,
+                                                    (bounds.size.width
+                                                        - marker_width
+                                                        - local_line_number_width)
+                                                        .max(px(0.)),
+                                                    bounds.size.height,
+                                                    window,
+                                                    cx,
+                                                );
+                                            });
+                                        })
+                                        .on_mouse_move(cx.listener(
+                                            move |this, event, window, cx| {
+                                                this.handle_row_drag_move(
+                                                    document_id,
+                                                    WrappedRegion::Log,
+                                                    event,
+                                                    window,
+                                                    cx,
+                                                );
+                                            },
+                                        ))
+                                        .child(Self::capture_log_wheel(
+                                            log_wheel_workspace,
                                             document_id,
                                             WrappedRegion::Log,
-                                            (bounds.size.width
-                                                - marker_width
-                                                - local_line_number_width)
-                                                .max(px(0.)),
-                                            bounds.size.height,
-                                            window,
-                                            cx,
-                                        );
-                                    });
-                                })
-                                .on_mouse_move(cx.listener(move |this, event, window, cx| {
-                                    this.handle_row_drag_move(
-                                        document_id,
-                                        WrappedRegion::Log,
-                                        event,
-                                        window,
-                                        cx,
-                                    );
-                                }))
-                                .child(Self::capture_log_wheel(
-                                    log_wheel_workspace,
-                                    document_id,
-                                    WrappedRegion::Log,
-                                ))
-                                .child(self.log_viewer.surface.clone())
-                                .when(
-                                    self.quick_find.open
-                                        && self.quick_find.target
-                                            == Some(QuickFindTarget::Log(document_id)),
-                                    |region| region.child(self.render_quick_find_bar(cx)),
+                                        ))
+                                        .child(self.log_viewer.surface.clone())
+                                        .when(
+                                            self.quick_find.open
+                                                && self.quick_find.target
+                                                    == Some(QuickFindTarget::Log(document_id)),
+                                            |region| region.child(self.render_quick_find_bar(cx)),
+                                        )
+                                        .context_menu(move |menu, window, cx| {
+                                            Self::build_log_context_menu(
+                                                menu,
+                                                log_context_workspace.clone(),
+                                                LogContextMenuContext {
+                                                    selected_text: TextSelection::selected_text(
+                                                        window, cx,
+                                                    ),
+                                                    include_results: false,
+                                                    include_global_merge: false,
+                                                    export_disabled: false,
+                                                },
+                                                window,
+                                                cx,
+                                            )
+                                        })
+                                        .text_selection_scope(self.log_viewer.text_selection_scope),
                                 )
-                                .context_menu(move |menu, window, cx| {
-                                    Self::build_log_context_menu(
-                                        menu,
-                                        log_context_workspace.clone(),
-                                        LogContextMenuContext {
-                                            selected_text: TextSelection::selected_text(window, cx),
-                                            include_results: false,
-                                            include_global_merge: false,
-                                            export_disabled: false,
-                                        },
-                                        window,
-                                        cx,
-                                    )
-                                })
-                                .text_selection_scope(self.log_viewer.text_selection_scope),
-                        ),
+                            }),
                     )
                     .child(
                         resizable_panel()

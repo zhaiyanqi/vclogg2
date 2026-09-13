@@ -233,16 +233,18 @@ impl Workspace {
     /// This keeps ordinary table notifications repainting the shared surface after a tab or
     /// search-session switch.
     pub(super) fn bind_active_display_tables(&mut self, cx: &mut Context<Self>) {
-        let Some(tab_ix) = self.active_ix else {
-            return;
-        };
-        self.refresh_active_log_search_presentation(cx);
-        let log_table = self.documents[tab_ix].log_table.clone();
-        self.log_viewer
-            .surface
-            .update(cx, |surface, cx| surface.bind_table(&log_table, cx));
+        if let Some(tab_ix) = self.active_ix {
+            self.refresh_active_log_search_presentation(cx);
+            let log_table = self.documents[tab_ix].log_table.clone();
+            self.log_viewer
+                .surface
+                .update(cx, |surface, cx| surface.bind_table(&log_table, cx));
+        }
         match self.global_search.scope {
             SearchScope::CurrentFile => {
+                let Some(tab_ix) = self.active_ix else {
+                    return;
+                };
                 let result_table = self.documents[tab_ix].result_table.clone();
                 self.search_results_viewer
                     .surface

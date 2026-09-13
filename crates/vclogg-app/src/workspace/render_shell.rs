@@ -1120,7 +1120,6 @@ impl Workspace {
 
     pub(super) fn render_search_scope_control(
         &self,
-        has_document: bool,
         tooltip: String,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -1145,7 +1144,7 @@ impl Workspace {
                     .rounded_l_none()
                     .border_l_0()
                     .icon(IconName::Settings2)
-                    .disabled(!has_document)
+                    .disabled(self.documents.is_empty())
                     .tooltip(crate::tr!("配置全局搜索…", "Configure global search…"))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_global_search_files_dialog(window, cx);
@@ -1161,7 +1160,6 @@ impl Workspace {
                     .rounded_l_none()
                     .border_l_0()
                     .icon(IconName::Settings2)
-                    .disabled(!has_document)
                     .tooltip(crate::tr!("配置目录搜索…", "Configure directory search…"))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_directory_search_dialog(window, cx);
@@ -1191,7 +1189,6 @@ impl Workspace {
                     },
                 )
             })
-            .disabled(!has_document)
             .tooltip(tooltip)
             .dropdown_menu(move |menu, window, cx| {
                 let menu =
@@ -1260,10 +1257,6 @@ impl Workspace {
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, _, window, cx| {
-                    if !has_document {
-                        return;
-                    }
-
                     window.prevent_default();
                     cx.stop_propagation();
                     GlobalState::suppress_text_selection(cx);
@@ -1630,8 +1623,8 @@ impl Workspace {
         // The field keeps an independent font size while sharing the toolbar control height.
         let input_font_size = px(f32::from(self.app_settings.search_input_font_size));
         let search_history_empty = self.search_history.is_empty();
-        let has_document = self.active_document().is_some();
-        let predefined_filters = self.render_predefined_filters_popover(has_document, cx);
+        let has_search_context = self.search_tab_owner().is_some();
+        let predefined_filters = self.render_predefined_filters_popover(has_search_context, cx);
         let active_document_ready = self
             .active_document()
             .is_some_and(|tab| tab.load_state == DocumentLoadState::Ready);
@@ -1695,7 +1688,11 @@ impl Workspace {
         let (result_mode_select, result_count_label, committed_results_visible) =
             match self.global_search.scope {
                 SearchScope::CurrentFile => self.active_document().map_or(
-                    (None, crate::tr!("0 条结果", "0 results").to_string(), false),
+                    (
+                        self.empty_result_mode_select.clone(),
+                        crate::tr!("0 条结果", "0 results").to_string(),
+                        false,
+                    ),
                     |tab| {
                         let truncation =
                             if tab.search_result.truncated && tab.result_mode.includes_matches() {
@@ -1704,7 +1701,7 @@ impl Workspace {
                                 ""
                             };
                         (
-                            Some(tab.result_mode_select.clone()),
+                            tab.result_mode_select.clone(),
                             crate::tr_args!(
                                 "{} 条结果{truncation}",
                                 "{} results{truncation}",
@@ -1722,7 +1719,7 @@ impl Workspace {
                         ""
                     };
                     (
-                        Some(self.global_search.result_mode_select.clone()),
+                        self.global_search.result_mode_select.clone(),
                         crate::tr_args!(
                             "{} 条 · {} 个文件{truncation}",
                             "{} results · {} files{truncation}",
@@ -1736,8 +1733,7 @@ impl Workspace {
         let search_disabled = match self.global_search.scope {
             SearchScope::CurrentFile => !active_document_ready,
             SearchScope::AllOpenFiles => {
-                !has_document
-                    || global_selected_count == 0
+                global_selected_count == 0
                     || self.documents.iter().any(|tab| {
                         self.global_search.selected_documents.contains(&tab.id)
                             && tab.load_state != DocumentLoadState::Ready
@@ -1745,7 +1741,7 @@ impl Workspace {
             }
             SearchScope::Directory => self.global_search.directory_options.directory.is_none(),
         };
-        let clear_disabled = !has_document
+        let clear_disabled = !has_search_context
             || (query_empty
                 && match self.global_search.scope {
                     SearchScope::CurrentFile => self
@@ -1756,8 +1752,7 @@ impl Workspace {
                     }
                 });
         let searching_current_scope = self.search_tab_is_searching();
-        let search_scope_control =
-            self.render_search_scope_control(has_document, search_scope_tooltip, cx);
+        let search_scope_control = self.render_search_scope_control(search_scope_tooltip, cx);
 
         v_flex()
             .relative()
@@ -1777,22 +1772,21 @@ impl Workspace {
                     .py(ui_theme::WORKSPACE_BAR_VERTICAL_INSET)
                     .bg(ui_theme::header_material(&colors))
                     .child(ui_theme::glass_sheen_layer(&colors))
-                    .when_some(result_mode_select, |controls, result_mode_select| {
-                        controls.child(
-                            div()
-                                .w(px(110.) * font_scale)
-                                .h(control_height)
-                                .flex_none()
-                                .child(
-                                    Select::new(&result_mode_select)
-                                        .small()
-                                        .text_size(font_size)
-                                        .line_height(relative(1.25))
-                                        .h(control_height)
-                                        .focus_ring(false),
-                                ),
-                        )
-                    })
+                    .child(
+                        div()
+                            .w(px(110.) * font_scale)
+                            .h(control_height)
+                            .flex_none()
+                            .child(
+                                Select::new(&result_mode_select)
+                                    .small()
+                                    .text_size(font_size)
+                                    .line_height(relative(1.25))
+                                    .h(control_height)
+                                    .disabled(!has_search_context)
+                                    .focus_ring(false),
+                            ),
+                    )
                     .child(
                         Button::new("case-sensitive")
                             .small()
@@ -1805,7 +1799,7 @@ impl Workspace {
                             .map(|button| self.search_toolbar_button_label(button, "Aa"))
                             .selected(self.case_sensitive)
                             .toggled(self.case_sensitive)
-                            .disabled(!has_document)
+                            .disabled(!has_search_context)
                             .tooltip(crate::tr!("区分大小写（Alt+C）", "Case-sensitive (Alt+C)"))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_case_sensitive(&ToggleCaseSensitive, window, cx);
@@ -1823,7 +1817,7 @@ impl Workspace {
                             .map(|button| self.search_toolbar_button_label(button, ".*"))
                             .selected(self.regex)
                             .toggled(self.regex)
-                            .disabled(!has_document)
+                            .disabled(!has_search_context)
                             .tooltip(crate::tr!("使用正则表达式", "Use regular expressions"))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_regex(&ToggleRegex, window, cx);
