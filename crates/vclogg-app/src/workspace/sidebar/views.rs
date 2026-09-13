@@ -320,9 +320,7 @@ impl SidebarState {
                                 SidebarPanelId::History => this.refresh_history(cx),
                                 SidebarPanelId::Files => this.refresh_tree(cx),
                                 SidebarPanelId::Colors => {
-                                    this.color_error = None;
-                                    this.colors_loaded = false;
-                                    this.start_colors(cx);
+                                    this.retry_colors(cx);
                                 }
                                 _ => {
                                     this.summary_error = None;
@@ -372,7 +370,10 @@ impl SidebarState {
                 );
             }
         }
-        if matches!(panel, SidebarPanelId::Minutes | SidebarPanelId::Minimap) {
+        if matches!(panel, SidebarPanelId::Minimap | SidebarPanelId::Colors) {
+            return self.render_overview(panel, window, cx);
+        }
+        if panel == SidebarPanelId::Minutes {
             if let Some(error) = self.summary_error.clone() {
                 return self.empty(panel, error, Some(panel), cx);
             }
@@ -388,22 +389,6 @@ impl SidebarState {
                         "正在建立导航索引：{scanned}/{total}",
                         "Indexing navigation: {scanned}/{total}"
                     ),
-                    None,
-                    cx,
-                );
-            }
-            if panel == SidebarPanelId::Minimap {
-                return self.render_minimap(window, cx);
-            }
-        }
-        if panel == SidebarPanelId::Colors {
-            if let Some(error) = self.color_error.clone() {
-                return self.empty(panel, error, Some(panel), cx);
-            }
-            if self.color_job.is_some() {
-                return self.empty(
-                    panel,
-                    crate::tr!("正在加载颜色标签…", "Loading color labels…"),
                     None,
                     cx,
                 );
@@ -429,19 +414,12 @@ impl SidebarState {
                     "暂无标记，可在日志行添加行标记或文字标记",
                     "No marks. Add a row mark or text mark to a log line"
                 ),
-                SidebarPanelId::Colors => {
-                    crate::tr!(
-                        "当前文件未应用颜色标签",
-                        "No color labels applied to this file"
-                    )
-                }
                 _ => crate::tr!("未识别到日志时间", "No log timestamps detected"),
             };
             return self.empty(panel, message, None, cx);
         }
         let scroll = self.scrolls[&panel].clone();
         let focus = self.focus[&panel].clone();
-        let preview_state = cx.weak_entity();
         div()
             .id(SharedString::from(format!("sidebar-list-{panel:?}")))
             .flex_1()
@@ -463,14 +441,6 @@ impl SidebarState {
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                 this.list_key(panel, event, window, cx)
             }))
-            .on_prepaint(move |_, _, cx| {
-                if panel == SidebarPanelId::Colors {
-                    let state = preview_state.clone();
-                    cx.defer(move |cx| {
-                        _ = state.update(cx, |state, cx| state.request_previews(cx));
-                    });
-                }
-            })
             .child(
                 uniform_list(
                     SharedString::from(format!("sidebar-rows-{panel:?}")),
@@ -478,9 +448,6 @@ impl SidebarState {
                     cx.processor(move |this, range: Range<usize>, window, cx| {
                         if panel == SidebarPanelId::Marks {
                             this.defer_mark_previews(range.clone(), window, cx);
-                        }
-                        if panel == SidebarPanelId::Colors {
-                            this.color_visible_start = range.start;
                         }
                         range
                             .map(|ix| this.render_list_item(panel, ix, cx))
@@ -506,7 +473,6 @@ impl SidebarState {
                 .summary
                 .as_ref()
                 .map_or(0, |summary| summary.groups().len()),
-            SidebarPanelId::Colors => self.color_item_count(),
             _ => 0,
         }
     }
@@ -533,13 +499,6 @@ impl SidebarState {
                 .groups()
                 .get(ix)
                 .map(|group| format!("minute-{}", group.first_row())),
-            SidebarPanelId::Colors => self.color_item(ix).map(|(group, row)| {
-                format!(
-                    "{}:{}",
-                    self.colors[group].id,
-                    row.map_or_else(|| "header".to_string(), |row| row.to_string())
-                )
-            }),
             _ => None,
         }
     }
@@ -559,28 +518,6 @@ impl SidebarState {
                     .groups()
                     .binary_search_by_key(&row, |group| group.first_row())
                     .ok()
-            }
-            SidebarPanelId::Colors => {
-                let (id, row) = key.rsplit_once(':')?;
-                let mut offset = 0;
-                for group in self.colors.iter() {
-                    if group.id == id {
-                        return if row == "header" || self.collapsed_colors.contains(id) {
-                            Some(offset)
-                        } else {
-                            group
-                                .rows
-                                .position(row.parse().ok()?)
-                                .map(|ix| offset + 1 + ix)
-                        };
-                    }
-                    offset += 1 + if self.collapsed_colors.contains(&group.id) {
-                        0
-                    } else {
-                        group.rows.len()
-                    };
-                }
-                None
             }
             SidebarPanelId::History => {
                 let id = key.strip_prefix("history-")?.parse::<i64>().ok()?;
@@ -636,20 +573,6 @@ impl SidebarState {
                     self.jump(group.first_row(), true, window, cx);
                 }
             }
-            SidebarPanelId::Colors => {
-                if let Some((group, row)) = self.color_item(ix) {
-                    if let Some(row) = row {
-                        self.jump(row, true, window, cx);
-                    } else {
-                        let id = self.colors[group].id.clone();
-                        if !self.collapsed_colors.remove(&id) {
-                            self.collapsed_colors.insert(id);
-                        }
-                        self.preview_range = None;
-                        self.request_previews(cx);
-                    }
-                }
-            }
             _ => {}
         }
         cx.notify();
@@ -695,10 +618,6 @@ impl SidebarState {
             self.selected.insert(panel, key);
         }
         self.scrolls[&panel].scroll_to_item(next, ScrollStrategy::Nearest);
-        if panel == SidebarPanelId::Colors {
-            self.preview_range = None;
-            self.request_previews(cx);
-        }
         cx.stop_propagation();
         cx.notify();
     }
@@ -716,7 +635,7 @@ impl SidebarState {
             return div().into_any_element();
         };
         let selected = self.selected.get(&panel) == Some(&key);
-        let (title, detail, color) = match panel {
+        let (title, detail) = match panel {
             SidebarPanelId::Favorites => {
                 let Some(file) = self.favorites.get(ix) else {
                     return div().into_any_element();
@@ -728,7 +647,6 @@ impl SidebarState {
                         .to_string_lossy()
                         .into_owned(),
                     file.path.display().to_string(),
-                    None,
                 )
             }
             SidebarPanelId::History => {
@@ -746,7 +664,6 @@ impl SidebarState {
                         format_opened_at(file.last_opened_at),
                         file.path.display()
                     ),
-                    None,
                 )
             }
             SidebarPanelId::Minutes => {
@@ -765,37 +682,7 @@ impl SidebarState {
                         group.count(),
                         group.first_row() + 1
                     ),
-                    None,
                 )
-            }
-            SidebarPanelId::Colors => {
-                let Some((group_ix, row)) = self.color_item(ix) else {
-                    return div().into_any_element();
-                };
-                let group = &self.colors[group_ix];
-                match row {
-                    Some(row) => (
-                        format!("{}", row + 1),
-                        self.previews
-                            .get(&row)
-                            .cloned()
-                            .unwrap_or_else(|| crate::tr!("加载中…", "Loading…").to_string()),
-                        Some(group.paint_color()),
-                    ),
-                    None => (
-                        format!(
-                            "{} {}",
-                            if self.collapsed_colors.contains(&group.id) {
-                                "▸"
-                            } else {
-                                "▾"
-                            },
-                            group.label
-                        ),
-                        crate::tr_args!("{} 行", "{} lines", group.rows.len()),
-                        Some(group.paint_color()),
-                    ),
-                }
             }
             _ => return div().into_any_element(),
         };
@@ -813,9 +700,6 @@ impl SidebarState {
                     .w_full()
                     .min_w_0()
                     .gap_2()
-                    .when_some(color, |this, color| {
-                        this.child(div().size_2().flex_shrink_0().bg(color))
-                    })
                     .child(
                         v_flex()
                             .min_w_0()
@@ -851,7 +735,7 @@ impl SidebarState {
                 if matches!(event, ClickEvent::Mouse(event) if event.down.button != MouseButton::Left || event.up.button != MouseButton::Left) {
                     return;
                 }
-                if matches!(panel, SidebarPanelId::Minutes | SidebarPanelId::Colors)
+                if panel == SidebarPanelId::Minutes
                     && this.generation != generation
                 {
                     return;

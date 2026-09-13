@@ -51,6 +51,11 @@ impl SidebarPanelId {
                 .small()
                 .into_any_element();
         }
+        if self == Self::Colors {
+            return Icon::new(crate::app_assets::AppIcon::ColorLabel)
+                .small()
+                .into_any_element();
+        }
         if self == Self::History {
             return Icon::new(crate::app_assets::AppIcon::History)
                 .small()
@@ -62,7 +67,7 @@ impl SidebarPanelId {
             Self::History => unreachable!("history uses its own icon"),
             Self::Marks => unreachable!("marks use the Letter M icon"),
             Self::Minutes => IconName::Calendar,
-            Self::Colors => IconName::Palette,
+            Self::Colors => unreachable!("color labels use their own icon"),
             Self::LogColoring => IconName::Palette,
             Self::Minimap => IconName::Map,
             Self::Tabs => IconName::File,

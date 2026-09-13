@@ -62,6 +62,10 @@ enum PendingScroll {
         row_ix: usize,
         viewport_y: Pixels,
     },
+    RowFractionAtCenter {
+        row_ix: usize,
+        fraction: f32,
+    },
     End,
 }
 
@@ -224,6 +228,14 @@ impl<K: 'static> VirtualLogViewport<K> {
     pub(crate) fn scroll_row_to_viewport_y(&self, row_ix: usize, viewport_y: Pixels) {
         self.inner.borrow_mut().pending_scroll =
             Some(PendingScroll::RowAtViewportY { row_ix, viewport_y });
+    }
+
+    /// Center a point within a source row after its wrapped height has been measured.
+    pub(crate) fn scroll_row_fraction_to_center(&self, row_ix: usize, fraction: f32) {
+        self.inner.borrow_mut().pending_scroll = Some(PendingScroll::RowFractionAtCenter {
+            row_ix,
+            fraction: fraction.clamp(0., 1.),
+        });
     }
 
     pub(crate) fn preserve_row_at_viewport_y(&self, row_ix: usize, viewport_y: Pixels) {
@@ -484,7 +496,8 @@ impl<K: 'static> VirtualLogViewport<K> {
             .max(1.) as usize;
         let target = match pending {
             Some(PendingScroll::Row { row_ix, .. })
-            | Some(PendingScroll::RowAtViewportY { row_ix, .. }) => {
+            | Some(PendingScroll::RowAtViewportY { row_ix, .. })
+            | Some(PendingScroll::RowFractionAtCenter { row_ix, .. }) => {
                 row_ix.min(inner.item_count - 1)
             }
             Some(PendingScroll::End) => inner.item_count - 1,
@@ -494,7 +507,10 @@ impl<K: 'static> VirtualLogViewport<K> {
             Some(PendingScroll::Row {
                 strategy: ScrollStrategy::Center,
                 ..
-            }) => target.saturating_sub(visible_slots / 2),
+            })
+            | Some(PendingScroll::RowFractionAtCenter { .. }) => {
+                target.saturating_sub(visible_slots / 2)
+            }
             Some(PendingScroll::Row {
                 strategy: ScrollStrategy::Bottom,
                 ..
@@ -1147,6 +1163,10 @@ fn resolve_position<K>(
                     }
                 }
             }
+        }
+        Some(PendingScroll::RowFractionAtCenter { row_ix, fraction }) => {
+            let row_ix = row_ix.clamp(first_ix, last_ix);
+            height_before(row_ix) + target_height(row_ix) * fraction - viewport_height / 2.
         }
         Some(PendingScroll::RowAtViewportY { row_ix, viewport_y }) => {
             let row_ix = row_ix.clamp(first_ix, last_ix);

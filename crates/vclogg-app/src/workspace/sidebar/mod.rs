@@ -9,11 +9,13 @@ use gpui_component::{
 use std::sync::atomic::AtomicUsize;
 use vclogg_core::{CancellationToken, DirectoryEntry, NavigationSummary};
 
+mod color_tracks;
 mod file_tree;
 mod layout;
 mod log_coloring;
 pub(super) mod marks;
 mod minimap;
+mod minimap_view;
 mod overview;
 mod tasks;
 mod views;
@@ -41,6 +43,7 @@ struct ColorGroup {
     color: u32,
     alpha: u8,
     rows: CompressedRows,
+    counts: Arc<Vec<usize>>,
 }
 
 #[derive(Clone)]
@@ -67,10 +70,6 @@ pub(super) struct SidebarState {
     table_subscription: Option<Subscription>,
     summary: Option<Arc<NavigationSummary>>,
     summary_source: Option<Arc<LogDocument>>,
-    overview_marks: Vec<Option<usize>>,
-    overview_job: Option<SidebarJob>,
-    overview_request: u64,
-    overview_dirty: bool,
     append_pair: Option<(Arc<LogDocument>, Arc<LogDocument>)>,
     summary_job: Option<SidebarJob>,
     summary_request: u64,
@@ -106,23 +105,18 @@ pub(super) struct SidebarState {
     rules_version: Option<Arc<ResolvedColorRules>>,
     labels: Vec<ColorLabel>,
     colors: Arc<Vec<ColorGroup>>,
-    collapsed_colors: BTreeSet<String>,
-    color_job: Option<SidebarJob>,
+    color_specs: BTreeMap<String, color_tracks::ColorSpec>,
+    color_cache: BTreeMap<String, ColorGroup>,
+    color_jobs: BTreeMap<String, color_tracks::ColorScanJob>,
+    color_errors: BTreeMap<String, String>,
     color_request: u64,
-    color_revision: u64,
     color_error: Option<String>,
-    colors_loaded: bool,
-    previews: BTreeMap<usize, String>,
-    preview_job: Option<SidebarJob>,
-    preview_request: u64,
-    preview_range: Option<Range<usize>>,
-    color_visible_start: usize,
     scrolls: BTreeMap<SidebarPanelId, UniformListScrollHandle>,
     focus: BTreeMap<SidebarPanelId, FocusHandle>,
     selected: BTreeMap<SidebarPanelId, String>,
     marks: marks::MarksState,
-    minimap_drag: Option<f32>,
-    minimap_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    minimap: minimap::OverviewState,
+    color_overview: minimap::OverviewState,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -171,10 +165,6 @@ impl SidebarState {
             table_subscription: None,
             summary: None,
             summary_source: None,
-            overview_marks: Vec::new(),
-            overview_job: None,
-            overview_request: 0,
-            overview_dirty: true,
             append_pair: None,
             summary_job: None,
             summary_request: 0,
@@ -210,17 +200,12 @@ impl SidebarState {
             rules_version: None,
             labels: Vec::new(),
             colors: Arc::default(),
-            collapsed_colors: BTreeSet::new(),
-            color_job: None,
+            color_specs: BTreeMap::new(),
+            color_cache: BTreeMap::new(),
+            color_jobs: BTreeMap::new(),
+            color_errors: BTreeMap::new(),
             color_request: 0,
-            color_revision: 0,
             color_error: None,
-            colors_loaded: false,
-            previews: BTreeMap::new(),
-            preview_job: None,
-            preview_request: 0,
-            preview_range: None,
-            color_visible_start: 0,
             scrolls: SidebarPanelId::ALL
                 .into_iter()
                 .map(|id| (id, UniformListScrollHandle::new()))
@@ -231,8 +216,14 @@ impl SidebarState {
                 .collect(),
             selected: BTreeMap::new(),
             marks: marks::MarksState::default(),
-            minimap_drag: None,
-            minimap_bounds: Rc::default(),
+            minimap: minimap::OverviewState {
+                dirty: true,
+                ..Default::default()
+            },
+            color_overview: minimap::OverviewState {
+                dirty: true,
+                ..Default::default()
+            },
             _subscriptions: subscriptions,
         }
     }
@@ -265,6 +256,15 @@ impl SidebarState {
         };
         let changed_file =
             source.as_ref().map(|(id, _)| *id) != self.document.as_ref().map(|(id, _)| *id);
+        let appended = !changed_file
+            && self.append_pair.as_ref().is_some_and(|(old, new)| {
+                self.document
+                    .as_ref()
+                    .is_some_and(|(_, document)| Arc::ptr_eq(document, old))
+                    && source
+                        .as_ref()
+                        .is_some_and(|(_, document)| Arc::ptr_eq(document, new))
+            });
         let rules = workspace
             .active_document()
             .map(|tab| &tab.file.keyword_color_rules);
@@ -312,23 +312,34 @@ impl SidebarState {
             self.generation += 1;
             self.summary_job.take();
             self.progress_task.take();
-            self.overview_job.take();
-            self.color_job.take();
-            self.preview_job.take();
+            self.color_jobs.clear();
             self.summary_error = None;
             self.color_error = None;
             self.document = source;
             if changed_file {
                 self.selected.remove(&SidebarPanelId::Minutes);
-                self.selected.remove(&SidebarPanelId::Colors);
             }
-            self.minimap_drag = None;
+            if !appended {
+                self.minimap.reset_source();
+                self.color_overview.reset_source();
+            }
+            if table.is_none() {
+                tasks::release_in_background(std::mem::take(&mut self.minimap.search), cx);
+            }
+            self.invalidate_overview(SidebarPanelId::Minimap, cx);
+            self.invalidate_overview(SidebarPanelId::Colors, cx);
             self.viewport = table
                 .as_ref()
                 .map(|table| table.read(cx).viewport().clone());
-            self.table_subscription = table
-                .as_ref()
-                .map(|table| cx.observe(table, |_, _, cx| cx.notify()));
+            self.table_subscription = table.as_ref().map(|table| {
+                cx.observe(table, |this, table, cx| {
+                    this.sync_overview_search(table.read(cx).delegate().matched_rows(), cx);
+                    if this.minimap.dirty && this.minimap.job.is_none() {
+                        this.prepare_overview(SidebarPanelId::Minimap, cx);
+                    }
+                    cx.notify();
+                })
+            });
             if changed_file {
                 self.reveal_active_file(cx);
             }
@@ -345,22 +356,14 @@ impl SidebarState {
             if !reusable {
                 tasks::release_in_background(self.summary.take(), cx);
                 self.summary_source = None;
-                self.overview_marks.clear();
                 self.append_pair = None;
             }
         }
         if colors_changed {
-            self.colors_loaded = false;
-            self.color_revision += 1;
-            self.color_job.take();
-            tasks::release_in_background(std::mem::take(&mut self.colors), cx);
-            self.overview_job.take();
-            self.overview_dirty = true;
-            self.overview_marks.clear();
-            self.previews.clear();
-            self.preview_range = None;
-            self.preview_job.take();
-            self.color_error = None;
+            if changed {
+                self.reset_color_tracks(cx);
+            }
+            self.sync_color_tracks(cx);
         }
         if self.store.is_none()
             && let Some(store) = store
@@ -371,6 +374,9 @@ impl SidebarState {
         if history_changed && self.is_showing(SidebarPanelId::History) {
             self.refresh_history(cx);
         }
+        if let Some(table) = table {
+            self.sync_overview_search(table.read(cx).delegate().matched_rows(), cx);
+        }
         self.ensure_visible_data(cx);
         cx.notify();
     }
@@ -379,27 +385,29 @@ impl SidebarState {
         if !self.is_showing(SidebarPanelId::Marks) {
             self.marks.release_previews();
         }
-        let need_summary =
-            self.is_showing(SidebarPanelId::Minutes) || self.is_showing(SidebarPanelId::Minimap);
-        let need_colors =
-            self.is_showing(SidebarPanelId::Colors) || self.is_showing(SidebarPanelId::Minimap);
+        let need_summary = self.is_showing(SidebarPanelId::Minutes);
+        let need_colors = self.is_showing(SidebarPanelId::Colors);
         if !need_summary {
             self.summary_job.take();
             self.progress_task.take();
         }
-        if !self.is_showing(SidebarPanelId::Minimap) {
-            self.overview_job.take();
+        for panel in [SidebarPanelId::Minimap, SidebarPanelId::Colors] {
+            if !self.is_showing(panel) {
+                let state = self.overview_state_mut(panel);
+                state.job.take();
+                state.request += 1;
+                state.hover = None;
+                state.drag = None;
+            }
         }
         if !need_colors {
-            self.color_job.take();
-            self.preview_job.take();
-            self.preview_range = None;
+            self.color_jobs.clear();
         }
         self.ensure_file_tree(cx);
         if !self.is_showing(SidebarPanelId::History) {
             self.history_task.take();
         }
-        if (self.is_showing(SidebarPanelId::Minutes) || self.is_showing(SidebarPanelId::Minimap))
+        if need_summary
             && self.summary_job.is_none()
             && self.summary_error.is_none()
             && self
@@ -414,16 +422,14 @@ impl SidebarState {
         {
             self.start_summary(cx);
         }
-        if (self.is_showing(SidebarPanelId::Colors) || self.is_showing(SidebarPanelId::Minimap))
-            && self.color_job.is_none()
-            && self.color_error.is_none()
-            && !self.colors_loaded
-            && !self.rules.is_empty()
-        {
+        if need_colors {
             self.start_colors(cx);
         }
-        if self.overview_dirty && self.overview_job.is_none() {
-            self.prepare_overview_marks(cx);
+        for panel in [SidebarPanelId::Minimap, SidebarPanelId::Colors] {
+            let state = self.overview_state(panel);
+            if state.dirty && state.job.is_none() {
+                self.prepare_overview(panel, cx);
+            }
         }
     }
 
@@ -442,7 +448,8 @@ impl SidebarState {
         if self.is_showing(SidebarPanelId::History) {
             self.refresh_history(cx);
         }
-        self.minimap_drag = None;
+        self.minimap.drag = None;
+        self.color_overview.drag = None;
         self.changed_layout(cx);
         if self.layout.sides[side.ix()].visible {
             if let Some(panel) = self.layout.sides[side.ix()].active {
@@ -501,14 +508,18 @@ impl SidebarState {
     }
 
     fn jump(&self, row: usize, select: bool, window: &mut Window, cx: &mut App) {
-        self.jump_fraction(row, 0., select, window, cx);
+        self.jump_to(row, select, None, window, cx);
     }
 
-    fn jump_fraction(
+    fn jump_centered(&self, row: usize, fraction: f32, window: &mut Window, cx: &mut App) {
+        self.jump_to(row, false, Some(fraction), window, cx);
+    }
+
+    fn jump_to(
         &self,
         row: usize,
-        fraction: f32,
         select: bool,
+        center: Option<f32>,
         window: &mut Window,
         cx: &mut App,
     ) {
@@ -542,8 +553,13 @@ impl SidebarState {
                     table.delegate().settle_table_selection(local);
                     table.set_active_log_row(local, cx);
                 }
-                let offset = table.viewport().row_height(local) * fraction.clamp(0., 0.9999);
-                table.viewport().scroll_row_to_viewport_y(local, -offset);
+                if let Some(fraction) = center {
+                    table
+                        .viewport()
+                        .scroll_row_fraction_to_center(local, fraction);
+                } else {
+                    table.viewport().scroll_row_to_viewport_y(local, px(0.));
+                }
                 cx.notify();
             });
             if select {

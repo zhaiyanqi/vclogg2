@@ -13,17 +13,25 @@ pub(crate) enum AppIcon {
     History,
     Refresh,
     FollowEnd,
+    ColorLabel,
     LetterM,
 }
 
 impl AppIcon {
-    const ALL: [Self; 4] = [Self::History, Self::Refresh, Self::FollowEnd, Self::LetterM];
+    const ALL: [Self; 5] = [
+        Self::History,
+        Self::Refresh,
+        Self::FollowEnd,
+        Self::ColorLabel,
+        Self::LetterM,
+    ];
 
     fn asset_path(self) -> &'static str {
         match self {
             Self::History => "vclogg/icons/history.svg",
             Self::Refresh => "vclogg/icons/refresh-cw.svg",
             Self::FollowEnd => "vclogg/icons/arrow-down-to-line.svg",
+            Self::ColorLabel => "vclogg/icons/tag.svg",
             Self::LetterM => "vclogg/icons/letter-m.svg",
         }
     }
@@ -33,6 +41,7 @@ impl AppIcon {
             Self::History => include_bytes!("../assets/icons/history.svg"),
             Self::Refresh => include_bytes!("../assets/icons/refresh-cw.svg"),
             Self::FollowEnd => include_bytes!("../assets/icons/arrow-down-to-line.svg"),
+            Self::ColorLabel => include_bytes!("../assets/icons/tag.svg"),
             Self::LetterM => include_bytes!("../assets/icons/letter-m.svg"),
         }
     }

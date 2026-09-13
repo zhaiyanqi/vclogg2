@@ -1015,6 +1015,10 @@ impl LogTableDelegate {
         self.presenter.matched_rows = matched_rows;
     }
 
+    pub(crate) fn matched_rows(&self) -> &CompressedRows {
+        &self.presenter.matched_rows
+    }
+
     pub fn set_quick_find_matcher(&mut self, quick_find_matcher: Option<SearchMatcher>) {
         self.presenter.quick_find_matcher = quick_find_matcher;
     }

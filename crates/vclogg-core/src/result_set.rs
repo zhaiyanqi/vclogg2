@@ -34,6 +34,18 @@ impl CompressedRows {
         self.rows.is_empty()
     }
 
+    /// Count matching source rows in a half-open range without expanding the set.
+    pub fn count_in_range(&self, range: std::ops::Range<usize>) -> usize {
+        if range.is_empty() {
+            return 0;
+        }
+        usize::try_from(
+            self.rows
+                .range_cardinality(range.start as u64..range.end as u64),
+        )
+        .unwrap_or(usize::MAX)
+    }
+
     /// Whether two handles share the same immutable, copy-on-write snapshot.
     /// Different storage does not imply different row contents.
     pub fn shares_storage(&self, other: &Self) -> bool {
