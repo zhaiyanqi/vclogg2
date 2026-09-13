@@ -717,15 +717,12 @@ impl Workspace {
             .layout
             .fit(window.viewport_size().width / rem);
         let state = self.sidebar.clone();
-        let vertical_visible = widths.iter().enumerate().any(|(ix, width)| {
-            width.is_some()
-                && self.sidebar.read(cx).layout.sides[ix].active == Some(SidebarPanelId::Tabs)
-        });
+        let vertical_tabs = self.vertical_tabs_enabled(cx);
         let center = v_flex()
             .min_w_0()
             .min_h_0()
             .size_full()
-            .when(!vertical_visible, |this| {
+            .when(!vertical_tabs, |this| {
                 this.child(self.render_tabs(has_other_window, cx))
             })
             .child(
