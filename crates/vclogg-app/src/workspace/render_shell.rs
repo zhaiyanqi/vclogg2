@@ -715,29 +715,8 @@ impl Workspace {
         let follow_available = self
             .active_document()
             .is_some_and(|tab| tab.load_state == DocumentLoadState::Ready);
-        let workspace = cx.entity();
         let has_document = self.active_document().is_some();
         let active_file_is_pinned = self.active_file_is_pinned();
-        let active_encoding = self.active_document().map(|tab| {
-            (
-                tab.id,
-                SharedString::from(if tab.load_state == DocumentLoadState::Opening {
-                    crate::tr!("检测中", "Detecting").to_string()
-                } else {
-                    tab.document.metadata().encoding_name.clone()
-                }),
-            )
-        });
-        let file_size = self
-            .active_document()
-            .map(|tab| format_bytes(tab.document.metadata().file_size));
-        let line_position = self.active_document().map(|tab| {
-            format!(
-                "Ln {}/{}",
-                self.selected_source_row.map_or(1, |row| row + 1),
-                tab.document.source_line_count()
-            )
-        });
 
         let colors = ui_theme::palette(cx);
         // 工具栏内四个圆角方钮为 34px 见方、3px 间距，与 `Button` 的 24/32px
@@ -749,17 +728,6 @@ impl Workspace {
                 .h(px(34.))
                 .rounded(px(10.))
                 .flex_shrink_0()
-        };
-        // file-meta 的每一项之间是一条 `--divider-soft` 竖线，首项不画。
-        let file_meta_item = |text: String, leading_divider: bool| {
-            div()
-                .px(px(9.))
-                .text_size(px(11.))
-                .text_color(colors.muted_foreground)
-                .when(leading_divider, |item| {
-                    item.border_l_1().border_color(colors.divider)
-                })
-                .child(text)
         };
 
         h_flex()
@@ -834,44 +802,6 @@ impl Workspace {
                     )),
             )
             .child(self.render_path_breadcrumb(window, cx))
-            .child(
-                h_flex()
-                    .h(px(36.))
-                    .flex_shrink_0()
-                    .items_center()
-                    .when_some(file_size, |meta, file_size| {
-                        meta.child(file_meta_item(file_size, false))
-                    })
-                    .when_some(active_encoding, |meta, (document_id, encoding_name)| {
-                        let menu_encoding_name = encoding_name.clone();
-                        let workspace = workspace.clone();
-                        meta.child(
-                            Button::new("document-encoding")
-                                .small()
-                                .ghost()
-                                .label(encoding_name)
-                                .h(px(26.))
-                                .px(px(9.))
-                                .rounded(px(8.))
-                                .text_size(px(11.))
-                                .disabled(self.open_task.is_some())
-                                .dropdown_menu(move |menu, window, cx| {
-                                    Self::build_encoding_menu(
-                                        Self::popup_menu_with_workspace_action_context(
-                                            menu, &workspace, cx,
-                                        ),
-                                        document_id,
-                                        menu_encoding_name.clone(),
-                                        workspace.clone(),
-                                        window,
-                                    )
-                                }),
-                        )
-                    })
-                    .when_some(line_position, |meta, line_position| {
-                        meta.child(file_meta_item(line_position, true))
-                    }),
-            )
             .child(self.sidebar_toggle_button(true, cx))
     }
 

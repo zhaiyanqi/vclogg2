@@ -3354,6 +3354,41 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let _performance_scope = crate::ui_performance::scope("Workspace::render_status_bar");
+        let workspace = cx.entity();
+        let active_encoding = self.active_document().map(|tab| {
+            (
+                tab.id,
+                SharedString::from(if tab.load_state == DocumentLoadState::Opening {
+                    crate::tr!("检测中", "Detecting").to_string()
+                } else {
+                    tab.document.metadata().encoding_name.clone()
+                }),
+            )
+        });
+        let file_size = self
+            .active_document()
+            .map(|tab| format_bytes(tab.document.metadata().file_size));
+        let line_position = self.active_document().map(|tab| {
+            format!(
+                "Ln {}/{}",
+                self.selected_source_row.map_or(1, |row| row + 1),
+                tab.document.source_line_count()
+            )
+        });
+
+        let colors = ui_theme::palette(cx);
+        // Keep the current/total line count separated from the encoding control.
+        let file_meta_item = |text: String, leading_divider: bool| {
+            div()
+                .px(px(9.))
+                .text_size(px(11.))
+                .text_color(colors.muted_foreground)
+                .when(leading_divider, |item| {
+                    item.border_l_1().border_color(colors.divider)
+                })
+                .child(text)
+        };
+
         let marked_count = self
             .active_document()
             .map_or(0, |tab| tab.file.marked_rows.len());
@@ -3366,23 +3401,17 @@ impl Workspace {
                 .map_or(0, |tab| tab.selected_rows_count(cx))
         };
         let right = self
-            .selected_source_row
-            .map(|row| {
+            .active_document()
+            .map(|_| {
                 if selected_count > 1 {
                     crate::tr_args!(
-                        "第 {} 行 · 已选 {} 行 · {} 个标记",
-                        "Line {} · {} lines selected · {} marks",
-                        row + 1,
+                        "已选 {} 行 · {} 个标记",
+                        "{} lines selected · {} marks",
                         selected_count,
                         marked_count,
                     )
                 } else {
-                    crate::tr_args!(
-                        "第 {} 行 · {} 个标记",
-                        "Line {} · {} marks",
-                        row + 1,
-                        marked_count
-                    )
+                    crate::tr_args!("{} 个标记", "{} marks", marked_count)
                 }
             })
             .unwrap_or_else(|| format!("core {}", crate::build_info::VERSION));
@@ -3394,12 +3423,52 @@ impl Workspace {
             .px(px(12.))
             .gap(px(8.))
             .text_size(px(11.))
-            .bg(ui_theme::footer_material(&ui_theme::palette(cx)))
+            .bg(ui_theme::footer_material(&colors))
             .left(self.render_add_search_tab(cx))
             .child(self.render_search_tabs(cx))
             .right(
                 h_flex()
                     .gap_2()
+                    .child(
+                        h_flex()
+                            .flex_shrink_0()
+                            .items_center()
+                            .when_some(file_size, |meta, file_size| {
+                                meta.child(file_meta_item(file_size, false))
+                            })
+                            .when_some(active_encoding, |meta, (document_id, encoding_name)| {
+                                let menu_encoding_name = encoding_name.clone();
+                                let workspace = workspace.clone();
+                                meta.child(
+                                    Button::new("document-encoding")
+                                        .small()
+                                        .ghost()
+                                        .label(encoding_name)
+                                        .h(px(26.))
+                                        .px(px(9.))
+                                        .rounded(px(8.))
+                                        .text_size(px(11.))
+                                        .disabled(self.open_task.is_some())
+                                        .dropdown_menu_with_anchor(
+                                            gpui::Anchor::BottomLeft,
+                                            move |menu, window, cx| {
+                                                Self::build_encoding_menu(
+                                                    Self::popup_menu_with_workspace_action_context(
+                                                        menu, &workspace, cx,
+                                                    ),
+                                                    document_id,
+                                                    menu_encoding_name.clone(),
+                                                    workspace.clone(),
+                                                    window,
+                                                )
+                                            },
+                                        ),
+                                )
+                            })
+                            .when_some(line_position, |meta, line_position| {
+                                meta.child(file_meta_item(line_position, true))
+                            }),
+                    )
                     .child(right)
                     .child(crate::notifications::button(window, cx)),
             )
