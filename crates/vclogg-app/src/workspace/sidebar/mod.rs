@@ -9,6 +9,7 @@ use gpui_component::{
 use std::sync::atomic::AtomicUsize;
 use vclogg_core::{CancellationToken, DirectoryEntry, NavigationSummary};
 
+mod file_tree;
 mod layout;
 mod minimap;
 mod overview;
@@ -73,12 +74,20 @@ pub(super) struct SidebarState {
     progress_task: Option<Task<()>>,
     generation: u64,
     tree: Entity<TreeState>,
-    root: Option<PathBuf>,
+    roots: Vec<PathBuf>,
+    roots_loaded: bool,
+    roots_error: Option<String>,
+    roots_job: Option<SidebarJob>,
     directories: BTreeMap<PathBuf, DirectoryLoad>,
     directory_jobs: BTreeMap<PathBuf, SidebarJob>,
     expanded: BTreeSet<PathBuf>,
     tree_generation: u64,
     tree_reveal_active: bool,
+    tree_target: Option<file_tree::FileTreeTarget>,
+    tree_retried: BTreeSet<PathBuf>,
+    tree_exceptions: BTreeSet<PathBuf>,
+    tree_error: Option<String>,
+    tree_visible: bool,
     tree_job: Option<SidebarJob>,
     tree_request: u64,
     tree_dirty: bool,
@@ -125,9 +134,13 @@ impl SidebarState {
                     TreeEvent::Collapsed(id) => (id, false),
                 };
                 let path = decode_persisted_path(id.as_ref());
+                this.tree_reveal_active = false;
                 if expanded {
+                    if matches!(this.directories.get(&path), Some(DirectoryLoad::Failed(_))) {
+                        this.directories.remove(&path);
+                    }
                     this.expanded.insert(path.clone());
-                    this.load_directory(path, cx);
+                    this.load_expanded_directories(cx);
                 } else {
                     this.expanded.remove(&path);
                 }
@@ -160,12 +173,20 @@ impl SidebarState {
             progress_task: None,
             generation: 0,
             tree,
-            root: None,
+            roots: Vec::new(),
+            roots_loaded: false,
+            roots_error: None,
+            roots_job: None,
             directories: BTreeMap::new(),
             directory_jobs: BTreeMap::new(),
             expanded: BTreeSet::new(),
             tree_generation: 0,
-            tree_reveal_active: true,
+            tree_reveal_active: false,
+            tree_target: None,
+            tree_retried: BTreeSet::new(),
+            tree_exceptions: BTreeSet::new(),
+            tree_error: None,
+            tree_visible: false,
             tree_job: None,
             tree_request: 0,
             tree_dirty: true,
@@ -272,7 +293,6 @@ impl SidebarState {
             self.color_error = None;
             self.document = source;
             if changed_file {
-                self.tree_reveal_active = true;
                 self.selected.remove(&SidebarPanelId::Minutes);
                 self.selected.remove(&SidebarPanelId::Colors);
             }
@@ -283,26 +303,8 @@ impl SidebarState {
             self.table_subscription = table
                 .as_ref()
                 .map(|table| cx.observe(table, |_, _, cx| cx.notify()));
-            let root = self
-                .document
-                .as_ref()
-                .and_then(|(_, document)| document.path().parent())
-                .map(Path::to_path_buf);
-            if root != self.root {
-                self.root = root;
-                self.tree_generation += 1;
-                self.directory_jobs.clear();
-                tasks::release_in_background(std::mem::take(&mut self.directories), cx);
-                self.expanded.clear();
-                if let Some(root) = &self.root {
-                    self.expanded.insert(root.clone());
-                }
-                self.rebuild_tree(cx);
-            } else {
-                if changed_file && let Some(root) = &self.root {
-                    self.expanded.insert(root.clone());
-                }
-                self.rebuild_tree(cx);
+            if changed_file {
+                self.reveal_active_file(cx);
             }
             // Keep an old summary only for a verified append; never display it for a new file.
             let reusable = self.append_pair.as_ref().is_some_and(|(old, new)| {
@@ -364,25 +366,9 @@ impl SidebarState {
             self.preview_job.take();
             self.preview_range = None;
         }
-        if !self.is_showing(SidebarPanelId::Files) {
-            self.tree_job.take();
-            self.directory_jobs.clear();
-            self.directories
-                .retain(|_, load| !matches!(load, DirectoryLoad::Loading));
-        }
+        self.ensure_file_tree(cx);
         if !self.is_showing(SidebarPanelId::History) {
             self.history_task.take();
-        }
-        if self.is_showing(SidebarPanelId::Files)
-            && let Some(root) = self.root.clone()
-        {
-            self.load_directory(root, cx);
-            for path in self.expanded.iter().cloned().collect::<Vec<_>>() {
-                self.load_directory(path, cx);
-            }
-            if self.tree_dirty && self.tree_job.is_none() {
-                self.rebuild_tree(cx);
-            }
         }
         if (self.is_showing(SidebarPanelId::Minutes) || self.is_showing(SidebarPanelId::Minimap))
             && self.summary_job.is_none()
@@ -445,11 +431,7 @@ impl SidebarState {
     }
 
     fn focus_panel(&self, panel: SidebarPanelId, window: &mut Window, cx: &mut Context<Self>) {
-        if panel == SidebarPanelId::Files
-            && self.root.as_ref().is_some_and(|root| {
-                !matches!(self.directories.get(root), Some(DirectoryLoad::Failed(_)))
-            })
-        {
+        if panel == SidebarPanelId::Files {
             self.tree.update(cx, |tree, cx| tree.focus(window, cx));
         } else {
             self.focus[&panel].focus(window, cx);

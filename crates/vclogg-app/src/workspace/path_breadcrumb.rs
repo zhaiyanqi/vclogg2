@@ -85,7 +85,8 @@ impl Workspace {
             } else {
                 directory.to_path_buf()
             };
-            let click_directory = directory.clone();
+            let click_path = item_path.clone();
+            let context_path = item_path.clone();
             let context_workspace = workspace.clone();
             let label = if is_file && !show_full_path {
                 tab.file.title.to_string()
@@ -123,10 +124,9 @@ impl Workspace {
                         } else {
                             cx.theme().muted_foreground
                         })
-                        .disabled(self.open_task.is_some())
                         .on_click(cx.listener(
                             move |this, _, window, cx| {
-                                this.open_files_in_directory(click_directory.clone(), window, cx);
+                                this.reveal_in_sidebar(click_path.clone(), !is_file, window, cx);
                             },
                         )),
                     )
@@ -134,6 +134,8 @@ impl Workspace {
                         Self::build_breadcrumb_menu(
                             menu,
                             directory.clone(),
+                            context_path.clone(),
+                            !is_file,
                             &context_workspace,
                             window,
                             cx,
@@ -155,13 +157,32 @@ impl Workspace {
     fn build_breadcrumb_menu(
         menu: PopupMenu,
         directory: PathBuf,
+        target: PathBuf,
+        target_is_directory: bool,
         workspace: &Entity<Self>,
         window: &mut Window,
         cx: &App,
     ) -> PopupMenu {
         let open_directory = directory.clone();
+        let choose_directory = directory.clone();
         let find_directory = directory;
+        let opening = workspace.read(cx).open_task.is_some();
         Self::popup_menu_with_workspace_action_context(menu, workspace, cx)
+            .item(
+                PopupMenuItem::new(crate::tr!("侧边栏打开", "Show in sidebar")).on_click(
+                    window.listener_for(workspace, move |this, _, window, cx| {
+                        this.reveal_in_sidebar(target.clone(), target_is_directory, window, cx);
+                    }),
+                ),
+            )
+            .item(
+                PopupMenuItem::new(crate::tr!("打开目录其他文件", "Open other files in folder"))
+                    .disabled(opening)
+                    .on_click(window.listener_for(workspace, move |this, _, window, cx| {
+                        this.open_files_in_directory(choose_directory.clone(), window, cx);
+                    })),
+            )
+            .separator()
             .item(
                 PopupMenuItem::new(crate::tr!("打开目录", "Open folder")).on_click(
                     window.listener_for(workspace, move |this, _, window, cx| {

@@ -12,14 +12,31 @@ impl Workspace {
         }
         self.file_refresh_task.take();
 
-        // GPUI's PathPromptOptions has no initial-directory option. Keep this
-        // native picker attached to the window and reuse the normal loader slot.
-        let prompt = rfd::AsyncFileDialog::new()
-            .set_parent(window)
-            .set_directory(directory)
-            .set_title(crate::tr!("选择日志文件", "Select log files"))
-            .pick_files();
+        // Menu handlers run before dismissal, and rfd initializes the native
+        // panel synchronously even for its async API. Frame callbacks run before
+        // drawing: cross two boundaries so the dismissed menu is presented first.
+        let (ready, dismissed) = async_channel::bounded(1);
+        window.on_next_frame(move |window, _| {
+            window.on_next_frame(move |_, _| {
+                _ = ready.try_send(());
+            });
+        });
+        // Reserve the shared loader slot now, including the frame handoff, so
+        // another menu/shortcut/external-open cannot create a second picker.
         self.open_task = Some(cx.spawn_in(window, async move |this, cx| {
+            if dismissed.recv().await.is_err() {
+                return;
+            }
+            // GPUI's PathPromptOptions has no initial-directory option.
+            let Ok(prompt) = this.update_in(cx, |_, window, _| {
+                rfd::AsyncFileDialog::new()
+                    .set_parent(window)
+                    .set_directory(directory)
+                    .set_title(crate::tr!("选择日志文件", "Select log files"))
+                    .pick_files()
+            }) else {
+                return;
+            };
             let files = prompt.await;
             _ = this.update_in(cx, |this, window, cx| {
                 this.open_task = None;

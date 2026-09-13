@@ -13,7 +13,7 @@ pub use document::{
 };
 pub use navigation::{
     DirectoryEntry, LogMinute, MinuteGroup, NavigationSummary, OverviewBucket,
-    navigation_directory, parse_log_minute, summarize_navigation,
+    navigation_directory, navigation_roots, parse_log_minute, summarize_navigation,
 };
 pub use result_set::CompressedRows;
 pub use search::{

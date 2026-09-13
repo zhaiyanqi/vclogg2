@@ -138,6 +138,7 @@ impl SidebarState {
                         .icon(IconName::ChevronUp)
                         .tooltip(crate::tr!("折叠文件夹", "Collapse folders"))
                         .on_click(cx.listener(|this, _, _, cx| {
+                            this.tree_reveal_active = false;
                             this.expanded.clear();
                             this.rebuild_tree(cx);
                             cx.notify();
@@ -813,41 +814,12 @@ impl SidebarState {
     }
 
     fn render_files(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        if self.root.is_none() {
-            return self.empty(
-                SidebarPanelId::Files,
-                crate::tr!(
-                    "打开日志文件后查看所在文件夹",
-                    "Open a log file to browse its folder"
-                ),
-                None,
-                cx,
-            );
-        }
-        if let Some(DirectoryLoad::Failed(error)) = self
-            .root
-            .as_ref()
-            .and_then(|root| self.directories.get(root))
-        {
-            return self.empty(
-                SidebarPanelId::Files,
-                error.clone(),
-                Some(SidebarPanelId::Files),
-                cx,
-            );
-        }
-        if self.tree_dirty {
-            return self.empty(
-                SidebarPanelId::Files,
-                crate::tr!("正在加载文件夹…", "Loading folder…"),
-                None,
-                cx,
-            );
-        }
+        let menu_state = cx.entity();
         let state = cx.entity();
         let tree = Tree::new(&self.tree, move |_, entry, selected, _, _| {
             let path = decode_persisted_path(entry.item().id.as_ref());
             let folder = entry.is_folder();
+            let disabled = entry.is_disabled();
             let state = state.clone();
             ListItem::new(entry.item().id.clone())
                 .selected(selected)
@@ -880,10 +852,66 @@ impl SidebarState {
                         ),
                 )
                 .on_click(move |event, window, cx| {
-                    if !folder && event.click_count() >= 2 {
-                        state.update(cx, |state, cx| state.open_path(path.clone(), window, cx));
+                    if disabled {
+                        return;
                     }
+                    state.update(cx, |state, cx| {
+                        state.tree_reveal_active = false;
+                        state.tree.update(cx, |tree, cx| tree.focus(window, cx));
+                        if !folder && event.click_count() >= 2 {
+                            state.open_path(path.clone(), window, cx);
+                        }
+                    });
                 })
+        })
+        .context_menu(move |_, entry, menu, window, cx| {
+            if entry.is_disabled() {
+                return menu;
+            }
+            let path = decode_persisted_path(entry.item().id.as_ref());
+            let folder = entry.is_folder();
+            let open_path = path.clone();
+            let mut menu = menu.item(
+                PopupMenuItem::new(crate::tr!("打开所在位置", "Show in folder")).on_click(
+                    window.listener_for(&menu_state, move |state, _, window, cx| {
+                        _ = state.workspace.update(cx, |workspace, cx| {
+                            let command = &workspace.app_settings.open_directory_command;
+                            let result = if folder {
+                                crate::open_directory::launch_custom_directory(command, &open_path)
+                            } else {
+                                crate::open_directory::launch_custom(command, &open_path)
+                            };
+                            match result {
+                                Ok(true) => {}
+                                Ok(false) => {
+                                    let directory = if folder {
+                                        Some(open_path.as_path())
+                                    } else {
+                                        open_path.parent()
+                                    };
+                                    if let Some(directory) = directory {
+                                        cx.open_with_system(directory);
+                                    }
+                                }
+                                Err(error) => window.notify_message(error.to_string(), cx),
+                            }
+                        });
+                    }),
+                ),
+            );
+            if folder
+                && matches!(
+                    menu_state.read(cx).directories.get(&path),
+                    Some(DirectoryLoad::Failed(_))
+                )
+            {
+                menu = menu.item(PopupMenuItem::new(crate::tr!("重试", "Retry")).on_click(
+                    window.listener_for(&menu_state, move |state, _, _, cx| {
+                        state.retry_tree_directory(path.clone(), cx)
+                    }),
+                ));
+            }
+            menu
         });
         div()
             .id("sidebar-file-tree")
@@ -892,6 +920,12 @@ impl SidebarState {
             .min_h_0()
             .min_w_0()
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if matches!(
+                    event.keystroke.key.as_str(),
+                    "up" | "down" | "left" | "right" | "enter"
+                ) {
+                    this.tree_reveal_active = false;
+                }
                 if event.keystroke.key == "enter" {
                     let path = this
                         .tree
@@ -905,7 +939,48 @@ impl SidebarState {
                     }
                 }
             }))
-            .child(tree)
+            .v_flex()
+            .when(
+                self.roots.is_empty() && self.roots_error.is_none(),
+                |this| {
+                    this.child(
+                        div()
+                            .px_2()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(crate::tr!("正在加载设备…", "Loading device…")),
+                    )
+                },
+            )
+            .when_some(
+                self.tree_error.clone().or_else(|| self.roots_error.clone()),
+                |this, error| {
+                    this.child(
+                        h_flex()
+                            .px_2()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(error),
+                            )
+                            .child(
+                                Button::new("sidebar-tree-error-retry")
+                                    .small()
+                                    .ghost()
+                                    .label(crate::tr!("重试", "Retry"))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.tree_reveal_active = this.tree_target.is_some();
+                                        this.refresh_tree(cx);
+                                    })),
+                            ),
+                    )
+                },
+            )
+            .child(div().flex_1().min_h_0().min_w_0().child(tree))
             .into_any_element()
     }
 }
