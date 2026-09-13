@@ -881,15 +881,16 @@ impl Workspace {
             layout.end = Bounds::default();
         }
         let colors = ui_theme::palette(cx);
-        // Large 档的 segmented 标签外框为 36px；指示层内芯由组件按档位固定为 28px，
-        // 无法从外部覆写。
+        // Match the component's fixed 36px Large segmented tabs with 2px vertical
+        // clearance; keep the 28px indicator and existing content sizes intact.
         let mut tabs = TabBar::new("document-tabs")
             .w_full()
             .track_scroll(&self.document_tab_scroll)
             .with_size(gpui_component::Size::Large)
             .segmented()
-            .h(px(48.))
-            .p(px(5.))
+            .h(ui_theme::WORKSPACE_BAR_HEIGHT)
+            .px(px(5.))
+            .py(ui_theme::WORKSPACE_BAR_VERTICAL_INSET)
             .gap(px(2.))
             .rounded_none()
             .bg(ui_theme::header_material(&colors))
@@ -1096,9 +1097,9 @@ impl Workspace {
                     this.scroll_document_tabs_from_wheel(event, window, cx);
                 }))
                 .child(tabs)
-                .child(deferred_workspace_overlay(ui_theme::tab_bar_bottom_shadow(
-                    cx,
-                )))
+                .child(deferred_workspace_overlay(
+                    ui_theme::workspace_bar_bottom_shadow(cx),
+                ))
         })
     }
 
@@ -1790,8 +1791,7 @@ impl Workspace {
         let control_height = px(f32::from(self.app_settings.search_toolbar_control_height()));
         let font_size = px(f32::from(self.app_settings.search_toolbar_font_size));
         let font_scale = f32::from(self.app_settings.search_toolbar_font_size) / 13.;
-        // These pixel values are independent user preferences, like the toolbar size above.
-        let input_height = px(f32::from(self.app_settings.search_input_control_height()));
+        // The field keeps an independent font size while sharing the toolbar control height.
         let input_font_size = px(f32::from(self.app_settings.search_input_font_size));
         let search_history_empty = self.search_history.is_empty();
         let has_document = self.active_document().is_some();
@@ -1924,18 +1924,21 @@ impl Workspace {
             self.render_search_scope_control(has_document, search_scope_tooltip, cx);
 
         v_flex()
+            .relative()
             .w_full()
-            .border_t_1()
-            .border_color(cx.theme().border)
+            .flex_shrink_0()
             .child(
                 h_flex()
                     .relative()
                     .w_full()
-                    .min_h(control_height.max(input_height) + SEARCH_BAR_VERTICAL_INSET * 2.)
+                    .min_h(
+                        ui_theme::WORKSPACE_BAR_HEIGHT
+                            .max(control_height + ui_theme::WORKSPACE_BAR_VERTICAL_INSET * 2.),
+                    )
                     .items_center()
                     .gap(px(6.))
                     .px(px(12.))
-                    .py(SEARCH_BAR_VERTICAL_INSET)
+                    .py(ui_theme::WORKSPACE_BAR_VERTICAL_INSET)
                     .bg(ui_theme::header_material(&colors))
                     .child(ui_theme::glass_sheen_layer(&colors))
                     .when_some(result_mode_select, |controls, result_mode_select| {
@@ -1996,7 +1999,7 @@ impl Workspace {
                         div()
                             .flex_1()
                             .min_w(px(180.))
-                            .h(input_height)
+                            .h(control_height)
                             .relative()
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -2134,6 +2137,9 @@ impl Workspace {
                         )
                     }),
             )
+            .child(deferred_workspace_overlay(
+                ui_theme::workspace_bar_bottom_shadow(cx),
+            ))
     }
 
     pub(super) fn render_pinned_files(

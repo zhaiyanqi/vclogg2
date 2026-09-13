@@ -253,7 +253,6 @@ pub struct AppSettings {
     pub log_font_size: u16,
     pub search_toolbar_height: u16,
     pub search_toolbar_font_size: u16,
-    pub search_input_height: u16,
     pub search_input_font_size: u16,
     pub log_line_spacing: u16,
     pub log_font_family: LogFontFamily,
@@ -298,9 +297,8 @@ impl Default for AppSettings {
             selection_styles: Default::default(),
             keyword_match_styles: Default::default(),
             log_font_size: 13,
-            search_toolbar_height: 28,
+            search_toolbar_height: 36,
             search_toolbar_font_size: 13,
-            search_input_height: 28,
             search_input_font_size: 13,
             log_line_spacing: 6,
             log_font_family: LogFontFamily::Consolas,
@@ -325,11 +323,12 @@ impl Default for AppSettings {
 
 impl AppSettings {
     pub(crate) fn search_toolbar_control_height(&self) -> u16 {
-        Self::search_control_height(self.search_toolbar_height, self.search_toolbar_font_size)
-    }
-
-    pub(crate) fn search_input_control_height(&self) -> u16 {
-        Self::search_control_height(self.search_input_height, self.search_input_font_size)
+        // Every search control shares one height, including when the field uses larger text.
+        Self::search_control_height(
+            self.search_toolbar_height,
+            self.search_toolbar_font_size
+                .max(self.search_input_font_size),
+        )
     }
 
     fn search_control_height(height: u16, font_size: u16) -> u16 {
@@ -786,11 +785,6 @@ fn app_settings_from_record(record: AppSettingsRecord) -> AppSettings {
             *SEARCH_TOOLBAR_FONT_SIZE_RANGE.start(),
             *SEARCH_TOOLBAR_FONT_SIZE_RANGE.end(),
         ),
-        search_input_height: bounded_u16(
-            record.search_input_height,
-            *SEARCH_TOOLBAR_HEIGHT_RANGE.start(),
-            *SEARCH_TOOLBAR_HEIGHT_RANGE.end(),
-        ),
         search_input_font_size: bounded_u16(
             record.search_input_font_size,
             *SEARCH_TOOLBAR_FONT_SIZE_RANGE.start(),
@@ -846,7 +840,8 @@ fn app_settings_to_record(settings: AppSettings) -> AppSettingsRecord {
         log_font_size: i64::from(settings.log_font_size),
         search_toolbar_height: i64::from(settings.search_toolbar_control_height()),
         search_toolbar_font_size: i64::from(settings.search_toolbar_font_size),
-        search_input_height: i64::from(settings.search_input_control_height()),
+        // Keep the legacy column compatible with older clients; it is no longer read by the UI.
+        search_input_height: i64::from(settings.search_toolbar_control_height()),
         search_input_font_size: i64::from(settings.search_input_font_size),
         log_line_spacing: i64::from(settings.log_line_spacing),
         log_font_family: settings.log_font_family.database_value(),

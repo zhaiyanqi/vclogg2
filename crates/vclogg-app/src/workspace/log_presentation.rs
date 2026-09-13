@@ -3029,8 +3029,6 @@ impl Workspace {
                 .w_full()
                 .flex_1()
                 .min_h_0()
-                .border_t_1()
-                .border_color(cx.theme().border)
                 .child(
                     div()
                         .relative()
@@ -3111,8 +3109,6 @@ impl Workspace {
                 .w_full()
                 .flex_1()
                 .min_h_0()
-                .border_t_1()
-                .border_color(cx.theme().border)
                 .child(
                     div()
                         .relative()
@@ -3204,8 +3200,6 @@ impl Workspace {
                         .items_center()
                         .justify_center()
                         .gap_1()
-                        .border_t_1()
-                        .border_color(cx.theme().border)
                         .text_color(cx.theme().muted_foreground)
                         .child(Icon::new(IconName::Search).small())
                         .child(div().text_sm().child(crate::tr!(
@@ -3226,7 +3220,7 @@ impl Workspace {
             .top(-scrollbar_overlap)
             .left_0()
             .w_full()
-            .h(scrollbar_overlap + SEARCH_BAR_VERTICAL_INSET)
+            .h(scrollbar_overlap + ui_theme::WORKSPACE_BAR_VERTICAL_INSET)
             .cursor_row_resize()
             .on_prepaint(move |bounds, _, _| resize_bounds.set(Some(bounds)));
         let search_panel_resize_event_layer = self.render_search_panel_resize_event_layer(cx);

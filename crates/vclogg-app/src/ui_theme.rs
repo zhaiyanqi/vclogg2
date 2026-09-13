@@ -8,6 +8,10 @@ use gpui_component::theme::{Theme, ThemeMode, ThemeTokens, try_parse_color};
 /// Shared by the log scrollbar's painted track and its reserved layout space.
 pub(crate) const LOG_SCROLLBAR_WIDTH: Pixels = px(12.);
 
+/// Match the document TabBar's fixed-pixel component geometry across workspace bars.
+pub(crate) const WORKSPACE_BAR_HEIGHT: Pixels = px(40.);
+pub(crate) const WORKSPACE_BAR_VERTICAL_INSET: Pixels = px(2.);
+
 pub(crate) fn persistent_log_scrollbar(scrollbar: Scrollbar, background: Hsla) -> Scrollbar {
     scrollbar.mode(ScrollbarMode::Always).styles(|styles| {
         styles
@@ -477,9 +481,9 @@ pub(crate) fn log_scrollbar_edge_shadow(axis: Axis, cx: &App) -> Div {
     ))
 }
 
-/// Extend the tab bar's bottom edge into the content below. The caller defers painting
+/// Extend a workspace bar's bottom edge into the content below. The caller defers painting
 /// so the following content surface cannot cover this non-interactive shadow.
-pub(crate) fn tab_bar_bottom_shadow(cx: &App) -> Div {
+pub(crate) fn workspace_bar_bottom_shadow(cx: &App) -> Div {
     let color = palette(cx).content_edge_shadow;
     let depth = rems(0.25);
     div()

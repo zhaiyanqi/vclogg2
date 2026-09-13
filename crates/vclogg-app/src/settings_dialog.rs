@@ -437,7 +437,6 @@ pub struct SettingsDialog {
     font_size: Entity<SliderState>,
     search_toolbar_height: Entity<SliderState>,
     search_toolbar_font_size: Entity<SliderState>,
-    search_input_height: Entity<SliderState>,
     search_input_font_size: Entity<SliderState>,
     line_spacing: Entity<SliderState>,
     line_number_width: Entity<SliderState>,
@@ -496,27 +495,13 @@ impl SettingsDialog {
             .value()
             .start()
             .round() as u16;
-        settings.search_input_height =
-            self.search_input_height.read(cx).value().start().round() as u16;
         settings.search_input_font_size =
             self.search_input_font_size.read(cx).value().start().round() as u16;
-        for (slider, requested_height, height) in [
-            (
-                &self.search_toolbar_height,
-                settings.search_toolbar_height,
-                settings.search_toolbar_control_height(),
-            ),
-            (
-                &self.search_input_height,
-                settings.search_input_height,
-                settings.search_input_control_height(),
-            ),
-        ] {
-            if height != requested_height {
-                slider.update(cx, |slider, cx| {
-                    slider.set_value(f32::from(height), window, cx);
-                });
-            }
+        let height = settings.search_toolbar_control_height();
+        if height != settings.search_toolbar_height {
+            self.search_toolbar_height.update(cx, |slider, cx| {
+                slider.set_value(f32::from(height), window, cx);
+            });
         }
         Self::draft_changed(cx);
     }
@@ -544,20 +529,20 @@ impl SettingsDialog {
                 "settings-search-toolbar-section",
                 crate::tr!("搜索工具栏", "Search toolbar"),
                 crate::tr!(
-                    "调整按钮、下拉框和结果状态文字；搜索输入框在下方单独调整",
-                    "Adjusts buttons, selectors, and result status text; the search field is configured below"
+                    "统一调整搜索控件高度，以及按钮、下拉框和结果状态的文字大小",
+                    "Sets the height of all search controls and the text size of buttons, selectors, and result status"
                 ),
-                &self.search_toolbar_height,
+                Some(&self.search_toolbar_height),
                 &self.search_toolbar_font_size,
             ),
             (
                 "settings-search-input-section",
                 crate::tr!("搜索输入框", "Search field"),
                 crate::tr!(
-                    "独立调整搜索输入框的高度和文字大小；高度不足以容纳文字时自动加高",
-                    "Adjusts the search field height and text size independently; height increases when needed to fit the text"
+                    "单独调整文字大小；高度跟随搜索工具栏，文字较大时统一加高",
+                    "Sets the field text size; all search controls share the toolbar height and grow together to fit larger text"
                 ),
-                &self.search_input_height,
+                None,
                 &self.search_input_font_size,
             ),
         ]
@@ -572,7 +557,9 @@ impl SettingsDialog {
                 .border_color(cx.theme().border)
                 .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(title))
                 .child(div().text_sm().text_color(cx.theme().muted_foreground).child(description))
-                .child(slider_row(crate::tr!("控件高度", "Control height"), height))
+                .when_some(height, |section, height| {
+                    section.child(slider_row(crate::tr!("控件高度", "Control height"), height))
+                })
                 .child(slider_row(crate::tr!("文字大小", "Text size"), font_size))
                 .into_any_element()
         })
@@ -751,13 +738,6 @@ impl SettingsDialog {
                 .step(1.)
                 .default_value(f32::from(settings.search_toolbar_font_size))
         });
-        let search_input_height = cx.new(|_| {
-            SliderState::new()
-                .min(f32::from(*SEARCH_TOOLBAR_HEIGHT_RANGE.start()))
-                .max(f32::from(*SEARCH_TOOLBAR_HEIGHT_RANGE.end()))
-                .step(1.)
-                .default_value(f32::from(settings.search_input_control_height()))
-        });
         let search_input_font_size = cx.new(|_| {
             SliderState::new()
                 .min(f32::from(*SEARCH_TOOLBAR_FONT_SIZE_RANGE.start()))
@@ -875,7 +855,6 @@ impl SettingsDialog {
         for slider in [
             &search_toolbar_height,
             &search_toolbar_font_size,
-            &search_input_height,
             &search_input_font_size,
         ] {
             subscriptions.push(cx.subscribe_in(
@@ -1084,7 +1063,6 @@ impl SettingsDialog {
             font_size,
             search_toolbar_height,
             search_toolbar_font_size,
-            search_input_height,
             search_input_font_size,
             line_spacing,
             line_number_width,
@@ -1152,12 +1130,9 @@ impl SettingsDialog {
             .value()
             .start()
             .round() as u16;
-        settings.search_toolbar_height = settings.search_toolbar_control_height();
-        settings.search_input_height =
-            self.search_input_height.read(cx).value().start().round() as u16;
         settings.search_input_font_size =
             self.search_input_font_size.read(cx).value().start().round() as u16;
-        settings.search_input_height = settings.search_input_control_height();
+        settings.search_toolbar_height = settings.search_toolbar_control_height();
         settings.log_line_spacing = self.line_spacing.read(cx).value().start().round() as u16;
         settings.line_number_width = self.line_number_width.read(cx).value().start().round() as u16;
         settings.line_number_text_color = self
