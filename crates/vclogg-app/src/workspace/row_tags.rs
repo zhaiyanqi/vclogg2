@@ -71,6 +71,98 @@ struct TagDrag {
 }
 
 impl Workspace {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn apply_ai_text_mark(
+        &mut self,
+        document_id: u64,
+        document: Arc<LogDocument>,
+        source_row: usize,
+        args: &serde_json::Value,
+        source: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<String> {
+        use anyhow::{Context as _, bail};
+        if self.persistence.store.is_none() {
+            bail!("Log annotation storage is unavailable");
+        }
+        let target = TagTarget {
+            document_id,
+            source_row,
+            region: WrappedRegion::Log,
+        };
+        let source_document = Arc::downgrade(&document);
+        if !self.tag_target_is_current(target, &source_document) {
+            bail!("Log changed or closed");
+        }
+        let action = args["action"].as_str().unwrap_or_default();
+        let id = if action == "add" {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            args["mark_id"]
+                .as_str()
+                .context("Missing mark_id")?
+                .to_owned()
+        };
+        let existing = self
+            .documents
+            .iter()
+            .find(|t| t.id == document_id)
+            .and_then(|t| t.file.row_tags.get(source_row, &id))
+            .cloned();
+        if action != "add" && existing.is_none() {
+            bail!("Text mark no longer exists");
+        }
+        if existing
+            .as_ref()
+            .is_some_and(|t| t.source_digest != source_digest(source))
+        {
+            bail!("Text mark is stale; its source text changed");
+        }
+        if action == "remove" {
+            self.delete_row_tag(target, &id, window, cx);
+            return Ok(id);
+        }
+        let label = args["text"]
+            .as_str()
+            .context("Missing annotation text")?
+            .to_owned();
+        let draft = existing.unwrap_or_else(|| RowTag {
+            source_row,
+            label: String::new(),
+            color: TagColor::Neutral,
+            style: TagStyle {
+                vertical_center: true,
+                ..Default::default()
+            },
+            x: 0,
+            y: 0,
+            source_digest: source_digest(source),
+        });
+        let preset = TagPreset {
+            label,
+            color: draft.color,
+            style: draft.style.clone(),
+        };
+        if !preset.is_valid() {
+            bail!("Annotation must be one nonempty line of at most 128 characters");
+        }
+        if !self.save_row_tag(
+            TagEditRequest {
+                target,
+                document: source_document,
+                id: id.clone(),
+                draft,
+                is_new: action == "add",
+            },
+            preset,
+            window,
+            cx,
+        ) {
+            bail!("Annotation could not be saved");
+        }
+        Ok(id)
+    }
     pub(super) fn add_text_mark(
         &mut self,
         _: &AddTextMark,

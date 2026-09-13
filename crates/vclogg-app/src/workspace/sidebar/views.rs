@@ -340,6 +340,9 @@ impl SidebarState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if panel == SidebarPanelId::Ai {
+            return self.ai.clone().into_any_element();
+        }
         if panel == SidebarPanelId::LogColoring {
             return self.render_log_coloring(cx);
         }

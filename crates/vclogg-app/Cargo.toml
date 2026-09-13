@@ -38,6 +38,7 @@ url.workspace = true
 uuid.workspace = true
 vclogg-core = { path = "../vclogg-core" }
 vclogg-data = { path = "../vclogg-data" }
+vclogg-ai = { path = "../vclogg-ai" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging"] }

@@ -1,6 +1,45 @@
 use super::*;
 
 impl Workspace {
+    pub(super) fn set_document_marks(
+        &mut self,
+        document_id: u64,
+        rows: &CompressedRows,
+        marked: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.documents.iter_mut().find(|t| t.id == document_id) else {
+            return;
+        };
+        if marked {
+            tab.file.marked_rows.insert_rows(rows);
+            tab.file.pending_restore_marked_rows.insert_rows(rows);
+        } else {
+            tab.file.marked_rows.remove_rows(rows);
+            tab.file.pending_restore_marked_rows.remove_rows(rows);
+        }
+        let snapshot = tab.file.marked_rows.clone();
+        tab.log_table.update(cx, |table, cx| {
+            table.delegate_mut().set_marked_rows(snapshot);
+            table.refresh(cx);
+        });
+        if marked && tab.result_mode.includes_marks() {
+            tab.results_visible = true;
+        }
+        if marked
+            && self.global_search.result_mode.includes_marks()
+            && self.global_search.selected_documents.contains(&document_id)
+        {
+            self.global_search.results_visible = true;
+        }
+        self.refresh_document_result_rows_atomically(document_id, window, cx);
+        self.refresh_global_result_rows(window, cx);
+        self.refresh_active_document_surfaces_atomically(window, cx);
+        self.schedule_checkpoint(document_id, window, cx);
+        self.schedule_workspace_search_state_save(window, cx);
+        cx.notify();
+    }
     pub(super) fn copy_current_line(
         &mut self,
         _: &CopyCurrentLine,
@@ -526,37 +565,9 @@ impl Workspace {
             }
 
             let is_marking = !tab.file.marked_rows.contains_all(&selected_rows);
-            if is_marking {
-                tab.file.marked_rows.insert_rows(&selected_rows);
-                tab.file
-                    .pending_restore_marked_rows
-                    .insert_rows(&selected_rows);
-            } else {
-                tab.file.marked_rows.remove_rows(&selected_rows);
-                tab.file
-                    .pending_restore_marked_rows
-                    .remove_rows(&selected_rows);
-            }
-            let marked_rows = tab.file.marked_rows.clone();
-            tab.log_table.update(cx, |table, cx| {
-                table.delegate_mut().set_marked_rows(marked_rows);
-                table.refresh(cx);
-            });
-            if is_marking && tab.result_mode.includes_marks() {
-                tab.results_visible = true;
-            }
             (tab.id, is_marking)
         };
-        self.refresh_document_result_rows_atomically(document_id, window, cx);
-        if is_marking
-            && self.global_search.result_mode.includes_marks()
-            && self.global_search.selected_documents.contains(&document_id)
-        {
-            self.global_search.results_visible = true;
-        }
-        self.refresh_global_result_rows(window, cx);
-        self.refresh_active_document_surfaces_atomically(window, cx);
-        self.schedule_workspace_search_state_save(window, cx);
+        self.set_document_marks(document_id, &selected_rows, is_marking, window, cx);
         let action = if is_marking {
             crate::tr!("已标记", "Marked")
         } else {
@@ -576,7 +587,6 @@ impl Workspace {
                 cx,
             );
         }
-        self.schedule_checkpoint(document_id, window, cx);
         cx.notify();
     }
 

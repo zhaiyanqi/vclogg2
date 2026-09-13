@@ -54,6 +54,7 @@ enum DirectoryLoad {
 }
 
 pub(super) struct SidebarState {
+    ai: Entity<super::ai::AiPanel>,
     log_coloring: crate::log_coloring::LogColoringSettings,
     log_coloring_enabled: bool,
     log_coloring_saving: bool,
@@ -123,7 +124,12 @@ pub(super) struct SidebarState {
 impl EventEmitter<SidebarChanged> for SidebarState {}
 
 impl SidebarState {
-    pub(super) fn new(workspace: WeakEntity<Workspace>, cx: &mut Context<Self>) -> Self {
+    pub(super) fn new(
+        workspace: WeakEntity<Workspace>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let ai = cx.new(|cx| super::ai::AiPanel::new(workspace.clone(), window, cx));
         let tree = cx.new(|cx| TreeState::new(cx));
         let owner = workspace.upgrade().expect("sidebar owner exists");
         let subscriptions = vec![
@@ -149,6 +155,7 @@ impl SidebarState {
             }),
         ];
         Self {
+            ai,
             log_coloring: Default::default(),
             log_coloring_enabled: false,
             log_coloring_saving: false,
@@ -467,6 +474,10 @@ impl SidebarState {
     }
 
     fn focus_panel(&self, panel: SidebarPanelId, window: &mut Window, cx: &mut Context<Self>) {
+        if panel == SidebarPanelId::Ai {
+            self.ai.update(cx, |ai, cx| ai.focus(window, cx));
+            return;
+        }
         if panel == SidebarPanelId::Files {
             self.tree.update(cx, |tree, cx| tree.focus(window, cx));
         } else {
@@ -482,6 +493,9 @@ impl SidebarState {
         cx: &mut Context<Self>,
     ) {
         self.layout.sides[side.ix()].active = Some(panel);
+        if panel == SidebarPanelId::Ai && self.layout.sides[side.ix()].width < 20. {
+            self.layout.sides[side.ix()].width = 28.;
+        }
         self.layout.sides[side.ix()].visible = true;
         if panel == SidebarPanelId::History {
             self.refresh_history(cx);
@@ -640,7 +654,7 @@ impl Workspace {
         Vec<Subscription>,
     ) {
         let workspace = cx.weak_entity();
-        let state = cx.new(|cx| SidebarState::new(workspace, cx));
+        let state = cx.new(|cx| SidebarState::new(workspace, window, cx));
         let surfaces = [SidebarSide::Left, SidebarSide::Right]
             .map(|side| cx.new(|cx| SidebarSurface::new(state.clone(), side, cx)));
         let subscriptions = vec![
@@ -812,7 +826,8 @@ impl Workspace {
                         .size(rem * (width + SIDEBAR_RAIL_WIDTH_REM))
                         .flex_none()
                         .size_range(
-                            rem * (SIDEBAR_MIN_WIDTH_REM + SIDEBAR_RAIL_WIDTH_REM)
+                            rem * (self.sidebar.read(cx).layout.sides[0].min_width()
+                                + SIDEBAR_RAIL_WIDTH_REM)
                                 ..rem * (SIDEBAR_MAX_WIDTH_REM + SIDEBAR_RAIL_WIDTH_REM),
                         )
                         .child(self.sidebar_surfaces[0].clone()),
@@ -829,7 +844,8 @@ impl Workspace {
                         .size(rem * (width + SIDEBAR_RAIL_WIDTH_REM))
                         .flex_none()
                         .size_range(
-                            rem * (SIDEBAR_MIN_WIDTH_REM + SIDEBAR_RAIL_WIDTH_REM)
+                            rem * (self.sidebar.read(cx).layout.sides[1].min_width()
+                                + SIDEBAR_RAIL_WIDTH_REM)
                                 ..rem * (SIDEBAR_MAX_WIDTH_REM + SIDEBAR_RAIL_WIDTH_REM),
                         )
                         .child(self.sidebar_surfaces[1].clone()),

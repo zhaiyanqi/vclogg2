@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/vclogg-ai",
     "crates/vclogg-app",
     "crates/vclogg-core",
     "crates/vclogg-data",

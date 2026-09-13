@@ -395,13 +395,46 @@ pub struct StateStore {
 }
 
 impl StateStore {
+    pub(crate) fn load_ai_settings(&self, path: &Path) -> Result<vclogg_ai::AiSettings> {
+        vclogg_ai::AiSettings::load(path)
+    }
+
+    pub(crate) fn save_ai_settings(
+        &self,
+        path: &Path,
+        settings: &vclogg_ai::AiSettings,
+    ) -> Result<()> {
+        settings.save(path)
+    }
+
+    pub(crate) fn ai_conversations(
+        &self,
+        offset: usize,
+    ) -> Result<Vec<vclogg_data::AiConversationRecord>> {
+        self.repository.ai_conversations(offset, 100)
+    }
+    pub(crate) fn load_ai_conversation(
+        &self,
+        id: &str,
+    ) -> Result<Option<vclogg_data::AiConversationRecord>> {
+        self.repository.load_ai_conversation(id)
+    }
+    pub(crate) fn save_ai_conversation(
+        &self,
+        record: &vclogg_data::AiConversationRecord,
+    ) -> Result<u64> {
+        self.repository.save_ai_conversation(record)
+    }
+    pub(crate) fn delete_ai_conversation(&self, id: &str, revision: u64) -> Result<()> {
+        self.repository.delete_ai_conversation(id, revision)
+    }
     pub fn open_default() -> Result<Self> {
         let data_root =
             crate::app_paths::application_data_dir().context("无法确定本机应用数据目录")?;
         Self::open(data_root.join("sessions").join("vclogg2-state.db"))
     }
 
-    fn open(database_path: PathBuf) -> Result<Self> {
+    pub(crate) fn open(database_path: PathBuf) -> Result<Self> {
         let defaults = StateMigrationDefaults {
             app_log_level: AppLogLevel::default().database_value().into(),
             color_labels: default_color_labels()

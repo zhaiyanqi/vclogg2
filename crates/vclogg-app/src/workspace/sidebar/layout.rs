@@ -9,6 +9,7 @@ pub(super) const SIDEBAR_MAX_WIDTH_REM: f32 = 48.;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum SidebarPanelId {
+    Ai,
     Files,
     Favorites,
     History,
@@ -21,7 +22,8 @@ pub(super) enum SidebarPanelId {
 }
 
 impl SidebarPanelId {
-    pub(super) const ALL: [Self; 9] = [
+    pub(super) const ALL: [Self; 10] = [
+        Self::Ai,
         Self::Files,
         Self::Favorites,
         Self::History,
@@ -34,6 +36,7 @@ impl SidebarPanelId {
     ];
     pub(super) fn title(self) -> &'static str {
         match self {
+            Self::Ai => "AI",
             Self::Files => crate::tr!("文件", "Files"),
             Self::Favorites => crate::tr!("收藏", "Favorites"),
             Self::History => crate::tr!("历史", "History"),
@@ -62,6 +65,7 @@ impl SidebarPanelId {
                 .into_any_element();
         }
         Icon::new(match self {
+            Self::Ai => IconName::Bot,
             Self::Files => IconName::Folder,
             Self::Favorites => IconName::Star,
             Self::History => unreachable!("history uses its own icon"),
@@ -115,7 +119,7 @@ pub(in super::super) struct SidebarLayout {
 impl Default for SidebarLayout {
     fn default() -> Self {
         Self {
-            version: 3,
+            version: 4,
             vertical_tabs: false,
             sides: [
                 SidebarPlacement {
@@ -132,6 +136,7 @@ impl Default for SidebarLayout {
                 },
                 SidebarPlacement {
                     panels: vec![
+                        SidebarPanelId::Ai,
                         SidebarPanelId::Minutes,
                         SidebarPanelId::Colors,
                         SidebarPanelId::Minimap,
@@ -141,6 +146,16 @@ impl Default for SidebarLayout {
                     width: 18.,
                 },
             ],
+        }
+    }
+}
+
+impl SidebarPlacement {
+    pub(super) fn min_width(&self) -> f32 {
+        if self.active == Some(SidebarPanelId::Ai) {
+            20.
+        } else {
+            SIDEBAR_MIN_WIDTH_REM
         }
     }
 }
@@ -175,13 +190,17 @@ impl SidebarLayout {
             }
             layout.version = 3;
         }
+        if layout.version == 3 {
+            layout.sides[1].panels.push(SidebarPanelId::Ai);
+            layout.version = 4;
+        }
         let panels = layout
             .sides
             .iter()
             .flat_map(|side| side.panels.iter().copied())
             .collect::<BTreeSet<_>>();
-        let expected = if layout.vertical_tabs { 9 } else { 8 };
-        if layout.version != 3
+        let expected = if layout.vertical_tabs { 10 } else { 9 };
+        if layout.version != 4
             || panels.len() != expected
             || panels.contains(&SidebarPanelId::Tabs) != layout.vertical_tabs
             || layout
@@ -270,7 +289,7 @@ impl SidebarLayout {
         let mut widths = self
             .sides
             .each_ref()
-            .map(|side| side.visible.then_some(side.width));
+            .map(|side| side.visible.then_some(side.width.max(side.min_width())));
         for ix in [1, 0] {
             let used = 24.
                 + widths
@@ -281,7 +300,7 @@ impl SidebarLayout {
             if used > available
                 && let Some(width) = &mut widths[ix]
             {
-                *width = (*width - (used - available)).max(SIDEBAR_MIN_WIDTH_REM);
+                *width = (*width - (used - available)).max(self.sides[ix].min_width());
             }
         }
         for ix in [1, 0] {
@@ -316,5 +335,46 @@ impl Render for DraggedSidebarPanel {
             .border_color(cx.theme().border)
             .child(self.panel.icon())
             .child(self.panel.title())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn version_three_adds_ai_without_resetting_user_layout() {
+        let mut previous = SidebarLayout {
+            version: 3,
+            ..Default::default()
+        };
+        previous.sides[1]
+            .panels
+            .retain(|p| *p != SidebarPanelId::Ai);
+        previous.sides[1].active = Some(SidebarPanelId::Colors);
+        previous.sides[1].visible = true;
+        previous.sides[1].width = 31.;
+        previous.move_panel(SidebarPanelId::History, SidebarSide::Right, None);
+        let encoded = serde_json::to_string(&previous).unwrap();
+        let next = SidebarLayout::decode(&encoded);
+        assert_eq!(next.version, 4);
+        assert_eq!(next.sides[0].panels, previous.sides[0].panels);
+        assert_eq!(next.sides[1].active, previous.sides[1].active);
+        assert_eq!(next.sides[1].width, 31.);
+        assert!(next.sides[1].visible);
+        let mut expected = previous.sides[1].panels.clone();
+        expected.push(SidebarPanelId::Ai);
+        assert_eq!(next.sides[1].panels, expected);
+        let repeated = SidebarLayout::decode(&serde_json::to_string(&next).unwrap());
+        assert_eq!(repeated.sides[1].panels, expected);
+    }
+    #[test]
+    fn ai_panel_keeps_usable_width_and_collapses_when_window_is_too_small() {
+        let mut layout = SidebarLayout::default();
+        layout.sides[1].visible = true;
+        layout.sides[1].active = Some(SidebarPanelId::Ai);
+        layout.sides[1].width = 12.;
+        assert_eq!(layout.fit(60.)[1], Some(20.));
+        assert_eq!(layout.fit(35.)[1], None);
+        assert_eq!(layout.sides[1].width, 12.);
     }
 }

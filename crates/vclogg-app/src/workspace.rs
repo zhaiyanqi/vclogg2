@@ -1,3 +1,5 @@
+mod ai;
+
 use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet, HashSet},
