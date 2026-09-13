@@ -562,12 +562,48 @@ impl SidebarSurface {
 }
 impl Render for SidebarSurface {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.state
-            .update(cx, |state, cx| state.render_side(self.side, window, cx))
+        // Render Workspace-owned tabs before borrowing SidebarState for the shell.
+        let tabs = {
+            let state = self.state.read(cx);
+            (state.layout.sides[self.side.ix()].active == Some(SidebarPanelId::Tabs)).then(|| {
+                (
+                    state.workspace.clone(),
+                    state.focus[&SidebarPanelId::Tabs].clone(),
+                )
+            })
+        };
+        let tabs = tabs.and_then(|(workspace, focus)| {
+            workspace
+                .update(cx, |workspace, cx| {
+                    workspace.render_vertical_tabs(focus, window, cx)
+                })
+                .ok()
+        });
+        self.state.update(cx, |state, cx| {
+            state.render_side(self.side, tabs, window, cx)
+        })
     }
 }
 
 impl Workspace {
+    pub(super) fn vertical_tabs_enabled(&self, cx: &App) -> bool {
+        self.sidebar.read(cx).layout.vertical_tabs
+    }
+
+    pub(super) fn toggle_vertical_tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sidebar.update(cx, |state, cx| {
+            let enabled = !state.layout.vertical_tabs;
+            state.layout.set_vertical_tabs(enabled);
+            state.changed_layout(cx);
+            if enabled {
+                state.focus_panel(SidebarPanelId::Tabs, window, cx);
+            }
+        });
+        self.vertical_tab_state.revealed.set(None);
+        *self.tab_drop_layout.borrow_mut() = TabDropLayout::default();
+        cx.notify();
+    }
+
     pub(super) fn create_sidebars(
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -699,11 +735,17 @@ impl Workspace {
             .layout
             .fit(window.viewport_size().width / rem);
         let state = self.sidebar.clone();
+        let vertical_visible = widths.iter().enumerate().any(|(ix, width)| {
+            width.is_some()
+                && self.sidebar.read(cx).layout.sides[ix].active == Some(SidebarPanelId::Tabs)
+        });
         let center = v_flex()
             .min_w_0()
             .min_h_0()
             .size_full()
-            .child(self.render_tabs(has_other_window, cx))
+            .when(!vertical_visible, |this| {
+                this.child(self.render_tabs(has_other_window, cx))
+            })
             .child(
                 div()
                     .flex_1()

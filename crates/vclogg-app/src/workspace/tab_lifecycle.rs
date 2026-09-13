@@ -1235,21 +1235,30 @@ impl Workspace {
             this.restore_tab_title(document_id, window, cx)
         });
 
-        menu.item(PopupMenuItem::new(crate::tr!("关闭标签", "Close tab")).on_click(close))
+        let menu = menu
+            .item(PopupMenuItem::new(crate::tr!("关闭标签", "Close tab")).on_click(close))
             .item(
                 PopupMenuItem::new(crate::tr!("关闭其他标签", "Close other tabs"))
                     .disabled(state.tab_count <= 1)
                     .on_click(close_others),
             )
             .item(
-                PopupMenuItem::new(crate::tr!("关闭左侧标签", "Close tabs to the left"))
-                    .disabled(state.tab_ix == 0)
-                    .on_click(close_left),
+                PopupMenuItem::new(if state.vertical {
+                    crate::tr!("关闭上方标签", "Close tabs above")
+                } else {
+                    crate::tr!("关闭左侧标签", "Close tabs to the left")
+                })
+                .disabled(state.tab_ix == 0)
+                .on_click(close_left),
             )
             .item(
-                PopupMenuItem::new(crate::tr!("关闭右侧标签", "Close tabs to the right"))
-                    .disabled(state.tab_ix + 1 >= state.tab_count)
-                    .on_click(close_right),
+                PopupMenuItem::new(if state.vertical {
+                    crate::tr!("关闭下方标签", "Close tabs below")
+                } else {
+                    crate::tr!("关闭右侧标签", "Close tabs to the right")
+                })
+                .disabled(state.tab_ix + 1 >= state.tab_count)
+                .on_click(close_right),
             )
             .item(
                 PopupMenuItem::new(crate::tr!("关闭所有标签", "Close all tabs"))
@@ -1288,7 +1297,8 @@ impl Workspace {
                 PopupMenuItem::new(crate::tr!("恢复标签名称", "Restore tab name"))
                     .disabled(!state.can_restore_title)
                     .on_click(restore_title),
-            )
+            );
+        Self::tab_orientation_menu(menu, state.vertical_tabs, workspace, window)
     }
 
     pub(super) fn build_new_tab_menu(
@@ -1326,25 +1336,35 @@ impl Workspace {
             this.close_tab_group(tab_id, TabCloseGroup::All, window, cx)
         });
 
-        menu.item(PopupMenuItem::new(crate::tr!("关闭标签", "Close tab")).on_click(close))
+        let menu = menu
+            .item(PopupMenuItem::new(crate::tr!("关闭标签", "Close tab")).on_click(close))
             .item(
                 PopupMenuItem::new(crate::tr!("关闭其他标签", "Close other tabs"))
                     .disabled(state.tab_count <= 1)
                     .on_click(close_others),
             )
             .item(
-                PopupMenuItem::new(crate::tr!("关闭左侧标签", "Close tabs to the left"))
-                    .disabled(state.tab_ix == 0)
-                    .on_click(close_left),
+                PopupMenuItem::new(if state.vertical {
+                    crate::tr!("关闭上方标签", "Close tabs above")
+                } else {
+                    crate::tr!("关闭左侧标签", "Close tabs to the left")
+                })
+                .disabled(state.tab_ix == 0)
+                .on_click(close_left),
             )
             .item(
-                PopupMenuItem::new(crate::tr!("关闭右侧标签", "Close tabs to the right"))
-                    .disabled(state.tab_ix + 1 >= state.tab_count)
-                    .on_click(close_right),
+                PopupMenuItem::new(if state.vertical {
+                    crate::tr!("关闭下方标签", "Close tabs below")
+                } else {
+                    crate::tr!("关闭右侧标签", "Close tabs to the right")
+                })
+                .disabled(state.tab_ix + 1 >= state.tab_count)
+                .on_click(close_right),
             )
             .item(
                 PopupMenuItem::new(crate::tr!("关闭所有标签", "Close all tabs"))
                     .on_click(close_all),
-            )
+            );
+        Self::tab_orientation_menu(menu, state.vertical_tabs, workspace, window)
     }
 }

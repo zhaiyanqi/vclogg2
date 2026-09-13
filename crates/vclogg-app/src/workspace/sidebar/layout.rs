@@ -15,16 +15,18 @@ pub(super) enum SidebarPanelId {
     Minutes,
     Colors,
     Minimap,
+    Tabs,
 }
 
 impl SidebarPanelId {
-    pub(super) const ALL: [Self; 6] = [
+    pub(super) const ALL: [Self; 7] = [
         Self::Files,
         Self::Favorites,
         Self::History,
         Self::Minutes,
         Self::Colors,
         Self::Minimap,
+        Self::Tabs,
     ];
     pub(super) fn title(self) -> &'static str {
         match self {
@@ -34,6 +36,7 @@ impl SidebarPanelId {
             Self::Minutes => crate::tr!("时间分组", "Time groups"),
             Self::Colors => crate::tr!("颜色标签", "Color labels"),
             Self::Minimap => crate::tr!("文件缩略图", "Minimap"),
+            Self::Tabs => crate::tr!("标签页", "Tabs"),
         }
     }
     pub(super) fn icon(self) -> AnyElement {
@@ -49,6 +52,7 @@ impl SidebarPanelId {
             Self::Minutes => IconName::Calendar,
             Self::Colors => IconName::Palette,
             Self::Minimap => IconName::Map,
+            Self::Tabs => IconName::File,
         })
         .small()
         .into_any_element()
@@ -85,6 +89,8 @@ pub(super) struct SidebarPlacement {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(in super::super) struct SidebarLayout {
     version: u32,
+    #[serde(default)]
+    pub(super) vertical_tabs: bool,
     pub(super) sides: [SidebarPlacement; 2],
 }
 
@@ -92,6 +98,7 @@ impl Default for SidebarLayout {
     fn default() -> Self {
         Self {
             version: 1,
+            vertical_tabs: false,
             sides: [
                 SidebarPlacement {
                     panels: vec![
@@ -128,14 +135,16 @@ impl SidebarLayout {
             .iter()
             .flat_map(|side| side.panels.iter().copied())
             .collect::<BTreeSet<_>>();
+        let expected = if layout.vertical_tabs { 7 } else { 6 };
         if layout.version != 1
-            || panels.len() != 6
+            || panels.len() != expected
+            || panels.contains(&SidebarPanelId::Tabs) != layout.vertical_tabs
             || layout
                 .sides
                 .iter()
                 .map(|side| side.panels.len())
                 .sum::<usize>()
-                != 6
+                != expected
         {
             return Self::default();
         }
@@ -187,6 +196,28 @@ impl SidebarLayout {
         placement.panels.insert(ix, panel);
         placement.active = Some(panel);
         placement.visible = true;
+    }
+
+    pub(super) fn set_vertical_tabs(&mut self, enabled: bool) {
+        self.vertical_tabs = enabled;
+        if enabled {
+            let left = &mut self.sides[0];
+            if !left.panels.contains(&SidebarPanelId::Tabs) {
+                left.panels.insert(0, SidebarPanelId::Tabs);
+            }
+            left.active = Some(SidebarPanelId::Tabs);
+            left.visible = true;
+        } else {
+            for side in &mut self.sides {
+                side.panels.retain(|panel| *panel != SidebarPanelId::Tabs);
+                if side.active == Some(SidebarPanelId::Tabs) {
+                    side.active = side.panels.first().copied();
+                }
+                if side.panels.is_empty() {
+                    side.visible = false;
+                }
+            }
+        }
     }
 
     /// Resolve temporary constraints without changing persisted user preferences.

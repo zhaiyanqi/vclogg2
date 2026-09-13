@@ -512,6 +512,8 @@ struct TabMenuState {
     tab_count: usize,
     can_restore_title: bool,
     has_other_window: bool,
+    vertical_tabs: bool,
+    vertical: bool,
 }
 
 #[derive(IntoElement)]
@@ -614,14 +616,26 @@ impl TabMoveCompletion {
 struct TabDropLayout {
     tabs: Vec<Bounds<Pixels>>,
     end: Bounds<Pixels>,
+    vertical: bool,
+    viewport: Option<Bounds<Pixels>>,
 }
 
 impl TabDropLayout {
     fn drop_index(&self, position: Point<Pixels>) -> Option<usize> {
+        if self
+            .viewport
+            .is_some_and(|viewport| !viewport.contains(&position))
+        {
+            return self.end.contains(&position).then_some(self.tabs.len());
+        }
         for (ix, bounds) in self.tabs.iter().enumerate() {
             if bounds.contains(&position) {
-                let midpoint = bounds.origin.x + bounds.size.width * 0.5;
-                return Some(if position.x < midpoint { ix } else { ix + 1 });
+                let before = if self.vertical {
+                    position.y < bounds.origin.y + bounds.size.height * 0.5
+                } else {
+                    position.x < bounds.origin.x + bounds.size.width * 0.5
+                };
+                return Some(if before { ix } else { ix + 1 });
             }
         }
         self.end.contains(&position).then_some(self.tabs.len())
@@ -1626,6 +1640,7 @@ pub struct Workspace {
     active_tab_id: WorkspaceTabId,
     active_ix: Option<usize>,
     document_tab_scroll: ScrollHandle,
+    vertical_tab_state: vertical_tabs::VerticalTabState,
     pending_document_tab_reveal: Cell<Option<u64>>,
     pending_search_result_jump: Option<PendingSearchResultJump>,
     search_result_jump_revision: u64,
@@ -1723,6 +1738,7 @@ mod search_tab_ui;
 mod search_tabs;
 mod sidebar;
 mod tab_lifecycle;
+mod vertical_tabs;
 mod view_state;
 mod viewport_orchestration;
 mod window_registry;
@@ -2265,6 +2281,7 @@ impl Workspace {
             active_tab_id: WorkspaceTabId::New(1),
             active_ix: None,
             document_tab_scroll: ScrollHandle::new(),
+            vertical_tab_state: vertical_tabs::VerticalTabState::default(),
             pending_document_tab_reveal: Cell::new(None),
             pending_search_result_jump: None,
             search_result_jump_revision: 0,

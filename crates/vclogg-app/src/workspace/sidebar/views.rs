@@ -10,6 +10,7 @@ impl SidebarState {
     pub(super) fn render_side(
         &mut self,
         side: SidebarSide,
+        tabs: Option<AnyElement>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -153,7 +154,7 @@ impl SidebarState {
                     Self::panel_menu(menu, menu_state.clone(), panel, side, window, cx)
                 }),
         );
-        let content = self.render_panel(panel, window, cx);
+        let content = tabs.unwrap_or_else(|| self.render_panel(panel, window, cx));
         let content = v_flex()
             .flex_1()
             .min_w_0()
