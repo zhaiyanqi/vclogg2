@@ -368,6 +368,10 @@ jobs:
             exit 1
           fi
 
+      - name: Verify server package checksums
+        working-directory: dist/server
+        run: sha256sum --check vclogg-server-*-SHA256SUMS.txt
+
       - name: Upload server packages
         uses: actions/upload-artifact@v7
         with:
@@ -375,7 +379,6 @@ jobs:
           path: |
             dist/server/vclogg-server-*-windows-amd64.zip
             dist/server/vclogg-server-*-linux-amd64.tar.gz
-            dist/server/vclogg-server-*-SHA256SUMS.txt
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -437,13 +440,10 @@ jobs:
             "release-assets/linux-x86_64/vclogg2-${version}-linux-x86_64.tar.gz"
             "release-assets/server/vclogg-server-${version}-windows-amd64.zip"
             "release-assets/server/vclogg-server-${version}-linux-amd64.tar.gz"
-            "release-assets/server/vclogg-server-${version}-SHA256SUMS.txt"
           )
           for package in "${packages[@]}"; do
             test -s "$package"
           done
-          cd release-assets/server
-          sha256sum --check "vclogg-server-${version}-SHA256SUMS.txt"
 
       - name: Generate release notes from commits
         shell: bash
@@ -493,5 +493,4 @@ jobs:
             release-assets/linux-x86_64/vclogg2-*-linux-x86_64.tar.gz \
             release-assets/server/vclogg-server-*-windows-amd64.zip \
             release-assets/server/vclogg-server-*-linux-amd64.tar.gz \
-            release-assets/server/vclogg-server-*-SHA256SUMS.txt \
             "${release_options[@]}"
