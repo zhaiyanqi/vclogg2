@@ -1092,7 +1092,7 @@ impl Workspace {
                         cx,
                     ))
                     .when(word_wrap, |track| {
-                        track.child(ui_theme::disabled_horizontal_log_scrollbar(cx))
+                        track.child(ui_theme::disabled_horizontal_log_scrollbar())
                     })
                     .when(!word_wrap, |track| {
                         track.child(
@@ -2881,7 +2881,7 @@ impl Workspace {
                         cx,
                     ))
                     .when(self.global_viewport.is_wrapped(), |track| {
-                        track.child(ui_theme::disabled_horizontal_log_scrollbar(cx))
+                        track.child(ui_theme::disabled_horizontal_log_scrollbar())
                     })
                     .when(!self.global_viewport.is_wrapped(), |track| {
                         track.child(

@@ -1,6 +1,6 @@
 use gpui::{
-    App, Axis, Background, Div, Hsla, InteractiveElement as _, ParentElement as _, Pixels,
-    Styled as _, div, hsla, linear_color_stop, linear_gradient, px, rems, rgb,
+    App, Axis, Background, Div, Hsla, InteractiveElement as _, Pixels, Styled as _, div, hsla,
+    linear_color_stop, linear_gradient, px, rems, rgb,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_component::theme::{Theme, ThemeMode, ThemeTokens, try_parse_color};
@@ -18,18 +18,10 @@ pub(crate) fn persistent_log_scrollbar(scrollbar: Scrollbar, background: Hsla) -
     })
 }
 
-/// A full-length, muted thumb indicates no horizontal range. No scroll handle is
-/// attached, so wrapped content cannot be moved by clicking or dragging this track.
-pub(crate) fn disabled_horizontal_log_scrollbar(cx: &App) -> Div {
-    div().relative().size_full().occlude().child(
-        div()
-            .absolute()
-            .left(px(4.))
-            .right(px(4.))
-            .top(px(4.))
-            .h(px(4.))
-            .bg(palette(cx).scrollbar_thumb.opacity(0.35)),
-    )
+/// Leave the disabled track empty while blocking pointer hits on content behind it.
+/// Its parent retains the track background, shadow and layout space.
+pub(crate) fn disabled_horizontal_log_scrollbar() -> Div {
+    div().size_full().occlude()
 }
 
 /// 界面表面使用叠在环境背景上的半透明材质。GPUI 没有元素级背景模糊，
