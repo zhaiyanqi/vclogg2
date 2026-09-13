@@ -9,9 +9,9 @@ use std::{
 
 use gpui::{
     AnyElement, App, Context, ElementId, Entity, EventEmitter, FocusHandle, InteractiveElement,
-    IntoElement, KeyBinding, MouseButton, ParentElement, Render, RenderOnce, SharedString,
-    StyleRefinement, Styled, UniformListScrollHandle, Window, div, prelude::FluentBuilder as _,
-    uniform_list,
+    IntoElement, KeyBinding, ListHorizontalSizingBehavior, MouseButton, ParentElement, Pixels,
+    Render, RenderOnce, SharedString, StyleRefinement, Styled, UniformListScrollHandle, Window,
+    div, prelude::FluentBuilder as _, uniform_list,
 };
 
 use crate::{
@@ -193,6 +193,11 @@ pub struct PreparedTreeItems {
 }
 
 impl PreparedTreeItems {
+    /// Read the flattened entries for background presentation measurements.
+    pub fn entries(&self) -> &[TreeEntry] {
+        &self.entries
+    }
+
     /// Flatten the expanded nodes, stopping if the caller cancels preparation.
     pub fn new(items: Vec<TreeItem>, mut cancelled: impl FnMut() -> bool) -> Option<Self> {
         fn append(
@@ -234,6 +239,7 @@ pub struct TreeState {
     right_clicked_ix: Option<usize>,
     render_item: Rc<RenderItem>,
     list_style: StyleRefinement,
+    horizontal_scroll_width: Option<Pixels>,
 }
 
 impl EventEmitter<TreeEvent> for TreeState {}
@@ -248,6 +254,7 @@ impl TreeState {
             right_clicked_ix: None,
             render_item: Rc::new(|_, _, _, _, _| div().into_any_element()),
             list_style: StyleRefinement::default(),
+            horizontal_scroll_width: None,
         }
     }
 
@@ -314,6 +321,15 @@ impl TreeState {
 
     pub fn scroll_handle(&self) -> &UniformListScrollHandle {
         &self.scroll_handle
+    }
+
+    /// Enable horizontal scrolling with a caller-measured content width.
+    /// None preserves the default viewport-constrained tree layout.
+    pub fn set_horizontal_scroll_width(&mut self, width: Option<Pixels>, cx: &mut Context<Self>) {
+        if self.horizontal_scroll_width != width {
+            self.horizontal_scroll_width = width;
+            cx.notify();
+        }
     }
 
     pub fn scroll_to_item(&mut self, ix: usize, strategy: gpui::ScrollStrategy) {
@@ -479,6 +495,7 @@ impl TreeState {
 impl Render for TreeState {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let render_item = self.render_item.clone();
+        let horizontal_scroll_width = self.horizontal_scroll_width;
         uniform_list("entries", self.entries.len(), {
             cx.processor(move |state, visible_range: Range<usize>, window, cx| {
                 visible_range
@@ -490,6 +507,7 @@ impl Render for TreeState {
                         };
                         div()
                             .id(ix)
+                            .when_some(horizontal_scroll_width, |this, width| this.min_w(width))
                             .child((render_item)(ix, entry, entry_state, window, cx))
                             .when(!entry.is_disabled(), |this| {
                                 this.on_mouse_down(
@@ -509,6 +527,9 @@ impl Render for TreeState {
                     })
                     .collect()
             })
+        })
+        .when(horizontal_scroll_width.is_some(), |list| {
+            list.with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
         })
         .track_scroll(&self.scroll_handle)
         .refine_style(&self.list_style)

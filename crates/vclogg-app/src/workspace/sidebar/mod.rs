@@ -128,6 +128,7 @@ impl SidebarState {
         let owner = workspace.upgrade().expect("sidebar owner exists");
         let subscriptions = vec![
             cx.observe(&owner, |this, owner, cx| this.sync(&owner, cx)),
+            cx.observe_global::<gpui_component::Theme>(|this, cx| this.rebuild_tree(cx)),
             cx.subscribe(&tree, |this, _, event: &TreeEvent, cx| {
                 let (id, expanded) = match event {
                     TreeEvent::Expanded(id) => (id, true),

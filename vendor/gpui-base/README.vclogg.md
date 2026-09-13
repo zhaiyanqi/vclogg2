@@ -43,3 +43,14 @@ area after `log|abc|test|sss` select `sss`. The offset is clipped to a UTF-8
 character boundary, and empty text still produces no selection. Single-click
 caret placement is unchanged. This applies to the shared input editing engine;
 preserve this behavior when upgrading the dependency.
+
+## Optional horizontal tree scrolling
+
+`src/tree.rs` exposes flattened prepared entries for background measurement and
+an opt-in `TreeState::set_horizontal_scroll_width` layout seam. When enabled,
+the virtual list uses unconstrained horizontal sizing and a shared minimum row
+width; both axes keep the existing uniform-list scroll handle. The default tree
+behavior stays viewport-constrained. The caller owns font measurement, row
+styling and scrollbar presentation, and must update the width when the tree or
+font metrics change. Preserve this seam until upstream provides equivalent
+horizontal scrolling when upgrading the dependency.

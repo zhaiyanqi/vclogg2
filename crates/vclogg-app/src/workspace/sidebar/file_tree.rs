@@ -2,6 +2,18 @@
 use super::*;
 use tasks::release_in_background;
 
+pub(super) const TREE_TEXT_REM: f32 = 0.875;
+pub(super) const TREE_ICON_REM: f32 = 0.875;
+pub(super) const TREE_GAP_REM: f32 = 0.25;
+pub(super) const TREE_PADDING_REM: f32 = 0.5;
+
+pub(super) fn tree_label(label: &str) -> String {
+    label
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
 #[derive(Clone)]
 pub(super) struct FileTreeTarget {
     path: PathBuf,
@@ -331,6 +343,9 @@ impl SidebarState {
         let expanded = self.expanded.clone();
         let exceptions = self.hidden_tree_paths();
         let installed_exceptions = exceptions.clone();
+        let text_system = cx.text_system().clone();
+        let font = gpui::font(cx.theme().font_family.clone());
+        let rem_size = cx.theme().font_size;
         let generation = self.tree_generation;
         let request = self.tree_request;
         let cancellation = CancellationToken::default();
@@ -426,7 +441,33 @@ impl SidebarState {
                         .iter()
                         .map(|root| folder(root, &directories, &expanded, &exceptions, &worker))
                         .collect::<Option<Vec<_>>>()?;
-                    gpui_base::PreparedTreeItems::new(items, || worker.is_cancelled())
+                    let prepared =
+                        gpui_base::PreparedTreeItems::new(items, || worker.is_cancelled())?;
+                    // Measure once with the snapshot, off the UI thread. Include
+                    // indentation and the same icon/gap/padding used by the row.
+                    let text_system = gpui::WindowTextSystem::new(text_system);
+                    let mut width = Pixels::ZERO;
+                    for entry in prepared.entries() {
+                        if worker.is_cancelled() {
+                            return None;
+                        }
+                        let label = tree_label(&entry.item().label);
+                        let run = gpui::TextRun {
+                            len: label.len(),
+                            font: font.clone(),
+                            ..Default::default()
+                        };
+                        let text_width = text_system
+                            .layout_line(&label, rem_size * TREE_TEXT_REM, &[run], None)
+                            .width;
+                        let chrome = rem_size
+                            * (entry.depth() as f32
+                                + TREE_PADDING_REM * 2.
+                                + TREE_ICON_REM
+                                + TREE_GAP_REM);
+                        width = width.max((text_width + chrome).ceil());
+                    }
+                    Some((prepared, width))
                 })
                 .await;
             _ = this.update(cx, |this, cx| {
@@ -435,7 +476,7 @@ impl SidebarState {
                     return;
                 }
                 this.tree_job = None;
-                if let Some(prepared) = prepared {
+                if let Some((prepared, width)) = prepared {
                     // Read selection at installation so user clicks during preparation survive.
                     let selected = this
                         .tree
@@ -445,6 +486,7 @@ impl SidebarState {
                     let selected_ix = selected.as_ref().and_then(|id| prepared.index_of(id));
                     let retired = this.tree.update(cx, |tree, cx| {
                         let retired = tree.replace_prepared_items(prepared, cx);
+                        tree.set_horizontal_scroll_width(Some(width), cx);
                         tree.set_selected_index(selected_ix, cx);
                         retired
                     });

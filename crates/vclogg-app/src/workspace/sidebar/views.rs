@@ -814,8 +814,11 @@ impl SidebarState {
     }
 
     fn render_files(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        use file_tree::{TREE_GAP_REM, TREE_ICON_REM, TREE_PADDING_REM, TREE_TEXT_REM, tree_label};
+
         let menu_state = cx.entity();
         let state = cx.entity();
+        let scroll = self.tree.read(cx).scroll_handle().clone();
         let tree = Tree::new(&self.tree, move |_, entry, selected, _, _| {
             let path = decode_persisted_path(entry.item().id.as_ref());
             let folder = entry.is_folder();
@@ -825,12 +828,12 @@ impl SidebarState {
                 .selected(selected)
                 .w_full()
                 .h(rems(2.))
-                .px_2()
-                .pl(rems(0.5 + entry.depth() as f32))
+                .px(rems(TREE_PADDING_REM))
+                .pl(rems(TREE_PADDING_REM + entry.depth() as f32))
                 .child(
                     h_flex()
-                        .min_w_0()
-                        .gap_1()
+                        .flex_shrink_0()
+                        .gap(rems(TREE_GAP_REM))
                         .child(
                             Icon::new(if folder {
                                 if entry.is_expanded() {
@@ -841,14 +844,14 @@ impl SidebarState {
                             } else {
                                 IconName::File
                             })
-                            .small(),
+                            .size(rems(TREE_ICON_REM)),
                         )
                         .child(
                             div()
-                                .min_w_0()
-                                .truncate()
-                                .text_sm()
-                                .child(entry.item().label.clone()),
+                                .flex_shrink_0()
+                                .whitespace_nowrap()
+                                .text_size(rems(TREE_TEXT_REM))
+                                .child(tree_label(&entry.item().label)),
                         ),
                 )
                 .on_click(move |event, window, cx| {
@@ -980,7 +983,15 @@ impl SidebarState {
                     )
                 },
             )
-            .child(div().flex_1().min_h_0().min_w_0().child(tree))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .child(tree)
+                    .horizontal_scrollbar(&scroll),
+            )
             .into_any_element()
     }
 }
