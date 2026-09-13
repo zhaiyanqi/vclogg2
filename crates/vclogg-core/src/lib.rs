@@ -2,6 +2,7 @@
 
 mod cancellation;
 mod document;
+mod navigation;
 mod result_set;
 mod search;
 
@@ -9,6 +10,10 @@ pub use cancellation::CancellationToken;
 pub use document::{
     DocumentMetadata, DocumentRefreshKind, LinePreview, LinePreviewReader, LineReader, LogDocument,
     PendingIndexCacheWrite, RefreshValidation,
+};
+pub use navigation::{
+    DirectoryEntry, LogMinute, MinuteGroup, NavigationSummary, OverviewBucket,
+    navigation_directory, parse_log_minute, summarize_navigation,
 };
 pub use result_set::CompressedRows;
 pub use search::{

@@ -253,6 +253,7 @@ impl Workspace {
                                         this.recent_files = recent_files.clone();
                                         this.pinned_files = pinned_files.clone();
                                         this.last_workspace_files = last_workspace_files.clone();
+                                        this.refresh_sidebar_history(cx);
                                         cx.notify();
                                     }
                                 },

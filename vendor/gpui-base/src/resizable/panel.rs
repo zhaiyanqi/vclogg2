@@ -353,7 +353,8 @@ impl RenderOnce for ResizablePanel {
                             cx.stop_propagation();
                             // Set current resizing panel ix
                             state.update(cx, |state, _| {
-                                state.resizing_panel_ix = Some(ix);
+                                state.resizing_panel_ix =
+                                    (ix < state.panels.len().saturating_sub(1)).then_some(ix);
                             });
                             cx.new(|_| drag_panel.deref().clone())
                         }),
@@ -418,31 +419,39 @@ impl Element for ResizePanelGroupElement {
         _: &mut Self::RequestLayoutState,
         _: &mut Self::PrepaintState,
         window: &mut Window,
-        cx: &mut App,
+        _cx: &mut App,
     ) {
         window.on_mouse_event({
             let state = self.state.clone();
             let axis = self.axis;
-            let current_ix = state.read(cx).resizing_panel_ix;
             move |e: &MouseMoveEvent, phase, window, cx| {
                 if !phase.bubble() {
                     return;
                 }
-                let Some(ix) = current_ix else { return };
-
                 state.update(cx, |state, cx| {
-                    let panel = state.panels.get(ix).expect("BUG: invalid panel index");
-
+                    // Layout changes can cancel a drag between painting and event dispatch.
+                    // Read live state; a panel index captured during paint is no longer valid.
+                    let Some(ix) = state.resizing_panel_ix else {
+                        return;
+                    };
+                    if state.axis != axis
+                        || ix >= state.panels.len().saturating_sub(1)
+                        || ix >= state.sizes.len().saturating_sub(1)
+                    {
+                        state.resizing_panel_ix = None;
+                        return;
+                    }
+                    let bounds = state.panels[ix].bounds;
                     match axis {
                         Axis::Horizontal => state.resize_panel_at_handle(
                             ix,
-                            e.position.x - panel.bounds.left(),
+                            e.position.x - bounds.left(),
                             window,
                             cx,
                         ),
                         Axis::Vertical => state.resize_panel_at_handle(
                             ix,
-                            e.position.y - panel.bounds.top(),
+                            e.position.y - bounds.top(),
                             window,
                             cx,
                         ),
@@ -455,14 +464,26 @@ impl Element for ResizePanelGroupElement {
         // When any mouse up, stop dragging
         window.on_mouse_event({
             let state = self.state.clone();
-            let current_ix = state.read(cx).resizing_panel_ix;
             let on_resize = self.on_resize.clone();
             move |_: &MouseUpEvent, phase, window, cx| {
-                if current_ix.is_none() {
+                if !phase.bubble() {
                     return;
                 }
-                if phase.bubble() {
-                    state.update(cx, |state, cx| state.done_resizing(cx));
+                let completed = state.update(cx, |state, cx| {
+                    let Some(ix) = state.resizing_panel_ix else {
+                        return false;
+                    };
+                    if ix >= state.panels.len().saturating_sub(1)
+                        || ix >= state.sizes.len().saturating_sub(1)
+                    {
+                        state.resizing_panel_ix = None;
+                        return false;
+                    }
+                    state.done_resizing(cx);
+                    true
+                });
+                // Cancelled drags must not persist empty or obsolete panel sizes.
+                if completed {
                     on_resize(&state, window, cx);
                 }
             }

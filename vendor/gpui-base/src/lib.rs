@@ -166,7 +166,9 @@ pub use toast::{
 pub use toggle::{Toggle, ToggleStyles};
 pub use toggle_group::ToggleGroup;
 pub use tooltip::{Tooltip, TooltipOverlay, TooltipPositioner, TooltipRequest, TooltipTransition};
-pub use tree::{Tree, TreeEntry, TreeEntryState, TreeEvent, TreeItem, TreeState};
+pub use tree::{
+    PreparedTreeItems, Tree, TreeEntry, TreeEntryState, TreeEvent, TreeItem, TreeState,
+};
 #[doc(hidden)]
 pub use tree::{init as init_tree, key_context as tree_key_context};
 #[doc(hidden)]

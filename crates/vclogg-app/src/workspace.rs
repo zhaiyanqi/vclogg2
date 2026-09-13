@@ -1594,6 +1594,10 @@ pub struct Workspace {
     primary_window: bool,
     focus_handle: FocusHandle,
     status_surface: Entity<WorkspaceStatusSurface>,
+    sidebar: Entity<sidebar::SidebarState>,
+    sidebar_surfaces: [Entity<sidebar::SidebarSurface>; 2],
+    _sidebar_subscriptions: Vec<Subscription>,
+    sidebar_split: Entity<ResizableState>,
     query: Entity<InputState>,
     search_history: Vec<String>,
     predefined_filters: Vec<PredefinedFilter>,
@@ -1717,6 +1721,7 @@ mod search_tab_activation;
 mod search_tab_tasks;
 mod search_tab_ui;
 mod search_tabs;
+mod sidebar;
 mod tab_lifecycle;
 mod view_state;
 mod viewport_orchestration;
@@ -1768,6 +1773,8 @@ impl Workspace {
         let log_focus_handle = cx.focus_handle().tab_stop(true);
         let search_results_focus_handle = cx.focus_handle().tab_stop(true);
         let search_panel_state = cx.new(|_| ResizableState::default());
+        let sidebar_split = cx.new(|_| ResizableState::default());
+        let (sidebar, sidebar_surfaces, sidebar_subscriptions) = Self::create_sidebars(window, cx);
         cx.on_focus_in(&log_focus_handle, window, |this: &mut Workspace, _, cx| {
             this.active_log_region = LogRegion::Body;
             cx.notify();
@@ -2226,6 +2233,10 @@ impl Workspace {
             primary_window,
             focus_handle,
             status_surface,
+            sidebar,
+            sidebar_surfaces,
+            _sidebar_subscriptions: sidebar_subscriptions,
+            sidebar_split,
             query,
             search_history: Vec::new(),
             predefined_filters: Vec::new(),
@@ -2610,17 +2621,12 @@ impl Render for Workspace {
             .children(ui_theme::ambient_glow_layers(&colors))
             .child(self.render_title_bar(window, cx))
             .child(self.render_file_toolbar(window, cx))
-            .child(self.render_tabs(has_other_window, cx))
             .child(
                 div()
                     .flex_1()
                     .min_h_0()
-                    .when(self.active_document().is_none(), |this| {
-                        this.child(self.render_new_tab_workspace(cx))
-                    })
-                    .when(self.active_document().is_some(), |this| {
-                        this.child(self.render_document_workspace(window, cx))
-                    }),
+                    .min_w_0()
+                    .child(self.render_sidebar_workspace(has_other_window, window, cx)),
             )
             .child(self.status_surface.clone())
             .child(self.render_file_drop_observer(cx))

@@ -98,6 +98,7 @@ impl ResizableState {
         ix: Option<usize>,
         cx: &mut Context<Self>,
     ) {
+        self.resizing_panel_ix = None;
         let panel_state = ResizablePanelState {
             size,
             ..Default::default()
@@ -192,6 +193,7 @@ impl ResizableState {
         }
 
         if changed {
+            self.resizing_panel_ix = None;
             // We need to make sure the total size is in line with the container size.
             self.adjust_to_container_size(cx);
         }
@@ -221,16 +223,13 @@ impl ResizableState {
     pub fn remove_panel(&mut self, panel_ix: usize, cx: &mut Context<Self>) {
         self.panels.remove(panel_ix);
         self.sizes.remove(panel_ix);
-        if let Some(resizing_panel_ix) = self.resizing_panel_ix {
-            if resizing_panel_ix > panel_ix {
-                self.resizing_panel_ix = Some(resizing_panel_ix - 1);
-            }
-        }
+        self.resizing_panel_ix = None;
         self.adjust_to_container_size(cx);
     }
 
     /// Reset the panel at `panel_ix` while preserving its current size.
     pub fn reset_panel(&mut self, panel_ix: usize, cx: &mut Context<Self>) {
+        self.resizing_panel_ix = None;
         let old_size = self.sizes[panel_ix];
 
         self.panels[panel_ix] = ResizablePanelState::default();
@@ -240,6 +239,7 @@ impl ResizableState {
 
     /// Remove all panel state.
     pub fn clear(&mut self) {
+        self.resizing_panel_ix = None;
         self.panels.clear();
         self.sizes.clear();
     }
@@ -282,13 +282,12 @@ impl ResizableState {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let old_sizes = self.sizes.clone();
-
-        let mut ix = ix;
-        // Only resize the left panels.
-        if ix >= old_sizes.len() - 1 {
+        // A removed or solitary panel has no adjacent divider to resize.
+        if ix >= self.sizes.len().saturating_sub(1) || ix >= self.panels.len().saturating_sub(1) {
             return;
         }
+        let old_sizes = self.sizes.clone();
+        let mut ix = ix;
         let container_size = self.container_size();
         self.sync_real_panel_sizes(cx);
 

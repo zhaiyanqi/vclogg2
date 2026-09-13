@@ -490,6 +490,15 @@ impl StateStore {
         }))
     }
 
+    pub(crate) fn load_sidebar_layout(&self) -> Result<Option<String>> {
+        self.repository.load_ui_value("workspace.sidebar_layout")
+    }
+
+    pub(crate) fn save_sidebar_layout(&self, layout: &str) -> Result<()> {
+        self.repository
+            .save_ui_value("workspace.sidebar_layout", layout)
+    }
+
     pub fn save_search_panel_height(&self, height: f32) -> Result<()> {
         if !height.is_finite() || height <= 0. {
             anyhow::bail!("搜索面板高度无效：{height}");

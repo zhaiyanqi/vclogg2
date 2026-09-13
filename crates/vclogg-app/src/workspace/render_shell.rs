@@ -779,6 +779,7 @@ impl Workspace {
                 h_flex()
                     .gap(px(3.))
                     .flex_shrink_0()
+                    .child(self.sidebar_toggle_button(false, cx))
                     .child(toolbar_icon_button(
                         Button::new("open-files")
                             .icon(IconName::FolderOpen)
@@ -871,6 +872,7 @@ impl Workspace {
                         meta.child(file_meta_item(line_position, true))
                     }),
             )
+            .child(self.sidebar_toggle_button(true, cx))
     }
 
     pub(super) fn render_tabs(

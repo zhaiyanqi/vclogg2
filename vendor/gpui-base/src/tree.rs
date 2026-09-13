@@ -1,4 +1,11 @@
-use std::{cell::RefCell, ops::Range, rc::Rc};
+use std::{
+    ops::Range,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use gpui::{
     AnyElement, App, Context, ElementId, Entity, EventEmitter, FocusHandle, InteractiveElement,
@@ -30,8 +37,8 @@ pub const fn key_context() -> &'static str {
 }
 
 struct TreeItemState {
-    expanded: bool,
-    disabled: bool,
+    expanded: AtomicBool,
+    disabled: AtomicBool,
 }
 
 /// A tree item with a stable id, display label, children, and shared state.
@@ -40,7 +47,7 @@ pub struct TreeItem {
     pub id: SharedString,
     pub label: SharedString,
     pub children: Vec<TreeItem>,
-    state: Rc<RefCell<TreeItemState>>,
+    state: Arc<TreeItemState>,
 }
 
 /// A flat representation of a tree item with its depth.
@@ -99,10 +106,10 @@ impl TreeItem {
             id: id.into(),
             label: label.into(),
             children: Vec::new(),
-            state: Rc::new(RefCell::new(TreeItemState {
-                expanded: false,
-                disabled: false,
-            })),
+            state: Arc::new(TreeItemState {
+                expanded: AtomicBool::new(false),
+                disabled: AtomicBool::new(false),
+            }),
         }
     }
 
@@ -117,12 +124,12 @@ impl TreeItem {
     }
 
     pub fn expanded(self, expanded: bool) -> Self {
-        self.state.borrow_mut().expanded = expanded;
+        self.state.expanded.store(expanded, Ordering::Relaxed);
         self
     }
 
     pub fn disabled(self, disabled: bool) -> Self {
-        self.state.borrow_mut().disabled = disabled;
+        self.state.disabled.store(disabled, Ordering::Relaxed);
         self
     }
 
@@ -132,12 +139,12 @@ impl TreeItem {
     }
 
     pub fn is_disabled(&self) -> bool {
-        self.state.borrow().disabled
+        self.state.disabled.load(Ordering::Relaxed)
     }
 
     #[inline]
     pub fn is_expanded(&self) -> bool {
-        self.state.borrow().expanded
+        self.state.expanded.load(Ordering::Relaxed)
     }
 
     /// Returns the target's ancestors from nearest parent to root.
@@ -178,6 +185,46 @@ impl TreeEntryState {
 
 type RenderItem = dyn Fn(usize, &TreeEntry, TreeEntryState, &mut Window, &mut App) -> AnyElement;
 
+/// A tree snapshot that can be prepared and retired on a background executor.
+/// Interaction state remains shared between each root and its flattened entries.
+#[derive(Default)]
+pub struct PreparedTreeItems {
+    entries: Vec<TreeEntry>,
+}
+
+impl PreparedTreeItems {
+    /// Flatten the expanded nodes, stopping if the caller cancels preparation.
+    pub fn new(items: Vec<TreeItem>, mut cancelled: impl FnMut() -> bool) -> Option<Self> {
+        fn append(
+            item: TreeItem,
+            depth: usize,
+            entries: &mut Vec<TreeEntry>,
+            cancelled: &mut impl FnMut() -> bool,
+        ) -> Option<()> {
+            if cancelled() {
+                return None;
+            }
+            entries.push(TreeEntry::new(item.clone(), depth));
+            if item.is_expanded() {
+                for child in item.children {
+                    append(child, depth + 1, entries, cancelled)?;
+                }
+            }
+            Some(())
+        }
+        let mut entries = Vec::new();
+        for item in items {
+            append(item, 0, &mut entries, &mut cancelled)?;
+        }
+        Some(Self { entries })
+    }
+
+    /// Resolve selection before publishing a snapshot to the UI thread.
+    pub fn index_of(&self, id: &SharedString) -> Option<usize> {
+        self.entries.iter().position(|entry| &entry.item.id == id)
+    }
+}
+
 /// Behavior and interaction state for a virtualized tree.
 pub struct TreeState {
     focus_handle: FocusHandle,
@@ -214,6 +261,20 @@ impl TreeState {
         self.selected_ix = None;
         self.right_clicked_ix = None;
         cx.notify();
+    }
+
+    /// Install an already prepared snapshot without traversing its nodes.
+    /// The returned snapshot can be dropped off the UI thread.
+    pub fn replace_prepared_items(
+        &mut self,
+        prepared: PreparedTreeItems,
+        cx: &mut Context<Self>,
+    ) -> PreparedTreeItems {
+        let entries = std::mem::replace(&mut self.entries, prepared.entries);
+        self.selected_ix = None;
+        self.right_clicked_ix = None;
+        cx.notify();
+        PreparedTreeItems { entries }
     }
 
     pub fn selected_index(&self) -> Option<usize> {
@@ -299,7 +360,7 @@ impl TreeState {
 
         for ancestor in ancestors.into_iter().rev() {
             if !ancestor.is_expanded() {
-                ancestor.state.borrow_mut().expanded = true;
+                ancestor.state.expanded.store(true, Ordering::Relaxed);
                 cx.emit(TreeEvent::Expanded(ancestor.id.clone()));
             }
         }
@@ -325,7 +386,7 @@ impl TreeState {
 
         let expanded = !entry.is_expanded();
         let id = entry.item.id.clone();
-        entry.item.state.borrow_mut().expanded = expanded;
+        entry.item.state.expanded.store(expanded, Ordering::Relaxed);
         cx.emit(if expanded {
             TreeEvent::Expanded(id)
         } else {
