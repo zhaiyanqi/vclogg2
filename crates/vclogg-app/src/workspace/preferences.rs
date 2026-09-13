@@ -1489,7 +1489,8 @@ impl Workspace {
             return;
         }
 
-        let auto_follow_changed = region == WrappedRegion::Log
+        let mut auto_follow_changed = region == WrappedRegion::Log
+            && delta_y > px(0.)
             && std::mem::replace(&mut self.documents[document_ix].view.auto_follow, false);
         let row_height = self.log_row_height();
         let line_count = usize::from(self.app_settings.mouse_wheel_scroll_lines.max(1));
@@ -1557,6 +1558,22 @@ impl Workspace {
             }
         };
 
+        // Scrolling down at the bottom produces no new target, but still opts back in to
+        // following after the user explicitly disabled it there.
+        if region == WrappedRegion::Log
+            && delta_y < px(0.)
+            && target_offset.is_none()
+            && latest_target.is_none()
+        {
+            let tab = &mut self.documents[document_ix];
+            if tab.load_state == DocumentLoadState::Ready
+                && row_count > 0
+                && tab.log_viewport.is_at_end()
+            {
+                auto_follow_changed |= !std::mem::replace(&mut tab.view.auto_follow, true);
+            }
+        }
+
         cx.stop_propagation();
         if let Some(offset) = target_offset {
             self.pending_log_scroll_frames
@@ -1569,6 +1586,9 @@ impl Workspace {
             Self::refresh_log_surfaces_atomically([surface], window, cx);
         }
 
+        if auto_follow_changed {
+            self.schedule_checkpoint(document_id, window, cx);
+        }
         if auto_follow_changed || target_offset.is_some() {
             cx.notify();
         }

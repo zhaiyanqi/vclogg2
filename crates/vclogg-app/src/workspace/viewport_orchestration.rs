@@ -340,9 +340,9 @@ impl Workspace {
         region: WrappedRegion,
         target: LogScrollFrameTarget,
         row_height: Pixels,
-        cx: &App,
+        cx: &mut Context<Self>,
     ) {
-        let Some(tab) = self.documents.iter().find(|tab| tab.id == document_id) else {
+        let Some(tab) = self.documents.iter_mut().find(|tab| tab.id == document_id) else {
             return;
         };
         let (table, viewport) = if region == WrappedRegion::Results {
@@ -350,11 +350,22 @@ impl Workspace {
         } else {
             (&tab.log_table, &tab.log_viewport)
         };
+        let vertical_scroll = target.offset().y != viewport.committed_scroll_offset().y;
         viewport.commit_scroll_frame_target(
             target,
             table.read(cx).delegate().row_count(),
             row_height,
         );
+        // Wheel and scrollbar input share the viewport's end calculation in both layout
+        // modes. Horizontal scrolling and programmatic row navigation do not opt in.
+        if region == WrappedRegion::Log && vertical_scroll {
+            let auto_follow = tab.load_state == DocumentLoadState::Ready
+                && tab.document.line_count() > 0
+                && viewport.is_at_end();
+            if std::mem::replace(&mut tab.view.auto_follow, auto_follow) != auto_follow {
+                cx.notify();
+            }
+        }
     }
 
     pub(super) fn apply_global_scroll_target(
