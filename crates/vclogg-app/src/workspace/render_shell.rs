@@ -78,6 +78,7 @@ impl Workspace {
             self.active_document().is_some_and(|tab| tab.view.word_wrap)
         };
         let show_full_path = self.app_settings.show_full_path;
+        let show_horizontal_scrollbar = self.app_settings.show_horizontal_scrollbar;
         let highlight_log_levels = self.app_settings.highlight_log_levels;
         let highlight_matches = self.app_settings.highlight_matches;
         let case_sensitive = self.case_sensitive;
@@ -308,6 +309,17 @@ impl Workspace {
                             cx,
                         );
                     });
+                let toggle_horizontal_scrollbar =
+                    window.listener_for(&view_workspace, |this, _, window, cx| {
+                        this.update_app_setting(
+                            |settings| {
+                                settings.show_horizontal_scrollbar =
+                                    !settings.show_horizontal_scrollbar;
+                            },
+                            window,
+                            cx,
+                        );
+                    });
                 menu.item(
                     PopupMenuItem::new(crate::tr!("自动换行", "Word wrap"))
                         .action(Box::new(ToggleWordWrap))
@@ -326,6 +338,11 @@ impl Workspace {
                         .checked(show_row_separators)
                         .disabled(!has_document)
                         .on_click(toggle_row_separators),
+                )
+                .item(
+                    PopupMenuItem::new(crate::tr!("横向滚动条", "Horizontal scrollbar"))
+                        .checked(show_horizontal_scrollbar)
+                        .on_click(toggle_horizontal_scrollbar),
                 )
                 .item(
                     PopupMenuItem::new(crate::tr!("显示完整路径", "Show full path"))
@@ -2140,6 +2157,11 @@ impl Workspace {
             .child(deferred_workspace_overlay(
                 ui_theme::workspace_bar_bottom_shadow(cx),
             ))
+            .when(!self.app_settings.show_horizontal_scrollbar, |bar| {
+                bar.child(deferred_workspace_overlay(
+                    ui_theme::log_scrollbar_edge_shadow(gpui::Axis::Horizontal, cx),
+                ))
+            })
     }
 
     pub(super) fn render_pinned_files(

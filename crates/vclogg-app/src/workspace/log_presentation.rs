@@ -1051,7 +1051,9 @@ impl Workspace {
                             },
                         )
                         .size_full()
-                        .pb(ui_theme::LOG_SCROLLBAR_WIDTH),
+                        .when(self.app_settings.show_horizontal_scrollbar, |list| {
+                            list.pb(ui_theme::LOG_SCROLLBAR_WIDTH)
+                        }),
                     ))
                     .child(
                         div()
@@ -1079,36 +1081,38 @@ impl Workspace {
                             ),
                     ),
             )
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .right(ui_theme::LOG_SCROLLBAR_WIDTH)
-                    .bottom_0()
-                    .h(ui_theme::LOG_SCROLLBAR_WIDTH)
-                    .bg(scrollbar_background)
-                    .child(ui_theme::log_scrollbar_edge_shadow(
-                        gpui::Axis::Horizontal,
-                        cx,
-                    ))
-                    .when(word_wrap, |track| {
-                        track.child(ui_theme::disabled_horizontal_log_scrollbar())
-                    })
-                    .when(!word_wrap, |track| {
-                        track.child(
-                            ui_theme::persistent_log_scrollbar(
-                                Scrollbar::horizontal(&logical_scroll)
-                                    .id(format!(
-                                        "log-horizontal-scrollbar-{document_id}-{}",
-                                        region as u8
-                                    ))
-                                    .viewport_from_layout(),
-                                scrollbar_background,
+            .when(self.app_settings.show_horizontal_scrollbar, |content| {
+                content.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right(ui_theme::LOG_SCROLLBAR_WIDTH)
+                        .bottom_0()
+                        .h(ui_theme::LOG_SCROLLBAR_WIDTH)
+                        .bg(scrollbar_background)
+                        .child(ui_theme::log_scrollbar_edge_shadow(
+                            gpui::Axis::Horizontal,
+                            cx,
+                        ))
+                        .when(word_wrap, |track| {
+                            track.child(ui_theme::disabled_horizontal_log_scrollbar())
+                        })
+                        .when(!word_wrap, |track| {
+                            track.child(
+                                ui_theme::persistent_log_scrollbar(
+                                    Scrollbar::horizontal(&logical_scroll)
+                                        .id(format!(
+                                            "log-horizontal-scrollbar-{document_id}-{}",
+                                            region as u8
+                                        ))
+                                        .viewport_from_layout(),
+                                    scrollbar_background,
+                                )
+                                .max_fps(60),
                             )
-                            .max_fps(60),
-                        )
-                    }),
-            );
+                        }),
+                )
+            });
         crate::ui_performance::element(
             "WrappedLogTable::request_layout",
             "WrappedLogTable::prepaint",
@@ -2843,7 +2847,9 @@ impl Workspace {
                             },
                         )
                         .size_full()
-                        .pb(ui_theme::LOG_SCROLLBAR_WIDTH),
+                        .when(self.app_settings.show_horizontal_scrollbar, |list| {
+                            list.pb(ui_theme::LOG_SCROLLBAR_WIDTH)
+                        }),
                     )
                     .child(
                         div()
@@ -2868,33 +2874,35 @@ impl Workspace {
                             ),
                     ),
             )
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .right(ui_theme::LOG_SCROLLBAR_WIDTH)
-                    .bottom_0()
-                    .h(ui_theme::LOG_SCROLLBAR_WIDTH)
-                    .bg(scrollbar_background)
-                    .child(ui_theme::log_scrollbar_edge_shadow(
-                        gpui::Axis::Horizontal,
-                        cx,
-                    ))
-                    .when(self.global_viewport.is_wrapped(), |track| {
-                        track.child(ui_theme::disabled_horizontal_log_scrollbar())
-                    })
-                    .when(!self.global_viewport.is_wrapped(), |track| {
-                        track.child(
-                            ui_theme::persistent_log_scrollbar(
-                                Scrollbar::horizontal(&logical_scroll)
-                                    .id("global-results-horizontal-scrollbar")
-                                    .viewport_from_layout(),
-                                scrollbar_background,
+            .when(self.app_settings.show_horizontal_scrollbar, |content| {
+                content.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right(ui_theme::LOG_SCROLLBAR_WIDTH)
+                        .bottom_0()
+                        .h(ui_theme::LOG_SCROLLBAR_WIDTH)
+                        .bg(scrollbar_background)
+                        .child(ui_theme::log_scrollbar_edge_shadow(
+                            gpui::Axis::Horizontal,
+                            cx,
+                        ))
+                        .when(self.global_viewport.is_wrapped(), |track| {
+                            track.child(ui_theme::disabled_horizontal_log_scrollbar())
+                        })
+                        .when(!self.global_viewport.is_wrapped(), |track| {
+                            track.child(
+                                ui_theme::persistent_log_scrollbar(
+                                    Scrollbar::horizontal(&logical_scroll)
+                                        .id("global-results-horizontal-scrollbar")
+                                        .viewport_from_layout(),
+                                    scrollbar_background,
+                                )
+                                .max_fps(60),
                             )
-                            .max_fps(60),
-                        )
-                    }),
-            )
+                        }),
+                )
+            })
             .into_any_element()
     }
 
@@ -3233,6 +3241,13 @@ impl Workspace {
             .child(
                 v_resizable("log-and-search-results")
                     .with_state(&self.search_panel_state)
+                    .when(!self.app_settings.show_horizontal_scrollbar, |split| {
+                        // Keep the component's drag behavior while the search bar owns
+                        // the boundary shadow instead of the divider's painted line.
+                        split.with_handle_appearance(Rc::new(|_, _, _| {
+                            Some(div().into_any_element())
+                        }))
+                    })
                     .on_resize(move |state, window, cx| {
                         let height = state.read(cx).sizes().get(1).copied();
                         let Some(height) = height else {
