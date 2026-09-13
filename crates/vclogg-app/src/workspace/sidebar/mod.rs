@@ -14,7 +14,10 @@ mod minimap;
 mod overview;
 mod tasks;
 mod views;
-use layout::{DraggedSidebarPanel, SidebarLayout, SidebarPanelId, SidebarSide};
+use layout::{
+    DraggedSidebarPanel, SIDEBAR_MAX_WIDTH_REM, SIDEBAR_MIN_WIDTH_REM, SIDEBAR_RAIL_WIDTH_REM,
+    SidebarLayout, SidebarPanelId, SidebarSide,
+};
 
 pub(super) struct SidebarChanged;
 
@@ -728,7 +731,8 @@ impl Workspace {
                     let mut changed = false;
                     for (side, measured) in [left, right].into_iter().enumerate() {
                         if let Some(width) = measured {
-                            let width = (width / window.rem_size() - 3.).clamp(12., 32.);
+                            let width = (width / window.rem_size() - SIDEBAR_RAIL_WIDTH_REM)
+                                .clamp(SIDEBAR_MIN_WIDTH_REM, SIDEBAR_MAX_WIDTH_REM);
                             // Only persist a divider's explicit change, not another pane's temporary fit.
                             if widths[side].is_some_and(|shown| (shown - width).abs() > 0.05) {
                                 state.layout.sides[side].width = width;
@@ -744,9 +748,12 @@ impl Workspace {
             .when_some(widths[0], |split, width| {
                 split.child(
                     resizable_panel()
-                        .size(rem * (width + 3.))
+                        .size(rem * (width + SIDEBAR_RAIL_WIDTH_REM))
                         .flex_none()
-                        .size_range(rem * 15. ..rem * 35.)
+                        .size_range(
+                            rem * (SIDEBAR_MIN_WIDTH_REM + SIDEBAR_RAIL_WIDTH_REM)
+                                ..rem * (SIDEBAR_MAX_WIDTH_REM + SIDEBAR_RAIL_WIDTH_REM),
+                        )
                         .child(self.sidebar_surfaces[0].clone()),
                 )
             })
@@ -758,9 +765,12 @@ impl Workspace {
             .when_some(widths[1], |split, width| {
                 split.child(
                     resizable_panel()
-                        .size(rem * (width + 3.))
+                        .size(rem * (width + SIDEBAR_RAIL_WIDTH_REM))
                         .flex_none()
-                        .size_range(rem * 15. ..rem * 35.)
+                        .size_range(
+                            rem * (SIDEBAR_MIN_WIDTH_REM + SIDEBAR_RAIL_WIDTH_REM)
+                                ..rem * (SIDEBAR_MAX_WIDTH_REM + SIDEBAR_RAIL_WIDTH_REM),
+                        )
                         .child(self.sidebar_surfaces[1].clone()),
                 )
             })

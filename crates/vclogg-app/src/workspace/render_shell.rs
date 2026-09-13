@@ -791,7 +791,7 @@ impl Workspace {
                     ))
                     .child(toolbar_icon_button(
                         Button::new("reload-active-file")
-                            .icon(IconName::Redo)
+                            .icon(crate::app_assets::AppIcon::Refresh)
                             .tooltip(crate::tr!("重新加载（F5）", "Reload (F5)"))
                             .disabled(!has_document)
                             .loading(matches!(self.activity, Activity::Opening))
@@ -820,7 +820,7 @@ impl Workspace {
                     ))
                     .child(toolbar_icon_button(
                         Button::new("toggle-auto-follow")
-                            .icon(IconName::ArrowDown)
+                            .icon(crate::app_assets::AppIcon::FollowEnd)
                             .selected(auto_follow)
                             .tooltip(if auto_follow {
                                 crate::tr!("关闭末尾跟随", "Disable follow end")

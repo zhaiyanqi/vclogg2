@@ -13,13 +13,14 @@ impl SidebarState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let background = ui_theme::header_material(&ui_theme::palette(cx));
         let placement = self.layout.sides[side.ix()].clone();
         let Some(panel) = placement.active else {
             let owner = cx.entity_id();
             return div()
                 .id("empty-sidebar-drop")
                 .size_full()
-                .bg(cx.theme().sidebar)
+                .bg(background)
                 .drag_over::<DraggedSidebarPanel>(move |this, drag, _, cx| {
                     if drag.owner == owner {
                         this.bg(cx.theme().accent)
@@ -44,13 +45,12 @@ impl SidebarState {
         };
         let owner = cx.entity_id();
         let rail = v_flex()
-            .w(rems(3.))
+            .w(rems(SIDEBAR_RAIL_WIDTH_REM))
             .h_full()
             .flex_shrink_0()
             .gap_1()
             .py_1()
             .items_center()
-            .bg(cx.theme().sidebar)
             .children(placement.panels.iter().copied().map(|id| {
                 let drag = DraggedSidebarPanel { owner, panel: id };
                 div()
@@ -72,8 +72,10 @@ impl SidebarState {
                     .child(
                         Button::new(SharedString::from(format!("sidebar-tab-button-{id:?}")))
                             .ghost()
+                            .small()
                             .w_full()
-                            .h(rems(2.5))
+                            .h_7()
+                            .p_0()
                             .child(id.icon())
                             .selected(id == panel)
                             .tooltip(id.title())
@@ -124,7 +126,7 @@ impl SidebarState {
                     Button::new("sidebar-files-refresh")
                         .xsmall()
                         .ghost()
-                        .icon(IconName::Redo)
+                        .icon(crate::app_assets::AppIcon::Refresh)
                         .tooltip(crate::tr!("刷新文件夹", "Refresh folders"))
                         .on_click(cx.listener(|this, _, _, cx| this.refresh_tree(cx))),
                 )
@@ -157,7 +159,6 @@ impl SidebarState {
             .min_w_0()
             .min_h_0()
             .h_full()
-            .bg(cx.theme().sidebar)
             .border_color(cx.theme().border)
             .when(side == SidebarSide::Left, |this| this.border_l_1())
             .when(side == SidebarSide::Right, |this| this.border_r_1())
@@ -183,7 +184,13 @@ impl SidebarState {
             .on_drop(cx.listener(move |this, drag: &DraggedSidebarPanel, _, cx| {
                 this.drop_panel(drag, side, None, cx)
             }));
-        let shell = h_flex().items_stretch().size_full().min_w_0().min_h_0();
+        // Paint the same window material once for both the rail and panel.
+        let shell = h_flex()
+            .items_stretch()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .bg(background);
         if side == SidebarSide::Left {
             shell.child(rail).child(content).into_any_element()
         } else {
@@ -748,6 +755,7 @@ impl SidebarState {
             .ghost()
             .w_full()
             .h(rems(3.25))
+            .py_1()
             .selected(selected)
             .justify_start()
             .tooltip(tooltip)
@@ -764,12 +772,27 @@ impl SidebarState {
                             .min_w_0()
                             .flex_1()
                             .items_start()
-                            .child(div().w_full().truncate().text_sm().child(title))
+                            .gap_0p5()
+                            // Keep both text lines within the fixed virtual-list row,
+                            // independent of inherited line height and flex shrinking.
                             .child(
                                 div()
                                     .w_full()
+                                    .h(rems(1.25))
+                                    .flex_shrink_0()
+                                    .text_sm()
+                                    .line_height(rems(1.25))
                                     .truncate()
+                                    .child(title),
+                            )
+                            .child(
+                                div()
+                                    .w_full()
+                                    .h(rems(1.125))
+                                    .flex_shrink_0()
                                     .text_xs()
+                                    .line_height(rems(1.125))
+                                    .truncate()
                                     .text_color(cx.theme().muted_foreground)
                                     .child(detail),
                             ),

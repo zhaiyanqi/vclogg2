@@ -4,6 +4,7 @@
 )]
 
 mod actions;
+mod app_assets;
 mod app_icon;
 mod app_log;
 mod app_paths;
@@ -213,7 +214,7 @@ fn main() {
     i18n::initialize_native_language();
     let platform = gpui_platform::current_platform(false);
     let system_fonts = system_fonts::SystemFonts::new(platform.text_system());
-    let app = Application::with_platform(platform).with_assets(gpui_component_assets::Assets);
+    let app = Application::with_platform(platform).with_assets(app_assets::Assets);
     let (platform_open_sender, platform_open_receiver) = async_channel::unbounded();
     app.on_open_urls(move |urls| {
         let paths = urls

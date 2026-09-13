@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 
 use super::*;
 
+pub(super) const SIDEBAR_RAIL_WIDTH_REM: f32 = 2.25;
+pub(super) const SIDEBAR_MIN_WIDTH_REM: f32 = 8.;
+pub(super) const SIDEBAR_MAX_WIDTH_REM: f32 = 48.;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum SidebarPanelId {
@@ -34,10 +38,8 @@ impl SidebarPanelId {
     }
     pub(super) fn icon(self) -> AnyElement {
         if self == Self::History {
-            return svg()
-                .data(include_bytes!("../../../assets/icons/history.svg"))
-                .size_4()
-                .flex_shrink_0()
+            return Icon::new(crate::app_assets::AppIcon::History)
+                .small()
                 .into_any_element();
         }
         Icon::new(match self {
@@ -48,6 +50,7 @@ impl SidebarPanelId {
             Self::Colors => IconName::Palette,
             Self::Minimap => IconName::Map,
         })
+        .small()
         .into_any_element()
     }
 }
@@ -138,7 +141,8 @@ impl SidebarLayout {
         }
         for side in &mut layout.sides {
             side.width = if side.width.is_finite() {
-                side.width.clamp(12., 32.)
+                side.width
+                    .clamp(SIDEBAR_MIN_WIDTH_REM, SIDEBAR_MAX_WIDTH_REM)
             } else {
                 18.
             };
@@ -192,15 +196,27 @@ impl SidebarLayout {
             .each_ref()
             .map(|side| side.visible.then_some(side.width));
         for ix in [1, 0] {
-            let used = 24. + widths.iter().flatten().map(|width| width + 3.).sum::<f32>();
+            let used = 24.
+                + widths
+                    .iter()
+                    .flatten()
+                    .map(|width| width + SIDEBAR_RAIL_WIDTH_REM)
+                    .sum::<f32>();
             if used > available
                 && let Some(width) = &mut widths[ix]
             {
-                *width = (*width - (used - available)).max(12.);
+                *width = (*width - (used - available)).max(SIDEBAR_MIN_WIDTH_REM);
             }
         }
         for ix in [1, 0] {
-            if 24. + widths.iter().flatten().map(|width| width + 3.).sum::<f32>() > available {
+            if 24.
+                + widths
+                    .iter()
+                    .flatten()
+                    .map(|width| width + SIDEBAR_RAIL_WIDTH_REM)
+                    .sum::<f32>()
+                > available
+            {
                 widths[ix] = None;
             }
         }
