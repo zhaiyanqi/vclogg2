@@ -259,10 +259,14 @@ async fn run(
             AgentMessage::Assistant { calls, .. } => calls.clone(),
             _ => Vec::new(),
         };
-        if (connection_test || request == MAX_REQUESTS) && !calls.is_empty() {
+        if connection_test && !calls.is_empty() {
             anyhow::bail!(
                 "Provider returned tool calls after tool use was disabled; no actions were executed"
             );
+        }
+        if request == MAX_REQUESTS && !calls.is_empty() {
+            // Stop before publishing or executing calls that cannot run within this budget.
+            return Ok(RunStatus::LimitReached);
         }
         events.send(AgentEvent::Assistant(message.clone())).await?;
         messages.push(message);
