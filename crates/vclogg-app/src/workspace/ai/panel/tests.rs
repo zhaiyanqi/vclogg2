@@ -7,7 +7,15 @@ use std::{
 
 #[test]
 fn isolated_panel_send_workflow() {
-    for mode in ["complete", "cancel", "preparing_cancel", "error", "non_sse"] {
+    for mode in [
+        "complete",
+        "cancel",
+        "preparing_cancel",
+        "error",
+        "non_sse",
+        "missing_directory",
+        "directory_is_file",
+    ] {
         let root = tempfile::tempdir().unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
@@ -85,6 +93,30 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui::TestAppContext) {
     let panel = panel.unwrap();
     pump_until(cx, &panel, |p| !p.busy);
     let mode = std::env::var("VCLOGG2_AI_TEST_MODE").unwrap();
+    let directory_unavailable = matches!(mode.as_str(), "missing_directory" | "directory_is_file");
+    let directory_fixture = tempfile::tempdir().unwrap();
+    let selected_directory = directory_fixture.path().join("selected");
+    if directory_unavailable {
+        if mode == "directory_is_file" {
+            std::fs::write(&selected_directory, "not a directory").unwrap();
+        }
+        cx.update(|cx| {
+            owner.as_ref().unwrap().update(cx, |w, _| {
+                w.global_search.directory_options.directory = Some(selected_directory.clone());
+            })
+        });
+    }
+    if directory_unavailable {
+        let log_path = directory_fixture.path().join("open.log");
+        std::fs::write(&log_path, "INFO ready\nERROR timeout\n").unwrap();
+        let document = Arc::new(LogDocument::open(log_path).unwrap());
+        cx.update_window(window.into(), |_, window, cx| {
+            owner.as_ref().unwrap().update(cx, |w, cx| {
+                super::super::tests::install_test_document(w, document, window, cx);
+            });
+        })
+        .unwrap();
+    }
     let preparing_cancel = mode == "preparing_cancel";
     let cancelling = mode == "cancel";
     let failed = matches!(mode.as_str(), "error" | "non_sse");
@@ -142,6 +174,16 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui::TestAppContext) {
             assert!(body["tools"].as_array().unwrap().len() > 1);
             if round == 1 {
                 assert_eq!(body["messages"][2]["reasoning_content"], "开始分析");
+                if directory_unavailable {
+                    let result: Value = serde_json::from_str(
+                        body["messages"].as_array().unwrap().last().unwrap()["content"]
+                            .as_str()
+                            .unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(result["files"].as_array().unwrap().len(), 1);
+                    assert_eq!(result["files"][0]["name"], "open.log");
+                }
                 assert_eq!(
                     body["messages"].as_array().unwrap().last().unwrap()["role"],
                     "tool"
@@ -265,6 +307,45 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui::TestAppContext) {
         let restored: Conversation = serde_json::from_str(&row.payload).unwrap();
         assert!(matches!(&restored.messages[1], AgentMessage::Assistant { reasoning, .. } if reasoning == "开始分析"));
     });
+    if directory_unavailable {
+        panel.read_with(cx, |p, _| {
+            assert!(
+                p.scope
+                    .as_ref()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .directory
+                    .directory
+                    .is_none()
+            );
+            assert!(!p.conversation.notice.is_empty());
+            assert!(p.error.is_empty());
+        });
+        let scope = panel.read_with(cx, |p, _| p.scope.clone().unwrap());
+        let work = owner.as_ref().unwrap().read_with(cx, |w, cx| {
+            w.ai_prepare(
+                scope,
+                &ToolCall {
+                    id: "directory-search".into(),
+                    name: "search_logs".into(),
+                    arguments: json!({"scope":"directory", "query":"ERROR"}),
+                },
+                cx,
+            )
+            .unwrap()
+        });
+        assert!(
+            work().is_err(),
+            "Unavailable directory must remain inaccessible"
+        );
+        owner.as_ref().unwrap().read_with(cx, |w, _| {
+            assert_eq!(
+                w.global_search.directory_options.directory.as_ref(),
+                Some(&selected_directory)
+            );
+        });
+    }
     server.join().unwrap();
     drop(owner);
 }

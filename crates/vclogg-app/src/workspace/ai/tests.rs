@@ -160,7 +160,7 @@ fn log_agent_commands_share_real_workspace_state(cx: &mut gpui::TestAppContext) 
     })).unwrap();
 }
 
-fn install_test_document(
+pub(super) fn install_test_document(
     workspace: &mut Workspace,
     document: Arc<LogDocument>,
     window: &mut Window,

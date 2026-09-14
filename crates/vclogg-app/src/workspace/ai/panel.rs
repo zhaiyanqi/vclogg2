@@ -297,14 +297,15 @@ impl AiPanel {
             let capture = scope.clone();
             let saved = cx.background_spawn(async move {
                 let directory = capture.lock().map_err(|_| anyhow::anyhow!("Analysis unavailable"))?.directory.directory.clone();
-                if let Some(path) = directory {
-                    let canonical = path.canonicalize().context("Selected search directory unavailable")?;
-                    capture.lock().map_err(|_| anyhow::anyhow!("Analysis unavailable"))?.directory.directory = Some(canonical);
-                }
-                save_store.save_ai_conversation(&record)
+                // A directory is an optional capability, not a prerequisite for chatting
+                // or inspecting the captured open documents. Never fall back to another path.
+                let canonical = directory.as_ref().and_then(|path| path.canonicalize().ok()).filter(|path| path.is_dir());
+                let directory_unavailable = directory.is_some() && canonical.is_none();
+                capture.lock().map_err(|_| anyhow::anyhow!("Analysis unavailable"))?.directory.directory = canonical;
+                save_store.save_ai_conversation(&record).map(|revision| (revision, directory_unavailable))
             }).await;
-            let revision = match saved {
-                Ok(revision) => revision,
+            let (revision, directory_unavailable) = match saved {
+                Ok(saved) => saved,
                 Err(error) => {
                     _ = this.update(cx, |this, cx| {
                         this.busy = false;
@@ -346,6 +347,12 @@ impl AiPanel {
             if this.update(cx, |this, cx| {
                 this.revision = revision;
                 this.busy = false;
+                if directory_unavailable {
+                    this.conversation.notice = crate::tr!(
+                        "已选搜索目录不可用，本轮仅可访问已打开的日志。需要搜索目录时，请重新选择目录后发送。",
+                        "The selected search directory is unavailable. This run can access open logs only. Select a directory again before sending to enable directory search."
+                    ).into();
+                }
                 this.run = Some(run);
                 cx.notify();
             }).is_err() { return; }
