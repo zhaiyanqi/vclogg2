@@ -6,8 +6,7 @@ impl AiPanel {
     fn render_message(&mut self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         if ix >= self.conversation.messages.len() {
             return v_flex().px_3().py_2().gap_2()
-                .when(self.run.is_some(),|this|this.child(div().text_xs().text_color(cx.theme().muted_foreground).child(self.pending_tool.as_ref().map(|c|format!("{}: {}",crate::tr!("执行工具","Running tool"),c.name)).unwrap_or_else(||crate::tr!("正在分析…","Analyzing…").into()))))
-                .when(!self.live.is_empty(),|this|this.child(TextView::new(&self.live_view).on_link_click(|url, _, _, cx| { if url.starts_with("https://") || url.starts_with("http://") { cx.open_url(url); } })))
+                .when(!self.live.is_empty() || !self.reasoning.is_empty(),|this|this.child(TextView::new(&self.live_view).on_link_click(|url, _, _, cx| { if url.starts_with("https://") || url.starts_with("http://") { cx.open_url(url); } })))
                 .when(self.conversation.messages.is_empty(),|this|this.child(div().text_sm().text_color(cx.theme().muted_foreground).child(crate::tr!("让 AI 查找异常、关联日志、添加标记或高亮关键词。先配置模型，再输入分析问题。","Ask AI to find errors, correlate logs, add marks or highlight keywords. Configure a model, then describe your investigation."))))
                 .into_any_element();
         }
@@ -348,14 +347,29 @@ impl Render for AiPanel {
             .p_2()
             .border_t_1()
             .border_color(cx.theme().border)
-            .when(!self.conversation.notice.is_empty(), |this| {
-                this.child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(self.conversation.notice.clone()),
-                )
-            })
+            .when(
+                !self.conversation.notice.is_empty() && self.conversation.notice != self.error,
+                |this| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(self.conversation.notice.clone()),
+                    )
+                },
+            )
+            .when(
+                self.run.is_some() || (self.busy && self.conversation.status == RunStatus::Running),
+                |this| {
+                    this.child(
+                        div()
+                            .id("ai-progress")
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(self.progress.clone()),
+                    )
+                },
+            )
             .child(Textarea::new(&self.input).disabled(self.busy))
             .child(
                 h_flex()
@@ -421,21 +435,25 @@ impl Render for AiPanel {
                             )
                         },
                     )
-                    .child(if self.run.is_some() {
-                        Button::new("ai-stop")
-                            .small()
-                            .label(crate::tr!("停止", "Stop"))
-                            .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
-                    } else {
-                        Button::new("ai-send")
-                            .small()
-                            .primary()
-                            .label(crate::tr!("发送", "Send"))
-                            .disabled(self.busy)
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.send(false, window, cx)),
-                            )
-                    }),
+                    .child(
+                        if self.run.is_some()
+                            || (self.busy && self.conversation.status == RunStatus::Running)
+                        {
+                            Button::new("ai-stop")
+                                .small()
+                                .label(crate::tr!("停止", "Stop"))
+                                .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
+                        } else {
+                            Button::new("ai-send")
+                                .small()
+                                .primary()
+                                .label(crate::tr!("发送", "Send"))
+                                .disabled(self.busy)
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.send(false, window, cx)),
+                                )
+                        },
+                    ),
             );
         body.child(header)
             .child(

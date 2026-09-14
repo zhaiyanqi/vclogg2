@@ -112,10 +112,11 @@ async fn run(
         events.send(AgentEvent::ContextTrimmed).await?;
     }
     let mut executed = std::collections::BTreeMap::<String, (ToolCall, ToolResult)>::new();
-    for _ in 0..MAX_REQUESTS {
+    for request in 1..=MAX_REQUESTS {
         if serde_json::to_vec(&messages)?.len() > 2 * 1024 * 1024 {
             return Ok(RunStatus::LimitReached);
         }
+        events.send(AgentEvent::RequestStarted(request)).await?;
         let message = stream_completion(
             config,
             &system,
@@ -223,6 +224,8 @@ mod tests {
                 text: "x".repeat(260 * 1024),
             },
             AgentMessage::Assistant {
+                reasoning: String::new(),
+                thinking: Vec::new(),
                 text: String::new(),
                 calls: vec![call],
             },

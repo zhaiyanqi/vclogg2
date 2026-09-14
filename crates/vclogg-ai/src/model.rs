@@ -161,6 +161,11 @@ pub enum AgentMessage {
     },
     Assistant {
         text: String,
+        #[serde(default)]
+        reasoning: String,
+        /// Signed native thinking blocks, replayed only by the Anthropic adapter.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        thinking: Vec<Value>,
         calls: Vec<ToolCall>,
     },
     Tool {
@@ -263,6 +268,10 @@ impl Cancellation {
 
 #[derive(Clone, Debug)]
 pub enum AgentEvent {
+    RequestStarted(usize),
+    ResponseStarted,
+    PreparingTools,
+    Thinking(String),
     Text(String),
     Assistant(AgentMessage),
     ToolStarted(ToolCall),

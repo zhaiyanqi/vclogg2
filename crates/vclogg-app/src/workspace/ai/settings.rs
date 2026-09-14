@@ -134,7 +134,11 @@ impl AiPanel {
                     _ = this.update(cx, |this, cx| {
                         this.run = None;
                         this.error = if status == vclogg_ai::RunStatus::Complete {
-                            crate::tr!("连接测试通过", "Connection test passed").into()
+                            crate::tr!(
+                                "连接测试通过，尚未测试日志工具",
+                                "Connection passed; log tools have not been tested"
+                            )
+                            .into()
                         } else {
                             error
                         };

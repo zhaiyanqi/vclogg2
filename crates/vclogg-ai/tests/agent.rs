@@ -337,6 +337,8 @@ fn recovering_a_pending_mutation_never_replays_it() {
                 text: "mark".into(),
             },
             AgentMessage::Assistant {
+                reasoning: String::new(),
+                thinking: Vec::new(),
                 text: String::new(),
                 calls: vec![ToolCall {
                     id: "one".into(),
@@ -492,6 +494,8 @@ async fn request_limit_returns_a_continuation_state() {
 #[test]
 fn recovery_pairs_reused_ids_with_their_own_assistant_response() {
     let assistant = AgentMessage::Assistant {
+        reasoning: String::new(),
+        thinking: Vec::new(),
         text: String::new(),
         calls: vec![ToolCall {
             id: "reused".into(),
@@ -513,6 +517,8 @@ fn recovery_pairs_reused_ids_with_their_own_assistant_response() {
             },
             assistant,
             AgentMessage::Assistant {
+                reasoning: String::new(),
+                thinking: Vec::new(),
                 text: "Partial output".into(),
                 calls: vec![],
             },
@@ -580,4 +586,112 @@ async fn anthropic_malformed_tool_json_recovers_with_valid_wire_blocks() {
     let requests = requests.lock().unwrap();
     assert!(requests[1]["messages"][1]["content"][0]["input"].is_object());
     assert_eq!(requests[1]["messages"][2]["content"][0]["is_error"], true);
+}
+
+#[tokio::test]
+async fn reasoning_streams_and_survives_tool_round_trips() {
+    for protocol in [Protocol::OpenAi, Protocol::Anthropic] {
+        let first = if protocol == Protocol::OpenAi {
+            event(json!({"choices":[{"delta":{"reasoning_content":"检查中文日志"}}]}))
+                + &openai_tool("one", "{}")
+        } else {
+            [
+                event(json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}})),
+                event(json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"检查中文日志"}})),
+                event(json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"signed-block"}})),
+                event(json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"one","name":"list_logs","input":{}}})),
+                event(json!({"type":"message_delta","delta":{"stop_reason":"tool_use"}})),
+                event(json!({"type":"message_stop"})),
+            ].concat()
+        };
+        let last = if protocol == Protocol::OpenAi {
+            openai_text("完成")
+        } else {
+            event(
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"完成"}}),
+            ) + &event(json!({"type":"message_stop"}))
+        };
+        let (mut config, requests, server) = mock(vec![(200, first), (200, last)]);
+        config.protocol = protocol;
+        let run = start_run(
+            config,
+            vec![AgentMessage::User {
+                text: "分析".into(),
+            }],
+            vec![],
+            String::new(),
+            false,
+        );
+        let mut thinking = String::new();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(5), run.events.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                AgentEvent::Thinking(delta) => thinking.push_str(&delta),
+                AgentEvent::ToolStarted(call) => {
+                    assert_eq!(thinking, "检查中文日志");
+                    run.replies
+                        .send((call.id, ToolResult::ok(json!({"files":[]}))))
+                        .await
+                        .unwrap();
+                }
+                AgentEvent::Finished(status, error) => {
+                    assert_eq!(status, RunStatus::Complete, "{error}");
+                    break;
+                }
+                _ => {}
+            }
+        }
+        server.join().unwrap();
+        let requests = requests.lock().unwrap();
+        if protocol == Protocol::OpenAi {
+            assert_eq!(requests[1]["messages"][2]["reasoning_content"], thinking);
+        } else {
+            assert_eq!(
+                requests[1]["messages"][1]["content"][0],
+                json!({"type":"thinking","thinking":thinking,"signature":"signed-block"})
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn empty_responses_fail_and_service_errors_are_redacted() {
+    for (status, response, expected) in [
+        (200, openai_text(""), "no answer"),
+        (
+            200,
+            event(
+                json!({"choices":[{"delta":{"reasoning_content":"正在思考"},"finish_reason":"length"}]}),
+            ),
+            "Output limit",
+        ),
+        (
+            400,
+            json!({"error":{"message":"Unsupported tools local-test-key"}}).to_string(),
+            "Unsupported tools [redacted]",
+        ),
+    ] {
+        let (config, _, server) = mock(vec![(status, response)]);
+        let run = start_run(config, vec![], vec![], String::new(), true);
+        loop {
+            match tokio::time::timeout(Duration::from_secs(5), run.events.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                AgentEvent::Finished(status, error) => {
+                    assert_eq!(status, RunStatus::Failed);
+                    assert!(error.contains(expected), "{error}");
+                    assert!(!error.contains("local-test-key"));
+                    break;
+                }
+                AgentEvent::ToolStarted(_) => panic!("Incomplete response must not execute tools"),
+                _ => {}
+            }
+        }
+        server.join().unwrap();
+    }
 }

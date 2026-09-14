@@ -21,6 +21,8 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) messages: Vec<Entity<TextViewState>>,
     pub(super) live_view: Entity<TextViewState>,
     pub(super) live: String,
+    pub(super) reasoning: String,
+    pub(super) progress: String,
     pub(super) expanded: BTreeSet<usize>,
     pub(super) pending_tool: Option<ToolCall>,
     pub(super) scope: Option<SharedScope>,
@@ -73,6 +75,8 @@ impl AiPanel {
             messages: Vec::new(),
             live_view: cx.new(|cx| TextViewState::markdown("", cx).selectable(true)),
             live: String::new(),
+            reasoning: String::new(),
+            progress: String::new(),
             expanded: BTreeSet::new(),
             pending_tool: None,
             scope: None,
@@ -136,6 +140,8 @@ impl AiPanel {
                 self.revision = record.revision;
                 self.scope = None;
                 self.live.clear();
+                self.reasoning.clear();
+                self.progress.clear();
                 self.pending_tool = None;
                 self.rebuild_messages(cx);
             }
@@ -235,6 +241,12 @@ impl AiPanel {
             .workspace
             .update(cx, |workspace, _| workspace.ai_scope())
         else {
+            self.error = crate::tr!(
+                "当前窗口不可用，请重新打开 AI 面板",
+                "Window unavailable; reopen the AI panel"
+            )
+            .into();
+            cx.notify();
             return;
         };
         self.scope = Some(scope.clone());
@@ -245,6 +257,8 @@ impl AiPanel {
         }
         self.error.clear();
         self.live.clear();
+        self.reasoning.clear();
+        self.progress = crate::tr!("正在准备会话", "Preparing conversation").into();
         self.live_view.update(cx, |v, cx| v.set_text("", cx));
         self.pending_tool = None;
         self.conversation.recover();
@@ -301,6 +315,29 @@ impl AiPanel {
                     return;
                 }
             };
+            if scope.lock().is_ok_and(|state| state.cancellation.is_cancelled()) {
+                let record = this.update(cx, |this, cx| {
+                    this.revision = revision;
+                    this.conversation.status = RunStatus::Interrupted;
+                    this.progress.clear();
+                    this.error = crate::tr!("分析已停止", "Analysis stopped").into();
+                    this.conversation.notice = this.error.clone();
+                    cx.notify();
+                    this.record()
+                });
+                if let Ok(Ok(record)) = record {
+                    let saved = cx.background_spawn(async move { store.save_ai_conversation(&record) }).await;
+                    _ = this.update(cx, |this, cx| {
+                        match saved {
+                            Ok(revision) => { this.revision = revision; this.update_history_entry(); }
+                            Err(error) => this.error = error.to_string(),
+                        }
+                        this.busy = false;
+                        cx.notify();
+                    });
+                }
+                return;
+            }
             let run = vclogg_ai::start_run(config, messages, skills,
                 "Access only the current window's captured files and selected directory. Call get_context and list_logs first. All line numbers are 1-based; references are run-scoped.".into(), false);
             let events = run.events.clone();
@@ -317,6 +354,7 @@ impl AiPanel {
                     if cancellation.is_cancelled() { break; }
                     let call = call.clone();
                     _ = this.update(cx, |this, cx| {
+                        this.progress = format!("{}: {}", crate::tr!("执行工具", "Running tool"), call.name);
                         this.pending_tool = Some(call.clone());
                         cx.notify();
                     });
@@ -405,11 +443,14 @@ impl AiPanel {
     }
     fn flush_partial(&mut self, cx: &mut Context<Self>) {
         self.live_task = None;
-        if !self.live.is_empty() {
+        if !self.live.is_empty() || !self.reasoning.is_empty() {
             let text = std::mem::take(&mut self.live);
+            let reasoning = std::mem::take(&mut self.reasoning);
             self.push_message(
                 AgentMessage::Assistant {
                     text,
+                    reasoning,
+                    thinking: Vec::new(),
                     calls: Vec::new(),
                 },
                 cx,
@@ -419,8 +460,32 @@ impl AiPanel {
     }
     fn receive_event(&mut self, event: AgentEvent, cx: &mut Context<Self>) {
         match event {
-            AgentEvent::Text(text) => {
-                self.live.push_str(&text);
+            AgentEvent::RequestStarted(request) => {
+                self.progress = format!(
+                    "{} ({request}/{})",
+                    crate::tr!("等待模型响应", "Waiting for model"),
+                    vclogg_ai::MAX_REQUESTS
+                );
+            }
+            AgentEvent::ResponseStarted => {
+                self.progress =
+                    crate::tr!("已连接，等待模型输出", "Connected; waiting for output").into()
+            }
+            AgentEvent::PreparingTools => {
+                self.progress = crate::tr!("正在接收工具参数", "Receiving tool arguments").into()
+            }
+            event @ (AgentEvent::Text(_) | AgentEvent::Thinking(_)) => {
+                match event {
+                    AgentEvent::Text(text) => {
+                        self.live.push_str(&text);
+                        self.progress = crate::tr!("正在生成回复", "Generating reply").into();
+                    }
+                    AgentEvent::Thinking(text) => {
+                        self.reasoning.push_str(&text);
+                        self.progress = crate::tr!("模型正在思考", "Model is thinking").into();
+                    }
+                    _ => unreachable!(),
+                }
                 if self.live_task.is_none() {
                     self.live_task = Some(cx.spawn(async move |this, cx| {
                         cx.background_executor()
@@ -429,7 +494,7 @@ impl AiPanel {
                         _ = this.update(cx, |this, cx| {
                             let follow = this.list.is_scrolled_to_end().unwrap_or(true);
                             this.live_view.update(cx, |view, cx| {
-                                view.set_text(&safe_markdown(&this.live), cx)
+                                view.set_text(&assistant_text(&this.live, &this.reasoning), cx)
                             });
                             this.list
                                 .remeasure_items(this.messages.len()..this.messages.len() + 1);
@@ -445,6 +510,7 @@ impl AiPanel {
             AgentEvent::Assistant(message) => {
                 self.live_task = None;
                 self.live.clear();
+                self.reasoning.clear();
                 self.live_view.update(cx, |view, cx| view.set_text("", cx));
                 self.push_message(message, cx);
             }
@@ -461,6 +527,10 @@ impl AiPanel {
             }
             AgentEvent::Finished(status, error) => {
                 self.conversation.status = status;
+                self.progress.clear();
+                if !error.is_empty() {
+                    self.conversation.notice = error.clone();
+                }
                 self.error = error;
                 self.pending_tool = None;
                 self.flush_partial(cx);
@@ -484,6 +554,7 @@ impl AiPanel {
         );
     }
     pub(super) fn stop(&mut self, cx: &mut Context<Self>) {
+        self.progress = crate::tr!("正在停止", "Stopping").into();
         if let Some(run) = &self.run {
             run.cancellation.cancel();
         }
@@ -516,6 +587,8 @@ impl AiPanel {
         self.scope = None;
         self.error.clear();
         self.live.clear();
+        self.reasoning.clear();
+        self.progress.clear();
         self.rebuild_messages(cx);
         cx.notify();
     }
@@ -636,9 +709,24 @@ impl Drop for AiPanel {
         }
     }
 }
+fn assistant_text(text: &str, reasoning: &str) -> String {
+    if reasoning.is_empty() {
+        return safe_markdown(text);
+    }
+    format!(
+        "### {}\n\n{}\n\n---\n\n{}",
+        crate::tr!("模型思考", "Model thinking"),
+        safe_markdown(reasoning),
+        safe_markdown(text)
+    )
+}
+
 pub(super) fn message_text(message: &AgentMessage, history: &[AgentMessage]) -> String {
     match message {
-        AgentMessage::User { text } | AgentMessage::Assistant { text, .. } => safe_markdown(text),
+        AgentMessage::User { text } => safe_markdown(text),
+        AgentMessage::Assistant {
+            text, reasoning, ..
+        } => assistant_text(text, reasoning),
         AgentMessage::Tool {
             call_id, result, ..
         } => {
@@ -698,3 +786,6 @@ pub(super) fn safe_markdown(text: &str) -> String {
     }
     output
 }
+
+#[cfg(test)]
+mod tests;

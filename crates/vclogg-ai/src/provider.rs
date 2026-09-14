@@ -20,8 +20,19 @@ pub(crate) fn request_body(
     for message in messages {
         match (config.protocol, message) {
             (_, AgentMessage::User { text }) => wire.push(json!({"role":"user","content":text})),
-            (Protocol::OpenAi, AgentMessage::Assistant { text, calls }) => {
+            (
+                Protocol::OpenAi,
+                AgentMessage::Assistant {
+                    text,
+                    calls,
+                    reasoning,
+                    ..
+                },
+            ) => {
                 let mut value = json!({"role":"assistant","content":text});
+                if !reasoning.is_empty() {
+                    value["reasoning_content"] = json!(reasoning);
+                }
                 if !calls.is_empty() {
                     value["tool_calls"] = json!(calls.iter().map(|c| json!({"id":c.id,"type":"function","function":{"name":c.name,"arguments":c.arguments.as_str().map(str::to_owned).unwrap_or_else(|| c.arguments.to_string())}})).collect::<Vec<_>>());
                 }
@@ -35,8 +46,16 @@ pub(crate) fn request_body(
             ) => wire.push(
                 json!({"role":"tool","tool_call_id":call_id,"content":result.value.to_string()}),
             ),
-            (Protocol::Anthropic, AgentMessage::Assistant { text, calls }) => {
-                let mut content = Vec::new();
+            (
+                Protocol::Anthropic,
+                AgentMessage::Assistant {
+                    text,
+                    calls,
+                    thinking,
+                    ..
+                },
+            ) => {
+                let mut content = thinking.clone();
                 if !text.is_empty() {
                     content.push(json!({"type":"text","text":text}));
                 }
@@ -108,6 +127,8 @@ struct PartialCall {
 #[derive(Default)]
 struct Completion {
     text: String,
+    reasoning: String,
+    thinking: BTreeMap<usize, Value>,
     calls: BTreeMap<usize, PartialCall>,
     finished: bool,
     stop_reason: String,
@@ -122,6 +143,7 @@ impl Completion {
             bail!("Provider reported a stream error");
         }
         let mut text = None;
+        let mut reasoning = None;
         match protocol {
             Protocol::OpenAi => {
                 if let Some(choice) = value["choices"].as_array().and_then(|v| v.first()) {
@@ -130,6 +152,10 @@ impl Completion {
                         self.stop_reason = reason.into();
                     }
                     text = choice["delta"]["content"].as_str().map(str::to_owned);
+                    reasoning = choice["delta"]["reasoning_content"]
+                        .as_str()
+                        .or_else(|| choice["delta"]["reasoning"].as_str())
+                        .map(str::to_owned);
                     for delta in choice["delta"]["tool_calls"]
                         .as_array()
                         .into_iter()
@@ -154,7 +180,21 @@ impl Completion {
             }
             Protocol::Anthropic => {
                 let ix = value["index"].as_u64().unwrap_or(0) as usize;
+                if ix > 127 {
+                    bail!("Too many content blocks");
+                }
                 match value["type"].as_str() {
+                    Some("content_block_start")
+                        if matches!(
+                            value["content_block"]["type"].as_str(),
+                            Some("thinking" | "redacted_thinking")
+                        ) =>
+                    {
+                        reasoning = value["content_block"]["thinking"]
+                            .as_str()
+                            .map(str::to_owned);
+                        self.thinking.insert(ix, value["content_block"].clone());
+                    }
                     Some("content_block_start") if value["content_block"]["type"] == "tool_use" => {
                         if ix > 127 {
                             bail!("Too many tool calls");
@@ -174,6 +214,24 @@ impl Completion {
                         text = value["content_block"]["text"].as_str().map(str::to_owned)
                     }
                     Some("content_block_delta") => match value["delta"]["type"].as_str() {
+                        Some("thinking_delta" | "signature_delta") => {
+                            let is_thinking = value["delta"]["type"] == "thinking_delta";
+                            let field = if is_thinking { "thinking" } else { "signature" };
+                            let delta = value["delta"][field].as_str().unwrap_or_default();
+                            let block = self
+                                .thinking
+                                .get_mut(&ix)
+                                .context("Thinking delta has no start")?;
+                            if !block[field].is_string() {
+                                block[field] = json!("");
+                            }
+                            if let Value::String(text) = &mut block[field] {
+                                text.push_str(delta);
+                            }
+                            if is_thinking {
+                                reasoning = Some(delta.to_owned());
+                            }
+                        }
                         Some("text_delta") => {
                             text = value["delta"]["text"].as_str().map(str::to_owned)
                         }
@@ -196,10 +254,24 @@ impl Completion {
                 }
             }
         }
+        if let Some(reasoning) = reasoning {
+            self.reasoning.push_str(&reasoning);
+        }
         if let Some(text) = &text {
             self.text.push_str(text);
         }
         if self.text.len()
+            + self.reasoning.len()
+            + self
+                .thinking
+                .values()
+                .map(|v| {
+                    ["thinking", "signature", "data"]
+                        .iter()
+                        .map(|key| v[key].as_str().map_or(0, str::len))
+                        .sum::<usize>()
+                })
+                .sum::<usize>()
             + self
                 .calls
                 .values()
@@ -240,8 +312,15 @@ impl Completion {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        if self.text.trim().is_empty() && calls.is_empty() {
+            bail!(
+                "Model returned no answer or tool calls. Check model compatibility and output limit"
+            );
+        }
         Ok(AgentMessage::Assistant {
             text: self.text,
+            reasoning: self.reasoning,
+            thinking: self.thinking.into_values().collect(),
             calls,
         })
     }
@@ -367,25 +446,77 @@ async fn stream_with_timeouts(
                     .header("anthropic-version", "2023-06-01");
             }
         }
-        // Do not expose request bodies or provider error pages, which can echo credentials.
-        let response = request
-            .send()
+        // Show only bounded, structured error messages; never expose request bodies or HTML error pages.
+        let mut response = tokio::time::timeout(idle_timeout, request.send())
             .await
+            .context("Model response headers timed out")?
             .map_err(|_| anyhow::anyhow!("Could not connect to the model service"))?;
         if !response.status().is_success() {
-            bail!("Model service returned HTTP {}", response.status().as_u16());
+            let status = response.status().as_u16();
+            let mut body = Vec::new();
+            while let Some(chunk) = tokio::time::timeout(idle_timeout, response.chunk())
+                .await
+                .context("Service error response timed out")?
+                .context("Could not read service error")?
+            {
+                if body.len() + chunk.len() > 8192 {
+                    break;
+                }
+                body.extend_from_slice(&chunk);
+            }
+            let detail = serde_json::from_slice::<Value>(&body)
+                .ok()
+                .and_then(|v| {
+                    v["error"]["message"]
+                        .as_str()
+                        .or_else(|| v["message"].as_str())
+                        .map(str::to_owned)
+                })
+                .unwrap_or_default();
+            let detail = config
+                .redact(&detail)
+                .chars()
+                .take(1024)
+                .collect::<String>();
+            bail!("Model service returned HTTP {status}: {detail}");
         }
+        if !response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| {
+                v.split(';')
+                    .next()
+                    .is_some_and(|v| v.trim().eq_ignore_ascii_case("text/event-stream"))
+            })
+        {
+            bail!("Model service did not return an SSE stream. Check the protocol and base URL");
+        }
+        events.send(AgentEvent::ResponseStarted).await?;
         let mut stream = response.bytes_stream();
         let mut decoder = SseDecoder::default();
         let mut completion = Completion::default();
         let mut redactor = StreamingRedactor::default();
+        let mut thinking_redactor = StreamingRedactor::default();
+        let mut preparing_tools = false;
         while let Some(bytes) = tokio::time::timeout(idle_timeout, stream.next())
             .await
             .context("Model stream timed out")?
         {
             let bytes = bytes.map_err(|_| anyhow::anyhow!("Model stream disconnected"))?;
             for payload in decoder.push(&bytes)? {
-                if let Some(text) = completion.event(config.protocol, &payload)? {
+                let reasoning_start = completion.reasoning.len();
+                let text = completion.event(config.protocol, &payload)?;
+                let reasoning = thinking_redactor
+                    .push(&completion.reasoning[reasoning_start..], &config.api_key);
+                if !reasoning.is_empty() {
+                    events.send(AgentEvent::Thinking(reasoning)).await?;
+                }
+                if !preparing_tools && !completion.calls.is_empty() {
+                    preparing_tools = true;
+                    events.send(AgentEvent::PreparingTools).await?;
+                }
+                if let Some(text) = text {
                     let text = redactor.push(&text, &config.api_key);
                     if !text.is_empty() {
                         events.send(AgentEvent::Text(text)).await?;
@@ -396,12 +527,16 @@ async fn stream_with_timeouts(
                 break;
             }
         }
-        let result = completion.finish()?;
+        let result = completion.finish();
         let tail = redactor.finish();
         if !tail.is_empty() {
             events.send(AgentEvent::Text(tail)).await?;
         }
-        Ok(result)
+        let tail = thinking_redactor.finish();
+        if !tail.is_empty() {
+            events.send(AgentEvent::Thinking(tail)).await?;
+        }
+        result
     };
     tokio::select! {
         _ = cancellation.cancelled() => bail!("Analysis stopped"),
@@ -447,7 +582,7 @@ mod tests {
                     let _ = held.recv_timeout(Duration::from_secs(3));
                 });
                 let token = Cancellation::default();
-                let (events, _) = async_channel::unbounded();
+                let (events, _receiver) = async_channel::unbounded();
                 let request = stream_with_timeouts(
                     &config,
                     "test",
@@ -517,7 +652,7 @@ mod tests {
                 .event(Protocol::Anthropic, &event.to_string())
                 .unwrap();
         }
-        let AgentMessage::Assistant { text, calls } = completion.finish().unwrap() else {
+        let AgentMessage::Assistant { text, calls, .. } = completion.finish().unwrap() else {
             panic!()
         };
         assert_eq!(text, "分析");

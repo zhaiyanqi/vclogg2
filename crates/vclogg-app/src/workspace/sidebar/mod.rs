@@ -853,3 +853,15 @@ impl Workspace {
             })
     }
 }
+
+#[cfg(test)]
+impl SidebarState {
+    pub(super) fn ai_test_panel(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<super::ai::AiPanel> {
+        self.activate(SidebarPanelId::Ai, SidebarSide::Right, window, cx);
+        self.ai.clone()
+    }
+}
