@@ -2588,8 +2588,15 @@ impl Render for Workspace {
             .child(self.render_tag_gesture_observer(cx))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                    if !this.is_text_selection_origin_in_log_region(event.position) {
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    // Root starts drag selection after this bubbles through Workspace.
+                    // Preserve that path for visible AI TextViews as well as log text.
+                    if !this.is_text_selection_origin_in_log_region(event.position)
+                        && !this
+                            .sidebar
+                            .read(cx)
+                            .contains_ai_transcript(event.position, window, cx)
+                    {
                         GlobalState::suppress_text_selection(cx);
                     }
                 }),

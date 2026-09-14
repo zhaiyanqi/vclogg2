@@ -288,6 +288,8 @@ fn request(listener: &TcpListener) -> (TcpStream, Value) {
             Err(error) => panic!("{error}"),
         }
     };
+    // Accepted sockets may inherit the nonblocking listener mode.
+    socket.set_nonblocking(false).unwrap();
     socket
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();

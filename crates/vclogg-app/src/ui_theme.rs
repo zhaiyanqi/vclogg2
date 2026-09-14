@@ -150,7 +150,7 @@ fn product_colors(mode: ThemeMode) -> ProductColors {
             control: color(0x1d2534),
             control_hover: color(0x273248),
             control_active: color(0x313d55),
-            selection: color(0x284f7a),
+            selection: color(0x426b9a),
             row_hover: color(0x212d41),
             row_selected: color(0x263f68),
             row_selected_border: color(0x4f87c7),
@@ -211,7 +211,7 @@ fn product_colors(mode: ThemeMode) -> ProductColors {
             control: color(0xfbfaf8),
             control_hover: color(0xe9e7e2),
             control_active: color(0xdfddd7),
-            selection: color(0xcfe0ff),
+            selection: color(0x80aae4),
             row_hover: color(0xf0f3f8),
             row_selected: color(0xdce9ff),
             row_selected_border: color(0x7db7e8),
@@ -521,4 +521,37 @@ pub(crate) fn suggestion_match_highlight(cx: &App) -> Hsla {
         } else {
             0.28
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn contrast(a: Hsla, b: Hsla) -> f32 {
+        let luminance = |color: Hsla| {
+            let rgb = color.to_rgb();
+            let linear = |c: f32| {
+                if c <= 0.04045 {
+                    c / 12.92
+                } else {
+                    ((c + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(rgb.r) + 0.7152 * linear(rgb.g) + 0.0722 * linear(rgb.b)
+        };
+        let a = luminance(a);
+        let b = luminance(b);
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn text_selection_is_distinct_from_chat_surfaces_and_keeps_text_readable() {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            let colors = product_colors(mode);
+            let bubble = colors.background.blend(colors.primary.opacity(0.12));
+            assert!(contrast(colors.selection, colors.foreground) >= 4.5);
+            assert!(contrast(colors.selection, colors.background) >= 1.5);
+            assert!(contrast(colors.selection, bubble) >= 1.5);
+        }
+    }
 }

@@ -10,6 +10,7 @@ fn isolated_panel_send_workflow() {
     for mode in [
         "complete",
         "transcript",
+        "workspace_transcript",
         "log_analysis",
         "cancel",
         "preparing_cancel",
@@ -95,9 +96,21 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui::TestAppContext) {
     let panel = panel.unwrap();
     pump_until(cx, &panel, |p| !p.busy);
     let mode = std::env::var("VCLOGG2_AI_TEST_MODE").unwrap();
-    if mode == "transcript" {
+    if matches!(mode.as_str(), "transcript" | "workspace_transcript") {
+        let fixture = tempfile::tempdir().unwrap();
+        if mode == "workspace_transcript" {
+            let path = fixture.path().join("selection.log");
+            std::fs::write(&path, "INFO ready\nERROR network timeout\n").unwrap();
+            let document = Arc::new(LogDocument::open(&path).unwrap());
+            cx.update_window(window.into(), |_, window, cx| {
+                owner.as_ref().unwrap().update(cx, |w, cx| {
+                    super::super::tests::install_test_document(w, document, window, cx);
+                });
+            })
+            .unwrap();
+        }
         exercise_transcript(cx, &panel, window);
-        verify_chat_geometry(cx, &panel, window);
+        verify_chat_geometry(cx, &panel, window, mode == "workspace_transcript");
         return;
     }
     if mode == "log_analysis" {
@@ -158,6 +171,8 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui::TestAppContext) {
                     Err(e) => panic!("{e}"),
                 }
             };
+            // Accepted sockets may inherit the nonblocking listener mode.
+            socket.set_nonblocking(false).unwrap();
             socket
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
@@ -494,6 +509,7 @@ fn verify_chat_geometry(
     cx: &mut gpui::TestAppContext,
     panel: &Entity<AiPanel>,
     window: gpui::WindowHandle<Root>,
+    embedded: bool,
 ) {
     cx.update(|cx| {
         panel.update(cx, |p, cx| {
@@ -527,18 +543,28 @@ fn verify_chat_geometry(
         })
     });
     cx.run_until_parked();
-    cx.update_window(window.into(), |_, window, cx| {
-        window.replace_root(cx, |window, cx| Root::new(panel.clone(), window, cx));
-    })
-    .unwrap();
+    if !embedded {
+        cx.update_window(window.into(), |_, window, cx| {
+            window.replace_root(cx, |window, cx| Root::new(panel.clone(), window, cx));
+        })
+        .unwrap();
+    }
     let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
     for mode in [
         gpui_component::ThemeMode::Dark,
         gpui_component::ThemeMode::Light,
     ] {
-        visual.update(|window, cx| gpui_component::Theme::change(mode, Some(window), cx));
-        for width in [320., 560.] {
-            visual.simulate_resize(gpui::size(px(width), px(600.)));
+        visual.update(|_, cx| crate::ui_theme::apply_product_theme(mode, cx));
+        let widths = if embedded {
+            [1200., 1400.]
+        } else {
+            [320., 560.]
+        };
+        for width in widths {
+            visual.simulate_resize(gpui::size(
+                px(width),
+                px(if embedded { 900. } else { 600. }),
+            ));
             cx.run_until_parked();
             let sent = visual.debug_bounds("ai-user-bubble").expect("user bubble");
             let reply = visual.debug_bounds("ai-reply").expect("assistant reply");
@@ -561,10 +587,23 @@ fn verify_chat_geometry(
     visual.update(|window, cx| {
         _ = window.draw(cx);
     });
-    visual.simulate_mouse_move(to, MouseButton::Left, gpui::Modifiers::default());
-    visual.update(|window, cx| {
-        _ = window.draw(cx);
-    });
+    let mut lengths = Vec::new();
+    for fraction in [0.4, 1.0, 0.2, 1.0] {
+        let position = gpui::point(from.x + (to.x - from.x) * fraction, to.y);
+        visual.simulate_mouse_move(position, MouseButton::Left, gpui::Modifiers::default());
+        visual.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        lengths.push(panel.read_with(cx, |p, cx| p.messages[0].read(cx).selected_text().len()));
+    }
+    assert!(
+        lengths[0] > 0 && lengths[1] > lengths[0],
+        "drag expands selection: {lengths:?}"
+    );
+    assert!(
+        lengths[2] < lengths[1] && lengths[3] == lengths[1],
+        "reverse drag shrinks selection: {lengths:?}"
+    );
     visual.simulate_mouse_up(to, MouseButton::Left, gpui::Modifiers::default());
     cx.run_until_parked();
     let selected = panel.read_with(cx, |p, cx| p.messages[0].read(cx).selected_text());
@@ -615,12 +654,41 @@ fn verify_chat_geometry(
             > collapsed
     );
     let thought = visual.debug_bounds("ai-reasoning-text").unwrap();
+    let reply = visual.debug_bounds("ai-reply").unwrap();
+    assert!(
+        (thought.left() - reply.left()).abs() <= px(1.),
+        "thoughts align with the reply"
+    );
+    assert!(
+        (thought.right() - reply.right()).abs() <= px(1.),
+        "thoughts use the full reply width"
+    );
     let from = gpui::point(thought.left() + px(2.), thought.top() + px(10.));
     let to = gpui::point(thought.left() + px(120.), thought.top() + px(10.));
     visual.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::default());
     visual.update(|window, cx| {
         _ = window.draw(cx);
     });
+    let across_paragraphs = gpui::point(to.x, from.y + px(65.));
+    visual.simulate_mouse_move(
+        across_paragraphs,
+        MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    visual.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    let expanded_selection = panel.read_with(cx, |p, cx| {
+        p.reasoning_views[1]
+            .as_ref()
+            .unwrap()
+            .read(cx)
+            .selected_text()
+    });
+    assert!(
+        expanded_selection.contains('\n'),
+        "drag selects across paragraphs: {expanded_selection:?}"
+    );
     visual.simulate_mouse_move(to, MouseButton::Left, gpui::Modifiers::default());
     visual.update(|window, cx| {
         _ = window.draw(cx);
@@ -648,4 +716,30 @@ fn verify_chat_geometry(
         Some(selected)
     );
     assert!(panel.read_with(cx, |p, _| p.message_menu.is_none()));
+    if embedded {
+        let hit = |window: &Window, cx: &App| {
+            let workspace = panel.read(cx).workspace.upgrade().unwrap();
+            workspace
+                .read(cx)
+                .sidebar
+                .read(cx)
+                .contains_ai_transcript(from, window, cx)
+        };
+        visual.update(|window, cx| {
+            assert!(hit(window, cx));
+            panel.update(cx, |p, _| p.show_settings = true);
+            assert!(
+                !hit(window, cx),
+                "settings must not reuse transcript bounds"
+            );
+            panel.update(cx, |p, _| p.show_settings = false);
+        });
+        visual.simulate_resize(gpui::size(px(400.), px(900.)));
+        visual.update(|window, cx| {
+            assert!(
+                !hit(window, cx),
+                "an automatically hidden sidebar must not reuse transcript bounds"
+            );
+        });
+    }
 }

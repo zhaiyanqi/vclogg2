@@ -248,6 +248,20 @@ impl SidebarState {
         }
     }
 
+    pub(super) fn contains_ai_transcript(
+        &self,
+        position: Point<Pixels>,
+        window: &Window,
+        cx: &App,
+    ) -> bool {
+        let widths = self
+            .layout
+            .fit(window.viewport_size().width / window.rem_size());
+        self.layout.sides.iter().enumerate().any(|(ix, side)| {
+            widths[ix].is_some() && side.visible && side.active == Some(SidebarPanelId::Ai)
+        }) && self.ai.read(cx).contains_transcript(position)
+    }
+
     fn is_showing(&self, panel: SidebarPanelId) -> bool {
         self.layout
             .sides

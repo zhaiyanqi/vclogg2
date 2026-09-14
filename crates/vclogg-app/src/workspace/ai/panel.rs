@@ -22,6 +22,7 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) attachment_task: Option<Task<()>>,
     pub(super) scroller: Entity<MessageScrollerState>,
     pub(super) live_row: bool,
+    pub(super) transcript_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     message_subscriptions: Vec<Subscription>,
     pub(super) messages: Vec<Entity<TextViewState>>,
     pub(super) live_view: Entity<TextViewState>,
@@ -53,6 +54,14 @@ pub(in crate::workspace) struct AiPanel {
 }
 
 impl AiPanel {
+    pub(in crate::workspace) fn contains_transcript(&self, position: Point<Pixels>) -> bool {
+        !self.show_settings
+            && self
+                .transcript_bounds
+                .get()
+                .is_some_and(|bounds| bounds.contains(&position))
+    }
+
     pub(in crate::workspace) fn focus(&self, window: &mut Window, cx: &mut App) {
         self.input.focus_handle(cx).focus(window, cx);
     }
@@ -95,6 +104,7 @@ impl AiPanel {
             attachment_task: None,
             scroller,
             live_row: false,
+            transcript_bounds: Rc::new(Cell::new(None)),
             message_subscriptions: Vec::new(),
             messages: Vec::new(),
             live_view: cx.new(|cx| TextViewState::markdown("", cx).selectable(true)),

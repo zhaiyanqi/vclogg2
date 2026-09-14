@@ -108,6 +108,8 @@ impl AiPanel {
         let expanded = self.thinking_expanded.contains(&start);
         let mut process = v_flex()
             .debug_selector(|| "ai-thinking-region".into())
+            .items_start()
+            .text_left()
             .w_full()
             .min_w_0()
             .gap_3()
@@ -120,6 +122,8 @@ impl AiPanel {
                     .border_color(cx.theme().border)
                     .child(
                         Button::new(("ai-thinking", start))
+                            .px_0()
+                            .justify_start()
                             .small()
                             .ghost()
                             .label(if live && self.live.is_empty() {
@@ -151,6 +155,7 @@ impl AiPanel {
                     process = process.child(
                         div()
                             .debug_selector(|| "ai-reasoning-text".into())
+                            .w_full()
                             .min_w_0()
                             .child(self.markdown_view(view, cx)),
                     );
@@ -174,6 +179,8 @@ impl AiPanel {
                         );
                         process = process.child(
                             Button::new(("ai-tool-expand", ix))
+                                .px_0()
+                                .justify_start()
                                 .small()
                                 .ghost()
                                 .icon(if details {
@@ -810,9 +817,11 @@ impl Render for AiPanel {
                             ),
                     ),
             );
+        let transcript_bounds = self.transcript_bounds.clone();
         body.child(header)
             .child(
                 div()
+                    .on_prepaint(move |bounds, _, _| transcript_bounds.set(Some(bounds)))
                     .relative()
                     .flex_1()
                     .min_h_0()
