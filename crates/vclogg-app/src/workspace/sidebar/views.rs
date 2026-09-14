@@ -145,6 +145,18 @@ impl SidebarState {
                         })),
                 );
         }
+        if panel == SidebarPanelId::Ai {
+            header = header.child(
+                Button::new("sidebar-ai-settings")
+                    .xsmall()
+                    .ghost()
+                    .icon(IconName::Settings)
+                    .tooltip(crate::tr!("大模型配置…", "AI configuration…"))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.ai.update(cx, |ai, cx| ai.open_settings(window, cx))
+                    })),
+            );
+        }
         header = header.child(
             Button::new("sidebar-panel-menu")
                 .xsmall()

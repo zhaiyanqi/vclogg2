@@ -44,7 +44,7 @@ impl AiPanel {
                                     .small()
                                     .ghost()
                                     .icon(IconName::File)
-                                    .label(attachment.content.label.clone())
+                                    .text_label(attachment.content.label.clone())
                                     .disabled(self.busy || self.ui_busy)
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.jump_reference(reference.clone(), window, cx)
@@ -126,7 +126,7 @@ impl AiPanel {
                             .justify_start()
                             .small()
                             .ghost()
-                            .label(if live && self.live.is_empty() {
+                            .text_label(if live && self.live.is_empty() {
                                 crate::tr!("正在分析", "Analyzing")
                             } else {
                                 crate::tr!("思考过程", "Thought process")
@@ -188,7 +188,7 @@ impl AiPanel {
                                 } else {
                                     IconName::ChevronRight
                                 })
-                                .label(label)
+                                .text_label(label)
                                 .text_color(cx.theme().muted_foreground)
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     if !this.expanded.insert(ix) {
@@ -207,7 +207,7 @@ impl AiPanel {
                                     Button::new(SharedString::from(format!("ai-jump-{ix}-{n}")))
                                         .small()
                                         .ghost()
-                                        .label(format!(
+                                        .text_label(format!(
                                             "{} {}",
                                             crate::tr!("日志行", "Log line"),
                                             reference.line
@@ -537,125 +537,15 @@ fn collect_references(value: &Value, refs: &mut Vec<LogReference>) {
 }
 impl Render for AiPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let disabled = self.busy || self.run.is_some() || self.ui_busy;
-        let mut body = v_flex()
+        let disabled = self.settings_busy(cx) || self.ui_busy;
+        let body = v_flex()
             .size_full()
             .min_h_0()
             .min_w_0()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground);
-        if !self.error.is_empty() {
-            body = body.child(div().px_3().py_2().text_xs().child(self.error.clone()));
-        }
-        if self.show_settings {
-            return body
-                .child(self.render_settings(window, cx))
-                .into_any_element();
-        }
-        let state = cx.entity();
         let models = cx.entity();
-        let skills = cx.entity();
-        let header = h_flex()
-            .items_start()
-            .flex_wrap()
-            .gap_1()
-            .p_3()
-            .border_b_1()
-            .border_color(cx.theme().border)
-            .child(
-                Button::new("ai-conversation-menu")
-                    .small()
-                    .ghost()
-                    .label(if self.conversation.title.is_empty() {
-                        crate::tr!("会话", "Conversations").to_owned()
-                    } else {
-                        self.conversation.title.chars().take(16).collect()
-                    })
-                    .disabled(disabled)
-                    .dropdown_menu(move |mut menu, window, cx| {
-                        for row in state.read(cx).history.clone() {
-                            let id = row.id;
-                            menu = menu.item(PopupMenuItem::new(row.title).on_click(
-                                window.listener_for(&state, move |this, _, window, cx| {
-                                    this.load_conversation(id.clone(), window, cx)
-                                }),
-                            ));
-                        }
-                        if state.read(cx).more_history {
-                            menu = menu.item(
-                                PopupMenuItem::new(crate::tr!(
-                                    "加载更多会话",
-                                    "Load more conversations"
-                                ))
-                                .on_click(
-                                    window.listener_for(&state, |this, _, window, cx| {
-                                        this.more_conversations(window, cx)
-                                    }),
-                                ),
-                            );
-                        }
-                        menu = menu.separator().item(
-                            PopupMenuItem::new(crate::tr!(
-                                "删除当前会话",
-                                "Delete current conversation"
-                            ))
-                            .on_click(
-                                window.listener_for(&state, |this, _, window, cx| {
-                                    this.delete_conversation(window, cx)
-                                }),
-                            ),
-                        );
-                        menu
-                    }),
-            )
-            .child(
-                Button::new("ai-new-conversation")
-                    .small()
-                    .ghost()
-                    .icon(IconName::Plus)
-                    .tooltip(crate::tr!("新建会话", "New conversation"))
-                    .disabled(disabled)
-                    .on_click(cx.listener(|this, _, _, cx| this.new_conversation(cx))),
-            )
-            .child(
-                Button::new("ai-settings")
-                    .small()
-                    .ghost()
-                    .icon(IconName::Settings)
-                    .tooltip(crate::tr!("AI 设置…", "AI settings…"))
-                    .disabled(disabled)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.show_settings = true;
-                        cx.notify();
-                    })),
-            )
-            .child(
-                Button::new("ai-model-menu")
-                    .small()
-                    .ghost()
-                    .label(
-                        self.settings
-                            .providers
-                            .iter()
-                            .find(|p| Some(&p.id) == self.conversation.provider_id.as_ref())
-                            .map(|p| p.name.clone())
-                            .unwrap_or_else(|| crate::tr!("选择模型", "Select model").into()),
-                    )
-                    .disabled(disabled)
-                    .dropdown_menu(move |mut menu, window, cx| {
-                        for provider in models.read(cx).settings.providers.clone() {
-                            let id = provider.id;
-                            menu = menu.item(PopupMenuItem::new(provider.name).on_click(
-                                window.listener_for(&models, move |this, _, window, cx| {
-                                    this.conversation.provider_id = Some(id.clone());
-                                    this.settings.active_provider = Some(id.clone());
-                                    this.save_settings(window, cx);
-                                }),
-                            ));
-                        }
-                        menu
-                    }),
-            );
+        let header = self.render_conversation_tabs(window, cx);
         let owner = cx.entity();
         let messages =
             MessageScroller::new("ai-transcript", self.scroller.clone(), move |ix, _, cx| {
@@ -665,7 +555,7 @@ impl Render for AiPanel {
             .with_row_style(gpui::StyleRefinement::default().pb_4())
             .with_jump_button_label(crate::tr!("回到最新消息", "Jump to latest"))
             .with_jump_button_renderer(|button| {
-                button.small().label(crate::tr!("最新消息", "Latest"))
+                button.small().text_label(crate::tr!("最新消息", "Latest"))
             });
         let footer = v_flex()
             .flex_shrink_0()
@@ -701,7 +591,9 @@ impl Render for AiPanel {
                     .gap_2()
                     .p_2()
                     .rounded(cx.theme().radius_lg)
-                    .bg(cx.theme().muted)
+                    .bg(cx.theme().background)
+                    .border_1()
+                    .border_color(cx.theme().border)
                     .when(self.attachments_loading, |this| {
                         this.child(
                             div()
@@ -715,73 +607,96 @@ impl Render for AiPanel {
                     .child(
                         Textarea::new(&self.input)
                             .appearance(false)
+                            .bordered(false)
                             .aria_label(crate::tr!("分析问题", "Analysis question"))
                             .disabled(self.busy),
                     )
                     .child(
                         h_flex()
                             .gap_1()
+                            .flex_wrap()
                             .child(
-                                Button::new("ai-skills-menu")
+                                Button::new("ai-add-context")
                                     .small()
                                     .ghost()
-                                    .label(format!(
-                                        "Skills ({})",
-                                        self.conversation.skill_ids.len()
-                                    ))
+                                    .icon(IconName::Plus)
+                                    .tooltip(crate::tr!("附加所选日志", "Attach selected logs"))
+                                    .disabled(disabled || self.attachments_loading)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        let targets = this
+                                            .workspace
+                                            .read_with(cx, |workspace, cx| {
+                                                workspace.ai_attachment_targets(
+                                                    workspace.active_log_region,
+                                                    cx,
+                                                )
+                                            })
+                                            .unwrap_or_default();
+                                        if targets.is_empty() {
+                                            this.error = crate::tr!(
+                                                "先在日志区域选择要附加的行",
+                                                "Select log rows to attach first"
+                                            )
+                                            .into();
+                                            cx.notify();
+                                        } else {
+                                            this.attach_logs(targets, window, cx);
+                                        }
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(crate::tr!("日志访问", "Log access")),
+                            )
+                            .child(div().flex_1().min_w_0())
+                            .child(
+                                Button::new("ai-model-menu")
+                                    .small()
+                                    .ghost()
+                                    .text_label(
+                                        self.settings
+                                            .providers
+                                            .iter()
+                                            .find(|p| {
+                                                Some(&p.id)
+                                                    == self.conversation.provider_id.as_ref()
+                                            })
+                                            .map(|p| p.model.clone())
+                                            .unwrap_or_else(|| {
+                                                crate::tr!("选择模型", "Select model").into()
+                                            }),
+                                    )
                                     .disabled(disabled)
                                     .dropdown_menu(move |mut menu, window, cx| {
-                                        let chosen = skills.read(cx).conversation.skill_ids.clone();
-                                        for skill in skills
-                                            .read(cx)
-                                            .settings
-                                            .skills
-                                            .iter()
-                                            .filter(|s| s.enabled)
-                                            .cloned()
-                                            .collect::<Vec<_>>()
-                                        {
-                                            let id = skill.id;
+                                        for provider in models.read(cx).settings.providers.clone() {
+                                            let id = provider.id;
                                             menu = menu.item(
-                                                PopupMenuItem::new(format!(
-                                                    "{} {}",
-                                                    if chosen.contains(&id) {
-                                                        "✓"
-                                                    } else {
-                                                        "○"
-                                                    },
-                                                    skill.name
-                                                ))
-                                                .on_click(window.listener_for(
-                                                    &skills,
-                                                    move |this, _, window, cx| {
-                                                        if this.conversation.skill_ids.contains(&id)
-                                                        {
-                                                            this.conversation
-                                                                .skill_ids
-                                                                .retain(|s| s != &id);
-                                                        } else {
-                                                            this.conversation
-                                                                .skill_ids
-                                                                .push(id.clone());
-                                                        }
-                                                        this.save_settings(window, cx);
-                                                        cx.notify();
-                                                    },
-                                                )),
+                                                PopupMenuItem::new(provider.name).on_click(
+                                                    window.listener_for(
+                                                        &models,
+                                                        move |this, _, window, cx| {
+                                                            this.conversation.provider_id =
+                                                                Some(id.clone());
+                                                            this.settings.active_provider =
+                                                                Some(id.clone());
+                                                            this.save_settings(window, cx);
+                                                        },
+                                                    ),
+                                                ),
                                             );
                                         }
                                         menu
                                     }),
                             )
-                            .child(div().flex_1())
                             .when(
                                 self.conversation.status == RunStatus::LimitReached,
                                 |this| {
                                     this.child(
                                         Button::new("ai-continue")
                                             .small()
-                                            .label(crate::tr!("继续", "Continue"))
+                                            .text_label(crate::tr!("继续", "Continue"))
                                             .disabled(disabled)
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.send(true, window, cx)
@@ -798,18 +713,17 @@ impl Render for AiPanel {
                                         .primary()
                                         .rounded(cx.theme().radius_full())
                                         .tooltip(crate::tr!("停止生成", "Stop generating"))
-                                        .label(crate::tr!("停止", "Stop"))
+                                        .text_label(crate::tr!("停止", "Stop"))
                                         .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
                                 } else {
                                     Button::new("ai-send")
                                         .small()
                                         .primary()
-                                        .icon(IconName::ArrowUp)
+                                        .icon(IconName::ArrowRight)
                                         .rounded(cx.theme().radius_full())
                                         .tooltip(crate::tr!("发送（Enter）", "Send (Enter)"))
-                                        .label(crate::tr!("发送", "Send"))
                                         .disabled(
-                                            self.busy
+                                            disabled
                                                 || self.ui_busy
                                                 || self.attachments_loading
                                                 || (self.input.read(cx).value().trim().is_empty()
@@ -824,6 +738,9 @@ impl Render for AiPanel {
             );
         let transcript_bounds = self.transcript_bounds.clone();
         body.child(header)
+            .when(!self.error.is_empty(), |this| {
+                this.child(div().px_3().py_2().text_xs().child(self.error.clone()))
+            })
             .child(
                 div()
                     .on_prepaint(move |bounds, _, _| transcript_bounds.set(Some(bounds)))
@@ -856,6 +773,13 @@ fn tool_label(name: &str) -> &str {
         "get_context" => crate::tr!("获取当前日志", "Read current context"),
         "list_logs" => crate::tr!("列出日志文件", "List log files"),
         "read_logs" => crate::tr!("读取日志", "Read logs"),
+        "locate_files" => crate::tr!("查找日志文件", "Find log files"),
+        "open_file" => crate::tr!("打开文件", "Open file"),
+        "close_file" => crate::tr!("关闭文件", "Close file"),
+        "switch_file" => crate::tr!("切换文件", "Switch file"),
+        "reveal_file" => crate::tr!("定位文件", "Reveal file"),
+        "read_log_context" => crate::tr!("读取引用上下文", "Read log context"),
+        "summarize_search" => crate::tr!("汇总搜索结果", "Summarize search results"),
         "search_logs" | "show_search" => crate::tr!("搜索日志", "Search logs"),
         "search_results" | "control_search" => crate::tr!("读取搜索结果", "Inspect search results"),
         "append_search" => crate::tr!("追加搜索文字", "Append search text"),

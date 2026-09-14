@@ -55,6 +55,12 @@ impl Workspace {
             }
         }
         let args = &call.arguments;
+        if matches!(
+            call.name.as_str(),
+            "open_file" | "close_file" | "switch_file" | "reveal_file"
+        ) {
+            return self.ai_commit_file(&mut state, call, evidence, window, cx);
+        }
         match call.name.as_str() {
             "append_search" => self.ai_append_search(
                 number(args, "document_id")?,
@@ -186,6 +192,7 @@ impl Workspace {
                     .position(|tab| tab.id == doc.id && Arc::ptr_eq(&tab.document, &doc.document))
                     .context("Log reference is stale")?;
                 self.activate_tab(ix, window, cx);
+                state.current = Some(doc.id);
                 if !self.activate_document_log_row_atomically(ix, row, window, cx) {
                     bail!("Could not navigate to the line");
                 }

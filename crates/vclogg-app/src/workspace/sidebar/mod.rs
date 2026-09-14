@@ -20,8 +20,8 @@ mod overview;
 mod tasks;
 mod views;
 use layout::{
-    DraggedSidebarPanel, SIDEBAR_MAX_WIDTH_REM, SIDEBAR_MIN_WIDTH_REM, SIDEBAR_RAIL_WIDTH_REM,
-    SidebarLayout, SidebarPanelId, SidebarSide,
+    DraggedSidebarPanel, SIDEBAR_MIN_WIDTH_REM, SIDEBAR_RAIL_WIDTH_REM, SidebarLayout,
+    SidebarPanelId, SidebarSide,
 };
 
 pub(super) struct SidebarChanged;
@@ -520,9 +520,6 @@ impl SidebarState {
         cx: &mut Context<Self>,
     ) {
         self.layout.sides[side.ix()].active = Some(panel);
-        if panel == SidebarPanelId::Ai && self.layout.sides[side.ix()].width < 20. {
-            self.layout.sides[side.ix()].width = 28.;
-        }
         self.layout.sides[side.ix()].visible = true;
         if panel == SidebarPanelId::History {
             self.refresh_history(cx);
@@ -834,7 +831,7 @@ impl Workspace {
                     for (side, measured) in [left, right].into_iter().enumerate() {
                         if let Some(width) = measured {
                             let width = (width / window.rem_size() - SIDEBAR_RAIL_WIDTH_REM)
-                                .clamp(SIDEBAR_MIN_WIDTH_REM, SIDEBAR_MAX_WIDTH_REM);
+                                .max(SIDEBAR_MIN_WIDTH_REM);
                             // Only persist a divider's explicit change, not another pane's temporary fit.
                             if widths[side].is_some_and(|shown| (shown - width).abs() > 0.05) {
                                 state.layout.sides[side].width = width;
@@ -854,8 +851,7 @@ impl Workspace {
                         .flex_none()
                         .size_range(
                             rem * (self.sidebar.read(cx).layout.sides[0].min_width()
-                                + SIDEBAR_RAIL_WIDTH_REM)
-                                ..rem * (SIDEBAR_MAX_WIDTH_REM + SIDEBAR_RAIL_WIDTH_REM),
+                                + SIDEBAR_RAIL_WIDTH_REM)..Pixels::MAX,
                         )
                         .child(self.sidebar_surfaces[0].clone()),
                 )
@@ -872,8 +868,7 @@ impl Workspace {
                         .flex_none()
                         .size_range(
                             rem * (self.sidebar.read(cx).layout.sides[1].min_width()
-                                + SIDEBAR_RAIL_WIDTH_REM)
-                                ..rem * (SIDEBAR_MAX_WIDTH_REM + SIDEBAR_RAIL_WIDTH_REM),
+                                + SIDEBAR_RAIL_WIDTH_REM)..Pixels::MAX,
                         )
                         .child(self.sidebar_surfaces[1].clone()),
                 )

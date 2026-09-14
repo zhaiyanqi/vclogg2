@@ -16,11 +16,17 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) revision: u64,
     pub(super) history: Vec<AiConversationRecord>,
     pub(super) more_history: bool,
+    pub(super) history_offset: usize,
+    pub(super) open_conversations: Vec<String>,
+    pub(super) inactive_conversations: BTreeMap<String, super::conversation_tabs::ConversationTab>,
+    pub(super) conversation_tab_scroll: ScrollHandle,
+    pub(super) conversation_tab_focus: FocusHandle,
     pub(super) input: Entity<TextareaState>,
     pub(super) draft_logs: Vec<super::attachments::DraftLog>,
     pub(super) attachments_loading: bool,
     pub(super) attachment_task: Option<Task<()>>,
     pub(super) scroller: Entity<MessageScrollerState>,
+    pub(super) scroll_subscription: Subscription,
     pub(super) live_row: bool,
     pub(super) transcript_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     message_subscriptions: Vec<Subscription>,
@@ -43,12 +49,15 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) run: Option<RunHandle>,
     pub(super) editor: Option<super::settings::ConfigEditor>,
     pub(super) show_settings: bool,
+    pub(super) settings_generation: u64,
+    pub(super) settings_tab: super::configuration::SettingsTab,
+    pub(super) prompt_editor: Option<super::prompt_settings::PromptEditor>,
     pub(super) busy: bool,
     pub(super) ui_busy: bool,
     pub(super) ui_task: Option<Task<()>>,
     pub(super) error: String,
     pub(super) generation: u64,
-    task: Option<Task<()>>,
+    pub(super) task: Option<Task<()>>,
     live_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -70,6 +79,20 @@ impl AiPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        if !cx.has_global::<super::configuration::SharedAiSettings>() {
+            cx.set_global(super::configuration::SharedAiSettings::default());
+        }
+        let settings_subscription =
+            cx.observe_global::<super::configuration::SharedAiSettings>(|this, cx| {
+                if let Some(settings) = cx
+                    .global::<super::configuration::SharedAiSettings>()
+                    .settings
+                    .clone()
+                {
+                    this.settings = settings;
+                }
+                cx.notify();
+            });
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(3, 8)
@@ -98,11 +121,17 @@ impl AiPanel {
             revision: 0,
             history: Vec::new(),
             more_history: false,
+            history_offset: 0,
+            open_conversations: Vec::new(),
+            inactive_conversations: BTreeMap::new(),
+            conversation_tab_scroll: ScrollHandle::new(),
+            conversation_tab_focus: cx.focus_handle(),
             input,
             draft_logs: Vec::new(),
             attachments_loading: false,
             attachment_task: None,
             scroller,
+            scroll_subscription,
             live_row: false,
             transcript_bounds: Rc::new(Cell::new(None)),
             message_subscriptions: Vec::new(),
@@ -125,6 +154,9 @@ impl AiPanel {
             run: None,
             editor: None,
             show_settings: false,
+            settings_generation: 0,
+            settings_tab: super::configuration::SettingsTab::Models,
+            prompt_editor: None,
             busy: true,
             ui_busy: false,
             ui_task: None,
@@ -132,8 +164,9 @@ impl AiPanel {
             generation: 0,
             task: None,
             live_task: None,
-            _subscriptions: vec![subscription, scroll_subscription],
+            _subscriptions: vec![subscription, settings_subscription],
         };
+        this.open_conversations.push(this.conversation.id.clone());
         let path = this.settings_path.clone();
         this.task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = cx
@@ -158,13 +191,31 @@ impl AiPanel {
                     Ok((store, settings, history, current)) => {
                         this.store = Some(store);
                         match settings {
-                            Ok(settings) => this.settings = settings,
+                            Ok(settings) => {
+                                this.settings = cx
+                                    .global::<super::configuration::SharedAiSettings>()
+                                    .settings
+                                    .clone()
+                                    .unwrap_or(settings);
+                                if cx
+                                    .global::<super::configuration::SharedAiSettings>()
+                                    .settings
+                                    .is_none()
+                                {
+                                    let settings = this.settings.clone();
+                                    cx.update_global::<super::configuration::SharedAiSettings, _>(
+                                        |shared, _| shared.settings = Some(settings),
+                                    );
+                                }
+                            }
                             Err(error) => this.error = error.to_string(),
                         }
+                        this.history_offset = history.len();
                         this.more_history = history.len() == 100;
                         this.history = history;
                         if let Some(record) = current {
                             this.install_record(record, cx);
+                            this.open_conversations = vec![this.conversation.id.clone()];
                         } else {
                             this.conversation.provider_id = this.settings.active_provider.clone();
                         }
@@ -214,7 +265,10 @@ impl AiPanel {
             }));
         view
     }
-    fn rebuild_messages(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn rebuild_messages(&mut self, cx: &mut Context<Self>) {
+        self.rebuild_tab_messages(true, cx);
+    }
+    pub(super) fn rebuild_tab_messages(&mut self, reset_scroll: bool, cx: &mut Context<Self>) {
         self.message_menu = None;
         self.message_menu_subscription = None;
         self.messages.clear();
@@ -243,7 +297,7 @@ impl AiPanel {
         for ix in 0..self.messages.len() {
             self.cache_attachments(ix, cx);
         }
-        self.sync_transcript(true, cx);
+        self.sync_transcript(reset_scroll, cx);
     }
     fn recover_messages(&mut self, cx: &mut Context<Self>) {
         let count = self.conversation.messages.len();
@@ -310,7 +364,7 @@ impl AiPanel {
     }
 
     pub(super) fn send(&mut self, continuation: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.busy || self.ui_busy || self.run.is_some() || self.attachments_loading {
+        if self.settings_busy(cx) || self.ui_busy || self.attachments_loading {
             return;
         }
         let Some(config) = self
@@ -322,7 +376,7 @@ impl AiPanel {
         else {
             self.error =
                 crate::tr!("请先配置并选择模型", "Configure and select a model first").into();
-            self.show_settings = true;
+            self.open_settings(window, cx);
             cx.notify();
             return;
         };
@@ -414,7 +468,7 @@ impl AiPanel {
             .settings
             .skills
             .iter()
-            .filter(|s| s.enabled && self.conversation.skill_ids.contains(&s.id))
+            .filter(|s| self.settings.skill_enabled(s))
             .cloned()
             .collect::<Vec<_>>();
         let record = match self.record() {
@@ -425,6 +479,8 @@ impl AiPanel {
                 return;
             }
         };
+        let settings_path = self.settings_path.clone();
+        let prompts = self.settings.prompts.clone();
         let workspace = self.workspace.clone();
         self.task = Some(cx.spawn_in(window, async move |this, cx| {
             let _lease = lease;
@@ -438,9 +494,10 @@ impl AiPanel {
                 let canonical = directory.as_ref().and_then(|path| path.canonicalize().ok()).filter(|path| path.is_dir());
                 let directory_unavailable = directory.is_some() && canonical.is_none();
                 capture.lock().map_err(|_| anyhow::anyhow!("Analysis unavailable"))?.directory.directory = canonical;
-                save_store.save_ai_conversation(&record).map(|revision| (revision, directory_unavailable))
+                let instructions = vclogg_ai::agent_instructions(settings_path.as_deref().context("AI configuration directory unavailable")?, &prompts)?;
+                save_store.save_ai_conversation(&record).map(|revision| (revision, directory_unavailable, instructions))
             }).await;
-            let (revision, directory_unavailable) = match saved {
+            let (revision, directory_unavailable, instructions) = match saved {
                 Ok(saved) => saved,
                 Err(error) => {
                     _ = this.update(cx, |this, cx| {
@@ -479,8 +536,7 @@ impl AiPanel {
                 this.draft_logs.retain(|log| !sent_logs.iter().any(|sent| sent.source_row == log.source_row && Arc::ptr_eq(&sent.document.document, &log.document.document)));
                 cx.notify();
             });
-            let run = vclogg_ai::start_run(config, messages, skills,
-                "Access only the current window's captured files and selected directory. Call get_context and list_logs first. All line numbers are 1-based; references are run-scoped. Cite the exact url returned for each log row using Markdown [filename:line](url), so users can navigate from your reply. Use set_marks, highlight_keyword and text_mark to apply requested findings to the logs. Use append_search to add text to the search box without running a search.".into(), false);
+            let run = vclogg_ai::start_run(config, messages, skills, instructions, false);
             let events = run.events.clone();
             let replies = run.replies.clone();
             let cancellation = run.cancellation.clone();
@@ -749,110 +805,6 @@ impl AiPanel {
         self.rebuild_messages(cx);
         cx.notify();
     }
-    pub(super) fn load_conversation(
-        &mut self,
-        id: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.run.is_some() || self.busy || self.ui_busy {
-            return;
-        }
-        let Some(store) = self.store.clone() else {
-            return;
-        };
-        self.busy = true;
-        self.task = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = cx
-                .background_spawn(async move { store.load_ai_conversation(&id) })
-                .await;
-            _ = this.update_in(cx, |this, _, cx| {
-                this.busy = false;
-                match result {
-                    Ok(Some(record)) => this.install_record(record, cx),
-                    Ok(None) => {
-                        this.error = crate::tr!("会话已删除", "Conversation deleted").into()
-                    }
-                    Err(e) => this.error = e.to_string(),
-                }
-                cx.notify();
-            });
-        }));
-    }
-    pub(super) fn delete_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if leases()
-            .lock()
-            .is_ok_and(|l| l.contains(&self.conversation.id))
-        {
-            self.error = crate::tr!(
-                "会话正在其他窗口运行",
-                "Conversation is running in another window"
-            )
-            .into();
-            cx.notify();
-            return;
-        }
-        if self.run.is_some() || self.busy || self.ui_busy {
-            return;
-        }
-        let Some(store) = self.store.clone() else {
-            return;
-        };
-        if self.revision == 0 {
-            self.new_conversation(cx);
-            return;
-        }
-        let id = self.conversation.id.clone();
-        let revision = self.revision;
-        self.busy = true;
-        self.task = Some(cx.spawn_in(window, async move |this, cx| {
-            let saved_id = id.clone();
-            let result = cx
-                .background_spawn(async move { store.delete_ai_conversation(&saved_id, revision) })
-                .await;
-            _ = this.update_in(cx, |this, _, cx| {
-                this.busy = false;
-                match result {
-                    Ok(()) => {
-                        this.history.retain(|r| r.id != id);
-                        this.new_conversation(cx);
-                    }
-                    Err(e) => this.error = e.to_string(),
-                }
-                cx.notify();
-            });
-        }));
-    }
-    pub(super) fn more_conversations(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.busy || self.run.is_some() {
-            return;
-        }
-        let Some(store) = self.store.clone() else {
-            return;
-        };
-        let offset = self.history.len();
-        self.busy = true;
-        self.task = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = cx
-                .background_spawn(async move { store.ai_conversations(offset) })
-                .await;
-            _ = this.update(cx, |this, cx| {
-                this.busy = false;
-                match result {
-                    Ok(rows) => {
-                        this.more_history = rows.len() == 100;
-                        for row in rows {
-                            if !this.history.iter().any(|r| r.id == row.id) {
-                                this.history.push(row);
-                            }
-                        }
-                    }
-                    Err(e) => this.error = e.to_string(),
-                }
-                cx.notify();
-            });
-        }));
-    }
 }
 impl Drop for AiPanel {
     fn drop(&mut self) {
@@ -871,7 +823,9 @@ pub(super) fn message_text(message: &AgentMessage, history: &[AgentMessage]) -> 
         AgentMessage::User { text } => safe_markdown(super::transcript::user_content(text).0),
         AgentMessage::Assistant { text, .. } => safe_markdown(text),
         AgentMessage::Tool {
-            call_id, result, ..
+            call_id,
+            name,
+            result,
         } => {
             let call = history
                 .iter()
@@ -883,8 +837,7 @@ pub(super) fn message_text(message: &AgentMessage, history: &[AgentMessage]) -> 
                     _ => None,
                 })
                 .next();
-            let details =
-                json!({"arguments":call.map(|call| &call.arguments),"result":result.value});
+            let details = json!({"arguments":call.map(|call| &call.arguments),"result":vclogg_ai::log_reference_metadata(name, &result.value)});
             format!(
                 "```json\n{}\n```",
                 serde_json::to_string_pretty(&details).unwrap_or_default()

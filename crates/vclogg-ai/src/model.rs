@@ -84,7 +84,7 @@ impl ProviderConfig {
     }
 }
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AiSettings {
     #[serde(default)]
     pub providers: Vec<ProviderConfig>,
@@ -92,14 +92,45 @@ pub struct AiSettings {
     pub active_provider: Option<String>,
     #[serde(default)]
     pub skills: Vec<crate::Skill>,
+    #[serde(default)]
+    pub initialized_builtin_skills: Vec<String>,
+    #[serde(default)]
+    pub skill_directories: Vec<crate::SkillDirectory>,
+    #[serde(default = "crate::default_prompts")]
+    pub prompts: Vec<crate::Prompt>,
+}
+impl Default for AiSettings {
+    fn default() -> Self {
+        Self {
+            providers: Vec::new(),
+            active_provider: None,
+            skills: Vec::new(),
+            initialized_builtin_skills: Vec::new(),
+            skill_directories: Vec::new(),
+            prompts: crate::default_prompts(),
+        }
+    }
 }
 impl AiSettings {
+    pub fn skill_enabled(&self, skill: &crate::Skill) -> bool {
+        skill.enabled
+            && self
+                .skill_directories
+                .iter()
+                .filter(|root| root.contains(skill))
+                .all(|root| root.enabled)
+    }
     pub fn load(path: &Path) -> Result<Self> {
-        match fs::read(path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).context("AI settings are corrupted"),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(e).context("Could not read AI settings"),
+        crate::initialize_prompts(path)?;
+        let mut settings = match fs::read(path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).context("AI settings are corrupted")?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
+            Err(e) => return Err(e).context("Could not read AI settings"),
+        };
+        if crate::builtin_skills::initialize_builtin_skills(&mut settings, path)? {
+            settings.save(path)?;
         }
+        Ok(settings)
     }
     pub fn save(&self, path: &Path) -> Result<()> {
         private_write(path, &serde_json::to_vec_pretty(self)?)

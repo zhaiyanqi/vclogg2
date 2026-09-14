@@ -217,13 +217,13 @@ impl AiPanel {
                 log.document.clone()
             };
             let reference = doc.reference(log.source_row);
-            // JSON escaping keeps embedded log instructions/fences inside a data string.
+            // Send stable references; the agent reads only the attachments relevant to this question.
             text.push_str(&format!(
                 "\n\n[{}:{}]({})\n```json\n{}\n```",
                 doc.document.file_name().replace(['[', ']'], "_"),
                 reference.line,
                 reference.url(),
-                serde_json::to_string(&json!({"reference":reference,"log_data":log.preview}))?
+                serde_json::to_string(&json!({"reference":reference,"content_included":false}))?
             ));
         }
         if text.len() > 64 * 1024 {

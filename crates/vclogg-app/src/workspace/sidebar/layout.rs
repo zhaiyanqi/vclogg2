@@ -3,8 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::*;
 
 pub(super) const SIDEBAR_RAIL_WIDTH_REM: f32 = 2.25;
-pub(super) const SIDEBAR_MIN_WIDTH_REM: f32 = 8.;
-pub(super) const SIDEBAR_MAX_WIDTH_REM: f32 = 48.;
+pub(super) const SIDEBAR_MIN_WIDTH_REM: f32 = 0.;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -152,11 +151,7 @@ impl Default for SidebarLayout {
 
 impl SidebarPlacement {
     pub(super) fn min_width(&self) -> f32 {
-        if self.active == Some(SidebarPanelId::Ai) {
-            20.
-        } else {
-            SIDEBAR_MIN_WIDTH_REM
-        }
+        SIDEBAR_MIN_WIDTH_REM
     }
 }
 
@@ -214,8 +209,7 @@ impl SidebarLayout {
         }
         for side in &mut layout.sides {
             side.width = if side.width.is_finite() {
-                side.width
-                    .clamp(SIDEBAR_MIN_WIDTH_REM, SIDEBAR_MAX_WIDTH_REM)
+                side.width.max(SIDEBAR_MIN_WIDTH_REM)
             } else {
                 18.
             };
@@ -368,13 +362,13 @@ mod tests {
         assert_eq!(repeated.sides[1].panels, expected);
     }
     #[test]
-    fn ai_panel_keeps_usable_width_and_collapses_when_window_is_too_small() {
+    fn ai_panel_keeps_user_width_and_fits_available_window_space() {
         let mut layout = SidebarLayout::default();
         layout.sides[1].visible = true;
         layout.sides[1].active = Some(SidebarPanelId::Ai);
         layout.sides[1].width = 12.;
-        assert_eq!(layout.fit(60.)[1], Some(20.));
-        assert_eq!(layout.fit(35.)[1], None);
+        assert_eq!(layout.fit(60.)[1], Some(12.));
+        assert_eq!(layout.fit(35.)[1], Some(8.75));
         assert_eq!(layout.sides[1].width, 12.);
     }
 }

@@ -6,16 +6,44 @@ use vclogg_ai::{AgentMessage, LogReference, ToolCall, ToolResult};
 
 mod attachments;
 mod commands;
+mod evidence;
+mod files;
 mod logs;
 mod search;
 mod transcript;
 use logs::*;
+mod configuration;
+mod conversation_tab_view;
+mod conversation_tabs;
 mod panel;
+mod prompt_settings;
 mod settings;
+mod skill_settings;
 #[cfg(test)]
 mod tests;
 mod view;
 pub(super) use panel::AiPanel;
+
+const AI_LABEL_LINE_HEIGHT: f32 = 1.25;
+
+trait AiButtonExt {
+    fn text_label(self, label: impl Into<SharedString>) -> Self;
+}
+
+impl AiButtonExt for Button {
+    fn text_label(self, label: impl Into<SharedString>) -> Self {
+        let label = label.into();
+        // Button's built-in label clips glyphs to 1em. Keep its sizing and
+        // behavior, but give the text its own line box and accessible name.
+        crate::button_accessibility::with_label(self, label.clone()).child(
+            div()
+                .min_w_0()
+                .truncate()
+                .line_height(relative(AI_LABEL_LINE_HEIGHT))
+                .child(label),
+        )
+    }
+}
 
 #[derive(Clone)]
 struct DocumentSnapshot {
@@ -42,6 +70,7 @@ impl DocumentSnapshot {
 #[derive(Clone)]
 struct SearchSnapshot {
     groups: Vec<(DocumentSnapshot, CompressedRows)>,
+    query: Option<SearchQuery>,
     cursor: Option<usize>,
     truncated: bool,
     tab: Option<(search_tabs::SearchTabOwner, search_tabs::SearchTabId, u64)>,
@@ -49,6 +78,8 @@ struct SearchSnapshot {
 
 #[derive(Clone)]
 struct AiScope {
+    file_candidates: BTreeMap<String, PathBuf>,
+    read_document: Option<DocumentSnapshot>,
     explicit: BTreeSet<u64>,
     allowed: BTreeSet<u64>,
     current: Option<u64>,
@@ -191,6 +222,8 @@ impl Workspace {
             })
             .collect::<BTreeMap<_, _>>();
         Arc::new(Mutex::new(AiScope {
+            file_candidates: BTreeMap::new(),
+            read_document: None,
             explicit: BTreeSet::new(),
             allowed: documents.keys().copied().collect(),
             current: self.active_document().map(|t| t.id),
@@ -249,6 +282,12 @@ impl Workspace {
     }
     fn ai_prepare(&self, scope: SharedScope, call: &ToolCall, cx: &App) -> Result<Work> {
         vclogg_ai::validate_call(call)?;
+        if matches!(
+            call.name.as_str(),
+            "locate_files" | "open_file" | "reveal_file"
+        ) {
+            return self.ai_prepare_file(scope, call);
+        }
         let mut state = scope
             .lock()
             .map_err(|_| anyhow::anyhow!("Analysis state unavailable"))?;
@@ -289,15 +328,15 @@ impl Workspace {
                             },
                         );
                     }
-                } else {
-                    state.documents.remove(&id);
+                } else if let Some(doc) = state.documents.get(&id).cloned() {
+                    state.forget_file(doc.document.path());
                 }
             }
         }
         let args = &call.arguments;
         let value = match call.name.as_str() {
             "list_logs" => {
-                json!({"files":state.documents.values().map(|d| json!({"document_id":d.id,"version":d.version,"name":d.document.file_name(),"lines":d.document.source_line_count(),"open":d.open})).collect::<Vec<_>>()})
+                json!({"files":state.documents.values().map(|d| json!({"document_id":d.id,"version":d.version,"name":d.document.file_name(),"path":d.document.path().display().to_string(),"lines":d.document.source_line_count(),"open":d.open})).collect::<Vec<_>>()})
             }
             "get_context" => {
                 let tab = self.active_document();
@@ -397,17 +436,8 @@ impl Workspace {
                     }
 
                     let mut value = metadata;
-                    let mut rows = Vec::new();
-                    for reference in refs {
-                        let doc = &docs[&reference.document_id];
-                        doc.verify()?;
-                        rows.push(log_row(doc, reference.line - 1)?);
-                        if serde_json::to_vec(&rows)?.len() > 48 * 1024 {
-                            rows.pop();
-                            break;
-                        }
-                    }
-                    value["visible"] = json!(rows);
+                    value["visible"] = json!(refs);
+                    value["content_included"] = json!(false);
                     let mut state = scope
                         .lock()
                         .map_err(|_| anyhow::anyhow!("Analysis unavailable"))?;
@@ -429,20 +459,69 @@ impl Workspace {
             "read_logs" => {
                 let doc = state.document(number(args, "document_id")?, args["version"].as_str())?;
                 let start = number(args, "start_line")? as usize - 1;
-                let limit = args["limit"].as_u64().unwrap_or(100) as usize;
+                let limit = args["limit"].as_u64().unwrap_or(10) as usize;
+                let cancellation = state.cancellation.clone();
+                drop(state);
                 return Ok(Box::new(move || {
-                    read_page(&doc, start, limit).map(Evidence::Json)
+                    let doc = read_snapshot(
+                        &scope,
+                        doc,
+                        start,
+                        start.saturating_add(limit),
+                        &cancellation,
+                    )?;
+                    read_page_cancellable(&doc, start, limit, &cancellation).map(Evidence::Json)
+                }));
+            }
+            "read_log_context" => {
+                let (doc, row) = state.reference(&args["reference"])?;
+                let before = args["before"].as_u64().unwrap_or(3) as usize;
+                let after = args["after"].as_u64().unwrap_or(3) as usize;
+                let cancellation = state.cancellation.clone();
+                drop(state);
+                return Ok(Box::new(move || {
+                    let doc = read_snapshot(
+                        &scope,
+                        doc,
+                        row.saturating_sub(before),
+                        row.saturating_add(after).saturating_add(1),
+                        &cancellation,
+                    )?;
+                    evidence::read_context(&doc, row, before, after, &cancellation)
+                        .map(Evidence::Json)
+                }));
+            }
+            "summarize_search" => {
+                let search = state
+                    .searches
+                    .get(text(args, "search_id")?)
+                    .context("Search not found in this run")?
+                    .clone();
+                let offset = args["offset"].as_u64().unwrap_or(0) as usize;
+                return Ok(Box::new(move || {
+                    evidence::summarize_search(&search, offset).map(Evidence::Json)
                 }));
             }
             "search_logs" => {
                 let query = query(args)?;
                 let kind = args["scope"].as_str().unwrap_or("current");
-                let docs = state
-                    .documents
-                    .values()
-                    .filter(|d| d.open && (kind != "current" || Some(d.id) == state.current))
-                    .cloned()
-                    .collect::<Vec<_>>();
+                let docs = if kind == "current" {
+                    let id = args["document_id"]
+                        .as_u64()
+                        .or(state.current)
+                        .context("No current file; specify document_id from list_logs")?;
+                    vec![state.document(id, None)?]
+                } else {
+                    if args.get("document_id").is_some() {
+                        bail!("document_id requires current scope");
+                    }
+                    state
+                        .documents
+                        .values()
+                        .filter(|d| d.open)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                };
                 let directory = (kind == "directory").then(|| state.directory.clone());
                 let cancellation = state.cancellation.clone();
                 drop(state);
@@ -457,9 +536,10 @@ impl Workspace {
                     .context("Search not found in this run")?
                     .clone();
                 let offset = args["offset"].as_u64().unwrap_or(0) as usize;
+                let limit = args["limit"].as_u64().unwrap_or(20) as usize;
                 let search_id = text(args, "search_id")?.to_owned();
                 return Ok(Box::new(move || {
-                    let mut page = search_page(&search, offset)?;
+                    let mut page = search_page_options(&search, offset, limit)?;
                     add_search_links(&mut page, &search_id, offset);
                     Ok(Evidence::Json(page))
                 }));
@@ -480,6 +560,12 @@ impl Workspace {
                 }
                 let mut search = SearchSnapshot {
                     groups: Vec::new(),
+                    query: tab.saved.completed.as_ref().map(|q| SearchQuery {
+                        text: q.text.clone(),
+                        case_sensitive: q.case_sensitive,
+                        regex: q.regex,
+                        max_results: None,
+                    }),
                     cursor: None,
                     truncated: false,
                     tab: Some((owner, id, revision)),

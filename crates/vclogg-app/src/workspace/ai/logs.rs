@@ -24,26 +24,56 @@ pub(super) fn query(value: &Value) -> Result<SearchQuery> {
     Ok(query)
 }
 pub(super) fn log_row(doc: &DocumentSnapshot, row: usize) -> Result<Value> {
+    log_excerpt(doc, row, 2048, None)
+}
+pub(super) fn log_excerpt(
+    doc: &DocumentSnapshot,
+    row: usize,
+    max_chars: usize,
+    matcher: Option<&SearchMatcher>,
+) -> Result<Value> {
     let preview = doc
         .document
         .line_preview(row, 8192)
         .context("Source line unavailable")?;
+    let source = preview.text();
+    let matched = matcher.and_then(|m| m.matching_ranges(source).first().cloned());
+    let center = matched
+        .as_ref()
+        .map_or(0, |r| source[..r.start].chars().count());
+    let start = center.saturating_sub(max_chars / 3);
+    let excerpt = source
+        .chars()
+        .skip(start)
+        .take(max_chars)
+        .collect::<String>();
+    let truncated = preview.is_truncated() || start > 0 || excerpt.len() < source.len();
     Ok(
-        json!({"reference":doc.reference(row),"url":doc.reference(row).url(),"file":doc.document.file_name(),"text":preview.text(),"truncated":preview.is_truncated()}),
+        json!({"reference":doc.reference(row),"url":doc.reference(row).url(),"file":doc.document.file_name(),"text":excerpt,"truncated":truncated,"excerpt_start_character":start,"match_in_excerpt":matched.is_some()}),
     )
 }
+#[cfg(test)]
 pub(super) fn read_page(doc: &DocumentSnapshot, start: usize, limit: usize) -> Result<Value> {
+    read_page_cancellable(doc, start, limit, &SearchCancellation::default())
+}
+pub(super) fn read_page_cancellable(
+    doc: &DocumentSnapshot,
+    start: usize,
+    limit: usize,
+    cancellation: &SearchCancellation,
+) -> Result<Value> {
     doc.verify()?;
-    let complete = complete_snapshot(doc.clone(), &SearchCancellation::default())?;
-    let doc = &complete;
     if start >= doc.document.source_line_count() {
         bail!("Start line exceeds the file");
     }
     let mut rows = Vec::new();
     let mut next = start;
     while next < doc.document.source_line_count() && rows.len() < limit.min(100) {
+        if cancellation.is_cancelled() {
+            bail!("Read cancelled");
+        }
         rows.push(log_row(doc, next)?);
-        if serde_json::to_vec(&rows)?.len() > 48 * 1024 {
+        if serde_json::to_vec(&rows)?.len() > 16 * 1024 {
             rows.pop();
             break;
         }
@@ -52,6 +82,13 @@ pub(super) fn read_page(doc: &DocumentSnapshot, start: usize, limit: usize) -> R
     Ok(json!({"rows":rows,"next_line":(next<doc.document.source_line_count()).then_some(next+1)}))
 }
 pub(super) fn search_page(search: &SearchSnapshot, offset: usize) -> Result<Value> {
+    search_page_options(search, offset, 20)
+}
+pub(super) fn search_page_options(
+    search: &SearchSnapshot,
+    offset: usize,
+    limit: usize,
+) -> Result<Value> {
     let total = search
         .groups
         .iter()
@@ -66,19 +103,19 @@ pub(super) fn search_page(search: &SearchSnapshot, offset: usize) -> Result<Valu
         }
         doc.verify()?;
         for row in matches.iter().skip(offset.saturating_sub(skipped)) {
-            rows.push(log_row(doc, row)?);
-            if serde_json::to_vec(&rows)?.len() > 48 * 1024 {
+            rows.push(json!({"reference":doc.reference(row),"url":doc.reference(row).url(),"file":doc.document.file_name()}));
+            if serde_json::to_vec(&rows)?.len() > 12 * 1024 {
                 rows.pop();
                 break 'groups;
             }
-            if rows.len() == 100 {
+            if rows.len() == limit.clamp(1, 40) {
                 break 'groups;
             }
         }
         skipped += matches.len();
     }
     Ok(
-        json!({"total":total,"truncated":search.truncated,"next_offset":(offset+rows.len()<total).then_some(offset+rows.len()),"rows":rows}),
+        json!({"total":total,"truncated":search.truncated,"representation":"references","content_included":false,"query":search.query.as_ref().map(|q| &q.text),"next_offset":(offset.saturating_add(rows.len())<total).then_some(offset.saturating_add(rows.len())),"rows":rows}),
     )
 }
 pub(super) fn search_logs(
@@ -91,6 +128,7 @@ pub(super) fn search_logs(
     let mut errors = 0usize;
     let mut search = SearchSnapshot {
         groups: Vec::new(),
+        query: Some(query.clone()),
         cursor: None,
         truncated: false,
         tab: None,
@@ -185,8 +223,10 @@ pub(super) fn mutation_documents(
     if let Some(id) = args["document_id"].as_u64() {
         return Ok(vec![state.document(id, args["version"].as_str())?]);
     }
-    if matches!(call.name.as_str(), "navigate" | "search_results")
-        && let Some(id) = args["search_id"].as_str()
+    if matches!(
+        call.name.as_str(),
+        "navigate" | "search_results" | "summarize_search"
+    ) && let Some(id) = args["search_id"].as_str()
     {
         return Ok(state
             .searches
@@ -222,6 +262,44 @@ pub(super) fn object_page(mut value: Value, field: &str, args: &Value) -> Result
     value["total"] = json!(all.len());
     value[field] = json!(page);
     Ok(value)
+}
+
+/// Reuse one completed index per run only when a sparse result lacks the requested
+/// neighbors. Direct hits use their existing offsets and never rebuild an index.
+pub(super) fn read_snapshot(
+    scope: &SharedScope,
+    doc: DocumentSnapshot,
+    start: usize,
+    end: usize,
+    cancellation: &SearchCancellation,
+) -> Result<DocumentSnapshot> {
+    doc.verify()?;
+    if (start..end.min(doc.document.source_line_count()))
+        .all(|row| doc.document.contains_source_row(row))
+    {
+        return Ok(doc);
+    }
+    let cached = scope
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Analysis unavailable"))?
+        .read_document
+        .clone();
+    if let Some(cached) = cached
+        && cached.id == doc.id
+        && cached.version == doc.version
+    {
+        cached.verify()?;
+        return Ok(cached);
+    }
+    let complete = complete_snapshot(doc, cancellation)?;
+    let mut state = scope
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Analysis unavailable"))?;
+    if state.cancellation.is_cancelled() {
+        bail!("Read cancelled");
+    }
+    state.read_document = Some(complete.clone());
+    Ok(complete)
 }
 
 pub(super) fn complete_snapshot(

@@ -42,7 +42,14 @@ pub(super) fn user_content(text: &str) -> (&str, Vec<AttachedContent>) {
         else {
             break;
         };
-        let Some(preview) = value["log_data"].as_str() else {
+        let preview = if let Some(preview) = value["log_data"].as_str() {
+            preview
+        } else if value["content_included"] == false {
+            crate::tr!(
+                "Agent 将按需读取此行",
+                "The agent will read this line as needed"
+            )
+        } else {
             break;
         };
         if LogReference::from_url(url).as_ref() != Some(&reference) {

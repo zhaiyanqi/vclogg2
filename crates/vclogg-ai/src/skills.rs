@@ -12,6 +12,8 @@ pub struct Skill {
     pub description: String,
     pub directory: PathBuf,
     pub enabled: bool,
+    #[serde(default)]
+    pub source_directory: Option<PathBuf>,
 }
 
 pub fn import_skill(directory: &Path) -> Result<Skill> {
@@ -24,6 +26,7 @@ pub fn import_skill(directory: &Path) -> Result<Skill> {
         description: String::new(),
         directory,
         enabled: true,
+        source_directory: None,
     };
     refresh_skill(&mut skill)?;
     Ok(skill)
