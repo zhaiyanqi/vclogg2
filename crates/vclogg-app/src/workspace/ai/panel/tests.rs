@@ -33,7 +33,7 @@ fn isolated_panel_send_workflow() {
             .unwrap();
         assert!(
             output.status.success(),
-            "{}\n{}",
+            "mode={mode}\n{}\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );

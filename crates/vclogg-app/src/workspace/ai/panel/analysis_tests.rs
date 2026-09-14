@@ -86,7 +86,7 @@ pub(super) fn exercise(
             .unwrap()["content"]
             .as_str()
             .unwrap();
-        assert!(user.contains("ERROR network timeout"));
+        assert!(!user.contains("ERROR network timeout"));
         let attached: Value = serde_json::from_str(
             user.split("```json\n")
                 .nth(1)
@@ -96,8 +96,11 @@ pub(super) fn exercise(
                 .unwrap(),
         )
         .unwrap();
+        assert_eq!(attached["content_included"], false);
+        assert!(attached.get("log_data").is_none());
         let reference = &attached["reference"];
         assert_eq!(reference["document_id"], id);
+        assert_eq!(reference["line"], 2);
         let calls = [
             ("read_logs", json!({"document_id":id,"version":reference["version"],"start_line":1,"limit":4})),
             ("search_logs", json!({"scope":"open","query":"ERROR"})),
@@ -131,6 +134,10 @@ pub(super) fn exercise(
         for tool in tools {
             let result: Value = serde_json::from_str(tool["content"].as_str().unwrap()).unwrap();
             assert!(result.get("error").is_none(), "{result}");
+            if tool["tool_call_id"] == "call-0" {
+                assert_eq!(result["rows"][1]["text"], "ERROR network timeout");
+                assert_eq!(result["rows"][1]["reference"], *reference);
+            }
         }
         let reference: LogReference = serde_json::from_value(reference.clone()).unwrap();
         let citation = reference.url();
@@ -246,7 +253,8 @@ pub(super) fn exercise(
     pump_until(cx, panel, |p| !p.attachments_loading);
     let scope = workspace.read_with(cx, |w, _| w.ai_scope());
     let attached = panel.read_with(cx, |p, _| p.message_with_attachments("", &scope).unwrap());
-    assert!(attached.contains("ERROR selected directory result"));
+    assert!(!attached.contains("ERROR selected directory result"));
+    assert!(attached.contains(&unopened.reference(0).url()));
     assert!(scope.lock().unwrap().directory.directory.is_none());
     for (name, arguments) in [
         ("list_logs", json!({})),
@@ -268,10 +276,14 @@ pub(super) fn exercise(
             )
             .unwrap()
         });
-        assert!(
-            work().is_ok(),
-            "{name} must retain the explicit attachment grant"
-        );
+        let evidence = work().unwrap_or_else(|error| {
+            panic!("{name} must retain the explicit attachment grant: {error}")
+        });
+        if name == "read_logs" {
+            let page = evidence.value().unwrap();
+            assert_eq!(page["rows"][0]["text"], "ERROR selected directory result");
+            assert_eq!(page["rows"][0]["reference"], json!(unopened.reference(0)));
+        }
     }
     assert!(scope.lock().unwrap().document(u64::MAX, None).is_err());
 }
