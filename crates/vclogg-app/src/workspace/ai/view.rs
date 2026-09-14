@@ -290,9 +290,14 @@ impl AiPanel {
     ) -> AnyElement {
         let owner = cx.weak_entity();
         let selected_view = view.clone();
+        let colors = ui_theme::palette(cx);
+        let style = gpui_component::text::TextViewStyle::default().selection_colors(
+            colors.chat_selection_background,
+            colors.chat_selection_foreground,
+        );
         div().id(SharedString::from(format!("ai-text-{:?}", view.entity_id())))
             .min_w_0().w_full()
-            .child(TextView::new(view).selectable(true).on_link_click(move |url, event, window, cx| {
+            .child(TextView::new(view).style(style).selectable(true).on_link_click(move |url, event, window, cx| {
                 if !matches!(event, gpui::ClickEvent::Mouse(event) if event.up.button != MouseButton::Left) {
                     _ = owner.update(cx, |this, cx| this.open_link(url, window, cx));
                 }

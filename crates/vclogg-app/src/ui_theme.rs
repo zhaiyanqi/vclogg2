@@ -73,6 +73,8 @@ pub(crate) struct ProductColors {
     pub(crate) control_hover: Hsla,
     pub(crate) control_active: Hsla,
     pub(crate) selection: Hsla,
+    pub(crate) chat_selection_background: Hsla,
+    pub(crate) chat_selection_foreground: Hsla,
     pub(crate) row_hover: Hsla,
     pub(crate) row_selected: Hsla,
     pub(crate) row_selected_border: Hsla,
@@ -151,6 +153,8 @@ fn product_colors(mode: ThemeMode) -> ProductColors {
             control_hover: color(0x273248),
             control_active: color(0x313d55),
             selection: color(0x426b9a),
+            chat_selection_background: color(0x2563eb),
+            chat_selection_foreground: color(0xffffff),
             row_hover: color(0x212d41),
             row_selected: color(0x263f68),
             row_selected_border: color(0x4f87c7),
@@ -212,6 +216,8 @@ fn product_colors(mode: ThemeMode) -> ProductColors {
             control_hover: color(0xe9e7e2),
             control_active: color(0xdfddd7),
             selection: color(0x80aae4),
+            chat_selection_background: color(0x2563eb),
+            chat_selection_foreground: color(0xffffff),
             row_hover: color(0xf0f3f8),
             row_selected: color(0xdce9ff),
             row_selected_border: color(0x7db7e8),
@@ -552,6 +558,14 @@ mod tests {
             assert!(contrast(colors.selection, colors.foreground) >= 4.5);
             assert!(contrast(colors.selection, colors.background) >= 1.5);
             assert!(contrast(colors.selection, bubble) >= 1.5);
+            assert_eq!(colors.chat_selection_foreground, color(0xffffff));
+            assert!(
+                contrast(
+                    colors.chat_selection_background,
+                    colors.chat_selection_foreground
+                ) >= 4.5
+            );
+            assert!(contrast(colors.chat_selection_background, bubble) >= 3.0);
         }
     }
 }

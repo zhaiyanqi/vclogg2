@@ -594,6 +594,16 @@ fn verify_chat_geometry(
         visual.update(|window, cx| {
             _ = window.draw(cx);
         });
+        visual.update(|window, cx| {
+            let blue = ui_theme::palette(cx).chat_selection_background;
+            assert!(
+                window.painted_quads().iter().any(|quad| {
+                    quad.background == blue.into()
+                        && quad.bounds.intersects(&sent.scale(window.scale_factor()))
+                }),
+                "the selected message paints the blue background"
+            );
+        });
         lengths.push(panel.read_with(cx, |p, cx| p.messages[0].read(cx).selected_text().len()));
     }
     assert!(
