@@ -8,6 +8,7 @@ mod attachments;
 mod commands;
 mod logs;
 mod search;
+mod transcript;
 use logs::*;
 mod panel;
 mod settings;

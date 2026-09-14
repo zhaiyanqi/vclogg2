@@ -328,7 +328,7 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui::TestAppContext) {
         assert!(!p.live_row);
         assert!(p.reasoning_views[1].is_some());
         assert!(!p.thinking_expanded.contains(&1));
-        assert_eq!(p.scroller.read(cx).item_count(), 4);
+        assert_eq!(p.scroller.read(cx).item_count(), 2);
         assert_eq!(p.messages[1].entity_id(), streamed_view);
         assert_eq!(p.conversation.status.clone(), RunStatus::Complete, "{}", p.error);
         assert_eq!(p.conversation.messages.len(), 4);
@@ -439,7 +439,7 @@ fn exercise_transcript(
             assert_eq!(p.scroller.read(cx).item_count(), 25);
             assert_eq!(p.live_view.entity_id(), streamed_view);
             assert!(
-                p.live_thinking_collapsed,
+                !p.thinking_expanded.contains(&24),
                 "thinking folds when the reply starts"
             );
             assert!(!p.scroller.read(cx).is_following_tail());
@@ -470,7 +470,7 @@ fn exercise_transcript(
                 }),
                 cx,
             );
-            assert_eq!(p.scroller.read(cx).item_count(), 26);
+            assert_eq!(p.scroller.read(cx).item_count(), 25);
             assert!(!p.scroller.read(cx).is_following_tail());
             p.scroller.update(cx, |state, cx| state.scroll_to_end(cx));
             assert!(p.scroller.read(cx).is_following_tail());
@@ -479,7 +479,7 @@ fn exercise_transcript(
                 AgentEvent::Finished(RunStatus::Interrupted, String::new()),
                 cx,
             );
-            assert_eq!(p.scroller.read(cx).item_count(), 27);
+            assert_eq!(p.scroller.read(cx).item_count(), 25);
             assert!(!p.live_row);
             p.busy = false;
             p.new_conversation(cx);
@@ -499,14 +499,26 @@ fn verify_chat_geometry(
         panel.update(cx, |p, cx| {
             p.push_message(
                 AgentMessage::User {
-                    text: "分析日志".into(),
+                    text: {
+                        let reference = LogReference {
+                            document_id: 1,
+                            version: "v1".into(),
+                            line: 2,
+                        };
+                        let data =
+                            json!({"reference":reference,"log_data":"ERROR network timeout"});
+                        format!(
+                            "Analyze these logs\n\n[app.log:2]({})\n```json\n{data}\n```",
+                            reference.url()
+                        )
+                    },
                 },
                 cx,
             );
             p.push_message(
                 AgentMessage::Assistant {
                     text: "发现两条相关日志".into(),
-                    reasoning: "逐行核对来源。\n\n".repeat(4),
+                    reasoning: "Check source lines.\n\n".repeat(4),
                     thinking: Vec::new(),
                     calls: Vec::new(),
                 },
@@ -520,30 +532,79 @@ fn verify_chat_geometry(
     })
     .unwrap();
     let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
-    for width in [320., 560.] {
-        visual.simulate_resize(gpui::size(px(width), px(600.)));
-        cx.run_until_parked();
-        let sent = visual.debug_bounds("ai-user-bubble").expect("user bubble");
-        let reply = visual.debug_bounds("ai-reply").expect("assistant reply");
-        assert!(sent.left() > reply.left(), "sent={sent:?}, reply={reply:?}");
-        assert!((sent.right() - reply.right()).abs() <= px(1.));
-        assert!(
-            reply.size.width <= px(width),
-            "width={width}, reply={reply:?}"
-        );
+    for mode in [
+        gpui_component::ThemeMode::Dark,
+        gpui_component::ThemeMode::Light,
+    ] {
+        visual.update(|window, cx| gpui_component::Theme::change(mode, Some(window), cx));
+        for width in [320., 560.] {
+            visual.simulate_resize(gpui::size(px(width), px(600.)));
+            cx.run_until_parked();
+            let sent = visual.debug_bounds("ai-user-bubble").expect("user bubble");
+            let reply = visual.debug_bounds("ai-reply").expect("assistant reply");
+            let references = visual
+                .debug_bounds("ai-user-references")
+                .expect("references above the bubble");
+            assert!(references.bottom() < sent.top());
+            assert!(sent.left() > reply.left(), "sent={sent:?}, reply={reply:?}");
+            assert!((sent.right() - reply.right()).abs() <= px(1.));
+            assert!(
+                reply.size.width <= px(width),
+                "width={width}, reply={reply:?}"
+            );
+        }
     }
+    let sent = visual.debug_bounds("ai-user-bubble").unwrap();
+    let from = gpui::point(sent.left() + px(17.), sent.top() + px(22.));
+    let to = gpui::point(sent.right() - px(17.), sent.top() + px(22.));
+    visual.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::default());
+    visual.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    visual.simulate_mouse_move(to, MouseButton::Left, gpui::Modifiers::default());
+    visual.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    visual.simulate_mouse_up(to, MouseButton::Left, gpui::Modifiers::default());
+    cx.run_until_parked();
+    let selected = panel.read_with(cx, |p, cx| p.messages[0].read(cx).selected_text());
+
+    assert!(
+        !selected.is_empty(),
+        "user text supports pointer drag selection: {sent:?}, {from:?}, {to:?}"
+    );
+    assert!(!selected.contains("log_data"));
+    visual.simulate_mouse_down(to, MouseButton::Right, gpui::Modifiers::default());
+    visual.simulate_mouse_up(to, MouseButton::Right, gpui::Modifiers::default());
+    cx.run_until_parked();
+    visual.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    visual.simulate_keystrokes("down enter");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(selected.clone())
+    );
+    visual.simulate_mouse_down(to, MouseButton::Right, gpui::Modifiers::default());
+    visual.simulate_mouse_up(to, MouseButton::Right, gpui::Modifiers::default());
+    cx.run_until_parked();
+    visual.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    visual.simulate_keystrokes("down down enter");
+    panel.read_with(cx, |p, cx| {
+        assert!(p.input.read(cx).value().ends_with(&selected))
+    });
     let collapsed = visual
         .debug_bounds("ai-thinking-region")
         .unwrap()
         .size
         .height;
-    cx.update(|cx| {
-        panel.update(cx, |p, cx| {
-            p.thinking_expanded.insert(1);
-            p.scroller
-                .update(cx, |state, cx| state.remeasure_items(1..2, cx));
-        })
-    });
+    let toggle = visual.debug_bounds("ai-thinking-toggle").unwrap();
+    visual.simulate_click(
+        gpui::point(toggle.left() + px(20.), toggle.top() + px(12.)),
+        gpui::Modifiers::default(),
+    );
     cx.run_until_parked();
     assert!(
         visual
@@ -553,4 +614,38 @@ fn verify_chat_geometry(
             .height
             > collapsed
     );
+    let thought = visual.debug_bounds("ai-reasoning-text").unwrap();
+    let from = gpui::point(thought.left() + px(2.), thought.top() + px(10.));
+    let to = gpui::point(thought.left() + px(120.), thought.top() + px(10.));
+    visual.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::default());
+    visual.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    visual.simulate_mouse_move(to, MouseButton::Left, gpui::Modifiers::default());
+    visual.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    visual.simulate_mouse_up(to, MouseButton::Left, gpui::Modifiers::default());
+    let selected = panel.read_with(cx, |p, cx| {
+        p.reasoning_views[1]
+            .as_ref()
+            .unwrap()
+            .read(cx)
+            .selected_text()
+    });
+    assert!(
+        !selected.is_empty(),
+        "expanded thoughts support drag selection: {thought:?}"
+    );
+    visual.simulate_mouse_down(to, MouseButton::Right, gpui::Modifiers::default());
+    visual.simulate_mouse_up(to, MouseButton::Right, gpui::Modifiers::default());
+    visual.update(|window, cx| {
+        _ = window.draw(cx);
+    });
+    visual.simulate_keystrokes("down enter");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(selected)
+    );
+    assert!(panel.read_with(cx, |p, _| p.message_menu.is_none()));
 }

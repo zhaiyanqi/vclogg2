@@ -4,186 +4,235 @@ use gpui_message_scroller::MessageScroller;
 use vclogg_ai::RunStatus;
 
 impl AiPanel {
-    fn render_message(&mut self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
-        // Append-only transcript ordinals are stable within a conversation.
-        // The live response uses the same ID and TextView as its final message.
-        let row_id = SharedString::from(format!("ai-message-{}-{ix}", self.conversation.id));
-        if ix >= self.conversation.messages.len() {
-            return v_flex()
-                .id(row_id)
-                .w_full()
-                .min_w_0()
-                .gap_2()
-                .when(!self.reasoning.is_empty(), |row| {
-                    row.child(self.render_thinking(ix, true, cx))
-                })
-                .when(!self.live.is_empty(), |row| {
-                    row.child(self.markdown_view(&self.live_view, cx))
-                })
+    fn render_message(&mut self, row_ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        let start = self.transcript_rows[row_ix];
+        let end = self
+            .transcript_rows
+            .get(row_ix + 1)
+            .copied()
+            .unwrap_or(self.messages.len());
+        let row_id = SharedString::from(format!("ai-message-{}-{start}", self.conversation.id));
+        if matches!(
+            self.conversation.messages.get(start),
+            Some(AgentMessage::User { .. })
+        ) {
+            let mut row = v_flex().id(row_id).w_full().min_w_0().items_end().gap_2();
+            if let Some(attachments) = self.message_attachments.get(&start) {
+                let mut cards = v_flex()
+                    .debug_selector(|| "ai-user-references".into())
+                    .w_full()
+                    .min_w_0()
+                    .items_end()
+                    .gap_2();
+                for (ix, attachment) in attachments.iter().enumerate() {
+                    let reference = attachment.content.reference.clone();
+                    cards =
+                        cards.child(
+                            v_flex()
+                                .w_full()
+                                .max_w(gpui::relative(0.9))
+                                .min_w_0()
+                                .p_2()
+                                .gap_1()
+                                .border_1()
+                                .border_color(cx.theme().border)
+                                .rounded(cx.theme().radius_lg)
+                                .child(
+                                    Button::new(SharedString::from(format!(
+                                        "ai-attachment-{start}-{ix}"
+                                    )))
+                                    .small()
+                                    .ghost()
+                                    .icon(IconName::File)
+                                    .label(attachment.content.label.clone())
+                                    .disabled(self.busy || self.ui_busy)
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.jump_reference(reference.clone(), window, cx)
+                                    })),
+                                )
+                                .child(self.markdown_view(&attachment.view, cx)),
+                        );
+                }
+                row = row.child(cards);
+            }
+            return row
+                .child(
+                    div()
+                        .debug_selector(|| "ai-user-bubble".into())
+                        .max_w(gpui::relative(0.9))
+                        .min_w_0()
+                        .px_4()
+                        .py_3()
+                        .rounded(cx.theme().radius_lg)
+                        .bg(cx.theme().primary.opacity(0.12))
+                        .child(self.markdown_view(&self.messages[start], cx)),
+                )
                 .into_any_element();
         }
-        let message = self.conversation.messages[ix].clone();
-        let title = match &message {
-            AgentMessage::User { .. } => crate::tr!("你", "You").to_owned(),
-            AgentMessage::Assistant { .. } => "AI".into(),
-            AgentMessage::Tool { name, result, .. } => format!(
-                "{} · {}",
-                name,
-                if result.is_error {
-                    crate::tr!("失败", "Failed")
-                } else {
-                    crate::tr!("完成", "Done")
-                }
-            ),
+        let live = self.live_row && row_ix + 1 == self.transcript_rows.len();
+        let answer = if live {
+            None
+        } else {
+            end.checked_sub(1).filter(|ix| matches!(&self.conversation.messages[*ix], AgentMessage::Assistant { calls, text, .. } if calls.is_empty() && !text.is_empty()))
         };
-        let is_tool = matches!(message, AgentMessage::Tool { .. });
-        let sent = matches!(message, AgentMessage::User { .. });
-        let expanded = self.expanded.contains(&ix);
-        let copy = match &message {
-            AgentMessage::User { text } | AgentMessage::Assistant { text, .. } => text.clone(),
-            AgentMessage::Tool { result, .. } => {
-                serde_json::to_string_pretty(&result.value).unwrap_or_default()
-            }
-        };
+        let has_process = (start..end)
+            .any(|ix| Some(ix) != answer || self.reasoning_views[ix].is_some())
+            || (live && !self.reasoning.is_empty())
+            || (row_ix + 1 == self.transcript_rows.len() && self.pending_tool.is_some());
         let mut row = v_flex()
             .id(row_id)
-            .debug_selector(move || {
-                if sent {
-                    "ai-user-bubble".into()
-                } else {
-                    "ai-reply".into()
-                }
-            })
+            .debug_selector(|| "ai-reply".into())
             .w_full()
             .min_w_0()
-            .gap_1()
-            .when(sent, |row| {
-                row.p_3().rounded(cx.theme().radius_lg).bg(cx.theme().muted)
-            })
-            .when(is_tool, |row| {
-                row.p_2()
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .rounded(cx.theme().radius)
-            })
-            .child(
-                h_flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(title),
-                    )
-                    .child(
-                        Button::new(("ai-copy", ix))
-                            .xsmall()
-                            .ghost()
-                            .label(crate::tr!("复制", "Copy"))
-                            .on_click(move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
-                            }),
-                    ),
-            );
-        if is_tool {
-            row = row.child(
-                Button::new(("ai-tool-expand", ix))
-                    .small()
-                    .ghost()
-                    .label(if expanded {
-                        crate::tr!("收起详情", "Hide details")
-                    } else {
-                        crate::tr!("查看详情", "Show details")
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.expanded.insert(ix) {
-                            this.expanded.remove(&ix);
-                        }
-                        this.scroller
-                            .update(cx, |state, cx| state.remeasure_items(ix..ix + 1, cx));
-                        cx.notify();
-                    })),
-            );
+            .gap_3();
+        if has_process {
+            row = row.child(self.render_process(start, end, answer, live, cx));
         }
-        if self.reasoning_views.get(ix).is_some_and(Option::is_some) {
-            row = row.child(self.render_thinking(ix, false, cx));
-        }
-        if !is_tool || expanded {
+        if let Some(ix) = answer {
             row = row.child(self.markdown_view(&self.messages[ix], cx));
         }
-        if let AgentMessage::Assistant { calls, .. } = &message {
-            for call in calls {
-                row = row.child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(format!("↳ {}", call.name)),
-                );
-            }
+        if live && !self.live.is_empty() {
+            row = row.child(self.markdown_view(&self.live_view, cx));
         }
-        if let AgentMessage::Tool { result, .. } = &message {
-            let mut refs = Vec::new();
-            collect_references(&result.value, &mut refs);
-            for (n, reference) in refs
-                .into_iter()
-                .take(if expanded { 100 } else { 3 })
-                .enumerate()
+        row.into_any_element()
+    }
+
+    fn render_process(
+        &self,
+        start: usize,
+        end: usize,
+        answer: Option<usize>,
+        live: bool,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let expanded = self.thinking_expanded.contains(&start);
+        let mut process = v_flex()
+            .debug_selector(|| "ai-thinking-region".into())
+            .w_full()
+            .min_w_0()
+            .gap_3()
+            .child(
+                h_flex()
+                    .debug_selector(|| "ai-thinking-toggle".into())
+                    .w_full()
+                    .pb_2()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        Button::new(("ai-thinking", start))
+                            .small()
+                            .ghost()
+                            .label(if live && self.live.is_empty() {
+                                crate::tr!("正在分析", "Analyzing")
+                            } else {
+                                crate::tr!("思考过程", "Thought process")
+                            })
+                            .child(
+                                Icon::new(if expanded {
+                                    IconName::ChevronDown
+                                } else {
+                                    IconName::ChevronRight
+                                })
+                                .size_4(),
+                            )
+                            .text_color(cx.theme().muted_foreground)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !this.thinking_expanded.insert(start) {
+                                    this.thinking_expanded.remove(&start);
+                                }
+                                this.remeasure_message(start, cx);
+                                cx.notify();
+                            })),
+                    ),
+            );
+        if expanded {
+            for ix in start..end {
+                if let Some(view) = &self.reasoning_views[ix] {
+                    process = process.child(
+                        div()
+                            .debug_selector(|| "ai-reasoning-text".into())
+                            .min_w_0()
+                            .child(self.markdown_view(view, cx)),
+                    );
+                }
+                match &self.conversation.messages[ix] {
+                    AgentMessage::Assistant { text, .. }
+                        if Some(ix) != answer && !text.is_empty() =>
+                    {
+                        process = process.child(self.markdown_view(&self.messages[ix], cx));
+                    }
+                    AgentMessage::Tool { name, result, .. } => {
+                        let details = self.expanded.contains(&ix);
+                        let label = format!(
+                            "{} · {}",
+                            tool_label(name),
+                            if result.is_error {
+                                crate::tr!("失败", "Failed")
+                            } else {
+                                crate::tr!("完成", "Done")
+                            }
+                        );
+                        process = process.child(
+                            Button::new(("ai-tool-expand", ix))
+                                .small()
+                                .ghost()
+                                .icon(if details {
+                                    IconName::ChevronDown
+                                } else {
+                                    IconName::ChevronRight
+                                })
+                                .label(label)
+                                .text_color(cx.theme().muted_foreground)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if !this.expanded.insert(ix) {
+                                        this.expanded.remove(&ix);
+                                    }
+                                    this.remeasure_message(ix, cx);
+                                    cx.notify();
+                                })),
+                        );
+                        if details {
+                            process = process.child(self.markdown_view(&self.messages[ix], cx));
+                            let mut references = Vec::new();
+                            collect_references(&result.value, &mut references);
+                            for (n, reference) in references.into_iter().enumerate() {
+                                process = process.child(
+                                    Button::new(SharedString::from(format!("ai-jump-{ix}-{n}")))
+                                        .small()
+                                        .ghost()
+                                        .label(format!(
+                                            "{} {}",
+                                            crate::tr!("日志行", "Log line"),
+                                            reference.line
+                                        ))
+                                        .disabled(self.busy || self.ui_busy)
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.jump_reference(reference.clone(), window, cx)
+                                        })),
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if live && !self.reasoning.is_empty() {
+                process = process.child(self.markdown_view(&self.live_reasoning_view, cx));
+            }
+            if let Some(call) = self
+                .pending_tool
+                .as_ref()
+                .filter(|_| end == self.messages.len())
             {
-                let name = self
-                    .scope
-                    .as_ref()
-                    .and_then(|scope| scope.lock().ok())
-                    .and_then(|scope| {
-                        scope
-                            .documents
-                            .get(&reference.document_id)
-                            .map(|d| d.document.file_name().to_owned())
-                    })
-                    .unwrap_or_else(|| crate::tr!("日志", "Log").into());
-                let label = format!("{name} · {} {}", crate::tr!("行", "line"), reference.line);
-                row = row.child(
-                    Button::new(SharedString::from(format!("ai-jump-{ix}-{n}")))
-                        .small()
-                        .ghost()
-                        .label(label)
-                        .disabled(self.busy || self.ui_busy)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.jump_reference(reference.clone(), window, cx)
-                        })),
+                process = process.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("{}…", tool_label(&call.name))),
                 );
             }
         }
-        let selected_view = self.messages[ix].clone();
-        let panel = cx.entity();
-        let row = row.context_menu(move |mut menu, window, cx| {
-            let text = selected_view.read(cx).selected_text();
-            menu = menu.item(PopupMenuItem::new(crate::tr!("复制选中文字", "Copy selected text"))
-                .disabled(text.is_empty()).on_click({ let text = text.clone(); move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.clone())) }));
-            let documents = panel.read(cx).scope.as_ref().and_then(|scope| scope.lock().ok())
-                .map(|scope| scope.documents.values().filter(|d| d.open).cloned().collect::<Vec<_>>()).unwrap_or_default();
-            for doc in documents {
-                let text = text.clone();
-                let label = format!("{} · {}", crate::tr!("追加到搜索框", "Append to search box"), doc.document.file_name());
-                menu = menu.item(PopupMenuItem::new(label)
-                    .disabled(text.trim().is_empty() || panel.read(cx).busy || panel.read(cx).ui_busy)
-                    .on_click(window.listener_for(&panel, move |this, _, window, cx| {
-                        this.run_ui_tool(ToolCall { id: uuid::Uuid::new_v4().to_string(), name: "append_search".into(), arguments: json!({"document_id":doc.id,"version":doc.version,"text":text}) }, window, cx);
-                    })));
-            }
-            menu
-        });
-        if sent {
-            h_flex()
-                .w_full()
-                .min_w_0()
-                .justify_end()
-                .child(div().max_w(gpui::relative(0.9)).min_w_0().child(row))
-                .into_any_element()
-        } else {
-            row.into_any_element()
-        }
+        process.into_any_element()
     }
     fn render_attachments(&self, cx: &Context<Self>) -> AnyElement {
         let mut content = v_flex()
@@ -231,71 +280,100 @@ impl AiPanel {
         &self,
         view: &Entity<gpui_component::text::TextViewState>,
         cx: &Context<Self>,
-    ) -> TextView {
+    ) -> AnyElement {
         let owner = cx.weak_entity();
-        TextView::new(view).on_link_click(move |url, event, window, cx| {
-            if !matches!(event, gpui::ClickEvent::Mouse(event) if event.up.button != MouseButton::Left) {
-                _ = owner.update(cx, |this, cx| this.open_link(url, window, cx));
-            }
-        })
+        let selected_view = view.clone();
+        div().id(SharedString::from(format!("ai-text-{:?}", view.entity_id())))
+            .min_w_0().w_full()
+            .child(TextView::new(view).selectable(true).on_link_click(move |url, event, window, cx| {
+                if !matches!(event, gpui::ClickEvent::Mouse(event) if event.up.button != MouseButton::Left) {
+                    _ = owner.update(cx, |this, cx| this.open_link(url, window, cx));
+                }
+            }))
+            .on_mouse_down(MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                this.open_message_menu(&selected_view, event.position, window, cx);
+                cx.stop_propagation();
+            })).into_any_element()
     }
 
-    fn render_thinking(&self, ix: usize, live: bool, cx: &Context<Self>) -> AnyElement {
-        let expanded = if live {
-            !self.live_thinking_collapsed
+    fn open_message_menu(
+        &mut self,
+        view: &Entity<gpui_component::text::TextViewState>,
+        position: gpui::Point<gpui::Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let local_selection = view.read(cx).selected_text();
+        let selection = gpui_base::TextSelection::selected_text(window, cx);
+        let text = if local_selection.is_empty() || selection.is_empty() {
+            local_selection
         } else {
-            self.thinking_expanded.contains(&ix)
+            selection
         };
-        let view = if live {
-            Some(&self.live_reasoning_view)
-        } else {
-            self.reasoning_views.get(ix).and_then(Option::as_ref)
-        };
-        v_flex()
-            .debug_selector(|| "ai-thinking-region".into())
-            .min_w_0()
-            .items_start()
-            .gap_2()
-            .child(
-                Button::new(("ai-thinking", ix))
-                    .small()
-                    .ghost()
-                    .icon(if expanded {
-                        IconName::ChevronDown
-                    } else {
-                        IconName::ChevronRight
-                    })
-                    .label(if live && self.live.is_empty() {
-                        crate::tr!("思考中", "Thinking")
-                    } else {
-                        crate::tr!("思考过程", "Thought process")
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if live {
-                            this.live_thinking_collapsed = !this.live_thinking_collapsed;
-                        } else if !this.thinking_expanded.insert(ix) {
-                            this.thinking_expanded.remove(&ix);
-                        }
-                        this.scroller
-                            .update(cx, |state, cx| state.remeasure_items(ix..ix + 1, cx));
-                        cx.notify();
-                    })),
-            )
-            .when(expanded, |row| {
-                row.when_some(view, |row, view| {
-                    row.child(
-                        div()
-                            .pl_3()
-                            .border_l_1()
-                            .border_color(cx.theme().border)
-                            .text_color(cx.theme().muted_foreground)
-                            .child(self.markdown_view(view, cx)),
-                    )
-                })
+        let focus = window
+            .focused(cx)
+            .unwrap_or_else(|| self.input.focus_handle(cx));
+        let panel = cx.entity();
+        let documents = self
+            .scope
+            .as_ref()
+            .and_then(|scope| scope.lock().ok())
+            .map(|scope| {
+                scope
+                    .documents
+                    .values()
+                    .filter(|d| d.open)
+                    .cloned()
+                    .collect::<Vec<_>>()
             })
-            .into_any_element()
+            .unwrap_or_default();
+        let busy = self.busy || self.ui_busy;
+        let menu = PopupMenu::build(window, cx, move |menu, window, _cx| {
+            let mut menu = menu
+                .action_context(focus)
+                .item(
+                    PopupMenuItem::new(crate::tr!("复制", "Copy"))
+                        .disabled(text.is_empty())
+                        .on_click({
+                            let text = text.clone();
+                            move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
+                            }
+                        }),
+                )
+                .item(
+                    PopupMenuItem::new(crate::tr!("添加到对话框", "Add to composer"))
+                        .disabled(text.trim().is_empty())
+                        .on_click(window.listener_for(&panel, {
+                            let text = text.clone();
+                            move |this, _, window, cx| this.add_text_to_composer(&text, window, cx)
+                        })),
+                );
+            for doc in documents {
+                let text = text.clone();
+                let label = format!(
+                    "{} · {}",
+                    crate::tr!("追加到搜索框", "Append to search box"),
+                    doc.document.file_name()
+                );
+                menu = menu.item(PopupMenuItem::new(label)
+                    .disabled(text.trim().is_empty() || busy)
+                    .on_click(window.listener_for(&panel, move |this, _, window, cx| {
+                        this.run_ui_tool(ToolCall { id: uuid::Uuid::new_v4().to_string(), name: "append_search".into(), arguments: json!({"document_id":doc.id,"version":doc.version,"text":text}) }, window, cx);
+                    })));
+            }
+            menu
+        });
+        self.message_menu_subscription =
+            Some(cx.subscribe(&menu, |this, _, _: &gpui::DismissEvent, cx| {
+                this.message_menu = None;
+                this.message_menu_subscription = None;
+                cx.notify();
+            }));
+        menu.focus_handle(cx).focus(window, cx);
+        self.message_menu = Some((menu, position));
+        cx.notify();
     }
-
     pub(super) fn open_link(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(reference) = LogReference::from_url(url) {
             if self.busy || self.ui_busy {
@@ -452,6 +530,7 @@ impl Render for AiPanel {
             .size_full()
             .min_h_0()
             .min_w_0()
+            .bg(cx.theme().background)
             .text_color(cx.theme().foreground);
         if !self.error.is_empty() {
             body = body.child(div().px_3().py_2().text_xs().child(self.error.clone()));
@@ -749,6 +828,27 @@ impl Render for AiPanel {
                     .when(!self.conversation.messages.is_empty() || self.live_row, |this| this.child(messages)),
             )
             .child(footer)
+            .when_some(self.message_menu.clone(), |this, (menu, position)| {
+                this.child(gpui::deferred(gpui::anchored().position(position)
+                    .snap_to_window_with_margin(gpui::rems(0.5).to_pixels(window.rem_size()))
+                    .child(menu)).with_priority(gpui_base::POPUP_PRIORITY))
+            })
             .into_any_element()
+    }
+}
+
+fn tool_label(name: &str) -> &str {
+    match name {
+        "get_context" => crate::tr!("获取当前日志", "Read current context"),
+        "list_logs" => crate::tr!("列出日志文件", "List log files"),
+        "read_logs" => crate::tr!("读取日志", "Read logs"),
+        "search_logs" | "show_search" => crate::tr!("搜索日志", "Search logs"),
+        "search_results" | "control_search" => crate::tr!("读取搜索结果", "Inspect search results"),
+        "append_search" => crate::tr!("追加搜索文字", "Append search text"),
+        "set_marks" => crate::tr!("标记日志", "Mark logs"),
+        "highlight_keyword" => crate::tr!("高亮关键词", "Highlight keywords"),
+        "text_mark" => crate::tr!("文字标记", "Annotate logs"),
+        "navigate" => crate::tr!("定位日志", "Navigate to logs"),
+        _ => name,
     }
 }

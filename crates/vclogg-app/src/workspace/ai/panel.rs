@@ -28,11 +28,14 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) live_reasoning_view: Entity<TextViewState>,
     pub(super) reasoning_views: Vec<Option<Entity<TextViewState>>>,
     pub(super) thinking_expanded: BTreeSet<usize>,
-    pub(super) live_thinking_collapsed: bool,
+    pub(super) transcript_rows: Vec<usize>,
+    pub(super) message_attachments: BTreeMap<usize, Vec<super::transcript::AttachmentView>>,
     pub(super) live: String,
     pub(super) reasoning: String,
     pub(super) progress: String,
     pub(super) expanded: BTreeSet<usize>,
+    pub(super) message_menu: Option<(Entity<PopupMenu>, gpui::Point<gpui::Pixels>)>,
+    pub(super) message_menu_subscription: Option<Subscription>,
     pub(super) pending_tool: Option<ToolCall>,
     pub(super) scope: Option<SharedScope>,
     pub(super) reference_scopes: Vec<SharedScope>,
@@ -98,11 +101,14 @@ impl AiPanel {
             live_reasoning_view: cx.new(|cx| TextViewState::markdown("", cx).selectable(true)),
             reasoning_views: Vec::new(),
             thinking_expanded: BTreeSet::new(),
-            live_thinking_collapsed: false,
+            transcript_rows: Vec::new(),
+            message_attachments: BTreeMap::new(),
             live: String::new(),
             reasoning: String::new(),
             progress: String::new(),
             expanded: BTreeSet::new(),
+            message_menu: None,
+            message_menu_subscription: None,
             pending_tool: None,
             scope: None,
             reference_scopes: Vec::new(),
@@ -183,27 +189,28 @@ impl AiPanel {
             }
         }
     }
-    fn message_view(
+    pub(super) fn message_view(
         &mut self,
         text: &str,
         ix: usize,
         cx: &mut Context<Self>,
     ) -> Entity<TextViewState> {
         let view = cx.new(|cx| TextViewState::markdown(text, cx).selectable(true));
-        let scroller = self.scroller.downgrade();
         // Markdown parsing also completes asynchronously, after a stream update.
         // Remeasure that row when its rendered document becomes ready.
         self.message_subscriptions
-            .push(cx.observe(&view, move |_, _, cx| {
-                _ = scroller.update(cx, |state, cx| state.remeasure_items(ix..ix + 1, cx));
+            .push(cx.observe(&view, move |this, _, cx| {
+                this.remeasure_message(ix, cx);
             }));
         view
     }
     fn rebuild_messages(&mut self, cx: &mut Context<Self>) {
+        self.message_menu = None;
+        self.message_menu_subscription = None;
         self.messages.clear();
         self.reasoning_views.clear();
         self.thinking_expanded.clear();
-        self.live_thinking_collapsed = false;
+        self.message_attachments.clear();
         self.message_subscriptions.clear();
         self.expanded.clear();
         self.live_row = false;
@@ -223,8 +230,10 @@ impl AiPanel {
             let view = reasoning.map(|text| self.message_view(&text, ix, cx));
             self.reasoning_views.push(view);
         }
-        self.scroller
-            .update(cx, |state, cx| state.reset(self.messages.len(), cx));
+        for ix in 0..self.messages.len() {
+            self.cache_attachments(ix, cx);
+        }
+        self.sync_transcript(true, cx);
     }
     fn recover_messages(&mut self, cx: &mut Context<Self>) {
         let count = self.conversation.messages.len();
@@ -242,9 +251,8 @@ impl AiPanel {
         self.live_view = self.message_view(&safe_markdown(&self.live), self.messages.len(), cx);
         self.live_reasoning_view =
             self.message_view(&safe_markdown(&self.reasoning), self.messages.len(), cx);
-        self.live_thinking_collapsed = false;
         self.live_row = true;
-        self.scroller.update(cx, |state, cx| state.append(1, cx));
+        self.sync_transcript(false, cx);
     }
     pub(super) fn push_message(&mut self, message: AgentMessage, cx: &mut Context<Self>) {
         let text = message_text(&message, &self.conversation.messages);
@@ -265,8 +273,6 @@ impl AiPanel {
                 .push((!reasoning.is_empty()).then(|| self.live_reasoning_view.clone()));
             self.thinking_expanded.remove(&ix);
             self.live_row = false;
-            self.scroller
-                .update(cx, |state, cx| state.remeasure_items(ix..ix + 1, cx));
         } else {
             let view = self.message_view(&text, ix, cx);
             self.messages.push(view);
@@ -278,9 +284,10 @@ impl AiPanel {
             };
             let reasoning_view = reasoning.map(|text| self.message_view(&text, ix, cx));
             self.reasoning_views.push(reasoning_view);
-            self.scroller.update(cx, |state, cx| state.append(1, cx));
         }
         self.conversation.messages.push(message);
+        self.cache_attachments(ix, cx);
+        self.sync_transcript(false, cx);
         cx.notify();
     }
     pub(super) fn record(&self) -> Result<AiConversationRecord> {
@@ -605,8 +612,11 @@ impl AiPanel {
             event @ (AgentEvent::Text(_) | AgentEvent::Thinking(_)) => {
                 match event {
                     AgentEvent::Text(text) => {
-                        if self.live.is_empty() && !text.is_empty() && !self.reasoning.is_empty() {
-                            self.live_thinking_collapsed = true;
+                        if self.live.is_empty()
+                            && !text.is_empty()
+                            && let Some(start) = self.transcript_rows.last()
+                        {
+                            self.thinking_expanded.remove(start);
                         }
                         self.live.push_str(&text);
                         self.progress = crate::tr!("正在生成回复", "Generating reply").into();
@@ -630,12 +640,7 @@ impl AiPanel {
                             this.live_reasoning_view.update(cx, |view, cx| {
                                 view.set_text(&safe_markdown(&this.reasoning), cx)
                             });
-                            this.scroller.update(cx, |state, cx| {
-                                state.remeasure_items(
-                                    this.messages.len()..this.messages.len() + 1,
-                                    cx,
-                                )
-                            });
+                            this.remeasure_message(this.messages.len(), cx);
                             this.live_task = None;
                             cx.notify();
                         });
@@ -668,6 +673,10 @@ impl AiPanel {
                 self.error = error;
                 self.pending_tool = None;
                 self.flush_partial(cx);
+                if let Some(start) = self.transcript_rows.last() {
+                    self.thinking_expanded.remove(start);
+                    self.remeasure_message(*start, cx);
+                }
                 self.busy = true; // Do not switch conversations until the final record is durable.
                 self.run = None;
             }
@@ -849,7 +858,7 @@ impl Drop for AiPanel {
 }
 pub(super) fn message_text(message: &AgentMessage, history: &[AgentMessage]) -> String {
     match message {
-        AgentMessage::User { text } => safe_markdown(text),
+        AgentMessage::User { text } => safe_markdown(super::transcript::user_content(text).0),
         AgentMessage::Assistant { text, .. } => safe_markdown(text),
         AgentMessage::Tool {
             call_id, result, ..
