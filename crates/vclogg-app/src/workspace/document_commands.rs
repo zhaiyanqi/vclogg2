@@ -345,6 +345,7 @@ impl Workspace {
             return;
         }
 
+        let document_id = tab.id;
         let workspace = cx.entity();
         let input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(crate::tr_args!(
@@ -364,6 +365,8 @@ impl Workspace {
                 .child(
                     v_flex()
                         .gap_3()
+                        // The dialog body clips overflow; keep the outward input ring inside it.
+                        .py_1()
                         .child(crate::tr!("输入源日志中的行号。确认后会选择该行并滚动到可见位置。", "Enter a source log line number. The line will be selected and scrolled into view."))
                         .child(Input::new(&input)),
                 )
@@ -393,22 +396,38 @@ impl Workspace {
                         let Some(tab) = workspace.active_document() else {
                             return Err(crate::tr!("当前没有活动日志文件", "There is no active log file").to_string());
                         };
+                        if tab.id != document_id || tab.load_state != DocumentLoadState::Ready {
+                            return Err(crate::tr!("当前日志文件已变化，请重新打开转到行", "The current log file has changed. Reopen Go to line").to_string());
+                        }
                         let current_line_count = tab.document.line_count();
                         if !(1..=current_line_count).contains(&line_number) {
                             return Err(crate::tr_args!("行号应在 1 到 {current_line_count} 之间", "Line number must be from 1 to {current_line_count}"));
                         }
 
                         let source_row = line_number - 1;
-                        let table = tab.log_table.clone();
-                        table.update(cx, |table, cx| {
-                            table.set_active_log_row(source_row, cx);
-                        });
+                        if !workspace.select_and_center_log_source_row_atomically(
+                            document_id, source_row, window, cx,
+                        ) {
+                            return Err(crate::tr!("无法定位该日志行，请重新打开转到行", "Couldn’t locate the log line. Reopen Go to line").to_string());
+                        }
+                        if let Some(tab) = workspace.documents.iter_mut().find(|tab| tab.id == document_id) {
+                            tab.view.auto_follow = false;
+                            tab.view.pending_restore_row = None;
+                            tab.view.selection_table = SelectionTable::Log;
+                        }
+                        workspace.remember_user_log_region(LogRegion::Body);
                         workspace.selected_source_row = Some(source_row);
                         cx.notify();
-                        Ok(())
+                        Ok(workspace.log_viewer.focus_handle.clone())
                     });
                     match outcome {
-                        Ok(()) => true,
+                        Ok(focus) => {
+                            // Close before focusing the destination so Root's restoration cannot
+                            // later move keyboard navigation back to the originating search input.
+                            window.close_dialog(cx);
+                            focus.focus(window, cx);
+                            false
+                        }
                         Err(message) => {
                             window.notify_message(message, cx);
                             false
