@@ -20,7 +20,7 @@ dist/
 !.env.example
 
 # # Local AI instructions, skills, conversations and working notes
-.local/
+.local/notes
 .agent/
 .agents/
 # .codex/
