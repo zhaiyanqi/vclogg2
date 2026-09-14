@@ -1,9 +1,9 @@
 use super::*;
-use gpui::{ListAlignment, ListState};
 use gpui_component::{
     input::{InputEvent, TextareaState},
     text::TextViewState,
 };
+use gpui_message_scroller::MessageScrollerState;
 use vclogg_ai::{AgentEvent, AiSettings, Conversation, RunHandle, RunStatus};
 use vclogg_data::AiConversationRecord;
 
@@ -17,7 +17,9 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) history: Vec<AiConversationRecord>,
     pub(super) more_history: bool,
     pub(super) input: Entity<TextareaState>,
-    pub(super) list: ListState,
+    pub(super) scroller: Entity<MessageScrollerState>,
+    pub(super) live_row: bool,
+    message_subscriptions: Vec<Subscription>,
     pub(super) messages: Vec<Entity<TextViewState>>,
     pub(super) live_view: Entity<TextViewState>,
     pub(super) live: String,
@@ -58,8 +60,12 @@ impl AiPanel {
         let subscription = cx.subscribe_in(&input, window, |this, _, event, window, cx| {
             if matches!(event, InputEvent::PressEnter { shift: false, .. }) {
                 this.send(false, window, cx);
+            } else if matches!(event, InputEvent::Change) {
+                cx.notify();
             }
         });
+        let scroller = cx.new(|cx| MessageScrollerState::new(0, cx));
+        let scroll_subscription = cx.observe(&scroller, |_, _, cx| cx.notify());
         let mut this = Self {
             workspace,
             store: None,
@@ -71,7 +77,9 @@ impl AiPanel {
             history: Vec::new(),
             more_history: false,
             input,
-            list: ListState::new(1, ListAlignment::Bottom, px(300.)),
+            scroller,
+            live_row: false,
+            message_subscriptions: Vec::new(),
             messages: Vec::new(),
             live_view: cx.new(|cx| TextViewState::markdown("", cx).selectable(true)),
             live: String::new(),
@@ -88,7 +96,7 @@ impl AiPanel {
             generation: 0,
             task: None,
             live_task: None,
-            _subscriptions: vec![subscription],
+            _subscriptions: vec![subscription, scroll_subscription],
         };
         let path = this.settings_path.clone();
         this.task = Some(cx.spawn_in(window, async move |this, cx| {
@@ -151,33 +159,77 @@ impl AiPanel {
             }
         }
     }
+    fn message_view(
+        &mut self,
+        text: &str,
+        ix: usize,
+        cx: &mut Context<Self>,
+    ) -> Entity<TextViewState> {
+        let view = cx.new(|cx| TextViewState::markdown(text, cx).selectable(true));
+        let scroller = self.scroller.downgrade();
+        // Markdown parsing also completes asynchronously, after a stream update.
+        // Remeasure that row when its rendered document becomes ready.
+        self.message_subscriptions
+            .push(cx.observe(&view, move |_, _, cx| {
+                _ = scroller.update(cx, |state, cx| state.remeasure_items(ix..ix + 1, cx));
+            }));
+        view
+    }
     fn rebuild_messages(&mut self, cx: &mut Context<Self>) {
         self.messages.clear();
+        self.message_subscriptions.clear();
         self.expanded.clear();
-        for (ix, message) in self.conversation.messages.iter().enumerate() {
-            self.messages.push(cx.new(|cx| {
-                TextViewState::markdown(
-                    &message_text(message, &self.conversation.messages[..ix]),
-                    cx,
-                )
-                .selectable(true)
-            }));
+        self.live_row = false;
+        for ix in 0..self.conversation.messages.len() {
+            let text = message_text(
+                &self.conversation.messages[ix],
+                &self.conversation.messages[..ix],
+            );
+            let view = self.message_view(&text, ix, cx);
+            self.messages.push(view);
         }
-        self.list.reset(self.messages.len() + 1);
+        self.scroller
+            .update(cx, |state, cx| state.reset(self.messages.len(), cx));
+    }
+    fn recover_messages(&mut self, cx: &mut Context<Self>) {
+        let count = self.conversation.messages.len();
+        self.conversation.recover();
+        // Ordinary sends must keep the reader's anchor and tail-follow choice.
+        // Recovery only changes the transcript when it inserts missing tool results.
+        if count != self.conversation.messages.len() {
+            self.rebuild_messages(cx);
+        }
+    }
+    fn ensure_live_row(&mut self, cx: &mut Context<Self>) {
+        if self.live_row || (self.live.is_empty() && self.reasoning.is_empty()) {
+            return;
+        }
+        self.live_view = self.message_view(
+            &assistant_text(&self.live, &self.reasoning),
+            self.messages.len(),
+            cx,
+        );
+        self.live_row = true;
+        self.scroller.update(cx, |state, cx| state.append(1, cx));
     }
     pub(super) fn push_message(&mut self, message: AgentMessage, cx: &mut Context<Self>) {
-        let follow = self.list.is_scrolled_to_end().unwrap_or(true);
-        self.messages.push(cx.new(|cx| {
-            TextViewState::markdown(&message_text(&message, &self.conversation.messages), cx)
-                .selectable(true)
-        }));
-        self.conversation.messages.push(message);
-        let count = self.messages.len() + 1;
-        self.list.splice(count - 1..count - 1, 1);
-        self.list.remeasure_items(count.saturating_sub(2)..count);
-        if follow {
-            self.list.scroll_to_reveal_item(count - 1);
+        let text = message_text(&message, &self.conversation.messages);
+        let ix = self.messages.len();
+        if self.live_row && matches!(message, AgentMessage::Assistant { .. }) {
+            // Commit the existing streamed row, including its Markdown entity
+            // and scroll identity. There is no remove/append at the live edge.
+            self.live_view
+                .update(cx, |view, cx| view.set_text(&text, cx));
+            self.messages.push(self.live_view.clone());
+            self.live_row = false;
+            self.scroller
+                .update(cx, |state, cx| state.remeasure_items(ix..ix + 1, cx));
+        } else {
+            let view = self.message_view(&text, ix, cx);
+            self.messages.push(view);
+            self.scroller.update(cx, |state, cx| state.append(1, cx));
         }
+        self.conversation.messages.push(message);
         cx.notify();
     }
     pub(super) fn record(&self) -> Result<AiConversationRecord> {
@@ -259,10 +311,8 @@ impl AiPanel {
         self.live.clear();
         self.reasoning.clear();
         self.progress = crate::tr!("正在准备会话", "Preparing conversation").into();
-        self.live_view.update(cx, |v, cx| v.set_text("", cx));
         self.pending_tool = None;
-        self.conversation.recover();
-        self.rebuild_messages(cx);
+        self.recover_messages(cx);
         self.push_message(
             AgentMessage::User {
                 text: config.redact(&user_text),
@@ -430,8 +480,7 @@ impl AiPanel {
                 this.run = None;
                 this.pending_tool = None;
                 this.flush_partial(cx);
-                this.conversation.recover();
-                this.rebuild_messages(cx);
+                this.recover_messages(cx);
                 cx.notify();
             });
             if let Ok(Ok(record)) = this.update(cx, |this, _| this.record()) {
@@ -463,7 +512,6 @@ impl AiPanel {
                 cx,
             );
         }
-        self.live_view.update(cx, |view, cx| view.set_text("", cx));
     }
     fn receive_event(&mut self, event: AgentEvent, cx: &mut Context<Self>) {
         match event {
@@ -493,21 +541,22 @@ impl AiPanel {
                     }
                     _ => unreachable!(),
                 }
-                if self.live_task.is_none() {
+                self.ensure_live_row(cx);
+                if self.live_row && self.live_task.is_none() {
                     self.live_task = Some(cx.spawn(async move |this, cx| {
                         cx.background_executor()
                             .timer(std::time::Duration::from_millis(40))
                             .await;
                         _ = this.update(cx, |this, cx| {
-                            let follow = this.list.is_scrolled_to_end().unwrap_or(true);
                             this.live_view.update(cx, |view, cx| {
                                 view.set_text(&assistant_text(&this.live, &this.reasoning), cx)
                             });
-                            this.list
-                                .remeasure_items(this.messages.len()..this.messages.len() + 1);
-                            if follow {
-                                this.list.scroll_to_reveal_item(this.messages.len());
-                            }
+                            this.scroller.update(cx, |state, cx| {
+                                state.remeasure_items(
+                                    this.messages.len()..this.messages.len() + 1,
+                                    cx,
+                                )
+                            });
                             this.live_task = None;
                             cx.notify();
                         });
@@ -518,7 +567,6 @@ impl AiPanel {
                 self.live_task = None;
                 self.live.clear();
                 self.reasoning.clear();
-                self.live_view.update(cx, |view, cx| view.set_text("", cx));
                 self.push_message(message, cx);
             }
             AgentEvent::ToolFinished(message) => {

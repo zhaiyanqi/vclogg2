@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "vendor/gpui-message-scroller",
     "crates/vclogg-ai",
     "crates/vclogg-app",
     "crates/vclogg-core",

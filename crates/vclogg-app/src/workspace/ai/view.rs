@@ -1,13 +1,32 @@
 use super::*;
 use gpui_component::{input::Textarea, text::TextView};
+use gpui_message_scroller::MessageScroller;
 use vclogg_ai::RunStatus;
 
 impl AiPanel {
     fn render_message(&mut self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        // Append-only transcript ordinals are stable within a conversation.
+        // The live response uses the same ID and TextView as its final message.
+        let row_id = SharedString::from(format!("ai-message-{}-{ix}", self.conversation.id));
         if ix >= self.conversation.messages.len() {
-            return v_flex().px_3().py_2().gap_2()
-                .when(!self.live.is_empty() || !self.reasoning.is_empty(),|this|this.child(TextView::new(&self.live_view).on_link_click(|url, _, _, cx| { if url.starts_with("https://") || url.starts_with("http://") { cx.open_url(url); } })))
-                .when(self.conversation.messages.is_empty(),|this|this.child(div().text_sm().text_color(cx.theme().muted_foreground).child(crate::tr!("让 AI 查找异常、关联日志、添加标记或高亮关键词。先配置模型，再输入分析问题。","Ask AI to find errors, correlate logs, add marks or highlight keywords. Configure a model, then describe your investigation."))))
+            return v_flex()
+                .id(row_id)
+                .w_full()
+                .min_w_0()
+                .gap_1()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("AI"),
+                )
+                .child(
+                    TextView::new(&self.live_view).on_link_click(|url, _, _, cx| {
+                        if url.starts_with("https://") || url.starts_with("http://") {
+                            cx.open_url(url);
+                        }
+                    }),
+                )
                 .into_any_element();
         }
         let message = self.conversation.messages[ix].clone();
@@ -25,6 +44,7 @@ impl AiPanel {
             ),
         };
         let is_tool = matches!(message, AgentMessage::Tool { .. });
+        let sent = matches!(message, AgentMessage::User { .. });
         let expanded = self.expanded.contains(&ix);
         let copy = match &message {
             AgentMessage::User { text } | AgentMessage::Assistant { text, .. } => text.clone(),
@@ -33,14 +53,19 @@ impl AiPanel {
             }
         };
         let mut row = v_flex()
-            .id(SharedString::from(format!(
-                "ai-message-{}-{ix}",
-                self.conversation.id
-            )))
-            .px_3()
-            .py_2()
-            .gap_1()
+            .id(row_id)
+            .w_full()
             .min_w_0()
+            .gap_1()
+            .when(sent, |row| {
+                row.p_3().rounded(cx.theme().radius_lg).bg(cx.theme().muted)
+            })
+            .when(is_tool, |row| {
+                row.p_2()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .rounded(cx.theme().radius)
+            })
             .child(
                 h_flex()
                     .gap_1()
@@ -76,7 +101,8 @@ impl AiPanel {
                         if !this.expanded.insert(ix) {
                             this.expanded.remove(&ix);
                         }
-                        this.list.remeasure_items(ix..ix + 1);
+                        this.scroller
+                            .update(cx, |state, cx| state.remeasure_items(ix..ix + 1, cx));
                         cx.notify();
                     })),
             );
@@ -132,7 +158,16 @@ impl AiPanel {
                 );
             }
         }
-        row.into_any_element()
+        if sent {
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .justify_end()
+                .child(div().max_w(gpui::relative(0.9)).min_w_0().child(row))
+                .into_any_element()
+        } else {
+            row.into_any_element()
+        }
     }
     fn jump_reference(
         &mut self,
@@ -241,7 +276,9 @@ impl Render for AiPanel {
             .items_start()
             .flex_wrap()
             .gap_1()
-            .p_2()
+            .p_3()
+            .border_b_1()
+            .border_color(cx.theme().border)
             .child(
                 Button::new("ai-conversation-menu")
                     .small()
@@ -337,16 +374,20 @@ impl Render for AiPanel {
                     }),
             );
         let owner = cx.entity();
-        let messages = gpui::list(self.list.clone(), move |ix, _, cx| {
-            owner.update(cx, |this, cx| this.render_message(ix, cx))
-        })
-        .size_full();
+        let messages =
+            MessageScroller::new("ai-transcript", self.scroller.clone(), move |ix, _, cx| {
+                owner.update(cx, |this, cx| this.render_message(ix, cx))
+            })
+            .with_list_style(gpui::StyleRefinement::default().p_3())
+            .with_row_style(gpui::StyleRefinement::default().pb_4())
+            .with_jump_button_label(crate::tr!("回到最新消息", "Jump to latest"))
+            .with_jump_button_renderer(|button| {
+                button.small().label(crate::tr!("最新消息", "Latest"))
+            });
         let footer = v_flex()
             .flex_shrink_0()
             .gap_2()
-            .p_2()
-            .border_t_1()
-            .border_color(cx.theme().border)
+            .p_3()
             .when(
                 !self.conversation.notice.is_empty() && self.conversation.notice != self.error,
                 |this| {
@@ -370,89 +411,119 @@ impl Render for AiPanel {
                     )
                 },
             )
-            .child(Textarea::new(&self.input).disabled(self.busy))
             .child(
-                h_flex()
-                    .gap_1()
+                v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_2()
+                    .p_2()
+                    .rounded(cx.theme().radius_lg)
+                    .bg(cx.theme().muted)
                     .child(
-                        Button::new("ai-skills-menu")
-                            .small()
-                            .ghost()
-                            .label(format!("Skills ({})", self.conversation.skill_ids.len()))
-                            .disabled(disabled)
-                            .dropdown_menu(move |mut menu, window, cx| {
-                                let chosen = skills.read(cx).conversation.skill_ids.clone();
-                                for skill in skills
-                                    .read(cx)
-                                    .settings
-                                    .skills
-                                    .iter()
-                                    .filter(|s| s.enabled)
-                                    .cloned()
-                                    .collect::<Vec<_>>()
-                                {
-                                    let id = skill.id;
-                                    menu =
-                                        menu.item(
-                                            PopupMenuItem::new(format!(
-                                                "{} {}",
-                                                if chosen.contains(&id) { "✓" } else { "○" },
-                                                skill.name
-                                            ))
-                                            .on_click(window.listener_for(
-                                                &skills,
-                                                move |this, _, window, cx| {
-                                                    if this.conversation.skill_ids.contains(&id) {
-                                                        this.conversation
-                                                            .skill_ids
-                                                            .retain(|s| s != &id);
-                                                    } else {
-                                                        this.conversation
-                                                            .skill_ids
-                                                            .push(id.clone());
-                                                    }
-                                                    this.save_settings(window, cx);
-                                                    cx.notify();
-                                                },
-                                            )),
-                                        );
-                                }
-                                menu
-                            }),
+                        Textarea::new(&self.input)
+                            .appearance(false)
+                            .aria_label(crate::tr!("分析问题", "Analysis question"))
+                            .disabled(self.busy),
                     )
-                    .child(div().flex_1())
-                    .when(
-                        self.conversation.status == RunStatus::LimitReached,
-                        |this| {
-                            this.child(
-                                Button::new("ai-continue")
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .child(
+                                Button::new("ai-skills-menu")
                                     .small()
-                                    .label(crate::tr!("继续", "Continue"))
+                                    .ghost()
+                                    .label(format!(
+                                        "Skills ({})",
+                                        self.conversation.skill_ids.len()
+                                    ))
                                     .disabled(disabled)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.send(true, window, cx)
-                                    })),
+                                    .dropdown_menu(move |mut menu, window, cx| {
+                                        let chosen = skills.read(cx).conversation.skill_ids.clone();
+                                        for skill in skills
+                                            .read(cx)
+                                            .settings
+                                            .skills
+                                            .iter()
+                                            .filter(|s| s.enabled)
+                                            .cloned()
+                                            .collect::<Vec<_>>()
+                                        {
+                                            let id = skill.id;
+                                            menu = menu.item(
+                                                PopupMenuItem::new(format!(
+                                                    "{} {}",
+                                                    if chosen.contains(&id) {
+                                                        "✓"
+                                                    } else {
+                                                        "○"
+                                                    },
+                                                    skill.name
+                                                ))
+                                                .on_click(window.listener_for(
+                                                    &skills,
+                                                    move |this, _, window, cx| {
+                                                        if this.conversation.skill_ids.contains(&id)
+                                                        {
+                                                            this.conversation
+                                                                .skill_ids
+                                                                .retain(|s| s != &id);
+                                                        } else {
+                                                            this.conversation
+                                                                .skill_ids
+                                                                .push(id.clone());
+                                                        }
+                                                        this.save_settings(window, cx);
+                                                        cx.notify();
+                                                    },
+                                                )),
+                                            );
+                                        }
+                                        menu
+                                    }),
                             )
-                        },
-                    )
-                    .child(
-                        if self.run.is_some()
-                            || (self.busy && self.conversation.status == RunStatus::Running)
-                        {
-                            Button::new("ai-stop")
-                                .small()
-                                .label(crate::tr!("停止", "Stop"))
-                                .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
-                        } else {
-                            Button::new("ai-send")
-                                .small()
-                                .primary()
-                                .label(crate::tr!("发送", "Send"))
-                                .disabled(self.busy)
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| this.send(false, window, cx)),
-                                )
-                        },
+                            .child(div().flex_1())
+                            .when(
+                                self.conversation.status == RunStatus::LimitReached,
+                                |this| {
+                                    this.child(
+                                        Button::new("ai-continue")
+                                            .small()
+                                            .label(crate::tr!("继续", "Continue"))
+                                            .disabled(disabled)
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.send(true, window, cx)
+                                            })),
+                                    )
+                                },
+                            )
+                            .child(
+                                if self.run.is_some()
+                                    || (self.busy && self.conversation.status == RunStatus::Running)
+                                {
+                                    Button::new("ai-stop")
+                                        .small()
+                                        .primary()
+                                        .rounded(cx.theme().radius_full())
+                                        .tooltip(crate::tr!("停止生成", "Stop generating"))
+                                        .label(crate::tr!("停止", "Stop"))
+                                        .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
+                                } else {
+                                    Button::new("ai-send")
+                                        .small()
+                                        .primary()
+                                        .icon(IconName::ArrowUp)
+                                        .rounded(cx.theme().radius_full())
+                                        .tooltip(crate::tr!("发送（Enter）", "Send (Enter)"))
+                                        .label(crate::tr!("发送", "Send"))
+                                        .disabled(
+                                            self.busy
+                                                || self.input.read(cx).value().trim().is_empty(),
+                                        )
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.send(false, window, cx)
+                                        }))
+                                },
+                            ),
                     ),
             );
         body.child(header)
@@ -462,8 +533,15 @@ impl Render for AiPanel {
                     .flex_1()
                     .min_h_0()
                     .min_w_0()
-                    .child(messages)
-                    .vertical_scrollbar(&self.list),
+                    .when(self.conversation.messages.is_empty() && !self.live_row, |this| {
+                        this.child(v_flex().p_3().gap_2()
+                            .child(div().font_semibold().child(crate::tr!("分析日志", "Analyze logs")))
+                            .child(div().text_sm().text_color(cx.theme().muted_foreground).child(crate::tr!(
+                                "让 AI 查找异常、关联日志、添加标记或高亮关键词。先配置模型，再输入分析问题。",
+                                "Ask AI to find errors, correlate logs, add marks or highlight keywords. Configure a model, then describe your investigation."
+                            ))))
+                    })
+                    .when(!self.conversation.messages.is_empty() || self.live_row, |this| this.child(messages)),
             )
             .child(footer)
             .into_any_element()

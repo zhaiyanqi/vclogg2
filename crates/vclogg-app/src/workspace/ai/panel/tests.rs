@@ -9,6 +9,7 @@ use std::{
 fn isolated_panel_send_workflow() {
     for mode in [
         "complete",
+        "transcript",
         "cancel",
         "preparing_cancel",
         "error",
@@ -93,6 +94,10 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui::TestAppContext) {
     let panel = panel.unwrap();
     pump_until(cx, &panel, |p| !p.busy);
     let mode = std::env::var("VCLOGG2_AI_TEST_MODE").unwrap();
+    if mode == "transcript" {
+        exercise_transcript(cx, &panel, window);
+        return;
+    }
     let directory_unavailable = matches!(mode.as_str(), "missing_directory" | "directory_is_file");
     let directory_fixture = tempfile::tempdir().unwrap();
     let selected_directory = directory_fixture.path().join("selected");
@@ -267,6 +272,11 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui::TestAppContext) {
         return;
     }
     pump_until(cx, &panel, |p| p.reasoning == "开始分析");
+    let streamed_view = panel.read_with(cx, |p, cx| {
+        assert_eq!(p.scroller.read(cx).item_count(), 2);
+        assert!(p.live_row);
+        p.live_view.entity_id()
+    });
     cx.background_executor
         .advance_clock(Duration::from_millis(50));
     cx.run_until_parked();
@@ -283,7 +293,10 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui::TestAppContext) {
         release.send(()).unwrap();
         server.join().unwrap();
         cx.run_until_parked();
-        panel.read_with(cx, |p, _| {
+        panel.read_with(cx, |p, cx| {
+            assert!(!p.live_row);
+            assert_eq!(p.scroller.read(cx).item_count(), 2);
+            assert_eq!(p.messages[1].entity_id(), streamed_view);
             assert_eq!(p.conversation.status, RunStatus::Interrupted);
             assert_eq!(p.conversation.messages.len(), 2);
             assert!(
@@ -298,7 +311,10 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui::TestAppContext) {
     assert!(panel.read_with(cx, |p, _| p.run.is_some()));
     release.send(()).unwrap();
     pump_until(cx, &panel, |p| !p.busy && p.run.is_none());
-    panel.read_with(cx, |p, _| {
+    panel.read_with(cx, |p, cx| {
+        assert!(!p.live_row);
+        assert_eq!(p.scroller.read(cx).item_count(), 4);
+        assert_eq!(p.messages[1].entity_id(), streamed_view);
         assert_eq!(p.conversation.status.clone(), RunStatus::Complete, "{}", p.error);
         assert_eq!(p.conversation.messages.len(), 4);
         assert!(matches!(&p.conversation.messages[3], AgentMessage::Assistant { text, .. } if text == "分析完成"));
@@ -348,4 +364,109 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui::TestAppContext) {
     }
     server.join().unwrap();
     drop(owner);
+}
+
+fn exercise_transcript(
+    cx: &mut gpui::TestAppContext,
+    panel: &Entity<AiPanel>,
+    window: gpui::WindowHandle<Root>,
+) {
+    cx.update_window(window.into(), |_, window, cx| {
+        panel.update(cx, |p, cx| {
+            assert_eq!(p.scroller.read(cx).item_count(), 0);
+            p.input
+                .update(cx, |input, cx| input.set_value("问题", window, cx));
+            p.focus(window, cx);
+        });
+    })
+    .unwrap();
+    cx.simulate_keystrokes(window.into(), "shift-enter");
+    panel.read_with(cx, |p, cx| {
+        assert!(p.input.read(cx).value().contains('\n'));
+        assert!(p.conversation.messages.is_empty());
+        assert!(p.error.is_empty());
+    });
+    cx.update(|cx| {
+        panel.update(cx, |p, cx| {
+            for _ in 0..24 {
+                p.push_message(
+                    AgentMessage::User {
+                        text: "已保存的历史日志分析内容。\n\n".repeat(8),
+                    },
+                    cx,
+                );
+            }
+            assert!(p.scroller.read(cx).is_following_tail());
+            p.scroller.update(cx, |s, cx| {
+                assert!(s.scroll_to_item(3, cx));
+            });
+            p.recover_messages(cx);
+            assert!(!p.scroller.read(cx).is_following_tail());
+            p.receive_event(AgentEvent::Thinking("检查日志".into()), cx);
+        })
+    });
+    cx.run_until_parked();
+    let streamed_view = panel.read_with(cx, |p, _| p.live_view.entity_id());
+    for chunk in [
+        "中文流式",
+        "回复\n\n",
+        "| 项目 | 结果 |\n| --- | --- |\n| 错误 | 2 |",
+    ] {
+        cx.update(|cx| {
+            panel.update(cx, |p, cx| {
+                p.receive_event(AgentEvent::Text(chunk.into()), cx)
+            })
+        });
+        cx.background_executor
+            .advance_clock(Duration::from_millis(50));
+        cx.run_until_parked();
+        panel.read_with(cx, |p, cx| {
+            assert_eq!(p.scroller.read(cx).item_count(), 25);
+            assert_eq!(p.live_view.entity_id(), streamed_view);
+            assert!(!p.scroller.read(cx).is_following_tail());
+        });
+    }
+    cx.update(|cx| {
+        panel.update(cx, |p, cx| {
+            p.receive_event(
+                AgentEvent::Assistant(AgentMessage::Assistant {
+                    text: p.live.clone(),
+                    reasoning: p.reasoning.clone(),
+                    thinking: Vec::new(),
+                    calls: Vec::new(),
+                }),
+                cx,
+            );
+            assert_eq!(p.messages[24].entity_id(), streamed_view);
+            assert_eq!(p.scroller.read(cx).item_count(), 25);
+            assert!(!p.live_row);
+            p.receive_event(AgentEvent::Text(String::new()), cx);
+            assert!(!p.live_row);
+            assert!(p.live_task.is_none());
+            p.receive_event(
+                AgentEvent::ToolFinished(AgentMessage::Tool {
+                    call_id: "read".into(),
+                    name: "read_logs".into(),
+                    result: ToolResult::error("File closed"),
+                }),
+                cx,
+            );
+            assert_eq!(p.scroller.read(cx).item_count(), 26);
+            assert!(!p.scroller.read(cx).is_following_tail());
+            p.scroller.update(cx, |state, cx| state.scroll_to_end(cx));
+            assert!(p.scroller.read(cx).is_following_tail());
+            p.receive_event(AgentEvent::Text("下一段".into()), cx);
+            p.receive_event(
+                AgentEvent::Finished(RunStatus::Interrupted, String::new()),
+                cx,
+            );
+            assert_eq!(p.scroller.read(cx).item_count(), 27);
+            assert!(!p.live_row);
+            p.busy = false;
+            p.new_conversation(cx);
+            assert_eq!(p.scroller.read(cx).item_count(), 0);
+            assert!(p.scroller.read(cx).is_following_tail());
+            assert!(p.messages.is_empty());
+        })
+    });
 }

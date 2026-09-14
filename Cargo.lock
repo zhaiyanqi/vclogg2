@@ -2514,6 +2514,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui-message-scroller"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
+]
+
+[[package]]
 name = "gpui_apple"
 version = "0.1.0"
 source = "git+https://github.com/zed-industries/zed#99b0ed6b55017fe110557af7408afff9a6cd9e71"
@@ -7604,6 +7612,7 @@ dependencies = [
  "gpui-base",
  "gpui-component",
  "gpui-component-assets",
+ "gpui-message-scroller",
  "gpui_platform",
  "image",
  "log",
