@@ -15,6 +15,7 @@ fn fixture() -> (tempfile::TempDir, DocumentSnapshot, SharedScope) {
         open: true,
     };
     let scope = Arc::new(Mutex::new(AiScope {
+        explicit: BTreeSet::new(),
         allowed: [7].into(),
         current: Some(7),
         documents: [(7, doc.clone())].into(),
@@ -158,6 +159,19 @@ fn log_agent_commands_share_real_workspace_state(cx: &mut gpui::TestAppContext) 
         global.load_visible_rows(0..4);
         assert!(matches!(global.wrapped_row(1), Some(crate::global_search_table::WrappedGlobalRow::Match { source_row: 1, marked: true, highlights, .. }) if !highlights.is_empty()));
     })).unwrap();
+    cx.update_window(window.into(), |_, _, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.global_table.update(cx, |table, cx| {
+                table.delegate().settle_table_selection(1);
+                table.set_active_log_row(1, cx);
+            });
+            let attached = workspace.ai_attachment_targets(LogRegion::GlobalResults, cx);
+            assert_eq!(attached.len(), 1);
+            assert_eq!(attached[0].source_row, 1);
+            assert_eq!(attached[0].document.id, workspace.documents[0].id);
+        })
+    })
+    .unwrap();
 }
 
 pub(super) fn install_test_document(
@@ -271,6 +285,39 @@ fn exercise_workspace(
         cx,
     );
     assert_eq!(current["total"], 2);
+    // Appending targets the captured file and preserves its existing draft.
+    workspace.activate_tab(0, window, cx);
+    workspace
+        .query
+        .update(cx, |input, cx| input.set_value("ERROR", window, cx));
+    workspace.capture_active_search_tab(cx);
+    workspace.activate_tab(1, window, cx);
+    let appended = invoke(
+        workspace,
+        &scope,
+        "append_search",
+        json!({"document_id":snapshot.id,"version":snapshot.version,"text":"timeout"}),
+        window,
+        cx,
+    );
+    assert_eq!(appended["query"], "ERROR timeout");
+    assert_eq!(appended["executed"], false);
+    assert_eq!(workspace.active_document().unwrap().id, snapshot.id);
+    let call = ToolCall {
+        id: "stale-draft".into(),
+        name: "append_search".into(),
+        arguments: json!({"document_id":snapshot.id,"version":snapshot.version,"text":"retry"}),
+    };
+    let evidence = workspace.ai_prepare(scope.clone(), &call, cx).unwrap()().unwrap();
+    workspace
+        .query
+        .update(cx, |input, cx| input.set_value("user edit", window, cx));
+    assert!(
+        workspace
+            .ai_commit(&scope, &call, evidence, window, cx)
+            .is_err()
+    );
+    assert_eq!(workspace.query.read(cx).value().as_ref(), "user edit");
     for _ in 0..2 {
         invoke(
             workspace,
@@ -382,6 +429,7 @@ fn exercise_workspace(
     let tab = workspace.search_tabs.state_mut(owner, id).unwrap();
     tab.local_result = Some((document.clone(), found, None));
     tab.saved.completed = Some(tab.saved.draft.clone());
+    workspace.install_search_tab(owner, id, window, cx);
     let page = invoke(
         workspace,
         &scope,
@@ -391,6 +439,30 @@ fn exercise_workspace(
         cx,
     );
     assert_eq!(page["rows"][0]["reference"]["line"], 4);
+    assert_eq!(page["rows"][0]["result_index"], 2);
+    assert!(
+        page["rows"][0]["url"]
+            .as_str()
+            .unwrap()
+            .contains("result_index=2")
+    );
+    invoke(
+        workspace,
+        &scope,
+        "navigate",
+        json!({"action":"result","search_id":page["search_id"],"result_index":2,"reference":page["rows"][0]["reference"]}),
+        window,
+        cx,
+    );
+    assert_eq!(workspace.active_log_region, LogRegion::CurrentResults);
+    assert_eq!(workspace.selected_source_row, Some(3));
+    assert_eq!(
+        workspace.documents[0]
+            .result_table
+            .read(cx)
+            .active_log_row(),
+        Some(1)
+    );
     invoke(
         workspace,
         &scope,

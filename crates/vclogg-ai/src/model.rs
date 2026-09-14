@@ -153,6 +153,35 @@ pub struct LogReference {
     pub line: usize,
 }
 
+impl LogReference {
+    /// App-local citation. It grants no access; the app validates the run and source version.
+    pub fn url(&self) -> String {
+        let mut url = url::Url::parse("vclogg://log").expect("static citation URL");
+        url.query_pairs_mut()
+            .append_pair("document_id", &self.document_id.to_string())
+            .append_pair("version", &self.version)
+            .append_pair("line", &self.line.to_string());
+        url.into()
+    }
+
+    pub fn from_url(value: &str) -> Option<Self> {
+        let url = url::Url::parse(value).ok()?;
+        if url.scheme() != "vclogg" || url.host_str() != Some("log") || !url.path().is_empty() {
+            return None;
+        }
+        let pairs = url
+            .query_pairs()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let reference = Self {
+            document_id: pairs.get("document_id")?.parse().ok()?,
+            version: pairs.get("version")?.to_string(),
+            line: pairs.get("line")?.parse().ok()?,
+        };
+        (reference.document_id > 0 && reference.line > 0 && !reference.version.is_empty())
+            .then_some(reference)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum AgentMessage {

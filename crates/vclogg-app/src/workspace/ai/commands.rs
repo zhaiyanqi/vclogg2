@@ -56,6 +56,13 @@ impl Workspace {
         }
         let args = &call.arguments;
         match call.name.as_str() {
+            "append_search" => self.ai_append_search(
+                number(args, "document_id")?,
+                text(args, "text")?,
+                evidence.value()?,
+                window,
+                cx,
+            ),
             "set_marks" => {
                 let mut targets = BTreeMap::<u64, CompressedRows>::new();
                 for reference in args["references"]
@@ -111,6 +118,23 @@ impl Workspace {
             }
             "navigate" => {
                 let (mut doc, row, cursor) = state.navigation_target(args)?;
+                if let Some(reference) = args.get("reference") {
+                    let (expected, expected_row) = state.reference(reference)?;
+                    if expected.id != doc.id || expected_row != row {
+                        bail!("Citation does not match this result");
+                    }
+                }
+                if let Some(search_id) = args["search_id"].as_str() {
+                    let search = state.searches.get(search_id).context("Search expired")?;
+                    if self.ai_select_search_hit(search, &doc, row, window, cx)? {
+                        if let Some(search) = state.searches.get_mut(search_id) {
+                            search.cursor = cursor;
+                        }
+                        return Ok(
+                            json!({"reference":doc.reference(row),"url":doc.reference(row).url(),"region":"results"}),
+                        );
+                    }
+                }
                 if !doc.open {
                     if self.open_task.is_some()
                         || self

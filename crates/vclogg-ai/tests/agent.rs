@@ -695,3 +695,23 @@ async fn empty_responses_fail_and_service_errors_are_redacted() {
         server.join().unwrap();
     }
 }
+
+#[test]
+fn log_citations_round_trip_without_becoming_external_access() {
+    let reference = vclogg_ai::LogReference {
+        document_id: 42,
+        version: "快照 / ?&v=1".into(),
+        line: 17,
+    };
+    let url = reference.url();
+    assert_eq!(vclogg_ai::LogReference::from_url(&url), Some(reference));
+    for invalid in [
+        "https://log?document_id=42&version=v1&line=17",
+        "file:///private/log",
+        "vclogg://log?document_id=0&version=v1&line=1",
+        "vclogg://log?document_id=1&version=v1&line=0",
+        "vclogg://log?document_id=1&version=&line=1",
+    ] {
+        assert!(vclogg_ai::LogReference::from_url(invalid).is_none());
+    }
+}

@@ -10,6 +10,7 @@ fn isolated_panel_send_workflow() {
     for mode in [
         "complete",
         "transcript",
+        "log_analysis",
         "cancel",
         "preparing_cancel",
         "error",
@@ -38,7 +39,7 @@ fn isolated_panel_send_workflow() {
     }
 }
 
-fn pump_until(
+pub(super) fn pump_until(
     cx: &mut gpui::TestAppContext,
     panel: &Entity<AiPanel>,
     ready: impl Fn(&AiPanel) -> bool,
@@ -96,6 +97,11 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui::TestAppContext) {
     let mode = std::env::var("VCLOGG2_AI_TEST_MODE").unwrap();
     if mode == "transcript" {
         exercise_transcript(cx, &panel, window);
+        verify_chat_geometry(cx, &panel, window);
+        return;
+    }
+    if mode == "log_analysis" {
+        super::analysis_tests::exercise(cx, &panel, owner.as_ref().unwrap(), window);
         return;
     }
     let directory_unavailable = matches!(mode.as_str(), "missing_directory" | "directory_is_file");
@@ -282,8 +288,13 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui::TestAppContext) {
     cx.run_until_parked();
     cx.update(|cx| {
         panel.update(cx, |p, cx| {
-            p.live_view.update(cx, |v, cx| v.select_all(cx));
-            assert!(p.live_view.read(cx).selected_text().contains("开始分析"));
+            p.live_reasoning_view.update(cx, |v, cx| v.select_all(cx));
+            assert!(
+                p.live_reasoning_view
+                    .read(cx)
+                    .selected_text()
+                    .contains("开始分析")
+            );
             assert!(!p.progress.is_empty());
         })
     });
@@ -295,6 +306,8 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui::TestAppContext) {
         cx.run_until_parked();
         panel.read_with(cx, |p, cx| {
             assert!(!p.live_row);
+            assert!(p.reasoning_views[1].is_some());
+            assert!(!p.thinking_expanded.contains(&1));
             assert_eq!(p.scroller.read(cx).item_count(), 2);
             assert_eq!(p.messages[1].entity_id(), streamed_view);
             assert_eq!(p.conversation.status, RunStatus::Interrupted);
@@ -313,6 +326,8 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui::TestAppContext) {
     pump_until(cx, &panel, |p| !p.busy && p.run.is_none());
     panel.read_with(cx, |p, cx| {
         assert!(!p.live_row);
+        assert!(p.reasoning_views[1].is_some());
+        assert!(!p.thinking_expanded.contains(&1));
         assert_eq!(p.scroller.read(cx).item_count(), 4);
         assert_eq!(p.messages[1].entity_id(), streamed_view);
         assert_eq!(p.conversation.status.clone(), RunStatus::Complete, "{}", p.error);
@@ -423,6 +438,10 @@ fn exercise_transcript(
         panel.read_with(cx, |p, cx| {
             assert_eq!(p.scroller.read(cx).item_count(), 25);
             assert_eq!(p.live_view.entity_id(), streamed_view);
+            assert!(
+                p.live_thinking_collapsed,
+                "thinking folds when the reply starts"
+            );
             assert!(!p.scroller.read(cx).is_following_tail());
         });
     }
@@ -469,4 +488,69 @@ fn exercise_transcript(
             assert!(p.messages.is_empty());
         })
     });
+}
+
+fn verify_chat_geometry(
+    cx: &mut gpui::TestAppContext,
+    panel: &Entity<AiPanel>,
+    window: gpui::WindowHandle<Root>,
+) {
+    cx.update(|cx| {
+        panel.update(cx, |p, cx| {
+            p.push_message(
+                AgentMessage::User {
+                    text: "分析日志".into(),
+                },
+                cx,
+            );
+            p.push_message(
+                AgentMessage::Assistant {
+                    text: "发现两条相关日志".into(),
+                    reasoning: "逐行核对来源。\n\n".repeat(4),
+                    thinking: Vec::new(),
+                    calls: Vec::new(),
+                },
+                cx,
+            );
+        })
+    });
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| {
+        window.replace_root(cx, |window, cx| Root::new(panel.clone(), window, cx));
+    })
+    .unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    for width in [320., 560.] {
+        visual.simulate_resize(gpui::size(px(width), px(600.)));
+        cx.run_until_parked();
+        let sent = visual.debug_bounds("ai-user-bubble").expect("user bubble");
+        let reply = visual.debug_bounds("ai-reply").expect("assistant reply");
+        assert!(sent.left() > reply.left(), "sent={sent:?}, reply={reply:?}");
+        assert!((sent.right() - reply.right()).abs() <= px(1.));
+        assert!(
+            reply.size.width <= px(width),
+            "width={width}, reply={reply:?}"
+        );
+    }
+    let collapsed = visual
+        .debug_bounds("ai-thinking-region")
+        .unwrap()
+        .size
+        .height;
+    cx.update(|cx| {
+        panel.update(cx, |p, cx| {
+            p.thinking_expanded.insert(1);
+            p.scroller
+                .update(cx, |state, cx| state.remeasure_items(1..2, cx));
+        })
+    });
+    cx.run_until_parked();
+    assert!(
+        visual
+            .debug_bounds("ai-thinking-region")
+            .unwrap()
+            .size
+            .height
+            > collapsed
+    );
 }

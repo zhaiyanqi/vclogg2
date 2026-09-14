@@ -124,6 +124,19 @@ pub(super) struct SidebarState {
 impl EventEmitter<SidebarChanged> for SidebarState {}
 
 impl SidebarState {
+    pub(in crate::workspace) fn show_ai(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<super::ai::AiPanel> {
+        let side = if self.layout.sides[0].panels.contains(&SidebarPanelId::Ai) {
+            SidebarSide::Left
+        } else {
+            SidebarSide::Right
+        };
+        self.activate(SidebarPanelId::Ai, side, window, cx);
+        self.ai.clone()
+    }
     pub(super) fn new(
         workspace: WeakEntity<Workspace>,
         window: &mut Window,

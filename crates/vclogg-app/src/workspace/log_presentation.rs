@@ -1788,6 +1788,16 @@ impl Workspace {
         } else {
             LogRegion::Body
         };
+        let attachments = workspace.read(cx).ai_attachment_targets(range_region, cx);
+        let menu = menu
+            .item(
+                PopupMenuItem::new(crate::tr!("添加到 AI 聊天", "Add to AI chat"))
+                    .disabled(attachments.is_empty())
+                    .on_click(window.listener_for(&workspace, move |this, _, window, cx| {
+                        this.add_logs_to_ai(attachments.clone(), window, cx);
+                    })),
+            )
+            .separator();
         let tag_target = workspace.read(cx).row_tags.menu_target.clone();
         if let Some(target) = tag_target {
             return Self::render_row_tag_menu(menu, workspace, target, window, cx);

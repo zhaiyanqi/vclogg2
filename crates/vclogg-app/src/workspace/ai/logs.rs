@@ -29,7 +29,7 @@ pub(super) fn log_row(doc: &DocumentSnapshot, row: usize) -> Result<Value> {
         .line_preview(row, 8192)
         .context("Source line unavailable")?;
     Ok(
-        json!({"reference":doc.reference(row),"file":doc.document.file_name(),"text":preview.text(),"truncated":preview.is_truncated()}),
+        json!({"reference":doc.reference(row),"url":doc.reference(row).url(),"file":doc.document.file_name(),"text":preview.text(),"truncated":preview.is_truncated()}),
     )
 }
 pub(super) fn read_page(doc: &DocumentSnapshot, start: usize, limit: usize) -> Result<Value> {
@@ -154,7 +154,7 @@ pub(super) fn search_logs(
     }
     let mut page = search_page(&search, 0)?;
     let id = uuid::Uuid::new_v4().to_string();
-    page["search_id"] = json!(id);
+    add_search_links(&mut page, &id, 0);
     page["unreadable_files"] = json!(errors);
     let mut state = scope
         .lock()
@@ -270,4 +270,20 @@ pub(super) fn approved_directory(path: &Path) -> Result<PathBuf> {
         bail!("Selected directory changed; start a new analysis to capture it again");
     }
     Ok(root)
+}
+
+pub(super) fn add_search_links(page: &mut Value, search_id: &str, offset: usize) {
+    page["search_id"] = json!(search_id);
+    if let Some(rows) = page["rows"].as_array_mut() {
+        for (ix, row) in rows.iter_mut().enumerate() {
+            let index = offset + ix + 1;
+            if let Some(mut url) = row["url"].as_str().and_then(|s| url::Url::parse(s).ok()) {
+                url.query_pairs_mut()
+                    .append_pair("search_id", search_id)
+                    .append_pair("result_index", &index.to_string());
+                row["url"] = json!(url.as_str());
+                row["result_index"] = json!(index);
+            }
+        }
+    }
 }

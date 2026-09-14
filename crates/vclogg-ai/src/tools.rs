@@ -35,7 +35,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         ),
         make(
             "read_logs",
-            "Read source lines (1-based), max 100 lines / 64 KiB. Use next_line for paging. References expire when the file changes.",
+            "Read source lines (1-based), max 100 lines / 64 KiB. Cite returned url using Markdown [file:line](url) when discussing logs. Use next_line for paging. References expire when the file changes.",
             json!({"document_id":id(),"version":string(),"start_line":id(),"limit":{"type":"integer","minimum":1,"maximum":100}}),
             json!(["document_id", "version", "start_line"]),
         ),
@@ -62,6 +62,12 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
             "Read status or paged results, cancel or clear only an AI-owned search tab returned by show_search.",
             json!({"search_tab":string(),"action":choice(&["status","results","cancel","clear"]),"offset":{"type":"integer","minimum":0}}),
             json!(["search_tab", "action"]),
+        ),
+        make(
+            "append_search",
+            "Append text to the target file's search box without executing a search. Preserves the existing draft and options. Returns the resulting query; use show_search to execute a separate AI search.",
+            json!({"document_id":id(),"version":string(),"text":string()}),
+            json!(["document_id", "version", "text"]),
         ),
         make(
             "list_filters",
@@ -101,8 +107,8 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         ),
         make(
             "navigate",
-            "Activate an allowed file and select/scroll to a source line, start, end, or next/previous hit of search_id. Explicit reference is required for line.",
-            json!({"action":choice(&["line","start","end","next","previous"]),"reference":reference(),"document_id":id(),"search_id":string()}),
+            "Activate an allowed file and select/scroll to a source line, start, end, or next/previous hit of search_id. Explicit reference is required for line. Use action=result with search_id and 1-based result_index to select a result row when visible, otherwise its source line; next/previous also select result rows when the search has a UI tab.",
+            json!({"action":choice(&["line","result","start","end","next","previous"]),"reference":reference(),"document_id":id(),"search_id":string(),"result_index":id()}),
             json!(["action"]),
         ),
         make(

@@ -4,8 +4,10 @@ use anyhow::{Context as _, bail};
 use serde_json::{Value, json};
 use vclogg_ai::{AgentMessage, LogReference, ToolCall, ToolResult};
 
+mod attachments;
 mod commands;
 mod logs;
+mod search;
 use logs::*;
 mod panel;
 mod settings;
@@ -44,7 +46,9 @@ struct SearchSnapshot {
     tab: Option<(search_tabs::SearchTabOwner, search_tabs::SearchTabId, u64)>,
 }
 
+#[derive(Clone)]
 struct AiScope {
+    explicit: BTreeSet<u64>,
     allowed: BTreeSet<u64>,
     current: Option<u64>,
     documents: BTreeMap<u64, DocumentSnapshot>,
@@ -130,7 +134,13 @@ impl AiScope {
                 if total == 0 {
                     bail!("No search hits");
                 }
-                let cursor = if action == "next" {
+                let cursor = if action == "result" {
+                    let index = number(args, "result_index")? as usize;
+                    if index == 0 || index > total {
+                        bail!("Result index out of range");
+                    }
+                    index - 1
+                } else if action == "next" {
                     search.cursor.map_or(0, |c| (c + 1) % total)
                 } else {
                     search.cursor.map_or(total - 1, |c| (c + total - 1) % total)
@@ -180,6 +190,7 @@ impl Workspace {
             })
             .collect::<BTreeMap<_, _>>();
         Arc::new(Mutex::new(AiScope {
+            explicit: BTreeSet::new(),
             allowed: documents.keys().copied().collect(),
             current: self.active_document().map(|t| t.id),
             documents,
@@ -362,6 +373,7 @@ impl Workspace {
                 }
                 let metadata = json!({"current_document_id":tab.map(|t|t.id),"send_document_id":state.current,"region":region,"selected":selected,"query":self.query.read(cx).value().to_string(),"case_sensitive":self.case_sensitive,"regex":self.regex,"results_visible":self.global_search.results_visible,"searching":self.search_tabs.running.is_some(),"directory":state.directory.directory.as_ref().map(|p|p.display().to_string())});
                 let directory = state.directory.directory.clone();
+                let explicit = state.explicit.clone();
                 let docs = context_documents;
                 let checked = refs
                     .iter()
@@ -373,7 +385,7 @@ impl Workspace {
                     for id in &checked {
                         let doc = &docs[id];
                         doc.verify()?;
-                        if !doc.open {
+                        if !doc.open && !explicit.contains(id) {
                             let root = approved_directory(
                                 directory.as_deref().context("Select a directory first")?,
                             )?;
@@ -444,8 +456,11 @@ impl Workspace {
                     .context("Search not found in this run")?
                     .clone();
                 let offset = args["offset"].as_u64().unwrap_or(0) as usize;
+                let search_id = text(args, "search_id")?.to_owned();
                 return Ok(Box::new(move || {
-                    search_page(&search, offset).map(Evidence::Json)
+                    let mut page = search_page(&search, offset)?;
+                    add_search_links(&mut page, &search_id, offset);
+                    Ok(Evidence::Json(page))
                 }));
             }
             "control_search" if args["action"] == "results" => {
@@ -512,7 +527,7 @@ impl Workspace {
                         }
                     }
                     let mut page = search_page(&search, offset)?;
-                    page["search_id"] = json!(search_id);
+                    add_search_links(&mut page, &search_id, offset);
                     let mut state = scope
                         .lock()
                         .map_err(|_| anyhow::anyhow!("Analysis unavailable"))?;
@@ -565,6 +580,14 @@ impl Workspace {
                         bail!("Source changed; refresh references");
                     }
                     Ok(Evidence::Open(Box::new(prepared)))
+                }));
+            }
+            "append_search" => {
+                let doc = state.document(number(args, "document_id")?, args["version"].as_str())?;
+                let expected = self.ai_search_draft(doc.id, cx)?;
+                return Ok(Box::new(move || {
+                    doc.verify()?;
+                    Ok(Evidence::Json(expected))
                 }));
             }
             "highlight_keyword" => {

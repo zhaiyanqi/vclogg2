@@ -17,21 +17,31 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) history: Vec<AiConversationRecord>,
     pub(super) more_history: bool,
     pub(super) input: Entity<TextareaState>,
+    pub(super) draft_logs: Vec<super::attachments::DraftLog>,
+    pub(super) attachments_loading: bool,
+    pub(super) attachment_task: Option<Task<()>>,
     pub(super) scroller: Entity<MessageScrollerState>,
     pub(super) live_row: bool,
     message_subscriptions: Vec<Subscription>,
     pub(super) messages: Vec<Entity<TextViewState>>,
     pub(super) live_view: Entity<TextViewState>,
+    pub(super) live_reasoning_view: Entity<TextViewState>,
+    pub(super) reasoning_views: Vec<Option<Entity<TextViewState>>>,
+    pub(super) thinking_expanded: BTreeSet<usize>,
+    pub(super) live_thinking_collapsed: bool,
     pub(super) live: String,
     pub(super) reasoning: String,
     pub(super) progress: String,
     pub(super) expanded: BTreeSet<usize>,
     pub(super) pending_tool: Option<ToolCall>,
     pub(super) scope: Option<SharedScope>,
+    pub(super) reference_scopes: Vec<SharedScope>,
     pub(super) run: Option<RunHandle>,
     pub(super) editor: Option<super::settings::ConfigEditor>,
     pub(super) show_settings: bool,
     pub(super) busy: bool,
+    pub(super) ui_busy: bool,
+    pub(super) ui_task: Option<Task<()>>,
     pub(super) error: String,
     pub(super) generation: u64,
     task: Option<Task<()>>,
@@ -77,21 +87,31 @@ impl AiPanel {
             history: Vec::new(),
             more_history: false,
             input,
+            draft_logs: Vec::new(),
+            attachments_loading: false,
+            attachment_task: None,
             scroller,
             live_row: false,
             message_subscriptions: Vec::new(),
             messages: Vec::new(),
             live_view: cx.new(|cx| TextViewState::markdown("", cx).selectable(true)),
+            live_reasoning_view: cx.new(|cx| TextViewState::markdown("", cx).selectable(true)),
+            reasoning_views: Vec::new(),
+            thinking_expanded: BTreeSet::new(),
+            live_thinking_collapsed: false,
             live: String::new(),
             reasoning: String::new(),
             progress: String::new(),
             expanded: BTreeSet::new(),
             pending_tool: None,
             scope: None,
+            reference_scopes: Vec::new(),
             run: None,
             editor: None,
             show_settings: false,
             busy: true,
+            ui_busy: false,
+            ui_task: None,
             error: String::new(),
             generation: 0,
             task: None,
@@ -144,6 +164,10 @@ impl AiPanel {
         match serde_json::from_str::<Conversation>(&record.payload) {
             Ok(mut conversation) => {
                 conversation.recover();
+                self.reference_scopes.clear();
+                self.draft_logs.clear();
+                self.attachment_task = None;
+                self.attachments_loading = false;
                 self.conversation = conversation;
                 self.revision = record.revision;
                 self.scope = None;
@@ -177,6 +201,9 @@ impl AiPanel {
     }
     fn rebuild_messages(&mut self, cx: &mut Context<Self>) {
         self.messages.clear();
+        self.reasoning_views.clear();
+        self.thinking_expanded.clear();
+        self.live_thinking_collapsed = false;
         self.message_subscriptions.clear();
         self.expanded.clear();
         self.live_row = false;
@@ -187,6 +214,14 @@ impl AiPanel {
             );
             let view = self.message_view(&text, ix, cx);
             self.messages.push(view);
+            let reasoning = match &self.conversation.messages[ix] {
+                AgentMessage::Assistant { reasoning, .. } if !reasoning.is_empty() => {
+                    Some(safe_markdown(reasoning))
+                }
+                _ => None,
+            };
+            let view = reasoning.map(|text| self.message_view(&text, ix, cx));
+            self.reasoning_views.push(view);
         }
         self.scroller
             .update(cx, |state, cx| state.reset(self.messages.len(), cx));
@@ -204,11 +239,10 @@ impl AiPanel {
         if self.live_row || (self.live.is_empty() && self.reasoning.is_empty()) {
             return;
         }
-        self.live_view = self.message_view(
-            &assistant_text(&self.live, &self.reasoning),
-            self.messages.len(),
-            cx,
-        );
+        self.live_view = self.message_view(&safe_markdown(&self.live), self.messages.len(), cx);
+        self.live_reasoning_view =
+            self.message_view(&safe_markdown(&self.reasoning), self.messages.len(), cx);
+        self.live_thinking_collapsed = false;
         self.live_row = true;
         self.scroller.update(cx, |state, cx| state.append(1, cx));
     }
@@ -221,12 +255,29 @@ impl AiPanel {
             self.live_view
                 .update(cx, |view, cx| view.set_text(&text, cx));
             self.messages.push(self.live_view.clone());
+            let reasoning = match &message {
+                AgentMessage::Assistant { reasoning, .. } => reasoning.as_str(),
+                _ => "",
+            };
+            self.live_reasoning_view
+                .update(cx, |view, cx| view.set_text(&safe_markdown(reasoning), cx));
+            self.reasoning_views
+                .push((!reasoning.is_empty()).then(|| self.live_reasoning_view.clone()));
+            self.thinking_expanded.remove(&ix);
             self.live_row = false;
             self.scroller
                 .update(cx, |state, cx| state.remeasure_items(ix..ix + 1, cx));
         } else {
             let view = self.message_view(&text, ix, cx);
             self.messages.push(view);
+            let reasoning = match &message {
+                AgentMessage::Assistant { reasoning, .. } if !reasoning.is_empty() => {
+                    Some(safe_markdown(reasoning))
+                }
+                _ => None,
+            };
+            let reasoning_view = reasoning.map(|text| self.message_view(&text, ix, cx));
+            self.reasoning_views.push(reasoning_view);
             self.scroller.update(cx, |state, cx| state.append(1, cx));
         }
         self.conversation.messages.push(message);
@@ -242,7 +293,7 @@ impl AiPanel {
     }
 
     pub(super) fn send(&mut self, continuation: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.busy || self.run.is_some() {
+        if self.busy || self.ui_busy || self.run.is_some() || self.attachments_loading {
             return;
         }
         let Some(config) = self
@@ -268,7 +319,7 @@ impl AiPanel {
         } else {
             self.input.read(cx).value().trim().to_owned()
         };
-        if user_text.is_empty() {
+        if user_text.is_empty() && self.draft_logs.is_empty() {
             return;
         }
         if user_text.len() > 64 * 1024 {
@@ -301,6 +352,23 @@ impl AiPanel {
             cx.notify();
             return;
         };
+        let user_text = match self.message_with_attachments(&user_text, &scope) {
+            Ok(text) => text,
+            Err(error) => {
+                self.error = error.to_string();
+                cx.notify();
+                return;
+            }
+        };
+        let sent_logs = self.draft_logs.clone();
+        let attached_documents = self
+            .draft_logs
+            .iter()
+            .map(|log| log.document.clone())
+            .collect::<Vec<_>>();
+        if let Some(previous) = self.scope.take() {
+            self.reference_scopes.push(previous);
+        }
         self.scope = Some(scope.clone());
         self.generation += 1;
         let generation = self.generation;
@@ -346,6 +414,7 @@ impl AiPanel {
             let save_store = store.clone();
             let capture = scope.clone();
             let saved = cx.background_spawn(async move {
+                for doc in attached_documents { doc.verify()?; }
                 let directory = capture.lock().map_err(|_| anyhow::anyhow!("Analysis unavailable"))?.directory.directory.clone();
                 // A directory is an optional capability, not a prerequisite for chatting
                 // or inspecting the captured open documents. Never fall back to another path.
@@ -389,8 +458,12 @@ impl AiPanel {
                 }
                 return;
             }
+            _ = this.update(cx, |this, cx| {
+                this.draft_logs.retain(|log| !sent_logs.iter().any(|sent| sent.source_row == log.source_row && Arc::ptr_eq(&sent.document.document, &log.document.document)));
+                cx.notify();
+            });
             let run = vclogg_ai::start_run(config, messages, skills,
-                "Access only the current window's captured files and selected directory. Call get_context and list_logs first. All line numbers are 1-based; references are run-scoped.".into(), false);
+                "Access only the current window's captured files and selected directory. Call get_context and list_logs first. All line numbers are 1-based; references are run-scoped. Cite the exact url returned for each log row using Markdown [filename:line](url), so users can navigate from your reply. Use set_marks, highlight_keyword and text_mark to apply requested findings to the logs. Use append_search to add text to the search box without running a search.".into(), false);
             let events = run.events.clone();
             let replies = run.replies.clone();
             let cancellation = run.cancellation.clone();
@@ -532,6 +605,9 @@ impl AiPanel {
             event @ (AgentEvent::Text(_) | AgentEvent::Thinking(_)) => {
                 match event {
                     AgentEvent::Text(text) => {
+                        if self.live.is_empty() && !text.is_empty() && !self.reasoning.is_empty() {
+                            self.live_thinking_collapsed = true;
+                        }
                         self.live.push_str(&text);
                         self.progress = crate::tr!("正在生成回复", "Generating reply").into();
                     }
@@ -549,7 +625,10 @@ impl AiPanel {
                             .await;
                         _ = this.update(cx, |this, cx| {
                             this.live_view.update(cx, |view, cx| {
-                                view.set_text(&assistant_text(&this.live, &this.reasoning), cx)
+                                view.set_text(&safe_markdown(&this.live), cx)
+                            });
+                            this.live_reasoning_view.update(cx, |view, cx| {
+                                view.set_text(&safe_markdown(&this.reasoning), cx)
                             });
                             this.scroller.update(cx, |state, cx| {
                                 state.remeasure_items(
@@ -626,7 +705,7 @@ impl AiPanel {
         cx.notify();
     }
     pub(super) fn new_conversation(&mut self, cx: &mut Context<Self>) {
-        if self.run.is_some() || self.busy {
+        if self.run.is_some() || self.busy || self.ui_busy {
             return;
         }
         self.conversation = Conversation {
@@ -639,7 +718,11 @@ impl AiPanel {
             ..Default::default()
         };
         self.revision = 0;
+        self.draft_logs.clear();
+        self.attachment_task = None;
+        self.attachments_loading = false;
         self.scope = None;
+        self.reference_scopes.clear();
         self.error.clear();
         self.live.clear();
         self.reasoning.clear();
@@ -653,7 +736,7 @@ impl AiPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.run.is_some() || self.busy {
+        if self.run.is_some() || self.busy || self.ui_busy {
             return;
         }
         let Some(store) = self.store.clone() else {
@@ -690,7 +773,7 @@ impl AiPanel {
             cx.notify();
             return;
         }
-        if self.run.is_some() || self.busy {
+        if self.run.is_some() || self.busy || self.ui_busy {
             return;
         }
         let Some(store) = self.store.clone() else {
@@ -764,24 +847,10 @@ impl Drop for AiPanel {
         }
     }
 }
-fn assistant_text(text: &str, reasoning: &str) -> String {
-    if reasoning.is_empty() {
-        return safe_markdown(text);
-    }
-    format!(
-        "### {}\n\n{}\n\n---\n\n{}",
-        crate::tr!("模型思考", "Model thinking"),
-        safe_markdown(reasoning),
-        safe_markdown(text)
-    )
-}
-
 pub(super) fn message_text(message: &AgentMessage, history: &[AgentMessage]) -> String {
     match message {
         AgentMessage::User { text } => safe_markdown(text),
-        AgentMessage::Assistant {
-            text, reasoning, ..
-        } => assistant_text(text, reasoning),
+        AgentMessage::Assistant { text, .. } => safe_markdown(text),
         AgentMessage::Tool {
             call_id, result, ..
         } => {
@@ -844,3 +913,6 @@ pub(super) fn safe_markdown(text: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod analysis_tests;

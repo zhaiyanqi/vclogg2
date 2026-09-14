@@ -13,20 +13,13 @@ impl AiPanel {
                 .id(row_id)
                 .w_full()
                 .min_w_0()
-                .gap_1()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("AI"),
-                )
-                .child(
-                    TextView::new(&self.live_view).on_link_click(|url, _, _, cx| {
-                        if url.starts_with("https://") || url.starts_with("http://") {
-                            cx.open_url(url);
-                        }
-                    }),
-                )
+                .gap_2()
+                .when(!self.reasoning.is_empty(), |row| {
+                    row.child(self.render_thinking(ix, true, cx))
+                })
+                .when(!self.live.is_empty(), |row| {
+                    row.child(self.markdown_view(&self.live_view, cx))
+                })
                 .into_any_element();
         }
         let message = self.conversation.messages[ix].clone();
@@ -54,6 +47,13 @@ impl AiPanel {
         };
         let mut row = v_flex()
             .id(row_id)
+            .debug_selector(move || {
+                if sent {
+                    "ai-user-bubble".into()
+                } else {
+                    "ai-reply".into()
+                }
+            })
             .w_full()
             .min_w_0()
             .gap_1()
@@ -107,14 +107,11 @@ impl AiPanel {
                     })),
             );
         }
+        if self.reasoning_views.get(ix).is_some_and(Option::is_some) {
+            row = row.child(self.render_thinking(ix, false, cx));
+        }
         if !is_tool || expanded {
-            row = row.child(
-                TextView::new(&self.messages[ix]).on_link_click(|url, _, _, cx| {
-                    if url.starts_with("https://") || url.starts_with("http://") {
-                        cx.open_url(url);
-                    }
-                }),
-            );
+            row = row.child(self.markdown_view(&self.messages[ix], cx));
         }
         if let AgentMessage::Assistant { calls, .. } = &message {
             for call in calls {
@@ -151,13 +148,32 @@ impl AiPanel {
                         .small()
                         .ghost()
                         .label(label)
-                        .disabled(self.busy || self.run.is_some())
+                        .disabled(self.busy || self.ui_busy)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.jump_reference(reference.clone(), window, cx)
                         })),
                 );
             }
         }
+        let selected_view = self.messages[ix].clone();
+        let panel = cx.entity();
+        let row = row.context_menu(move |mut menu, window, cx| {
+            let text = selected_view.read(cx).selected_text();
+            menu = menu.item(PopupMenuItem::new(crate::tr!("复制选中文字", "Copy selected text"))
+                .disabled(text.is_empty()).on_click({ let text = text.clone(); move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.clone())) }));
+            let documents = panel.read(cx).scope.as_ref().and_then(|scope| scope.lock().ok())
+                .map(|scope| scope.documents.values().filter(|d| d.open).cloned().collect::<Vec<_>>()).unwrap_or_default();
+            for doc in documents {
+                let text = text.clone();
+                let label = format!("{} · {}", crate::tr!("追加到搜索框", "Append to search box"), doc.document.file_name());
+                menu = menu.item(PopupMenuItem::new(label)
+                    .disabled(text.trim().is_empty() || panel.read(cx).busy || panel.read(cx).ui_busy)
+                    .on_click(window.listener_for(&panel, move |this, _, window, cx| {
+                        this.run_ui_tool(ToolCall { id: uuid::Uuid::new_v4().to_string(), name: "append_search".into(), arguments: json!({"document_id":doc.id,"version":doc.version,"text":text}) }, window, cx);
+                    })));
+            }
+            menu
+        });
         if sent {
             h_flex()
                 .w_full()
@@ -169,13 +185,191 @@ impl AiPanel {
             row.into_any_element()
         }
     }
+    fn render_attachments(&self, cx: &Context<Self>) -> AnyElement {
+        let mut content = v_flex()
+            .id("ai-attachments")
+            .gap_1()
+            .max_h(gpui::rems(8.))
+            .overflow_y_scroll();
+        for (ix, log) in self.draft_logs.iter().enumerate() {
+            let label = format!(
+                "{}:{}",
+                log.document.document.file_name(),
+                log.source_row + 1
+            );
+            content = content.child(
+                h_flex()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_ellipsis()
+                            .child(label),
+                    )
+                    .child(
+                        Button::new(("ai-remove-attachment", ix))
+                            .xsmall()
+                            .ghost()
+                            .icon(IconName::Close)
+                            .tooltip(crate::tr!("移除附加日志", "Remove attached log"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if ix < this.draft_logs.len() {
+                                    this.draft_logs.remove(ix);
+                                }
+                                cx.notify();
+                            })),
+                    ),
+            );
+        }
+        content.into_any_element()
+    }
+
+    fn markdown_view(
+        &self,
+        view: &Entity<gpui_component::text::TextViewState>,
+        cx: &Context<Self>,
+    ) -> TextView {
+        let owner = cx.weak_entity();
+        TextView::new(view).on_link_click(move |url, event, window, cx| {
+            if !matches!(event, gpui::ClickEvent::Mouse(event) if event.up.button != MouseButton::Left) {
+                _ = owner.update(cx, |this, cx| this.open_link(url, window, cx));
+            }
+        })
+    }
+
+    fn render_thinking(&self, ix: usize, live: bool, cx: &Context<Self>) -> AnyElement {
+        let expanded = if live {
+            !self.live_thinking_collapsed
+        } else {
+            self.thinking_expanded.contains(&ix)
+        };
+        let view = if live {
+            Some(&self.live_reasoning_view)
+        } else {
+            self.reasoning_views.get(ix).and_then(Option::as_ref)
+        };
+        v_flex()
+            .debug_selector(|| "ai-thinking-region".into())
+            .min_w_0()
+            .items_start()
+            .gap_2()
+            .child(
+                Button::new(("ai-thinking", ix))
+                    .small()
+                    .ghost()
+                    .icon(if expanded {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })
+                    .label(if live && self.live.is_empty() {
+                        crate::tr!("思考中", "Thinking")
+                    } else {
+                        crate::tr!("思考过程", "Thought process")
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if live {
+                            this.live_thinking_collapsed = !this.live_thinking_collapsed;
+                        } else if !this.thinking_expanded.insert(ix) {
+                            this.thinking_expanded.remove(&ix);
+                        }
+                        this.scroller
+                            .update(cx, |state, cx| state.remeasure_items(ix..ix + 1, cx));
+                        cx.notify();
+                    })),
+            )
+            .when(expanded, |row| {
+                row.when_some(view, |row, view| {
+                    row.child(
+                        div()
+                            .pl_3()
+                            .border_l_1()
+                            .border_color(cx.theme().border)
+                            .text_color(cx.theme().muted_foreground)
+                            .child(self.markdown_view(view, cx)),
+                    )
+                })
+            })
+            .into_any_element()
+    }
+
+    pub(super) fn open_link(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(reference) = LogReference::from_url(url) {
+            if self.busy || self.ui_busy {
+                return;
+            }
+            let parsed = url::Url::parse(url).expect("validated citation");
+            let pairs = parsed.query_pairs().collect::<BTreeMap<_, _>>();
+            let mut args = json!({"action":"line", "reference":reference});
+            if let (Some(search), Some(index)) = (pairs.get("search_id"), pairs.get("result_index"))
+                && let Ok(index) = index.parse::<usize>()
+            {
+                args = json!({"action":"result", "search_id":search, "result_index":index, "reference":reference});
+            }
+            self.run_ui_tool(
+                ToolCall {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    name: "navigate".into(),
+                    arguments: args,
+                },
+                window,
+                cx,
+            );
+        } else if url.starts_with("https://") || url.starts_with("http://") {
+            cx.open_url(url);
+        }
+    }
+
     fn jump_reference(
         &mut self,
         reference: LogReference,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(scope) = self.scope.clone() else {
+        self.run_ui_tool(
+            ToolCall {
+                id: uuid::Uuid::new_v4().to_string(),
+                name: "navigate".into(),
+                arguments: json!({"action":"line","reference":reference}),
+            },
+            window,
+            cx,
+        );
+    }
+    fn run_ui_tool(&mut self, call: ToolCall, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy || self.ui_busy {
+            return;
+        }
+        let reference: Option<LogReference> = call
+            .arguments
+            .get("reference")
+            .and_then(|value| serde_json::from_value(value.clone()).ok());
+        let scope = self
+            .scope
+            .iter()
+            .chain(self.reference_scopes.iter().rev())
+            .find(|scope| {
+                scope.lock().is_ok_and(|state| {
+                    if let Some(reference) = &reference {
+                        state
+                            .document(reference.document_id, Some(&reference.version))
+                            .is_ok()
+                    } else if let Some(search) = call.arguments["search_id"].as_str() {
+                        state.searches.contains_key(search)
+                    } else {
+                        call.arguments["document_id"].as_u64().is_some_and(|id| {
+                            state
+                                .document(id, call.arguments["version"].as_str())
+                                .is_ok()
+                        })
+                    }
+                })
+            })
+            .cloned();
+        let Some(scope) = scope else {
             self.error = crate::tr!(
                 "历史引用需要重新分析以确认文件内容",
                 "Analyze again to refresh historical log references"
@@ -184,15 +378,12 @@ impl AiPanel {
             cx.notify();
             return;
         };
-        let call = ToolCall {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: "navigate".into(),
-            arguments: json!({"action":"line","reference":reference}),
+        // A manual action has its own cancellation token; it cannot revive a stopped run.
+        let Ok(mut state) = scope.lock().map(|state| state.clone()) else {
+            return;
         };
-        // A completed run's cancellation token is not reused for a user navigation action.
-        if let Ok(mut state) = scope.lock() {
-            state.cancellation = SearchCancellation::default();
-        }
+        state.cancellation = SearchCancellation::default();
+        let scope = Arc::new(Mutex::new(state));
         let work = self.workspace.update(cx, |workspace, cx| {
             workspace.ai_prepare(scope.clone(), &call, cx)
         });
@@ -206,8 +397,9 @@ impl AiPanel {
             Err(_) => return,
         };
         let workspace = self.workspace.clone();
-        self.busy = true;
-        cx.spawn_in(window, async move |this, cx| {
+        self.error.clear();
+        self.ui_busy = true;
+        self.ui_task = Some(cx.spawn_in(window, async move |this, cx| {
             let evidence = cx.background_spawn(async move { work() }).await;
             let result = match evidence {
                 Ok(value) => workspace
@@ -218,14 +410,14 @@ impl AiPanel {
                 Err(e) => Err(e),
             };
             _ = this.update(cx, |this, cx| {
-                this.busy = false;
+                this.ui_busy = false;
                 if let Err(e) = result {
                     this.error = e.to_string();
                 }
                 cx.notify();
             });
-        })
-        .detach();
+        }));
+        cx.notify();
     }
 }
 fn collect_references(value: &Value, refs: &mut Vec<LogReference>) {
@@ -255,7 +447,7 @@ fn collect_references(value: &Value, refs: &mut Vec<LogReference>) {
 }
 impl Render for AiPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let disabled = self.busy || self.run.is_some();
+        let disabled = self.busy || self.run.is_some() || self.ui_busy;
         let mut body = v_flex()
             .size_full()
             .min_h_0()
@@ -419,6 +611,16 @@ impl Render for AiPanel {
                     .p_2()
                     .rounded(cx.theme().radius_lg)
                     .bg(cx.theme().muted)
+                    .when(self.attachments_loading, |this| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .child(crate::tr!("正在添加日志…", "Adding logs…")),
+                        )
+                    })
+                    .when(!self.draft_logs.is_empty(), |this| {
+                        this.child(self.render_attachments(cx))
+                    })
                     .child(
                         Textarea::new(&self.input)
                             .appearance(false)
@@ -517,7 +719,10 @@ impl Render for AiPanel {
                                         .label(crate::tr!("发送", "Send"))
                                         .disabled(
                                             self.busy
-                                                || self.input.read(cx).value().trim().is_empty(),
+                                                || self.ui_busy
+                                                || self.attachments_loading
+                                                || (self.input.read(cx).value().trim().is_empty()
+                                                    && self.draft_logs.is_empty()),
                                         )
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.send(false, window, cx)
