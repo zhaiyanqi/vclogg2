@@ -19,17 +19,17 @@ dist/
 .env.*
 !.env.example
 
-# Local AI instructions, skills, conversations and working notes
+# # Local AI instructions, skills, conversations and working notes
 .local/
 .agent/
 .agents/
-.codex/
-.claude/
-AGENTS.md
-CLAUDE.md
-GEMINI.md
-/RULES.md
-skills-lock.json
+# .codex/
+# .claude/
+# AGENTS.md
+# CLAUDE.md
+# GEMINI.md
+# /RULES.md
+# skills-lock.json
 
 # Private keys and local application data
 *.key

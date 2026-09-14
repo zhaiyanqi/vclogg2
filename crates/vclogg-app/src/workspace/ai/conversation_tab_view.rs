@@ -245,6 +245,26 @@ impl AiPanel {
                     window.prevent_default();
                 }
             })
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
+                let delta = event.delta.pixel_delta(window.line_height());
+                // Preserve native horizontal gestures; map ordinary wheel motion
+                // onto the tab strip's horizontal axis, as document tabs do.
+                if delta.y == px(0.) || delta.x.abs() > delta.y.abs() {
+                    return;
+                }
+                let scroll = &this.conversation_tab_scroll;
+                let max_x = scroll.max_offset().x.max(px(0.));
+                if max_x == px(0.) {
+                    return;
+                }
+                let current = scroll.offset();
+                let next_x = (current.x + delta.y).clamp(-max_x, px(0.));
+                if next_x != current.x {
+                    scroll.set_offset(point(next_x, current.y));
+                    cx.notify();
+                }
+                cx.stop_propagation();
+            }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if this.conversation_tabs_busy(cx) || this.open_conversations.is_empty() {
                     return;

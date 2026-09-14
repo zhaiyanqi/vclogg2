@@ -13,6 +13,8 @@ pub(super) enum SettingsTab {
     Models,
     Skills,
     Prompts,
+    Mcp,
+    Memory,
 }
 struct SettingsSurface {
     panel: Entity<AiPanel>,
@@ -36,6 +38,7 @@ impl AiPanel {
         if self.show_settings {
             return;
         }
+        self.load_memories(cx);
         self.show_settings = true;
         self.settings_generation += 1;
         let panel = cx.entity();
@@ -87,6 +90,8 @@ impl AiPanel {
                     submit.update(cx, |this, cx| match this.settings_tab {
                         SettingsTab::Models => this.save_provider(window, cx),
                         SettingsTab::Prompts => this.save_prompt_editor(window, cx),
+                        SettingsTab::Mcp => this.save_mcp_editor(window, cx),
+                        SettingsTab::Memory => this.save_memory_editor(window, cx),
                         SettingsTab::Skills => {}
                     });
                     false
@@ -97,6 +102,13 @@ impl AiPanel {
                         this.settings_generation += 1;
                         this.editor = None;
                         this.prompt_editor = None;
+                        this.mcp_editor = None;
+                        this.memory_editor = None;
+                        if let Some(token) = this.mcp_test_cancel.take() {
+                            token.cancel();
+                        }
+                        this.mcp_test_task = None;
+                        this.mcp_testing = false;
                         cx.notify();
                     })
                 })
@@ -114,6 +126,8 @@ impl AiPanel {
         for (id, tab, title) in [
             ("models", SettingsTab::Models, crate::tr!("模型", "Models")),
             ("skills", SettingsTab::Skills, "Skills"),
+            ("mcp", SettingsTab::Mcp, "MCP"),
+            ("memory", SettingsTab::Memory, crate::tr!("记忆", "Memory")),
             (
                 "prompts",
                 SettingsTab::Prompts,
@@ -136,6 +150,8 @@ impl AiPanel {
             SettingsTab::Models => self.render_model_settings(window, cx),
             SettingsTab::Skills => self.render_skill_settings(cx),
             SettingsTab::Prompts => self.render_prompt_settings(cx),
+            SettingsTab::Mcp => self.render_mcp_settings(cx),
+            SettingsTab::Memory => self.render_memory_settings(cx),
         };
         v_flex()
             .size_full()

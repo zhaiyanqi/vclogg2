@@ -18,7 +18,7 @@ pub use state::{
     FileSessionRecords, HistorySession, LastWorkspaceFile, PredefinedFilterRecord, RecentFile,
     SessionRecordSaveResult, StateMigrationDefaults,
 };
-pub use state_repository::{STATE_SCHEMA_VERSION, StateRepository};
+pub use state_repository::{AiMemoryRecord, STATE_SCHEMA_VERSION, StateRepository};
 
 /// Opaque app-owned conversation payload and optimistic storage revision.
 #[derive(Clone, Debug)]

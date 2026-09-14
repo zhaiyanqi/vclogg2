@@ -8,8 +8,8 @@ mod search;
 
 pub use cancellation::CancellationToken;
 pub use document::{
-    DocumentMetadata, DocumentRefreshKind, LinePreview, LinePreviewReader, LineReader, LogDocument,
-    PendingIndexCacheWrite, RefreshValidation,
+    DocumentMetadata, DocumentRefreshKind, LinePreview, LinePreviewReader, LineReader,
+    LineTextWindow, LogDocument, PendingIndexCacheWrite, RefreshValidation,
 };
 pub use navigation::{
     DirectoryEntry, LogMinute, MinuteGroup, NavigationSummary, OverviewBucket,

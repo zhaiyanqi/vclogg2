@@ -101,16 +101,27 @@ pub(crate) fn request_body(
     } else {
         "max_tokens"
     }] = json!(config.max_output_tokens);
+    // Providers may require schemas while replaying tool-use history even when
+    // the final request is reserved for prose. Keep schemas and disable new calls.
+    let has_tool_history = messages
+        .iter()
+        .any(|m| matches!(m, AgentMessage::Assistant { calls, .. } if !calls.is_empty()));
     match config.protocol {
         Protocol::OpenAi => {
-            if with_tools {
+            if with_tools || has_tool_history {
                 body["tools"] = json!(definitions.iter().map(|d| json!({"type":"function","function":{"name":d.name,"description":d.description,"parameters":d.parameters}})).collect::<Vec<_>>());
+            }
+            if !with_tools && has_tool_history {
+                body["tool_choice"] = json!("none");
             }
         }
         Protocol::Anthropic => {
             body["system"] = json!(system);
-            if with_tools {
+            if with_tools || has_tool_history {
                 body["tools"] = json!(definitions.iter().map(|d| json!({"name":d.name,"description":d.description,"input_schema":d.parameters})).collect::<Vec<_>>());
+            }
+            if !with_tools && has_tool_history {
+                body["tool_choice"] = json!({"type":"none"});
             }
         }
     }

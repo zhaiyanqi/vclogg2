@@ -22,6 +22,8 @@ use crate::{
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
 pub const STATE_SCHEMA_VERSION: u32 = 18;
 mod ai;
+mod ai_memory;
+pub use ai_memory::AiMemoryRecord;
 
 /// Owns SQLite access for durable file-history and workspace records.
 pub struct StateRepository {

@@ -454,8 +454,8 @@ fn exercise_transcript(
             assert_eq!(p.scroller.read(cx).item_count(), 25);
             assert_eq!(p.live_view.entity_id(), streamed_view);
             assert!(
-                !p.thinking_expanded.contains(&24),
-                "thinking folds when the reply starts"
+                p.thinking_expanded.contains(&24),
+                "thinking stays expanded while the reply streams"
             );
             assert!(!p.scroller.read(cx).is_following_tail());
         });

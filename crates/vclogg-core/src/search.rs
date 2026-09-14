@@ -845,6 +845,26 @@ impl SearchMatcher {
         }
     }
 
+    /// Find the first non-empty match without allocating a range for every occurrence.
+    pub fn first_matching_range(&self, text: &str) -> Option<Range<usize>> {
+        let valid = |range: &Range<usize>| {
+            range.start < range.end
+                && text.is_char_boundary(range.start)
+                && text.is_char_boundary(range.end)
+                && (!self.whole_word || is_whole_word_match(text, range))
+        };
+        match &self.inner {
+            Matcher::Literal(matcher) => matcher
+                .find_iter(text.as_bytes())
+                .map(|m| m.start()..m.end())
+                .find(valid),
+            Matcher::Regex(matcher) => matcher
+                .find_iter(text.as_bytes())
+                .map(|m| m.start()..m.end())
+                .find(valid),
+        }
+    }
+
     /// Return UTF-8 byte ranges for every non-empty match in rendered text.
     pub fn matching_ranges(&self, text: &str) -> Vec<Range<usize>> {
         let mut ranges: Vec<Range<usize>> = match &self.inner {

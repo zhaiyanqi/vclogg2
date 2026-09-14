@@ -407,6 +407,19 @@ impl StateStore {
         settings.save(path)
     }
 
+    pub(crate) fn ai_memories(&self) -> Result<Vec<vclogg_data::AiMemoryRecord>> {
+        self.repository.ai_memories()
+    }
+    pub(crate) fn save_ai_memory(
+        &self,
+        record: &vclogg_data::AiMemoryRecord,
+    ) -> Result<vclogg_data::AiMemoryRecord> {
+        self.repository.save_ai_memory(record)
+    }
+    pub(crate) fn delete_ai_memory(&self, id: &str, revision: u64) -> Result<()> {
+        self.repository.delete_ai_memory(id, revision)
+    }
+
     pub(crate) fn ai_conversations(
         &self,
         offset: usize,

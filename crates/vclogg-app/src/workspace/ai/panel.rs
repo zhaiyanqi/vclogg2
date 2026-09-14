@@ -52,6 +52,15 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) settings_generation: u64,
     pub(super) settings_tab: super::configuration::SettingsTab,
     pub(super) prompt_editor: Option<super::prompt_settings::PromptEditor>,
+    pub(super) mcp_editor: Option<super::mcp_settings::McpEditor>,
+    pub(super) mcp_testing: bool,
+    pub(super) mcp_status: String,
+    pub(super) mcp_test_cancel: Option<vclogg_ai::Cancellation>,
+    pub(super) mcp_test_task: Option<Task<()>>,
+    pub(super) memories: Vec<vclogg_data::AiMemoryRecord>,
+    pub(super) memory_editor: Option<super::memory::MemoryEditor>,
+    pub(super) memory_loading: bool,
+    pub(super) memory_task: Option<Task<()>>,
     pub(super) busy: bool,
     pub(super) ui_busy: bool,
     pub(super) ui_task: Option<Task<()>>,
@@ -93,6 +102,11 @@ impl AiPanel {
                 }
                 cx.notify();
             });
+        if !cx.has_global::<super::memory::SharedAiMemory>() {
+            cx.set_global(super::memory::SharedAiMemory);
+        }
+        let memory_subscription =
+            cx.observe_global::<super::memory::SharedAiMemory>(|this, cx| this.load_memories(cx));
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(3, 8)
@@ -157,6 +171,15 @@ impl AiPanel {
             settings_generation: 0,
             settings_tab: super::configuration::SettingsTab::Models,
             prompt_editor: None,
+            mcp_editor: None,
+            mcp_testing: false,
+            mcp_status: String::new(),
+            mcp_test_cancel: None,
+            mcp_test_task: None,
+            memories: Vec::new(),
+            memory_editor: None,
+            memory_loading: false,
+            memory_task: None,
             busy: true,
             ui_busy: false,
             ui_task: None,
@@ -164,7 +187,7 @@ impl AiPanel {
             generation: 0,
             task: None,
             live_task: None,
-            _subscriptions: vec![subscription, settings_subscription],
+            _subscriptions: vec![subscription, settings_subscription, memory_subscription],
         };
         this.open_conversations.push(this.conversation.id.clone());
         let path = this.settings_path.clone();
@@ -316,11 +339,29 @@ impl AiPanel {
         self.live_reasoning_view =
             self.message_view(&safe_markdown(&self.reasoning), self.messages.len(), cx);
         self.live_row = true;
+        if self.conversation.messages.is_empty()
+            || matches!(
+                self.conversation.messages.last(),
+                Some(AgentMessage::User { .. })
+            )
+        {
+            self.thinking_expanded.insert(self.messages.len());
+        }
         self.sync_transcript(false, cx);
     }
     pub(super) fn push_message(&mut self, message: AgentMessage, cx: &mut Context<Self>) {
         let text = message_text(&message, &self.conversation.messages);
         let ix = self.messages.len();
+        if !self.live_row
+            && matches!(message, AgentMessage::Assistant { .. })
+            && (self.conversation.messages.is_empty()
+                || matches!(
+                    self.conversation.messages.last(),
+                    Some(AgentMessage::User { .. })
+                ))
+        {
+            self.thinking_expanded.insert(ix);
+        }
         if self.live_row && matches!(message, AgentMessage::Assistant { .. }) {
             // Commit the existing streamed row, including its Markdown entity
             // and scroll identity. There is no remove/append at the live edge.
@@ -335,7 +376,6 @@ impl AiPanel {
                 .update(cx, |view, cx| view.set_text(&safe_markdown(reasoning), cx));
             self.reasoning_views
                 .push((!reasoning.is_empty()).then(|| self.live_reasoning_view.clone()));
-            self.thinking_expanded.remove(&ix);
             self.live_row = false;
         } else {
             let view = self.message_view(&text, ix, cx);
@@ -481,6 +521,7 @@ impl AiPanel {
         };
         let settings_path = self.settings_path.clone();
         let prompts = self.settings.prompts.clone();
+        let extensions = vclogg_ai::RunExtensions::from_settings(&self.settings);
         let workspace = self.workspace.clone();
         self.task = Some(cx.spawn_in(window, async move |this, cx| {
             let _lease = lease;
@@ -536,7 +577,7 @@ impl AiPanel {
                 this.draft_logs.retain(|log| !sent_logs.iter().any(|sent| sent.source_row == log.source_row && Arc::ptr_eq(&sent.document.document, &log.document.document)));
                 cx.notify();
             });
-            let run = vclogg_ai::start_run(config, messages, skills, instructions, false);
+            let run = vclogg_ai::start_run_with_extensions(config, messages, skills, instructions, false, extensions);
             let events = run.events.clone();
             let replies = run.replies.clone();
             let cancellation = run.cancellation.clone();
@@ -561,6 +602,22 @@ impl AiPanel {
                         this.pending_tool = Some(call.clone());
                         cx.notify();
                     });
+                    if matches!(call.name.as_str(), "search_memory" | "save_memory" | "delete_memory") {
+                        // Recheck the live switch as well as the run's captured policy.
+                        let enabled = this.update(cx, |this, _| this.settings.memory_enabled).unwrap_or(false);
+                        let result = if enabled {
+                            let memory_store = store.clone();
+                            let memory_call = call.clone();
+                            let token = cancellation.clone();
+                            cx.background_spawn(async move { super::memory::execute_memory_tool(&memory_store, &memory_call, &token) }).await
+                        } else { Err(anyhow::anyhow!("Memory is disabled")) };
+                        if result.is_ok() && call.name != "search_memory" {
+                            gpui::AsyncApp::update_global::<super::memory::SharedAiMemory, _>(cx, |_, _| {});
+                        }
+                        let result = match result { Ok(value) => ToolResult::ok(value), Err(error) => ToolResult::error(error.to_string()) };
+                        if replies.send((call.id, result)).await.is_err() { break; }
+                        continue;
+                    }
                     let prepared = workspace.update(cx, |workspace, cx| workspace.ai_prepare(scope.clone(), &call, cx));
                     let result = match prepared {
                         Ok(Ok(work)) => {
@@ -627,6 +684,7 @@ impl AiPanel {
                 this.pending_tool = None;
                 this.flush_partial(cx);
                 this.recover_messages(cx);
+                this.collapse_current_thinking(cx);
                 cx.notify();
             });
             if let Ok(Ok(record)) = this.update(cx, |this, _| this.record()) {
@@ -659,6 +717,13 @@ impl AiPanel {
             );
         }
     }
+    fn collapse_current_thinking(&mut self, cx: &mut Context<Self>) {
+        if let Some(&start) = self.transcript_rows.last()
+            && self.thinking_expanded.remove(&start)
+        {
+            self.remeasure_message(start, cx);
+        }
+    }
     fn receive_event(&mut self, event: AgentEvent, cx: &mut Context<Self>) {
         match event {
             AgentEvent::RequestStarted(request) => {
@@ -678,12 +743,6 @@ impl AiPanel {
             event @ (AgentEvent::Text(_) | AgentEvent::Thinking(_)) => {
                 match event {
                     AgentEvent::Text(text) => {
-                        if self.live.is_empty()
-                            && !text.is_empty()
-                            && let Some(start) = self.transcript_rows.last()
-                        {
-                            self.thinking_expanded.remove(start);
-                        }
                         self.live.push_str(&text);
                         self.progress = crate::tr!("正在生成回复", "Generating reply").into();
                     }
@@ -739,12 +798,14 @@ impl AiPanel {
                 self.error = error;
                 self.pending_tool = None;
                 self.flush_partial(cx);
-                if let Some(start) = self.transcript_rows.last() {
-                    self.thinking_expanded.remove(start);
-                    self.remeasure_message(*start, cx);
-                }
+                self.collapse_current_thinking(cx);
                 self.busy = true; // Do not switch conversations until the final record is durable.
                 self.run = None;
+            }
+            AgentEvent::ExtensionToolStarted(call) => {
+                self.progress =
+                    format!("{}: {}", crate::tr!("执行工具", "Running tool"), call.name);
+                self.pending_tool = Some(call);
             }
             AgentEvent::ToolStarted(_) => {}
         }
@@ -808,6 +869,9 @@ impl AiPanel {
 }
 impl Drop for AiPanel {
     fn drop(&mut self) {
+        if let Some(token) = &self.mcp_test_cancel {
+            token.cancel();
+        }
         if let Some(run) = &self.run {
             run.cancellation.cancel();
         }

@@ -84,3 +84,28 @@ pub(super) fn read_context(
         json!({"focus":focus,"context":rows,"context_truncated":truncated,"requested_start_line":start+1,"requested_end_line":end}),
     )
 }
+
+pub(super) fn read_segment(
+    doc: &DocumentSnapshot,
+    row: usize,
+    start: usize,
+    limit: usize,
+    query: Option<&SearchQuery>,
+    cancellation: &SearchCancellation,
+) -> Result<Value> {
+    doc.verify()?;
+    let matcher = query.map(SearchMatcher::new).transpose()?.flatten();
+    let segment =
+        doc.document
+            .line_text_window(row, start, limit, matcher.as_ref(), cancellation)?;
+    let matched = segment.match_characters();
+    let end = segment.start_character() + segment.text().chars().count();
+    Ok(json!({
+        "reference":doc.reference(row),"url":doc.reference(row).url(),"file":doc.document.file_name(),
+        "text":segment.text(),"start_character":segment.start_character(),"next_character":segment.next_character(),
+        "truncated":segment.start_character()>0 || segment.next_character().is_some(),
+        "source_truncated":segment.is_source_truncated(),
+        "match_start_character":matched.as_ref().map(|r|r.start),"match_end_character":matched.as_ref().map(|r|r.end),
+        "match_truncated":matched.is_some_and(|r|r.end>end),"local_scan_limit_bytes":16*1024*1024
+    }))
+}

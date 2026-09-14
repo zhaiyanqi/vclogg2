@@ -2,12 +2,27 @@ use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    io::{Read as _, Write as _},
+    io::Read as _,
     path::{Component, Path, PathBuf},
 };
 
 // Product defaults only. User-authored instructions live in the application data directory.
-pub const DEFAULT_AGENT_PROMPT: &str = r#"You are VCLogg's log analysis agent. Answer in the user's language and perform the requested application actions using tools.
+pub const DEFAULT_AGENT_PROMPT: &str = r#"You are VCLogg's log analysis agent. Answer in the user's language.
+
+Identify whether the request is an application action, an investigation, or both. Perform clear, simple actions directly using tool descriptions; do not read a skill just to repeat an obvious tool call. Load an applicable enabled skill only for ambiguous, multi-step or domain-specific work. Built-in entries share four workflows; do not reread the same workflow during a run unless the user edited it. Skill switches select guidance, not tool permissions. Tool definitions specify syntax, limits and returned states.
+
+Resolve the intended file, selection and scope from metadata. For an investigation, state a concrete question internally and search the smallest useful scope. Translate symptoms into plausible log terms instead of searching the entire user sentence; use the tool's actual literal/regex semantics. If the question has no useful keywords, inspect a few selected/visible rows, or small head/tail samples, to learn the format and identify event names. Ask for the missing file, event or time interval only when it materially prevents progress.
+
+Search results identify candidate rows. Read the relevant candidates before making content claims. For a small relevant result set or a small explicitly requested file, reading the whole set is allowed within budget. Do not default to walking every result or paging through a whole file. For large results sample across affected files and the event's beginning/end; frequent events must not hide rare failures. Use counts for quantitative questions. Truncated counts are lower bounds, and representative references are positional samples, not semantic categories.
+
+Link related evidence using request/thread IDs, component, timestamps and event order. Expand context to answer a specific unresolved question, including success/recovery or counterexamples that could disprove the leading explanation. A nearby error alone does not prove causation. After no hits, change one relevant term or scope deliberately; after two unproductive search revisions, explain what is missing or ask a focused question instead of repeating generic searches. If a read is truncated, use read_log_segment with search_id to inspect the matching portion, or start_character to read a specified continuation. Never treat an unread or truncated portion as absent.
+
+Stop when the requested action is confirmed, or the evidence supports the requested conclusion with material uncertainty stated. A pending action is not completion. Respect remaining evidence/request budgets and keep enough room for an answer; when a limit is reached, summarize verified findings and the next missing evidence rather than continuing failed reads. Reuse already-read evidence in this run. Old-turn references must be refreshed before further reads or mutations.
+
+For action requests, report the actual resulting state concisely. For investigations, lead with the finding, then cite evidence as [filename:line](url), distinguish observations from hypotheses, and state any limits that affect the conclusion. Do not reproduce original log lines, excerpts, log blocks, or raw tool JSON. A file-only action does not need a fabricated line citation.
+"#;
+
+const PREVIOUS_AGENT_PROMPT: &str = r#"You are VCLogg's log analysis agent. Answer in the user's language and perform the requested application actions using tools.
 
 Choose the workflow from the user's actual intent. Read only the applicable enabled SKILL.md, not all skills or their references. Use get_context when the user refers to the current file, selection, or screen; use list_logs/locate_files to resolve file identity. These tools return metadata, not evidence of log contents. For file switching, opening, closing, locating or an explicit mark operation, perform that action without unrelated content searches or reads.
 
@@ -62,28 +77,17 @@ pub fn prompt_path(settings_path: &Path, prompt: &Prompt) -> Result<PathBuf> {
 pub fn initialize_prompts(settings_path: &Path) -> Result<()> {
     for prompt in default_prompts() {
         let path = prompt_path(settings_path, &prompt)?;
-        fs::create_dir_all(path.parent().context("Missing prompt directory")?)?;
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt as _;
-            options.mode(0o600);
-        }
-        match options.open(&path) {
-            Ok(mut file) => file.write_all(if prompt.id == "agent" {
-                DEFAULT_AGENT_PROMPT.as_bytes()
-            } else {
-                b""
-            })?,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                // Upgrade only the exact shipped default; preserve all user edits.
-                if prompt.id == "agent" && read_prompt_text(&path)? == LEGACY_AGENT_PROMPT {
-                    crate::model::private_write(&path, DEFAULT_AGENT_PROMPT.as_bytes())?;
-                }
-            }
-            Err(e) => return Err(e.into()),
-        }
+        let default = if prompt.id == "agent" {
+            DEFAULT_AGENT_PROMPT
+        } else {
+            ""
+        };
+        let legacy = if prompt.id == "agent" {
+            vec![LEGACY_AGENT_PROMPT, PREVIOUS_AGENT_PROMPT]
+        } else {
+            vec![]
+        };
+        crate::defaults::update_default(&path, default, &legacy, true)?;
     }
     Ok(())
 }
@@ -113,7 +117,12 @@ pub fn save_prompt(settings_path: &Path, prompt: &Prompt, text: &str) -> Result<
 pub fn agent_instructions(settings_path: &Path, prompts: &[Prompt]) -> Result<String> {
     let mut text = String::new();
     for prompt in prompts.iter().filter(|p| p.enabled) {
-        text.push_str(&format!("\n--- {} ---\n", prompt.name));
+        let role = if prompt.id == "rules" {
+            "User workspace rules"
+        } else {
+            "Agent workflow and output preferences"
+        };
+        text.push_str(&format!("\n--- {role}: {} ---\n", prompt.name));
         text.push_str(&read_prompt(settings_path, prompt)?);
         if text.len() > 48 * 1024 {
             bail!("Enabled prompts exceed 48 KiB; disable or shorten a prompt");

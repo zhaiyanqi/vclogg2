@@ -44,6 +44,9 @@ impl AiPanel {
         cx: &mut Context<Self>,
     ) {
         let saved_prompt = prompt.is_some();
+        let saved_mcp = self.settings_tab == super::configuration::SettingsTab::Mcp
+            && self.mcp_editor.is_some();
+        let settings_generation = self.settings_generation;
         if cx.global::<super::configuration::SharedAiSettings>().saving {
             self.error = crate::tr!(
                 "另一窗口正在保存设置，请稍后重试",
@@ -99,6 +102,18 @@ impl AiPanel {
             );
             _ = this.update(cx, |this, cx| {
                 this.busy = false;
+                if result.is_ok() {
+                    this.error.clear();
+                    if saved_mcp && this.settings_generation == settings_generation {
+                        this.mcp_editor = None;
+                    }
+                } else if let Some(settings) = cx
+                    .global::<super::configuration::SharedAiSettings>()
+                    .settings
+                    .clone()
+                {
+                    this.settings = settings;
+                }
                 if result.is_ok() && saved_prompt {
                     this.prompt_editor = None;
                     this.error.clear();

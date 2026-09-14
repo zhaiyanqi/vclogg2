@@ -778,6 +778,7 @@ fn tool_label(name: &str) -> &str {
         "close_file" => crate::tr!("关闭文件", "Close file"),
         "switch_file" => crate::tr!("切换文件", "Switch file"),
         "reveal_file" => crate::tr!("定位文件", "Reveal file"),
+        "read_log_segment" => crate::tr!("读取长行片段", "Read line segment"),
         "read_log_context" => crate::tr!("读取引用上下文", "Read log context"),
         "summarize_search" => crate::tr!("汇总搜索结果", "Summarize search results"),
         "search_logs" | "show_search" => crate::tr!("搜索日志", "Search logs"),

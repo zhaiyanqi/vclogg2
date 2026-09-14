@@ -35,6 +35,8 @@ use sha2::{Digest as _, Sha256};
 use crate::{CancellationToken, CompressedRows, SearchMatcher, SearchResult, SearchRun};
 
 mod index_cache;
+mod text_window;
+pub use text_window::LineTextWindow;
 
 #[cfg(test)]
 mod search_tests;

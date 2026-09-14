@@ -15,6 +15,8 @@ use logs::*;
 mod configuration;
 mod conversation_tab_view;
 mod conversation_tabs;
+mod mcp_settings;
+mod memory;
 mod panel;
 mod prompt_settings;
 mod settings;
@@ -488,6 +490,36 @@ impl Workspace {
                         &cancellation,
                     )?;
                     evidence::read_context(&doc, row, before, after, &cancellation)
+                        .map(Evidence::Json)
+                }));
+            }
+            "read_log_segment" => {
+                let (doc, row) = state.reference(&args["reference"])?;
+                if args.get("search_id").is_some() && args.get("start_character").is_some() {
+                    bail!("Use search_id or start_character, exclusively");
+                }
+                let query = if let Some(id) = args["search_id"].as_str() {
+                    let search = state
+                        .searches
+                        .get(id)
+                        .context("Search not found in this run")?;
+                    if !search.groups.iter().any(|(source, rows)| {
+                        source.id == doc.id && source.version == doc.version && rows.contains(row)
+                    }) {
+                        bail!("The reference is not a hit in this search");
+                    }
+                    Some(search.query.clone().context("Search query unavailable")?)
+                } else {
+                    None
+                };
+                let start = args["start_character"].as_u64().unwrap_or(0) as usize;
+                let limit = args["max_characters"].as_u64().unwrap_or(2048) as usize;
+                let cancellation = state.cancellation.clone();
+                drop(state);
+                return Ok(Box::new(move || {
+                    let doc =
+                        read_snapshot(&scope, doc, row, row.saturating_add(1), &cancellation)?;
+                    evidence::read_segment(&doc, row, start, limit, query.as_ref(), &cancellation)
                         .map(Evidence::Json)
                 }));
             }

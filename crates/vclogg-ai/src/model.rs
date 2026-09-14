@@ -87,6 +87,12 @@ impl ProviderConfig {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct AiSettings {
     #[serde(default)]
+    pub mcp_servers: Vec<crate::McpServer>,
+    #[serde(default = "memory_enabled_default")]
+    pub memory_enabled: bool,
+    #[serde(default)]
+    pub memory_auto_save: bool,
+    #[serde(default)]
     pub providers: Vec<ProviderConfig>,
     #[serde(default)]
     pub active_provider: Option<String>,
@@ -99,9 +105,15 @@ pub struct AiSettings {
     #[serde(default = "crate::default_prompts")]
     pub prompts: Vec<crate::Prompt>,
 }
+fn memory_enabled_default() -> bool {
+    true
+}
 impl Default for AiSettings {
     fn default() -> Self {
         Self {
+            mcp_servers: Vec::new(),
+            memory_enabled: true,
+            memory_auto_save: false,
             providers: Vec::new(),
             active_provider: None,
             skills: Vec::new(),
@@ -335,6 +347,8 @@ pub enum AgentEvent {
     Text(String),
     Assistant(AgentMessage),
     ToolStarted(ToolCall),
+    /// Runner-owned tools report progress without requesting a host reply.
+    ExtensionToolStarted(ToolCall),
     ToolFinished(AgentMessage),
     ContextTrimmed,
     Finished(RunStatus, String),
