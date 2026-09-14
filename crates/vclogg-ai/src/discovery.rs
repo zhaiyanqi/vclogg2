@@ -130,12 +130,11 @@ fn scan(
                 entry.file_name().to_str(),
                 Some(".git" | "node_modules" | "target")
             )
+            && let Err(error) = scan(&entry.path(), depth + 1, visited, result)
         {
-            if let Err(error) = scan(&entry.path(), depth + 1, visited, result) {
-                result.warnings.push(error.to_string());
-                if visited.len() >= 4096 || result.skills.len() >= 512 {
-                    break;
-                }
+            result.warnings.push(error.to_string());
+            if visited.len() >= 4096 || result.skills.len() >= 512 {
+                break;
             }
         }
     }
