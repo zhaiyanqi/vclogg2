@@ -540,6 +540,9 @@ fn verify_chat_geometry(
                 },
                 cx,
             );
+            // Completed replies collapse thinking through the normal finish event.
+            p.receive_event(AgentEvent::Finished(RunStatus::Complete, String::new()), cx);
+            p.busy = false;
         })
     });
     cx.run_until_parked();

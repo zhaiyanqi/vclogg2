@@ -277,7 +277,7 @@ fn exercise_workspace(
         cx,
     );
     assert_eq!(workspace.active_document().unwrap().id, other.id);
-    // Sending from the first file remains bound to it after the user/model changes tabs.
+    // Explicit agent navigation updates the target of subsequent current-scope searches.
     let current = invoke(
         workspace,
         &scope,
@@ -286,7 +286,8 @@ fn exercise_workspace(
         window,
         cx,
     );
-    assert_eq!(current["total"], 2);
+    assert_eq!(current["total"], 1);
+    assert_eq!(current["rows"][0]["reference"]["document_id"], other.id);
     // Appending targets the captured file and preserves its existing draft.
     workspace.activate_tab(0, window, cx);
     workspace
@@ -589,12 +590,14 @@ fn isolated_workspace_agent_workflow() {
 
 #[test]
 fn sparse_directory_references_read_surrounding_source_lines() {
-    let (_dir, mut doc, _) = fixture();
+    let (_dir, mut doc, scope) = fixture();
     doc.open = false;
     let rows = [1usize, 3].into_iter().collect::<CompressedRows>();
     doc.document = Arc::new(doc.document.project_source_rows(&rows));
     assert!(!doc.document.has_complete_line_index());
-    let page = read_page(&doc, 0, 4).unwrap();
+    let cancellation = SearchCancellation::default();
+    let doc = read_snapshot(&scope, doc, 0, 4, &cancellation).unwrap();
+    let page = read_page_cancellable(&doc, 0, 4, &cancellation).unwrap();
     assert_eq!(page["rows"][0]["reference"]["line"], 1);
     assert_eq!(page["rows"][2]["text"], "INFO retry");
 }
