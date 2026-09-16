@@ -216,6 +216,54 @@ pub(super) fn exercise(
         assert_eq!(w.active_document().unwrap().id, id);
         assert_eq!(w.selected_source_row, Some(1));
     });
+    // Reloading persisted history loses run scopes, but keeps local navigation targets.
+    let saved = panel.read_with(cx, |p, _| p.record().unwrap().payload);
+    let scopes = cx
+        .update_window(window.into(), |_, window, cx| {
+            workspace.update(cx, |w, cx| w.activate_tab(1, window, cx));
+            panel.update(cx, |p, cx| {
+                let scopes = (p.scope.take(), std::mem::take(&mut p.reference_scopes));
+                p.conversation = serde_json::from_str(&saved).unwrap();
+                // Expired search IDs in old links must not prevent source-line navigation.
+                p.open_link(
+                    &format!("{citation}&search_id=expired&result_index=999"),
+                    window,
+                    cx,
+                );
+                scopes
+            })
+        })
+        .unwrap();
+    pump_until(cx, panel, |p| !p.ui_busy);
+    panel.read_with(cx, |p, _| assert!(p.error.is_empty(), "{}", p.error));
+    cx.update_window(window.into(), |_, window, cx| {
+        assert!(
+            workspace
+                .read(cx)
+                .log_viewer
+                .focus_handle
+                .contains_focused(window, cx)
+        );
+    })
+    .unwrap();
+    workspace.read_with(cx, |w, cx| {
+        assert_eq!(
+            w.active_document()
+                .unwrap()
+                .log_table
+                .read(cx)
+                .delegate()
+                .selected_source_rows(),
+            vec![1]
+        );
+        assert_eq!(w.active_document().unwrap().id, id);
+        assert_eq!(w.selected_source_row, Some(1));
+    });
+    panel.update(cx, |p, _| {
+        p.scope = scopes.0;
+        p.reference_scopes = scopes.1;
+    });
+
     // A changed source is rejected before the citation can move selection.
     std::fs::write(&path, "changed\n").unwrap();
     cx.update_window(window.into(), |_, window, cx| {
@@ -226,6 +274,50 @@ pub(super) fn exercise(
     pump_until(cx, panel, |p| !p.ui_busy);
     assert!(!panel.read_with(cx, |p, _| p.error.clone()).is_empty());
     workspace.read_with(cx, |w, _| assert_ne!(w.active_document().unwrap().id, id));
+
+    std::fs::write(
+        &path,
+        "INFO ready\nERROR network timeout\nINFO retry\nERROR disconnected\n",
+    )
+    .unwrap();
+    cx.update_window(window.into(), |_, window, cx| {
+        workspace.update(cx, |w, cx| w.close_tab_by_id(id, window, cx));
+        panel.update(cx, |p, cx| {
+            p.scope = None;
+            p.reference_scopes.clear();
+            p.conversation = serde_json::from_str(&saved).unwrap();
+            p.open_link(&citation, window, cx);
+        });
+    })
+    .unwrap();
+    pump_until(cx, panel, |p| !p.ui_busy);
+    panel.read_with(cx, |p, _| assert!(p.error.is_empty(), "{}", p.error));
+    cx.update_window(window.into(), |_, window, cx| {
+        assert!(
+            workspace
+                .read(cx)
+                .log_viewer
+                .focus_handle
+                .contains_focused(window, cx)
+        );
+    })
+    .unwrap();
+    workspace.read_with(cx, |w, cx| {
+        assert_eq!(
+            w.active_document()
+                .unwrap()
+                .log_table
+                .read(cx)
+                .delegate()
+                .selected_source_rows(),
+            vec![1]
+        );
+        assert!(paths_match(
+            w.active_document().unwrap().document.path(),
+            &path
+        ));
+        assert_eq!(w.selected_source_row, Some(1));
+    });
 
     // A manually selected unopened result grants only that source, even without a directory.
     let unopened_path = root.path().join("unopened.log");

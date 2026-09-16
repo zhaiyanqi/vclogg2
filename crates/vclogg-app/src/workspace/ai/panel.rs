@@ -398,7 +398,7 @@ impl AiPanel {
         Ok(AiConversationRecord {
             id: self.conversation.id.clone(),
             title: self.conversation.title.clone(),
-            payload: serde_json::to_string(&self.conversation)?,
+            payload: serde_json::to_string(&self.conversation_with_log_sources())?,
             revision: self.revision,
         })
     }
@@ -725,6 +725,12 @@ impl AiPanel {
         }
     }
     fn receive_event(&mut self, event: AgentEvent, cx: &mut Context<Self>) {
+        if matches!(
+            event,
+            AgentEvent::ToolFinished(_) | AgentEvent::Finished(..)
+        ) {
+            self.conversation.log_sources = self.conversation_with_log_sources().log_sources;
+        }
         match event {
             AgentEvent::RequestStarted(request) => {
                 self.progress = format!(

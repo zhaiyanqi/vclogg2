@@ -258,6 +258,14 @@ pub enum RunStatus {
     LimitReached,
 }
 
+/// Local navigation metadata; never grants the agent access to a source.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LogSource {
+    pub document_id: u64,
+    pub version: String,
+    pub path: std::path::PathBuf,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Conversation {
     pub id: String,
@@ -266,6 +274,8 @@ pub struct Conversation {
     #[serde(default)]
     pub skill_ids: Vec<String>,
     pub messages: Vec<AgentMessage>,
+    #[serde(default)]
+    pub log_sources: Vec<LogSource>,
     pub status: RunStatus,
     #[serde(default)]
     pub notice: String,
@@ -278,6 +288,7 @@ impl Default for Conversation {
             provider_id: None,
             skill_ids: Vec::new(),
             messages: Vec::new(),
+            log_sources: Vec::new(),
             status: RunStatus::Idle,
             notice: String::new(),
         }

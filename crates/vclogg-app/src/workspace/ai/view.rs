@@ -291,13 +291,30 @@ impl AiPanel {
         let owner = cx.weak_entity();
         let selected_view = view.clone();
         let colors = ui_theme::palette(cx);
-        let style = gpui_component::text::TextViewStyle::default().selection_colors(
-            colors.chat_selection_background,
-            colors.chat_selection_foreground,
-        );
+        // Match gpui-kit's example-markdown preview: default typography and
+        // adaptive tables that scroll horizontally once columns reach their floor.
+        let mut table = gpui::StyleRefinement::default();
+        table.overflow.x = Some(gpui::Overflow::Scroll);
+        // Keep the component's default inline-code background instead of the
+        // application's accent override, following the active light/dark mode.
+        let default_colors = if cx.theme().is_dark() {
+            gpui_component::theme::ThemeColor::dark()
+        } else {
+            gpui_component::theme::ThemeColor::light()
+        };
+        let style = gpui_component::text::TextViewStyle::default()
+            .table(table)
+            .inline_code(gpui::HighlightStyle {
+                background_color: Some(default_colors.accent),
+                ..Default::default()
+            })
+            .selection_colors(
+                colors.chat_selection_background,
+                colors.chat_selection_foreground,
+            );
         div().id(SharedString::from(format!("ai-text-{:?}", view.entity_id())))
             .min_w_0().w_full()
-            .child(TextView::new(view).style(style).selectable(true).on_link_click(move |url, event, window, cx| {
+            .child(TextView::new(view).style(style).text_size(gpui::rems(1.)).selectable(true).on_link_click(move |url, event, window, cx| {
                 if !matches!(event, gpui::ClickEvent::Mouse(event) if event.up.button != MouseButton::Left) {
                     _ = owner.update(cx, |this, cx| this.open_link(url, window, cx));
                 }
@@ -437,7 +454,7 @@ impl AiPanel {
             .arguments
             .get("reference")
             .and_then(|value| serde_json::from_value(value.clone()).ok());
-        let scope = self
+        let mut scope = self
             .scope
             .iter()
             .chain(self.reference_scopes.iter().rev())
@@ -459,7 +476,39 @@ impl AiPanel {
                 })
             })
             .cloned();
+        if call.name == "navigate"
+            && let (Some(scope_state), Some(reference)) = (&scope, &reference)
+        {
+            let closed = scope_state
+                .lock()
+                .ok()
+                .and_then(|state| {
+                    state
+                        .document(reference.document_id, Some(&reference.version))
+                        .ok()
+                })
+                .is_some_and(|doc| {
+                    doc.open
+                        && self
+                            .workspace
+                            .update(cx, |w, _| {
+                                !w.documents.iter().any(|tab| {
+                                    tab.id == doc.id && Arc::ptr_eq(&tab.document, &doc.document)
+                                })
+                            })
+                            .unwrap_or(false)
+                });
+            if closed {
+                scope = None;
+            }
+        }
         let Some(scope) = scope else {
+            if call.name == "navigate"
+                && let Some(reference) = reference
+            {
+                self.open_historical_reference(&reference, window, cx);
+                return;
+            }
             self.error = crate::tr!(
                 "历史引用需要重新分析以确认文件内容",
                 "Analyze again to refresh historical log references"
@@ -494,7 +543,11 @@ impl AiPanel {
             let result = match evidence {
                 Ok(value) => workspace
                     .update_in(cx, |w, window, cx| {
-                        w.ai_commit(&scope, &call, value, window, cx)
+                        let result = w.ai_commit(&scope, &call, value, window, cx)?;
+                        if call.name == "navigate" && result["region"] != "results" {
+                            w.log_viewer.focus_handle.focus(window, cx);
+                        }
+                        Ok(result)
                     })
                     .and_then(|r| r),
                 Err(e) => Err(e),

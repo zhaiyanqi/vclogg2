@@ -9,6 +9,7 @@ mod commands;
 mod evidence;
 mod files;
 mod logs;
+mod navigation;
 mod search;
 mod transcript;
 use logs::*;
