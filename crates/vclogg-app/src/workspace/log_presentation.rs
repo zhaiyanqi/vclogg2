@@ -1791,7 +1791,7 @@ impl Workspace {
         let attachments = workspace.read(cx).ai_attachment_targets(range_region, cx);
         let menu = menu
             .item(
-                PopupMenuItem::new(crate::tr!("添加到 AI 聊天", "Add to AI chat"))
+                PopupMenuItem::new(crate::tr!("添加到对话", "Add to chat"))
                     .disabled(attachments.is_empty())
                     .on_click(window.listener_for(&workspace, move |this, _, window, cx| {
                         this.add_logs_to_ai(attachments.clone(), window, cx);
