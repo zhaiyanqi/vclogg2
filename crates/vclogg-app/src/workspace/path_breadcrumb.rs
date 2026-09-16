@@ -176,13 +176,12 @@ impl Workspace {
                 ),
             )
             .item(
-                PopupMenuItem::new(crate::tr!("打开目录其他文件", "Open other files in folder"))
+                PopupMenuItem::new(crate::tr!("打开目录文件", "Open files in folder"))
                     .disabled(opening)
                     .on_click(window.listener_for(workspace, move |this, _, window, cx| {
                         this.open_files_in_directory(choose_directory.clone(), window, cx);
                     })),
             )
-            .separator()
             .item(
                 PopupMenuItem::new(crate::tr!("打开目录", "Open folder")).on_click(
                     window.listener_for(workspace, move |this, _, window, cx| {
@@ -197,7 +196,6 @@ impl Workspace {
                     }),
                 ),
             )
-            .separator()
             .item(
                 PopupMenuItem::new(crate::tr!("目录中查找", "Find in folder")).on_click(
                     window.listener_for(workspace, move |this, _, window, cx| {
