@@ -14,6 +14,9 @@ pub(super) struct ConversationTab {
     logs: Vec<attachments::DraftLog>,
     queued_prompts: VecDeque<QueuedPrompt>,
     editing_message: Option<usize>,
+    selected_log_ids: Option<BTreeSet<u64>>,
+    selected_workspace_directories: Option<BTreeSet<PathBuf>>,
+    include_search_directory: bool,
     scope: Option<SharedScope>,
     reference_scopes: Vec<SharedScope>,
     error: String,
@@ -38,6 +41,9 @@ impl AiPanel {
                 logs: std::mem::take(&mut self.draft_logs),
                 queued_prompts: std::mem::take(&mut self.queued_prompts),
                 editing_message: self.editing_message.take(),
+                selected_log_ids: self.selected_log_ids.take(),
+                selected_workspace_directories: self.selected_workspace_directories.take(),
+                include_search_directory: self.include_search_directory,
                 scope: self.scope.take(),
                 reference_scopes: std::mem::take(&mut self.reference_scopes),
                 error: std::mem::take(&mut self.error),
@@ -61,6 +67,9 @@ impl AiPanel {
         self.draft_logs = tab.logs;
         self.queued_prompts = tab.queued_prompts;
         self.editing_message = tab.editing_message;
+        self.selected_log_ids = tab.selected_log_ids;
+        self.selected_workspace_directories = tab.selected_workspace_directories;
+        self.include_search_directory = tab.include_search_directory;
         self.resume_queue_after_stop = false;
         self.scope = tab.scope;
         self.reference_scopes = tab.reference_scopes;
@@ -162,6 +171,9 @@ impl AiPanel {
                                 logs: Vec::new(),
                                 queued_prompts: VecDeque::new(),
                                 editing_message: None,
+                                selected_log_ids: None,
+                                selected_workspace_directories: None,
+                                include_search_directory: true,
                                 scope: None,
                                 reference_scopes: Vec::new(),
                                 error: String::new(),

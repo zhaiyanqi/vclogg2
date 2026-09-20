@@ -884,6 +884,7 @@ impl Render for AiPanel {
                                     .child(crate::tr!("日志访问", "Log access")),
                             )
                             .child(div().flex_1().min_w_0())
+                            .child(self.render_context_sources_popover(cx))
                             .child(self.render_context_usage_popover(cx))
                             .child(
                                 Button::new("ai-model-menu")

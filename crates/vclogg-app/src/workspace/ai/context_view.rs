@@ -12,6 +12,245 @@ fn tokens(value: u32) -> String {
 }
 
 impl AiPanel {
+    pub(super) fn render_context_sources_popover(&self, cx: &mut Context<Self>) -> AnyElement {
+        let panel = cx.entity();
+        let weak_panel = cx.weak_entity();
+        let logs = self
+            .workspace
+            .read_with(cx, |workspace, _| {
+                workspace
+                    .documents
+                    .iter()
+                    .filter(|tab| tab.load_state == DocumentLoadState::Ready)
+                    .map(|tab| tab.id)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let count = logs
+            .iter()
+            .filter(|id| {
+                self.selected_log_ids
+                    .as_ref()
+                    .is_none_or(|selected| selected.contains(id))
+            })
+            .count();
+        let label = format!(
+            "{} · {} {} · {} {}",
+            crate::tr!("本轮访问", "Run access"),
+            count,
+            crate::tr!("日志", "logs"),
+            self.selected_workspace_directories
+                .as_ref()
+                .map_or(self.settings.workspace_directories.len(), BTreeSet::len),
+            crate::tr!("项目", "projects")
+        );
+        Popover::new("ai-context-sources-popover")
+            .anchor(Anchor::BottomLeft)
+            .open(self.show_context_sources)
+            .on_open_change(move |open, _, cx| {
+                _ = weak_panel.update(cx, |this, cx| {
+                    this.show_context_sources = *open;
+                    cx.notify();
+                });
+            })
+            .p_0()
+            .trigger(
+                Button::new("ai-context-sources")
+                    .small()
+                    .ghost()
+                    .text_label(label.clone())
+                    .tooltip(label),
+            )
+            .content(move |_, window, popover_cx| {
+                let width = (window.rem_size() * 25.).min(window.viewport_size().width * 0.8);
+                div()
+                    .w(width)
+                    .child(panel.update(popover_cx, |this, cx| this.render_context_sources(cx)))
+            })
+            .into_any_element()
+    }
+
+    fn render_context_sources(&self, cx: &mut Context<Self>) -> AnyElement {
+        let logs = self
+            .workspace
+            .read_with(cx, |workspace, _| {
+                workspace
+                    .documents
+                    .iter()
+                    .filter(|tab| tab.load_state == DocumentLoadState::Ready)
+                    .map(|tab| (tab.id, tab.document.file_name().to_owned()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let all_log_ids = logs.iter().map(|(id, _)| *id).collect::<BTreeSet<_>>();
+        let disabled = self.settings_busy(cx) || self.ui_busy;
+        let mut content = v_flex()
+            .gap_2()
+            .p_3()
+            .child(div().text_sm().font_semibold().child(crate::tr!(
+                "发送前选择可访问的来源",
+                "Choose sources before sending"
+            )))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(crate::tr!(
+                        "选择对下一轮生效；附加的日志行始终包含在本轮中。",
+                        "Choices apply to the next run; attached log lines are always included."
+                    )),
+            )
+            .child(
+                Button::new("ai-scope-reset")
+                    .small()
+                    .ghost()
+                    .text_label(crate::tr!("恢复全部访问", "Restore all access"))
+                    .disabled(disabled)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.selected_log_ids = None;
+                        this.selected_workspace_directories = None;
+                        this.include_search_directory = true;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .font_semibold()
+                    .child(crate::tr!("已打开日志", "Open logs")),
+            );
+        for (id, name) in logs {
+            let selected = self
+                .selected_log_ids
+                .as_ref()
+                .is_none_or(|ids| ids.contains(&id));
+            let all = all_log_ids.clone();
+            content = content.child(
+                Button::new(SharedString::from(format!("ai-scope-log-{id}")))
+                    .small()
+                    .ghost()
+                    .justify_start()
+                    .w_full()
+                    .text_label(format!("{} {name}", if selected { "✓" } else { "○" }))
+                    .disabled(disabled)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let selected = this.selected_log_ids.get_or_insert_with(|| all.clone());
+                        if !selected.insert(id) {
+                            selected.remove(&id);
+                        }
+                        cx.notify();
+                    })),
+            );
+        }
+        if all_log_ids.is_empty() {
+            content = content.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(crate::tr!("没有已打开的日志", "No open logs")),
+            );
+        }
+        let directory = self
+            .workspace
+            .read_with(cx, |workspace, _| {
+                workspace.global_search.directory_options.directory.clone()
+            })
+            .ok()
+            .flatten();
+        if let Some(path) = directory {
+            content = content.child(
+                div()
+                    .pt_2()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        Button::new("ai-scope-directory")
+                            .small()
+                            .ghost()
+                            .justify_start()
+                            .w_full()
+                            .text_label(format!(
+                                "{} {}: {}",
+                                if self.include_search_directory {
+                                    "✓"
+                                } else {
+                                    "○"
+                                },
+                                crate::tr!("搜索目录", "Search folder"),
+                                path.display()
+                            ))
+                            .disabled(disabled)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.include_search_directory = !this.include_search_directory;
+                                cx.notify();
+                            })),
+                    ),
+            );
+        }
+        content = content.child(
+            div()
+                .pt_2()
+                .border_t_1()
+                .border_color(cx.theme().border)
+                .text_xs()
+                .font_semibold()
+                .child(crate::tr!("源码项目", "Source projects")),
+        );
+        let all_projects = self
+            .settings
+            .workspace_directories
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        for path in &self.settings.workspace_directories {
+            let selected = self
+                .selected_workspace_directories
+                .as_ref()
+                .is_none_or(|paths| paths.contains(path));
+            let path = path.clone();
+            let all = all_projects.clone();
+            let label = format!("{} {}", if selected { "✓" } else { "○" }, path.display());
+            content = content.child(
+                Button::new(SharedString::from(format!(
+                    "ai-scope-project-{}",
+                    path.display()
+                )))
+                .small()
+                .ghost()
+                .justify_start()
+                .w_full()
+                .text_label(label)
+                .disabled(disabled)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let selected = this
+                        .selected_workspace_directories
+                        .get_or_insert_with(|| all.clone());
+                    if !selected.insert(path.clone()) {
+                        selected.remove(&path);
+                    }
+                    cx.notify();
+                })),
+            );
+        }
+        if all_projects.is_empty() {
+            content = content.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(crate::tr!(
+                        "未配置源码项目",
+                        "No source projects configured"
+                    )),
+            );
+        }
+        div()
+            .id("ai-context-sources-scroll")
+            .max_h(gpui_kit::rems(25.))
+            .overflow_y_scroll()
+            .child(content)
+            .into_any_element()
+    }
+
     fn current_usage(&self) -> ContextUsage {
         let mut usage = self.conversation.context_usage.clone().unwrap_or_default();
         usage.conversation_tokens = conversation_tokens(&self.conversation.active_messages());

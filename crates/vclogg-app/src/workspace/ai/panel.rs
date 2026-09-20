@@ -54,6 +54,10 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) editor: Option<super::settings::ConfigEditor>,
     pub(super) show_settings: bool,
     pub(super) show_context_usage: bool,
+    pub(super) show_context_sources: bool,
+    pub(super) selected_log_ids: Option<BTreeSet<u64>>,
+    pub(super) selected_workspace_directories: Option<BTreeSet<PathBuf>>,
+    pub(super) include_search_directory: bool,
     pub(super) settings_generation: u64,
     pub(super) settings_tab: super::configuration::SettingsTab,
     pub(super) prompt_editor: Option<super::prompt_settings::PromptEditor>,
@@ -82,6 +86,23 @@ pub(super) struct QueuedPrompt {
 }
 
 impl AiPanel {
+    fn restrict_scope(&self, scope: &SharedScope) {
+        if let Ok(mut state) = scope.lock() {
+            if let Some(selected) = &self.selected_log_ids {
+                let included = |id: &u64| {
+                    selected.contains(id)
+                        || self.draft_logs.iter().any(|log| log.document.id == *id)
+                };
+                state.documents.retain(|id, _| included(id));
+                state.allowed.retain(|id| included(id));
+                state.current = state.current.filter(included);
+            }
+            if !self.include_search_directory {
+                state.directory.directory = None;
+            }
+        }
+    }
+
     pub(super) fn queue_current_prompt(
         &mut self,
         steer: bool,
@@ -243,6 +264,10 @@ impl AiPanel {
             editor: None,
             show_settings: false,
             show_context_usage: false,
+            show_context_sources: false,
+            selected_log_ids: None,
+            selected_workspace_directories: None,
+            include_search_directory: true,
             settings_generation: 0,
             settings_tab: super::configuration::SettingsTab::Models,
             prompt_editor: None,
@@ -332,6 +357,9 @@ impl AiPanel {
                 self.reference_scopes.clear();
                 self.draft_logs.clear();
                 self.editing_message = None;
+                self.selected_log_ids = None;
+                self.selected_workspace_directories = None;
+                self.include_search_directory = true;
                 self.attachment_task = None;
                 self.attachments_loading = false;
                 self.conversation = conversation;
@@ -545,6 +573,7 @@ impl AiPanel {
             cx.notify();
             return;
         };
+        self.restrict_scope(&scope);
         let user_text = match self.message_with_attachments(&user_text, &scope) {
             Ok(text) => text,
             Err(error) => {
@@ -609,7 +638,13 @@ impl AiPanel {
         };
         let settings_path = self.settings_path.clone();
         let prompts = self.settings.prompts.clone();
-        let extensions = vclogg_ai::RunExtensions::from_settings(&self.settings)
+        let mut run_settings = self.settings.clone();
+        if let Some(selected) = &self.selected_workspace_directories {
+            run_settings
+                .workspace_directories
+                .retain(|path| selected.contains(path));
+        }
+        let extensions = vclogg_ai::RunExtensions::from_settings(&run_settings)
             .with_conversation(&self.conversation);
         let workspace = self.workspace.clone();
         self.task = Some(cx.spawn_in(window, async move |this, cx| {
@@ -990,6 +1025,9 @@ impl AiPanel {
         self.queued_prompts.clear();
         self.resume_queue_after_stop = false;
         self.editing_message = None;
+        self.selected_log_ids = None;
+        self.selected_workspace_directories = None;
+        self.include_search_directory = true;
         self.attachment_task = None;
         self.attachments_loading = false;
         self.scope = None;

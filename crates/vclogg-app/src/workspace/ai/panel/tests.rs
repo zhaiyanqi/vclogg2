@@ -13,6 +13,7 @@ fn isolated_panel_send_workflow() {
         "workspace_transcript",
         "tabs",
         "queue",
+        "context",
         "log_analysis",
         "cancel",
         "preparing_cancel",
@@ -98,6 +99,45 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
     let panel = panel.unwrap();
     pump_until(cx, &panel, |p| !p.busy);
     let mode = std::env::var("VCLOGG2_AI_TEST_MODE").unwrap();
+    if mode == "context" {
+        let fixture = tempfile::tempdir().unwrap();
+        let paths = [
+            fixture.path().join("one.log"),
+            fixture.path().join("two.log"),
+        ];
+        for path in &paths {
+            std::fs::write(path, "INFO ready\n").unwrap();
+        }
+        cx.update_window(window.into(), |_, window, cx| {
+            owner.as_ref().unwrap().update(cx, |workspace, cx| {
+                for path in &paths {
+                    super::super::tests::install_test_document(
+                        workspace,
+                        Arc::new(LogDocument::open(path).unwrap()),
+                        window,
+                        cx,
+                    );
+                }
+                workspace.global_search.directory_options.directory =
+                    Some(fixture.path().to_path_buf());
+            });
+            let workspace = owner.as_ref().unwrap().read(cx);
+            let keep = workspace.documents[0].id;
+            let remove = workspace.documents[1].id;
+            let scope = workspace.ai_scope();
+            panel.update(cx, |panel, _| {
+                panel.selected_log_ids = Some(BTreeSet::from([keep]));
+                panel.include_search_directory = false;
+                panel.restrict_scope(&scope);
+            });
+            let state = scope.lock().unwrap();
+            assert!(state.documents.contains_key(&keep));
+            assert!(!state.documents.contains_key(&remove));
+            assert!(state.directory.directory.is_none());
+        })
+        .unwrap();
+        return;
+    }
     if mode == "queue" {
         cx.update_window(window.into(), |_, window, cx| {
             panel.update(cx, |panel, cx| {
