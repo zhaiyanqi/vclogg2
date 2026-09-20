@@ -1,6 +1,7 @@
 //! Retained sidebar tools; document ownership stays with Workspace.
 use super::*;
 use gpui_kit::component::{
+    animation::EffectTransition,
     list::ListItem,
     resizable::h_resizable,
     tree::{Tree, TreeEvent, TreeItem, TreeState},
@@ -21,10 +22,38 @@ mod tasks;
 mod views;
 use layout::{
     DraggedSidebarPanel, SIDEBAR_MIN_WIDTH_REM, SIDEBAR_RAIL_WIDTH_REM, SidebarLayout,
-    SidebarPanelId, SidebarSide,
+    SidebarPanelId, SidebarSide, sidebar_drag_should_close, sidebar_reopen_width,
 };
 
 pub(super) struct SidebarChanged;
+
+const SIDEBAR_COLLAPSE_DURATION: Duration = Duration::from_millis(160);
+
+fn drag_collapse_candidate(
+    widths: [Option<f32>; 2],
+    sizes: &[Pixels],
+    rem: Pixels,
+) -> Option<SidebarSide> {
+    let left = widths[0].and_then(|_| sizes.first().copied());
+    let right = widths[1].and_then(|_| sizes.get(1 + usize::from(widths[0].is_some())).copied());
+    [left, right]
+        .into_iter()
+        .enumerate()
+        .filter_map(|(ix, measured)| {
+            let shown = widths[ix]?;
+            let measured = measured?;
+            let width = (measured / rem - SIDEBAR_RAIL_WIDTH_REM).max(SIDEBAR_MIN_WIDTH_REM);
+            sidebar_drag_should_close(shown, width).then_some((ix, shown - width))
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(ix, _)| {
+            if ix == 0 {
+                SidebarSide::Left
+            } else {
+                SidebarSide::Right
+            }
+        })
+}
 
 struct SidebarJob {
     cancellation: CancellationToken,
@@ -63,6 +92,8 @@ pub(super) struct SidebarState {
     layout_loaded: bool,
     layout_modified: bool,
     layout_revision: u64,
+    closing_side: Option<SidebarSide>,
+    collapse_request: u64,
     store: Option<Arc<StateStore>>,
     persistence_task: Option<Task<()>>,
     persistence_error: Option<String>,
@@ -179,6 +210,8 @@ impl SidebarState {
             layout_loaded: false,
             layout_modified: false,
             layout_revision: 0,
+            closing_side: None,
+            collapse_request: 0,
             store: None,
             persistence_task: None,
             persistence_error: None,
@@ -481,6 +514,10 @@ impl SidebarState {
     }
 
     fn toggle(&mut self, side: SidebarSide, window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing_side == Some(side) {
+            self.closing_side = None;
+            self.collapse_request += 1;
+        }
         let placement = &mut self.layout.sides[side.ix()];
         placement.visible = !placement.visible;
         if self.is_showing(SidebarPanelId::History) {
@@ -504,6 +541,47 @@ impl SidebarState {
         }
     }
 
+    fn begin_drag_collapse(
+        &mut self,
+        side: SidebarSide,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.closing_side.is_some() || !self.layout.sides[side.ix()].visible {
+            return;
+        }
+        if cx.reduce_motion() {
+            self.finish_drag_collapse(side, window, cx);
+            return;
+        }
+        self.closing_side = Some(side);
+        self.collapse_request += 1;
+        let request = self.collapse_request;
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor()
+                .timer(SIDEBAR_COLLAPSE_DURATION)
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                if this.closing_side == Some(side) && this.collapse_request == request {
+                    this.finish_drag_collapse(side, window, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn finish_drag_collapse(
+        &mut self,
+        side: SidebarSide,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let placement = &mut self.layout.sides[side.ix()];
+        placement.width = sidebar_reopen_width(placement.width);
+        self.toggle(side, window, cx);
+    }
+
     fn focus_panel(&self, panel: SidebarPanelId, window: &mut Window, cx: &mut Context<Self>) {
         if panel == SidebarPanelId::Ai {
             self.ai.update(cx, |ai, cx| ai.focus(window, cx));
@@ -523,6 +601,10 @@ impl SidebarState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.closing_side == Some(side) {
+            self.closing_side = None;
+            self.collapse_request += 1;
+        }
         self.layout.sides[side.ix()].active = Some(panel);
         self.layout.sides[side.ix()].visible = true;
         if panel == SidebarPanelId::History {
@@ -648,9 +730,33 @@ impl Render for SidebarSurface {
                 })
                 .ok()
         });
-        self.state.update(cx, |state, cx| {
+        let content = self.state.update(cx, |state, cx| {
             state.render_side(self.side, tabs, window, cx)
-        })
+        });
+        let state = self.state.read(cx);
+        let shell = div().size_full().relative().child(content);
+        if state.closing_side == Some(self.side) {
+            let travel = if self.side == SidebarSide::Left {
+                px(-28.)
+            } else {
+                px(28.)
+            };
+            EffectTransition::new(SIDEBAR_COLLAPSE_DURATION)
+                .ease(ease_out_cubic)
+                .slide_x(px(0.), travel)
+                .fade(1., 0.)
+                .apply(
+                    shell,
+                    format!(
+                        "sidebar-collapse-{}-{}",
+                        self.side.ix(),
+                        state.collapse_request
+                    ),
+                )
+                .into_any_element()
+        } else {
+            shell.into_any_element()
+        }
     }
 }
 
@@ -810,6 +916,9 @@ impl Workspace {
         let state = self.sidebar.clone();
         let workspace = cx.weak_entity();
         let split_id = self.sidebar_split.entity_id();
+        let live_state = self.sidebar.clone();
+        let live_workspace = cx.weak_entity();
+        let live_split = self.sidebar_split.clone();
         let vertical_tabs = self.vertical_tabs_enabled(cx);
         let center = v_flex()
             .min_w_0()
@@ -824,7 +933,7 @@ impl Workspace {
                     .min_h_0()
                     .child(self.render_tab_workspace(window, cx)),
             );
-        h_resizable("workspace-sidebars")
+        let split = h_resizable("workspace-sidebars")
             .with_state(&self.sidebar_split)
             .on_resize(move |sizes, window, cx| {
                 if !workspace.upgrade().is_some_and(|workspace| {
@@ -842,19 +951,27 @@ impl Workspace {
                 ix += 1;
                 let right = widths[1].and_then(|_| sizes.get(ix).copied());
                 state.update(cx, |state, cx| {
+                    if state.closing_side.is_some() {
+                        return;
+                    }
                     let mut changed = false;
+                    let close = drag_collapse_candidate(widths, &sizes, window.rem_size());
                     for (side, measured) in [left, right].into_iter().enumerate() {
                         if let Some(width) = measured {
                             let width = (width / window.rem_size() - SIDEBAR_RAIL_WIDTH_REM)
                                 .max(SIDEBAR_MIN_WIDTH_REM);
                             // Only persist a divider's explicit change, not another pane's temporary fit.
-                            if widths[side].is_some_and(|shown| (shown - width).abs() > 0.05) {
+                            if close.is_none()
+                                && widths[side].is_some_and(|shown| (shown - width).abs() > 0.05)
+                            {
                                 state.layout.sides[side].width = width;
                                 changed = true;
                             }
                         }
                     }
-                    if changed {
+                    if let Some(side) = close {
+                        state.begin_drag_collapse(side, window, cx);
+                    } else if changed {
                         state.changed_layout(cx);
                     }
                 });
@@ -887,7 +1004,41 @@ impl Workspace {
                         )
                         .child(self.sidebar_surfaces[1].clone()),
                 )
-            })
+            });
+        div()
+            .size_full()
+            .relative()
+            // This listener is painted before the split. Bubble dispatch runs in
+            // reverse order, so it sees the panel width updated for this move.
+            .child(
+                canvas(
+                    |_, _, _| (),
+                    move |_, _, window, _| {
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                            if !phase.bubble()
+                                || !event.dragging()
+                                || !live_workspace.upgrade().is_some_and(|workspace| {
+                                    workspace.read(cx).sidebar_split.entity_id() == split_id
+                                })
+                            {
+                                return;
+                            }
+                            let sizes = live_split.read(cx).sizes();
+                            if let Some(side) =
+                                drag_collapse_candidate(widths, sizes, window.rem_size())
+                            {
+                                live_state.update(cx, |state, cx| {
+                                    state.begin_drag_collapse(side, window, cx)
+                                });
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .w_0()
+                .h_0(),
+            )
+            .child(split)
     }
 }
 
