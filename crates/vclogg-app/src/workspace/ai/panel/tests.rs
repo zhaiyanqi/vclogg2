@@ -11,6 +11,7 @@ fn isolated_panel_send_workflow() {
         "complete",
         "transcript",
         "workspace_transcript",
+        "tabs",
         "log_analysis",
         "cancel",
         "preparing_cancel",
@@ -96,6 +97,29 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
     let panel = panel.unwrap();
     pump_until(cx, &panel, |p| !p.busy);
     let mode = std::env::var("VCLOGG2_AI_TEST_MODE").unwrap();
+    if mode == "tabs" {
+        cx.update_window(window.into(), |_, window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.new_conversation_tab(window, cx);
+                panel.new_conversation_tab(window, cx);
+                panel.new_conversation_tab(window, cx);
+                assert_eq!(panel.open_conversations.len(), 4);
+                let ids = panel.open_conversations.clone();
+                panel.close_conversation_tab(&ids[1], window, cx);
+                assert_eq!(panel.open_conversations, vec![ids[0].clone(), ids[2].clone(), ids[3].clone()]);
+                panel.close_conversation_tab(&ids[0], window, cx);
+                assert_eq!(panel.open_conversations, vec![ids[2].clone(), ids[3].clone()]);
+                panel.close_conversation_tab(&ids[3], window, cx);
+                assert_eq!(panel.open_conversations, vec![ids[2].clone()]);
+                assert_eq!(panel.conversation.id, ids[2]);
+                panel.close_conversation_tab(&ids[2], window, cx);
+                assert_eq!(panel.open_conversations.len(), 1);
+                assert_eq!(panel.conversation.id, panel.open_conversations[0]);
+                assert_ne!(panel.conversation.id, ids[2]);
+            });
+        }).unwrap();
+        return;
+    }
     if matches!(mode.as_str(), "transcript" | "workspace_transcript") {
         let fixture = tempfile::tempdir().unwrap();
         if mode == "workspace_transcript" {
