@@ -13,6 +13,7 @@ pub(super) struct ConversationTab {
     draft: String,
     logs: Vec<attachments::DraftLog>,
     queued_prompts: VecDeque<QueuedPrompt>,
+    editing_message: Option<usize>,
     scope: Option<SharedScope>,
     reference_scopes: Vec<SharedScope>,
     error: String,
@@ -36,6 +37,7 @@ impl AiPanel {
                 draft: self.input.read(cx).value().to_string(),
                 logs: std::mem::take(&mut self.draft_logs),
                 queued_prompts: std::mem::take(&mut self.queued_prompts),
+                editing_message: self.editing_message.take(),
                 scope: self.scope.take(),
                 reference_scopes: std::mem::take(&mut self.reference_scopes),
                 error: std::mem::take(&mut self.error),
@@ -58,6 +60,7 @@ impl AiPanel {
         self.revision = tab.revision;
         self.draft_logs = tab.logs;
         self.queued_prompts = tab.queued_prompts;
+        self.editing_message = tab.editing_message;
         self.resume_queue_after_stop = false;
         self.scope = tab.scope;
         self.reference_scopes = tab.reference_scopes;
@@ -158,6 +161,7 @@ impl AiPanel {
                                 draft: String::new(),
                                 logs: Vec::new(),
                                 queued_prompts: VecDeque::new(),
+                                editing_message: None,
                                 scope: None,
                                 reference_scopes: Vec::new(),
                                 error: String::new(),
@@ -218,6 +222,7 @@ impl AiPanel {
                 && tab.draft.trim().is_empty()
                 && tab.logs.is_empty()
                 && tab.queued_prompts.is_empty()
+                && tab.editing_message.is_none()
         }) {
             self.inactive_conversations.remove(id);
         }

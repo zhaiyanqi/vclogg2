@@ -66,6 +66,29 @@ impl AiPanel {
                         .bg(cx.theme().primary.opacity(0.12))
                         .child(self.markdown_view(&self.messages[start], cx)),
                 )
+                .child(
+                    h_flex()
+                        .gap_1()
+                        .child(
+                            Button::new(("ai-copy-user", start))
+                                .small()
+                                .ghost()
+                                .text_label(crate::tr!("复制消息", "Copy message"))
+                                .on_click(
+                                    cx.listener(move |this, _, _, cx| this.copy_message(start, cx)),
+                                ),
+                        )
+                        .child(
+                            Button::new(("ai-edit-user", start))
+                                .small()
+                                .ghost()
+                                .text_label(crate::tr!("编辑并重试", "Edit and retry"))
+                                .disabled(self.busy || self.ui_busy)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.edit_message(start, window, cx)
+                                })),
+                        ),
+                )
                 .into_any_element();
         }
         let live = self.live_row && row_ix + 1 == self.transcript_rows.len();
@@ -88,12 +111,36 @@ impl AiPanel {
             row = row.child(self.render_process(start, end, answer, live, cx));
         }
         if let Some(ix) = answer {
-            row = row.child(
-                div()
-                    .debug_selector(|| "ai-answer".into())
-                    .w_full()
-                    .child(self.markdown_view(&self.messages[ix], cx)),
-            );
+            row = row
+                .child(
+                    div()
+                        .debug_selector(|| "ai-answer".into())
+                        .w_full()
+                        .child(self.markdown_view(&self.messages[ix], cx)),
+                )
+                .child(
+                    h_flex()
+                        .gap_1()
+                        .child(
+                            Button::new(("ai-copy-answer", ix))
+                                .small()
+                                .ghost()
+                                .text_label(crate::tr!("复制回复", "Copy response"))
+                                .on_click(
+                                    cx.listener(move |this, _, _, cx| this.copy_message(ix, cx)),
+                                ),
+                        )
+                        .child(
+                            Button::new(("ai-regenerate", ix))
+                                .small()
+                                .ghost()
+                                .text_label(crate::tr!("重新生成", "Regenerate"))
+                                .disabled(self.busy || self.ui_busy)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.regenerate_message(ix, window, cx)
+                                })),
+                        ),
+                );
         }
         if live && !self.live.is_empty() {
             row = row.child(self.markdown_view(&self.live_view, cx));
@@ -707,6 +754,34 @@ impl Render for AiPanel {
                                         })),
                                 )
                         })),
+                )
+            })
+            .when_some(self.editing_message, |this, _| {
+                this.child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(crate::tr!(
+                                    "编辑后发送将替换这条消息及后续回复",
+                                    "Sending will replace this message and later replies"
+                                )),
+                        )
+                        .child(
+                            Button::new("ai-cancel-edit")
+                                .small()
+                                .ghost()
+                                .text_label(crate::tr!("取消编辑", "Cancel edit"))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.editing_message = None;
+                                    this.draft_logs.clear();
+                                    this.input
+                                        .update(cx, |input, cx| input.set_value("", window, cx));
+                                    cx.notify();
+                                })),
+                        ),
                 )
             })
             .child(

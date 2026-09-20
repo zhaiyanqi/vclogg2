@@ -26,6 +26,7 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) draft_logs: Vec<super::attachments::DraftLog>,
     pub(super) queued_prompts: VecDeque<QueuedPrompt>,
     pub(super) resume_queue_after_stop: bool,
+    pub(super) editing_message: Option<usize>,
     pub(super) attachments_loading: bool,
     pub(super) attachment_task: Option<Task<()>>,
     pub(super) scroller: Entity<TranscriptScroll>,
@@ -214,6 +215,7 @@ impl AiPanel {
             draft_logs: Vec::new(),
             queued_prompts: VecDeque::new(),
             resume_queue_after_stop: false,
+            editing_message: None,
             attachments_loading: false,
             attachment_task: None,
             scroller,
@@ -329,6 +331,7 @@ impl AiPanel {
                 conversation.recover();
                 self.reference_scopes.clear();
                 self.draft_logs.clear();
+                self.editing_message = None;
                 self.attachment_task = None;
                 self.attachments_loading = false;
                 self.conversation = conversation;
@@ -570,6 +573,12 @@ impl AiPanel {
         self.reasoning.clear();
         self.progress = crate::tr!("正在准备会话", "Preparing conversation").into();
         self.pending_tool = None;
+        if let Some(ix) = self.editing_message.take() {
+            self.conversation.messages.truncate(ix);
+            self.conversation.summarized_messages = self.conversation.summarized_messages.min(ix);
+            self.conversation.context_summary.clear();
+            self.rebuild_messages(cx);
+        }
         self.recover_messages(cx);
         self.push_message(
             AgentMessage::User {
@@ -980,6 +989,7 @@ impl AiPanel {
         self.draft_logs.clear();
         self.queued_prompts.clear();
         self.resume_queue_after_stop = false;
+        self.editing_message = None;
         self.attachment_task = None;
         self.attachments_loading = false;
         self.scope = None;

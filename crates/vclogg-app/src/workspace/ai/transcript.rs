@@ -83,6 +83,86 @@ pub(super) fn row_starts(messages: &[AgentMessage], live: bool) -> Vec<usize> {
 }
 
 impl AiPanel {
+    pub(super) fn copy_message(&self, ix: usize, cx: &mut Context<Self>) {
+        let text = match self.conversation.messages.get(ix) {
+            Some(AgentMessage::User { text }) => user_content(text).0,
+            Some(AgentMessage::Assistant { text, .. }) => text,
+            _ => return,
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(text.to_owned()));
+    }
+
+    pub(super) fn edit_message(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings_busy(cx) || self.ui_busy {
+            return;
+        }
+        let Some(AgentMessage::User { text }) = self.conversation.messages.get(ix) else {
+            return;
+        };
+        let (body, attachments) = user_content(text);
+        let body = body.to_owned();
+        let mut logs = Vec::new();
+        let expected = attachments.len();
+        for attachment in attachments {
+            let reference = attachment.reference;
+            let snapshot = self
+                .scope
+                .iter()
+                .chain(self.reference_scopes.iter())
+                .filter_map(|scope| scope.lock().ok())
+                .find_map(|scope| {
+                    scope
+                        .documents
+                        .get(&reference.document_id)
+                        .filter(|doc| doc.version == reference.version)
+                        .cloned()
+                });
+            if let Some(document) = snapshot {
+                logs.push(super::attachments::DraftLog {
+                    document,
+                    source_row: reference.line.saturating_sub(1),
+                    preview: String::new(),
+                });
+            }
+        }
+        if logs.len() != expected {
+            self.error = crate::tr!(
+                "原消息的日志引用已不可用，请重新附加日志",
+                "Original log references are unavailable; attach the logs again"
+            )
+            .into();
+            cx.notify();
+            return;
+        }
+        self.draft_logs = logs;
+        self.editing_message = Some(ix);
+        self.queued_prompts.clear();
+        self.input
+            .update(cx, |input, cx| input.set_value(body, window, cx));
+        self.focus(window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn regenerate_message(
+        &mut self,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings_busy(cx) || self.ui_busy {
+            return;
+        }
+        let Some(user_ix) =
+            (0..ix).rfind(|&i| matches!(self.conversation.messages[i], AgentMessage::User { .. }))
+        else {
+            return;
+        };
+        self.edit_message(user_ix, window, cx);
+        if self.editing_message == Some(user_ix) {
+            self.send(false, window, cx);
+        }
+    }
+
     pub(super) fn remeasure_message(&self, message_ix: usize, cx: &mut Context<Self>) {
         if let Some(row) = self
             .transcript_rows
