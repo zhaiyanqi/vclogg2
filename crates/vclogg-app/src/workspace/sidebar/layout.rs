@@ -5,7 +5,7 @@ use super::*;
 pub(super) const SIDEBAR_RAIL_WIDTH_REM: f32 = 2.25;
 pub(super) const SIDEBAR_MIN_WIDTH_REM: f32 = 0.;
 /// Below this usable content width, an inward divider drag closes the sidebar.
-pub(super) const SIDEBAR_COLLAPSE_WIDTH_REM: f32 = 8.;
+pub(super) const SIDEBAR_COLLAPSE_WIDTH_REM: f32 = 4.;
 pub(super) const SIDEBAR_REOPEN_WIDTH_REM: f32 = 12.;
 
 pub(super) fn sidebar_drag_should_close(shown_width: f32, measured_width: f32) -> bool {
@@ -385,6 +385,7 @@ mod tests {
 
     #[test]
     fn sidebar_closes_only_after_an_inward_drag_below_the_threshold() {
+        assert_eq!(SIDEBAR_COLLAPSE_WIDTH_REM, 4.);
         assert!(sidebar_drag_should_close(
             18.,
             SIDEBAR_COLLAPSE_WIDTH_REM - 0.1
