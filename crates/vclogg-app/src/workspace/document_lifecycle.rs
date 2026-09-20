@@ -713,7 +713,7 @@ impl Workspace {
                 restoring_result_selection: false,
                 load_state: prepared.load_state,
                 edit: None,
-                edit_task: None,
+                edit_load_task: None,
             });
             global_sources_changed = true;
             installed_document_ids.insert(document_id);

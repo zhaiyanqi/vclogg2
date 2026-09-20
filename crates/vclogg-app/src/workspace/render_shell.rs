@@ -815,7 +815,7 @@ impl Workspace {
                     .child(toolbar_icon_button(
                         Button::new("toggle-auto-follow")
                             .icon(if edit_document_id.is_some() || draft_editing {
-                                Icon::new(crate::app_assets::AppIcon::Save)
+                                Icon::new(crate::app_assets::AppIcon::SaveCheck)
                             } else {
                                 Icon::new(crate::app_assets::AppIcon::FollowEnd)
                             })

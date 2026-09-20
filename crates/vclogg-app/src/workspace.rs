@@ -709,7 +709,8 @@ struct DocumentTab {
     restoring_result_selection: bool,
     load_state: DocumentLoadState,
     edit: Option<DocumentEditSession>,
-    edit_task: Option<Task<()>>,
+    // Only the initial editor load drives the loading surface; saves belong to the session.
+    edit_load_task: Option<Task<()>>,
 }
 
 struct DocumentEditSession {
@@ -721,7 +722,8 @@ struct DocumentEditSession {
     saving: bool,
     saved_since_enter: bool,
     pending_exit_row: Option<usize>,
-    exit_after_save: bool,
+    after_save: EditAfterSave,
+    save_task: Option<Task<()>>,
     _subscription: Subscription,
 }
 
@@ -732,9 +734,17 @@ struct NewFileDraft {
     dirty: bool,
     active: bool,
     saving: bool,
-    exit_after_save: bool,
+    after_save: EditAfterSave,
     save_task: Option<Task<()>>,
     _subscription: Subscription,
+}
+
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+enum EditAfterSave {
+    #[default]
+    None,
+    ExitMode,
+    CloseTab,
 }
 
 struct PreparedTabFrame {

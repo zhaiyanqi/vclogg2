@@ -3104,7 +3104,7 @@ impl Workspace {
         let _performance_scope = crate::ui_performance::scope("Workspace::render_tab_workspace");
         let tab = self.active_document();
         if let Some(document_id) = tab
-            .filter(|tab| tab.edit.is_none() && tab.edit_task.is_some())
+            .filter(|tab| tab.edit.is_none() && tab.edit_load_task.is_some())
             .map(|tab| tab.id)
         {
             let loading = div()

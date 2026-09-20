@@ -4,7 +4,7 @@ use gpui_kit::component::IconNamed;
 use gpui_kit::{AssetSource, Result, SharedString};
 
 /// Additional icons rendered by the standard Icon component.
-/// Lucide 1.27.0 SVGs: https://github.com/lucide-icons/lucide/tree/1.27.0/icons.
+/// Lucide SVGs: existing icons from 1.27.0; file-pen-line and save-check from 1.43.0.
 /// License: assets/icons/lucide-LICENSE.txt.
 /// Tabler Letter M: https://github.com/tabler/tabler-icons.
 /// License: assets/icons/tabler-LICENSE.txt.
@@ -13,7 +13,7 @@ pub(crate) enum AppIcon {
     History,
     Refresh,
     FollowEnd,
-    Save,
+    SaveCheck,
     ColorLabel,
     LetterM,
 }
@@ -23,7 +23,7 @@ impl AppIcon {
         Self::History,
         Self::Refresh,
         Self::FollowEnd,
-        Self::Save,
+        Self::SaveCheck,
         Self::ColorLabel,
         Self::LetterM,
     ];
@@ -33,7 +33,7 @@ impl AppIcon {
             Self::History => "vclogg/icons/history.svg",
             Self::Refresh => "vclogg/icons/refresh-cw.svg",
             Self::FollowEnd => "vclogg/icons/arrow-down-to-line.svg",
-            Self::Save => "vclogg/icons/save.svg",
+            Self::SaveCheck => "vclogg/icons/save-check.svg",
             Self::ColorLabel => "vclogg/icons/tag.svg",
             Self::LetterM => "vclogg/icons/letter-m.svg",
         }
@@ -44,7 +44,7 @@ impl AppIcon {
             Self::History => include_bytes!("../assets/icons/history.svg"),
             Self::Refresh => include_bytes!("../assets/icons/refresh-cw.svg"),
             Self::FollowEnd => include_bytes!("../assets/icons/arrow-down-to-line.svg"),
-            Self::Save => include_bytes!("../assets/icons/save.svg"),
+            Self::SaveCheck => include_bytes!("../assets/icons/save-check.svg"),
             Self::ColorLabel => include_bytes!("../assets/icons/tag.svg"),
             Self::LetterM => include_bytes!("../assets/icons/letter-m.svg"),
         }

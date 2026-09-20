@@ -478,6 +478,40 @@ impl Workspace {
         if ids.is_empty() {
             return;
         }
+        if ids.len() == 1 {
+            let tab_id = *ids.iter().next().expect("single tab");
+            match tab_id {
+                WorkspaceTabId::Document(id) => {
+                    if let Some(edit) = self
+                        .documents
+                        .iter_mut()
+                        .find(|tab| tab.id == id)
+                        .and_then(|tab| tab.edit.as_mut())
+                    {
+                        if edit.saving {
+                            edit.after_save = EditAfterSave::CloseTab;
+                            return;
+                        }
+                        if edit.dirty {
+                            self.confirm_edit_close(tab_id, window, cx);
+                            return;
+                        }
+                    }
+                }
+                WorkspaceTabId::New(id) => {
+                    if let Some(draft) = self.new_file_drafts.get_mut(&id) {
+                        if draft.saving {
+                            draft.after_save = EditAfterSave::CloseTab;
+                            return;
+                        }
+                        if draft.dirty || draft.path.is_none() {
+                            self.confirm_edit_close(tab_id, window, cx);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         if self.documents.iter().any(|tab| {
             ids.contains(&WorkspaceTabId::Document(tab.id))
                 && tab
@@ -1289,16 +1323,6 @@ impl Workspace {
             })
         };
         let menu = menu
-            .item(
-                PopupMenuItem::new(if state.editing {
-                    crate::tr!("退出编辑模式", "Exit edit mode")
-                } else {
-                    crate::tr!("编辑日志", "Edit log")
-                })
-                .disabled(!state.can_edit)
-                .on_click(edit),
-            )
-            .separator()
             .item(PopupMenuItem::new(crate::tr!("关闭标签", "Close tab")).on_click(close))
             .item(
                 PopupMenuItem::new(crate::tr!("关闭其他标签", "Close other tabs"))
@@ -1362,6 +1386,21 @@ impl Workspace {
                     .on_click(restore_title),
             );
         Self::tab_orientation_menu(menu, state.vertical_tabs, workspace, window)
+            .separator()
+            .item(
+                PopupMenuItem::element(move |_, cx| {
+                    div()
+                        .text_color(cx.theme().primary)
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(if state.editing {
+                            crate::tr!("退出编辑模式", "Exit edit mode")
+                        } else {
+                            crate::tr!("编辑日志", "Edit log")
+                        })
+                })
+                .disabled(!state.can_edit)
+                .on_click(edit),
+            )
     }
 
     pub(super) fn build_new_tab_menu(
@@ -1411,18 +1450,6 @@ impl Workspace {
             this.close_tab_group(tab_id, TabCloseGroup::All, window, cx)
         });
 
-        let menu = if state.can_edit {
-            menu.item(
-                PopupMenuItem::new(if state.editing {
-                    crate::tr!("退出编辑模式", "Exit edit mode")
-                } else {
-                    crate::tr!("继续编辑", "Continue editing")
-                })
-                .on_click(edit_toggle),
-            )
-        } else {
-            menu
-        };
         let menu = menu
             .item(PopupMenuItem::new(crate::tr!("关闭标签", "Close tab")).on_click(close))
             .item(
@@ -1452,6 +1479,23 @@ impl Workspace {
                 PopupMenuItem::new(crate::tr!("关闭所有标签", "Close all tabs"))
                     .on_click(close_all),
             );
-        Self::tab_orientation_menu(menu, state.vertical_tabs, workspace, window)
+        let menu = Self::tab_orientation_menu(menu, state.vertical_tabs, workspace, window);
+        if state.can_edit {
+            menu.separator().item(
+                PopupMenuItem::element(move |_, cx| {
+                    div()
+                        .text_color(cx.theme().primary)
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(if state.editing {
+                            crate::tr!("退出编辑模式", "Exit edit mode")
+                        } else {
+                            crate::tr!("继续编辑", "Continue editing")
+                        })
+                })
+                .on_click(edit_toggle),
+            )
+        } else {
+            menu
+        }
     }
 }

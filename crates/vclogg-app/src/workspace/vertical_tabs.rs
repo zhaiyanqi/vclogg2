@@ -563,6 +563,23 @@ impl Workspace {
                 .get(&id)
                 .is_some_and(|draft| draft.dirty),
         };
+        let editing = match tab_id {
+            WorkspaceTabId::Document(document_id) => self
+                .documents
+                .iter()
+                .find(|tab| tab.id == document_id)
+                .and_then(|tab| tab.edit.as_ref())
+                .is_some_and(|edit| edit.active),
+            WorkspaceTabId::New(id) => self
+                .new_file_drafts
+                .get(&id)
+                .is_some_and(|draft| draft.active),
+        };
+        let tab_icon: &'static [u8] = if editing {
+            include_bytes!("../../assets/icons/file-pen-line.svg")
+        } else {
+            include_bytes!("../../assets/icons/document-text-20-regular.svg")
+        };
         let visible_title = if dirty {
             format!("{tab_title} *")
         } else {
@@ -597,9 +614,7 @@ impl Workspace {
             .text_size(px(12.))
             .child(
                 svg()
-                    .data(include_bytes!(
-                        "../../assets/icons/document-text-20-regular.svg"
-                    ))
+                    .data(tab_icon)
                     .size(px(20.))
                     .text_color(file_icon_color)
                     .opacity(if dirty { 1. } else { 0.72 }),

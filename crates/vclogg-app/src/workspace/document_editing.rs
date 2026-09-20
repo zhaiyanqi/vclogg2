@@ -169,7 +169,7 @@ impl Workspace {
             cx.notify();
             return;
         }
-        if self.documents[ix].edit_task.is_some() {
+        if self.documents[ix].edit_load_task.is_some() {
             return;
         }
         self.documents[ix].view.auto_follow = false;
@@ -181,7 +181,7 @@ impl Workspace {
                 _ = painted.try_send(());
             });
         });
-        self.documents[ix].edit_task = Some(cx.spawn_in(window, async move |this, cx| {
+        self.documents[ix].edit_load_task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
                     let metadata = std::fs::metadata(&path)?;
@@ -216,7 +216,7 @@ impl Workspace {
                 let Some(ix) = this.documents.iter().position(|tab| tab.id == document_id) else {
                     return;
                 };
-                this.documents[ix].edit_task = None;
+                this.documents[ix].edit_load_task = None;
                 match result {
                     Ok((text, encoding, disk_version)) => {
                         // Resizing a wrapped editor recomputes wrapping for every line. Logs
@@ -256,7 +256,8 @@ impl Workspace {
                             saving: false,
                             saved_since_enter: false,
                             pending_exit_row: None,
-                            exit_after_save: false,
+                            after_save: EditAfterSave::None,
+                            save_task: None,
                             _subscription: subscription,
                         });
                         if this.active_tab_id == WorkspaceTabId::Document(document_id) {
@@ -290,7 +291,7 @@ impl Workspace {
             .and_then(|tab| tab.edit.as_mut())
         {
             if edit.saving {
-                edit.exit_after_save = true;
+                edit.after_save = EditAfterSave::ExitMode;
                 return;
             }
             if edit.dirty {
@@ -347,7 +348,7 @@ impl Workspace {
                 tab.edit = None;
             }
             cx.notify();
-        } else if tab.edit_task.take().is_some() {
+        } else if tab.edit_load_task.take().is_some() {
             cx.notify();
         }
     }
@@ -355,6 +356,29 @@ impl Workspace {
     fn confirm_edit_exit(
         &mut self,
         target: EditExitTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.confirm_edit_action(target, EditAfterSave::ExitMode, window, cx);
+    }
+
+    pub(super) fn confirm_edit_close(
+        &mut self,
+        tab_id: WorkspaceTabId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target = match tab_id {
+            WorkspaceTabId::Document(id) => EditExitTarget::Document(id),
+            WorkspaceTabId::New(id) => EditExitTarget::NewFile(id),
+        };
+        self.confirm_edit_action(target, EditAfterSave::CloseTab, window, cx);
+    }
+
+    fn confirm_edit_action(
+        &mut self,
+        target: EditExitTarget,
+        after_save: EditAfterSave,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -370,7 +394,9 @@ impl Workspace {
             let discard_workspace = workspace.clone();
             let save_workspace = workspace.clone();
             alert
-                .title(if never_saved {
+                .title(if after_save == EditAfterSave::CloseTab {
+                    crate::tr!("关闭标签前保存更改？", "Save changes before closing the tab?")
+                } else if never_saved {
                     crate::tr!("保存新文件后退出编辑模式？", "Save the new file before exiting edit mode?")
                 } else {
                     crate::tr!("保存更改后退出编辑模式？", "Save changes before exiting edit mode?")
@@ -395,7 +421,7 @@ impl Workspace {
                                 .on_click(move |_, window, cx| {
                                     window.close_dialog(cx);
                                     discard_workspace.update(cx, |this, cx| {
-                                        this.discard_edit_and_exit(target, window, cx);
+                                        this.discard_edit_and_finish(target, after_save, window, cx);
                                     });
                                 }),
                         )
@@ -412,7 +438,7 @@ impl Workspace {
                         let workspace = save_workspace.clone();
                         move |window, cx| {
                             workspace.update(cx, |this, cx| {
-                                this.save_edit_and_exit(target, window, cx);
+                                this.save_edit_and_finish(target, after_save, window, cx);
                             });
                         }
                     });
@@ -421,9 +447,10 @@ impl Workspace {
         });
     }
 
-    fn save_edit_and_exit(
+    fn save_edit_and_finish(
         &mut self,
         target: EditExitTarget,
+        after_save: EditAfterSave,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -435,22 +462,23 @@ impl Workspace {
                     .find(|tab| tab.id == id)
                     .and_then(|tab| tab.edit.as_mut())
                 {
-                    edit.exit_after_save = true;
+                    edit.after_save = after_save;
                     self.save_document_edit(id, window, cx);
                 }
             }
             EditExitTarget::NewFile(id) => {
                 if let Some(draft) = self.new_file_drafts.get_mut(&id) {
-                    draft.exit_after_save = true;
+                    draft.after_save = after_save;
                     self.save_new_file_draft(id, window, cx);
                 }
             }
         }
     }
 
-    fn discard_edit_and_exit(
+    fn discard_edit_and_finish(
         &mut self,
         target: EditExitTarget,
+        action: EditAfterSave,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -463,15 +491,29 @@ impl Workspace {
                     .and_then(|tab| tab.edit.as_mut())
                 {
                     edit.dirty = false;
-                    edit.exit_after_save = false;
-                    self.finish_document_edit(id, window, cx);
+                    edit.after_save = EditAfterSave::None;
+                    if action == EditAfterSave::CloseTab {
+                        self.close_workspace_tabs(
+                            BTreeSet::from([WorkspaceTabId::Document(id)]),
+                            window,
+                            cx,
+                        );
+                    } else {
+                        self.finish_document_edit(id, window, cx);
+                    }
                 }
             }
             EditExitTarget::NewFile(id) => {
                 if let Some(draft) = self.new_file_drafts.get_mut(&id) {
                     draft.dirty = false;
-                    draft.exit_after_save = false;
-                    if draft.path.is_none() {
+                    draft.after_save = EditAfterSave::None;
+                    if action == EditAfterSave::CloseTab {
+                        self.close_workspace_tabs(
+                            BTreeSet::from([WorkspaceTabId::New(id)]),
+                            window,
+                            cx,
+                        );
+                    } else if draft.path.is_none() {
                         self.new_file_drafts.remove(&id);
                         self.log_viewer.focus_handle.focus(window, cx);
                         cx.notify();
@@ -527,17 +569,27 @@ impl Workspace {
                         edit.dirty = edit.editor.read(cx).value().as_ref() != saved_text;
                         edit.disk_version = new_version;
                         edit.saved_since_enter = true;
-                        let exit_after_save =
-                            std::mem::take(&mut edit.exit_after_save) && !edit.dirty;
+                        let after_save = std::mem::take(&mut edit.after_save);
+                        let after_save = if edit.dirty {
+                            EditAfterSave::None
+                        } else {
+                            after_save
+                        };
                         window.notify_message(crate::tr!("文件已保存", "File saved"), cx);
-                        if reload_after_save {
+                        if after_save == EditAfterSave::CloseTab {
+                            this.close_workspace_tabs(
+                                BTreeSet::from([WorkspaceTabId::Document(document_id)]),
+                                window,
+                                cx,
+                            );
+                        } else if reload_after_save {
                             this.reload_document(document_id, ReloadStrategy::Full, window, cx);
-                        } else if exit_after_save {
+                        } else if after_save == EditAfterSave::ExitMode {
                             this.finish_document_edit(document_id, window, cx);
                         }
                     }
                     Err(error) => {
-                        edit.exit_after_save = false;
+                        edit.after_save = EditAfterSave::None;
                         window.notify_message(
                             crate::tr_args!(
                                 "无法保存文件：{error}",
@@ -550,7 +602,7 @@ impl Workspace {
                 cx.notify();
             });
         });
-        tab.edit_task = Some(task);
+        edit.save_task = Some(task);
         cx.notify();
     }
 
@@ -580,7 +632,7 @@ impl Workspace {
                 dirty: false,
                 active: true,
                 saving: false,
-                exit_after_save: false,
+                after_save: EditAfterSave::None,
                 save_task: None,
                 _subscription: subscription,
             },
@@ -610,7 +662,7 @@ impl Workspace {
     ) {
         if let Some(draft) = self.new_file_drafts.get_mut(&id) {
             if draft.saving {
-                draft.exit_after_save = true;
+                draft.after_save = EditAfterSave::ExitMode;
                 return;
             }
             if draft.dirty || draft.path.is_none() {
@@ -705,17 +757,27 @@ impl Workspace {
                         draft.dirty = draft.editor.read(cx).value().as_ref() != saved_text;
                         draft.path = Some(path);
                         draft.disk_version = Some(version);
-                        let exit_after_save =
-                            std::mem::take(&mut draft.exit_after_save) && !draft.dirty;
+                        let after_save = std::mem::take(&mut draft.after_save);
+                        let after_save = if draft.dirty {
+                            EditAfterSave::None
+                        } else {
+                            after_save
+                        };
                         window.notify_message(crate::tr!("文件已保存", "File saved"), cx);
-                        if exit_after_save {
+                        if after_save == EditAfterSave::CloseTab {
+                            this.close_workspace_tabs(
+                                BTreeSet::from([WorkspaceTabId::New(id)]),
+                                window,
+                                cx,
+                            );
+                        } else if after_save == EditAfterSave::ExitMode {
                             this.finish_new_file_draft(id, window, cx);
                         } else {
                             this.open_saved_new_file_draft(id, window, cx);
                         }
                     }
                     Some(Err(error)) => {
-                        draft.exit_after_save = false;
+                        draft.after_save = EditAfterSave::None;
                         window.notify_message(
                             crate::tr_args!(
                                 "无法保存文件：{error}",
@@ -724,7 +786,7 @@ impl Workspace {
                             cx,
                         );
                     }
-                    None => draft.exit_after_save = false,
+                    None => draft.after_save = EditAfterSave::None,
                 }
                 cx.notify();
             });
