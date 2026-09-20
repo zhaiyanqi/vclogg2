@@ -228,33 +228,58 @@ impl AiPanel {
                                 crate::tr!("完成", "Done")
                             }
                         );
-                        process = process.child(
-                            Button::new(("ai-tool-expand", ix))
-                                .px_0()
-                                .justify_start()
-                                .small()
-                                .ghost()
-                                .icon(if details {
-                                    IconName::ChevronDown
-                                } else {
-                                    IconName::ChevronRight
-                                })
-                                .text_label(label)
-                                .text_color(cx.theme().muted_foreground)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    if !this.expanded.insert(ix) {
-                                        this.expanded.remove(&ix);
-                                    }
-                                    this.remeasure_message(ix, cx);
-                                    cx.notify();
-                                })),
-                        );
+                        let mut card = v_flex()
+                            .debug_selector(|| "ai-tool-result".into())
+                            .w_full()
+                            .min_w_0()
+                            .gap_1()
+                            .p_2()
+                            .rounded(cx.theme().radius_lg)
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .child(
+                                Button::new(("ai-tool-expand", ix))
+                                    .px_0()
+                                    .justify_start()
+                                    .small()
+                                    .ghost()
+                                    .icon(if details {
+                                        IconName::ChevronDown
+                                    } else {
+                                        IconName::ChevronRight
+                                    })
+                                    .text_label(label)
+                                    .text_color(cx.theme().muted_foreground)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if !this.expanded.insert(ix) {
+                                            this.expanded.remove(&ix);
+                                        }
+                                        this.remeasure_message(ix, cx);
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(if result.is_error {
+                                        cx.theme().danger
+                                    } else {
+                                        cx.theme().muted_foreground
+                                    })
+                                    .child(tool_result_summary(result)),
+                            );
                         if details {
-                            process = process.child(self.markdown_view(&self.messages[ix], cx));
+                            card = card.child(
+                                div()
+                                    .pt_2()
+                                    .border_t_1()
+                                    .border_color(cx.theme().border)
+                                    .child(self.markdown_view(&self.messages[ix], cx)),
+                            );
                             let mut references = Vec::new();
                             collect_references(&result.value, &mut references);
                             for (n, reference) in references.into_iter().enumerate() {
-                                process = process.child(
+                                card = card.child(
                                     Button::new(SharedString::from(format!("ai-jump-{ix}-{n}")))
                                         .small()
                                         .ghost()
@@ -270,6 +295,7 @@ impl AiPanel {
                                 );
                             }
                         }
+                        process = process.child(card);
                     }
                     _ => {}
                 }
@@ -1034,6 +1060,60 @@ impl Render for AiPanel {
                     .child(menu)).with_priority(gpui_kit::base::POPUP_PRIORITY))
             })
             .into_any_element()
+    }
+}
+
+pub(super) fn tool_result_summary(result: &ToolResult) -> String {
+    let value = &result.value;
+    if let Some(error) = value.get("error").and_then(Value::as_str) {
+        return error.chars().take(160).collect();
+    }
+    let count = ["rows", "files", "results", "matches", "symbols"]
+        .iter()
+        .find_map(|key| {
+            value
+                .get(*key)
+                .and_then(Value::as_array)
+                .map(|rows| (key, rows.len()))
+        });
+    if let Some((key, count)) = count {
+        let total = value
+            .get("total")
+            .and_then(Value::as_u64)
+            .unwrap_or(count as u64);
+        return format!("{key}: {count} / {total}");
+    }
+    if let Some(total) = value
+        .get("total")
+        .or_else(|| value.get("count"))
+        .and_then(Value::as_u64)
+    {
+        return format!("{}: {total}", crate::tr!("数量", "Count"));
+    }
+    if let Some(status) = value.get("status").and_then(Value::as_str) {
+        return status.to_owned();
+    }
+    crate::tr!(
+        "结果已就绪，展开查看详情",
+        "Result ready; expand for details"
+    )
+    .into()
+}
+
+#[cfg(test)]
+mod tool_summary_tests {
+    use super::*;
+
+    #[test]
+    fn summarizes_result_counts_and_errors() {
+        assert_eq!(
+            tool_result_summary(&ToolResult::ok(json!({"rows":[{},{}],"total":7}))),
+            "rows: 2 / 7"
+        );
+        assert_eq!(
+            tool_result_summary(&ToolResult::error("source unavailable")),
+            "source unavailable"
+        );
     }
 }
 
