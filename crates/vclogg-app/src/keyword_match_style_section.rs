@@ -1,9 +1,4 @@
-use gpui::{
-    AppContext as _, Context, Entity, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, Rgba, ScrollHandle, StatefulInteractiveElement as _, Styled as _,
-    StyledText, Subscription, Window, div,
-};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
@@ -12,6 +7,11 @@ use gpui_component::{
     scroll::{Scrollbar, ScrollbarMode},
     theme::ThemeMode,
     v_flex,
+};
+use gpui_kit::{
+    AppContext as _, Context, Entity, Hsla, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, Rgba, ScrollHandle, StatefulInteractiveElement as _, Styled as _,
+    StyledText, Subscription, Window, div,
 };
 
 use crate::{keyword_match_style::KeywordMatchStyles, ui_theme};
@@ -111,7 +111,7 @@ impl KeywordMatchStyleSection {
             [usize::from(background)];
         let color = picker.read(cx).value().unwrap_or(cx.theme().transparent);
         let control = if self.saving {
-            gpui_base::ColorSwatch::new(("keyword-saving-color", picker.entity_id()), color)
+            gpui_kit::base::ColorSwatch::new(("keyword-saving-color", picker.entity_id()), color)
                 .disabled(true)
                 .size_6()
                 .rounded(cx.theme().radius)
@@ -168,7 +168,7 @@ impl KeywordMatchStyleSection {
             .child(
                 div()
                     .text_sm()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                     .child(if quick_find {
                         crate::tr!("页内查找", "Quick find")
                     } else {

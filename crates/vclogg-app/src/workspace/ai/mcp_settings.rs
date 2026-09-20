@@ -1,5 +1,5 @@
 use super::*;
-use gpui_component::{
+use gpui_kit::component::{
     input::{Input, InputState, Textarea, TextareaState},
     switch::Switch,
 };

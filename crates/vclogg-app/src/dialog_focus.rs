@@ -1,11 +1,11 @@
-use gpui::{
-    Action, App, ElementId, Entity, Focusable as _, InteractiveElement as _, IntoElement,
-    ParentElement as _, RenderOnce, Window, div,
-};
-use gpui_component::{
+use gpui_kit::component::{
     button::Button,
     color_picker::ColorPickerState,
     dialog::{Cancel, Confirm},
+};
+use gpui_kit::{
+    Action, App, ElementId, Entity, Focusable as _, InteractiveElement as _, IntoElement,
+    ParentElement as _, RenderOnce, Window, div,
 };
 
 #[derive(IntoElement)]
@@ -102,7 +102,7 @@ pub(crate) fn restore_color_picker_trigger(
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use gpui::{
+    use gpui_kit::{
         Context, FocusHandle, Modifiers, Render, Styled as _, TestAppContext, point,
         prelude::FluentBuilder as _, px,
     };
@@ -135,7 +135,7 @@ mod tests {
                     cx,
                 ));
 
-            gpui_base::Dialog::new(cx)
+            gpui_kit::base::Dialog::new(cx)
                 .focus_handle(self.dialog_focus.clone())
                 .popup(popup)
                 .on_ok(move |_, _, _| {
@@ -145,9 +145,9 @@ mod tests {
         }
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn pointer_confirm_uses_its_rendered_path_when_current_focus_is_stale(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::component::init);
         let confirmed = Rc::new(Cell::new(false));
         let (harness, cx) = cx.add_window_view({
             let confirmed = confirmed.clone();
@@ -178,9 +178,9 @@ mod tests {
         );
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn stable_dialog_action_preserves_keyboard_activation(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::component::init);
         let confirmed = Rc::new(Cell::new(false));
         let (_, cx) = cx.add_window_view({
             let confirmed = confirmed.clone();

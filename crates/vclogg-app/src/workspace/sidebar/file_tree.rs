@@ -385,7 +385,7 @@ impl SidebarState {
         let exceptions = self.hidden_tree_paths();
         let installed_exceptions = exceptions.clone();
         let text_system = cx.text_system().clone();
-        let font = gpui::font(cx.theme().font_family.clone());
+        let font = gpui_kit::font(cx.theme().font_family.clone());
         let rem_size = cx.theme().font_size;
         let generation = self.tree_generation;
         let request = self.tree_request;
@@ -485,7 +485,7 @@ impl SidebarState {
                         .collect::<Option<Vec<_>>>()?;
                     // Measure expanded rows off the UI thread. The public Tree API
                     // installs the resulting roots on the UI thread.
-                    let text_system = gpui::WindowTextSystem::new(text_system);
+                    let text_system = gpui_kit::WindowTextSystem::new(text_system);
                     let mut width = Pixels::ZERO;
                     let mut pending = items
                         .iter()
@@ -497,7 +497,7 @@ impl SidebarState {
                             return None;
                         }
                         let label = tree_label(&item.label);
-                        let run = gpui::TextRun {
+                        let run = gpui_kit::TextRun {
                             len: label.len(),
                             font: font.clone(),
                             ..Default::default()

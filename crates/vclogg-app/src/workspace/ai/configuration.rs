@@ -6,7 +6,7 @@ pub(super) struct SharedAiSettings {
     pub settings: Option<AiSettings>,
     pub saving: bool,
 }
-impl gpui::Global for SharedAiSettings {}
+impl gpui_kit::Global for SharedAiSettings {}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SettingsTab {

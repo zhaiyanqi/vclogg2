@@ -1,9 +1,9 @@
-use gpui::{
+use gpui_kit::component::scroll::{Scrollbar, ScrollbarMode};
+use gpui_kit::component::theme::{Theme, ThemeMode, ThemeTokens, try_parse_color};
+use gpui_kit::{
     App, Axis, Background, Div, Hsla, InteractiveElement as _, Pixels, Styled as _, div, hsla,
     linear_color_stop, linear_gradient, px, rems, rgb,
 };
-use gpui_component::scroll::{Scrollbar, ScrollbarMode};
-use gpui_component::theme::{Theme, ThemeMode, ThemeTokens, try_parse_color};
 
 /// Shared by the log scrollbar's painted track and its reserved layout space.
 pub(crate) const LOG_SCROLLBAR_WIDTH: Pixels = px(12.);

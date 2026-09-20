@@ -85,6 +85,10 @@ for layer in core data; do
   done
 done
 
+for dependency in gpui gpui-base gpui-component gpui-component-assets gpui_platform; do
+  forbid_manifest_dependency crates/vclogg-app/Cargo.toml "$dependency"
+done
+
 for dependency in rusqlite vclogg-data vclogg-app; do
   forbid_manifest_dependency crates/vclogg-core/Cargo.toml "$dependency"
 done

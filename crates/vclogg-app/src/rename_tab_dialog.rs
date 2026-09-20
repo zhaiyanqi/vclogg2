@@ -1,11 +1,11 @@
-use gpui::{
-    AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    Render, Styled as _, Window, div, prelude::FluentBuilder as _,
-};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _,
     input::{Input, InputState},
     v_flex,
+};
+use gpui_kit::{
+    AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+    Render, Styled as _, Window, div, prelude::FluentBuilder as _,
 };
 
 pub struct RenameTabDialog {
@@ -30,7 +30,7 @@ impl RenameTabDialog {
         self.input.clone()
     }
 
-    pub fn title(&self, cx: &gpui::App) -> Option<String> {
+    pub fn title(&self, cx: &gpui_kit::App) -> Option<String> {
         let title = self.input.read(cx).value().trim().to_string();
         (!title.is_empty()).then_some(title)
     }

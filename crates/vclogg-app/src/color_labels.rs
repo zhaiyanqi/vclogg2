@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, ops::Range, sync::Arc};
 
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
-use gpui::{Hsla, rgba};
+use gpui_kit::{Hsla, rgba};
 use serde::{Deserialize, Serialize};
 use vclogg_core::SearchMatcher;
 

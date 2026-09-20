@@ -41,7 +41,7 @@ fn isolated_panel_send_workflow() {
 }
 
 pub(super) fn pump_until(
-    cx: &mut gpui::TestAppContext,
+    cx: &mut gpui_kit::TestAppContext,
     panel: &Entity<AiPanel>,
     ready: impl Fn(&AiPanel) -> bool,
 ) {
@@ -66,8 +66,8 @@ pub(super) fn pump_until(
     }
 }
 
-#[gpui::test]
-fn panel_sends_streams_and_runs_tools(cx: &mut gpui::TestAppContext) {
+#[gpui_kit::test]
+fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
     if std::env::var_os("VCLOGG2_AI_TEST_CHILD").is_none() {
         return;
     }
@@ -75,7 +75,7 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui::TestAppContext) {
     cx.background_executor.allow_parking();
     cx.background_executor.forbid_parking();
     cx.update(|cx| {
-        gpui_component::init(cx);
+        gpui_kit::component::init(cx);
         Workspace::init_window_registry(cx);
         crate::notifications::init(cx);
         crate::app_icon::init(cx);
@@ -397,9 +397,9 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui::TestAppContext) {
 }
 
 fn exercise_transcript(
-    cx: &mut gpui::TestAppContext,
+    cx: &mut gpui_kit::TestAppContext,
     panel: &Entity<AiPanel>,
-    window: gpui::WindowHandle<Root>,
+    window: gpui_kit::WindowHandle<Root>,
 ) {
     cx.update_window(window.into(), |_, window, cx| {
         panel.update(cx, |p, cx| {
@@ -506,9 +506,9 @@ fn exercise_transcript(
 }
 
 fn verify_chat_geometry(
-    cx: &mut gpui::TestAppContext,
+    cx: &mut gpui_kit::TestAppContext,
     panel: &Entity<AiPanel>,
-    window: gpui::WindowHandle<Root>,
+    window: gpui_kit::WindowHandle<Root>,
     embedded: bool,
 ) {
     cx.update(|cx| {
@@ -552,10 +552,10 @@ fn verify_chat_geometry(
         })
         .unwrap();
     }
-    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
     for mode in [
-        gpui_component::ThemeMode::Dark,
-        gpui_component::ThemeMode::Light,
+        gpui_kit::component::ThemeMode::Dark,
+        gpui_kit::component::ThemeMode::Light,
     ] {
         visual.update(|_, cx| crate::ui_theme::apply_product_theme(mode, cx));
         let widths = if embedded {
@@ -564,7 +564,7 @@ fn verify_chat_geometry(
             [320., 560.]
         };
         for width in widths {
-            visual.simulate_resize(gpui::size(
+            visual.simulate_resize(gpui_kit::size(
                 px(width),
                 px(if embedded { 900. } else { 600. }),
             ));
@@ -584,21 +584,21 @@ fn verify_chat_geometry(
         }
     }
     let sent = visual.debug_bounds("ai-user-bubble").unwrap();
-    let from = gpui::point(sent.left() + px(17.), sent.top() + px(22.));
-    let to = gpui::point(sent.right() - px(17.), sent.top() + px(22.));
-    visual.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::default());
+    let from = gpui_kit::point(sent.left() + px(17.), sent.top() + px(22.));
+    let to = gpui_kit::point(sent.right() - px(17.), sent.top() + px(22.));
+    visual.simulate_mouse_down(from, MouseButton::Left, gpui_kit::Modifiers::default());
     visual.update(|window, cx| {
         _ = window.draw(cx);
     });
     let mut lengths = Vec::new();
     for fraction in [0.4, 1.0, 0.2, 1.0] {
-        let position = gpui::point(from.x + (to.x - from.x) * fraction, to.y);
-        visual.simulate_mouse_move(position, MouseButton::Left, gpui::Modifiers::default());
+        let position = gpui_kit::point(from.x + (to.x - from.x) * fraction, to.y);
+        visual.simulate_mouse_move(position, MouseButton::Left, gpui_kit::Modifiers::default());
         visual.update(|window, cx| {
             _ = window.draw(cx);
         });
         visual.update(|window, cx| {
-            let blue = ui_theme::palette(cx).chat_selection_background;
+            let blue = cx.theme().selection;
             assert!(
                 window.painted_quads().iter().any(|quad| {
                     quad.background == blue.into()
@@ -617,7 +617,7 @@ fn verify_chat_geometry(
         lengths[2] < lengths[1] && lengths[3] == lengths[1],
         "reverse drag shrinks selection: {lengths:?}"
     );
-    visual.simulate_mouse_up(to, MouseButton::Left, gpui::Modifiers::default());
+    visual.simulate_mouse_up(to, MouseButton::Left, gpui_kit::Modifiers::default());
     cx.run_until_parked();
     let selected = panel.read_with(cx, |p, cx| p.messages[0].read(cx).selected_text());
 
@@ -626,8 +626,8 @@ fn verify_chat_geometry(
         "user text supports pointer drag selection: {sent:?}, {from:?}, {to:?}"
     );
     assert!(!selected.contains("log_data"));
-    visual.simulate_mouse_down(to, MouseButton::Right, gpui::Modifiers::default());
-    visual.simulate_mouse_up(to, MouseButton::Right, gpui::Modifiers::default());
+    visual.simulate_mouse_down(to, MouseButton::Right, gpui_kit::Modifiers::default());
+    visual.simulate_mouse_up(to, MouseButton::Right, gpui_kit::Modifiers::default());
     cx.run_until_parked();
     visual.update(|window, cx| {
         _ = window.draw(cx);
@@ -637,8 +637,8 @@ fn verify_chat_geometry(
         cx.read_from_clipboard().and_then(|item| item.text()),
         Some(selected.clone())
     );
-    visual.simulate_mouse_down(to, MouseButton::Right, gpui::Modifiers::default());
-    visual.simulate_mouse_up(to, MouseButton::Right, gpui::Modifiers::default());
+    visual.simulate_mouse_down(to, MouseButton::Right, gpui_kit::Modifiers::default());
+    visual.simulate_mouse_up(to, MouseButton::Right, gpui_kit::Modifiers::default());
     cx.run_until_parked();
     visual.update(|window, cx| {
         _ = window.draw(cx);
@@ -654,8 +654,8 @@ fn verify_chat_geometry(
         .height;
     let toggle = visual.debug_bounds("ai-thinking-toggle").unwrap();
     visual.simulate_click(
-        gpui::point(toggle.left() + px(20.), toggle.top() + px(12.)),
-        gpui::Modifiers::default(),
+        gpui_kit::point(toggle.left() + px(20.), toggle.top() + px(12.)),
+        gpui_kit::Modifiers::default(),
     );
     cx.run_until_parked();
     assert!(
@@ -676,17 +676,17 @@ fn verify_chat_geometry(
         (thought.right() - reply.right()).abs() <= px(1.),
         "thoughts use the full reply width"
     );
-    let from = gpui::point(thought.left() + px(2.), thought.top() + px(10.));
-    let to = gpui::point(thought.left() + px(120.), thought.top() + px(10.));
-    visual.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::default());
+    let from = gpui_kit::point(thought.left() + px(2.), thought.top() + px(10.));
+    let to = gpui_kit::point(thought.left() + px(120.), thought.top() + px(10.));
+    visual.simulate_mouse_down(from, MouseButton::Left, gpui_kit::Modifiers::default());
     visual.update(|window, cx| {
         _ = window.draw(cx);
     });
-    let across_paragraphs = gpui::point(to.x, from.y + px(65.));
+    let across_paragraphs = gpui_kit::point(to.x, from.y + px(65.));
     visual.simulate_mouse_move(
         across_paragraphs,
         MouseButton::Left,
-        gpui::Modifiers::default(),
+        gpui_kit::Modifiers::default(),
     );
     visual.update(|window, cx| {
         _ = window.draw(cx);
@@ -702,11 +702,11 @@ fn verify_chat_geometry(
         expanded_selection.contains('\n'),
         "drag selects across paragraphs: {expanded_selection:?}"
     );
-    visual.simulate_mouse_move(to, MouseButton::Left, gpui::Modifiers::default());
+    visual.simulate_mouse_move(to, MouseButton::Left, gpui_kit::Modifiers::default());
     visual.update(|window, cx| {
         _ = window.draw(cx);
     });
-    visual.simulate_mouse_up(to, MouseButton::Left, gpui::Modifiers::default());
+    visual.simulate_mouse_up(to, MouseButton::Left, gpui_kit::Modifiers::default());
     let selected = panel.read_with(cx, |p, cx| {
         p.reasoning_views[1]
             .as_ref()
@@ -718,8 +718,8 @@ fn verify_chat_geometry(
         !selected.is_empty(),
         "expanded thoughts support drag selection: {thought:?}"
     );
-    visual.simulate_mouse_down(to, MouseButton::Right, gpui::Modifiers::default());
-    visual.simulate_mouse_up(to, MouseButton::Right, gpui::Modifiers::default());
+    visual.simulate_mouse_down(to, MouseButton::Right, gpui_kit::Modifiers::default());
+    visual.simulate_mouse_up(to, MouseButton::Right, gpui_kit::Modifiers::default());
     visual.update(|window, cx| {
         _ = window.draw(cx);
     });
@@ -747,7 +747,7 @@ fn verify_chat_geometry(
             );
             panel.update(cx, |p, _| p.show_settings = false);
         });
-        visual.simulate_resize(gpui::size(px(400.), px(900.)));
+        visual.simulate_resize(gpui_kit::size(px(400.), px(900.)));
         visual.update(|window, cx| {
             assert!(
                 !hit(window, cx),

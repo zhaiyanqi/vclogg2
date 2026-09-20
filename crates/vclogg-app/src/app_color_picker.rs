@@ -1,5 +1,5 @@
-use gpui::Entity;
-use gpui_component::color_picker::{ColorPicker, ColorPickerState};
+use gpui_kit::Entity;
+use gpui_kit::component::color_picker::{ColorPicker, ColorPickerState};
 
 /// The upstream picker keys featured swatches by color value. Repeated theme
 /// colors then produce duplicate accessibility node IDs and panic in debug

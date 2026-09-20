@@ -10,7 +10,7 @@ name = "vclogg2"
 path = "src/main.rs"
 
 [features]
-ui-performance-profiler = ["gpui/profiler"]
+ui-performance-profiler = ["gpui-kit/profiler"]
 
 [dependencies]
 aho-corasick.workspace = true
@@ -18,11 +18,7 @@ anyhow.workspace = true
 async-channel.workspace = true
 chrono.workspace = true
 dirs.workspace = true
-gpui.workspace = true
-gpui-base.workspace = true
-gpui-component.workspace = true
-gpui-component-assets.workspace = true
-gpui_platform.workspace = true
+gpui-kit.workspace = true
 log.workspace = true
 notify.workspace = true
 reqwest.workspace = true
@@ -59,7 +55,7 @@ x11rb = "0.13.2"
 workspace = true
 
 [dev-dependencies]
-gpui = { workspace = true, features = ["test-support"] }
+gpui-kit = { workspace = true, features = ["test-support"] }
 
 [build-dependencies]
 semver.workspace = true

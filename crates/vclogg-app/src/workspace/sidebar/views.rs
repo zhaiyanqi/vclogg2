@@ -1,5 +1,4 @@
 use super::*;
-use gpui::StatefulInteractiveElement as _;
 
 impl ColorGroup {
     pub(super) fn paint_color(&self) -> Hsla {

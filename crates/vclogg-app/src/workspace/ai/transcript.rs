@@ -1,6 +1,6 @@
 use super::panel::safe_markdown;
 use super::*;
-use gpui_component::text::TextViewState;
+use gpui_kit::component::text::TextViewState;
 
 pub(super) struct AttachedContent {
     pub label: String,

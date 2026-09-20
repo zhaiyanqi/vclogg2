@@ -1,5 +1,5 @@
 use super::*;
-use gpui_component::switch::Switch;
+use gpui_kit::component::switch::Switch;
 
 impl SidebarState {
     pub(super) fn render_log_coloring(&self, cx: &mut Context<Self>) -> AnyElement {

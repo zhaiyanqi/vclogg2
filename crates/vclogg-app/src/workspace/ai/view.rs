@@ -1,5 +1,5 @@
 use super::*;
-use gpui_component::{input::Textarea, scroll::ScrollableElement as _, text::TextView};
+use gpui_kit::component::{input::Textarea, scroll::ScrollableElement as _, text::TextView};
 use vclogg_ai::RunStatus;
 
 impl AiPanel {
@@ -29,7 +29,7 @@ impl AiPanel {
                         cards.child(
                             v_flex()
                                 .w_full()
-                                .max_w(gpui::relative(0.9))
+                                .max_w(gpui_kit::relative(0.9))
                                 .min_w_0()
                                 .p_2()
                                 .gap_1()
@@ -58,7 +58,7 @@ impl AiPanel {
                 .child(
                     div()
                         .debug_selector(|| "ai-user-bubble".into())
-                        .max_w(gpui::relative(0.9))
+                        .max_w(gpui_kit::relative(0.9))
                         .min_w_0()
                         .px_4()
                         .py_3()
@@ -244,7 +244,7 @@ impl AiPanel {
         let mut content = v_flex()
             .id("ai-attachments")
             .gap_1()
-            .max_h(gpui::rems(8.))
+            .max_h(gpui_kit::rems(8.))
             .overflow_y_scroll();
         for (ix, log) in self.draft_logs.iter().enumerate() {
             let label = format!(
@@ -284,36 +284,36 @@ impl AiPanel {
 
     fn markdown_view(
         &self,
-        view: &Entity<gpui_component::text::TextViewState>,
+        view: &Entity<gpui_kit::component::text::TextViewState>,
         cx: &Context<Self>,
     ) -> AnyElement {
         let owner = cx.weak_entity();
         let selected_view = view.clone();
         // Match gpui-kit's example-markdown preview: default typography and
         // adaptive tables that scroll horizontally once columns reach their floor.
-        let mut table = gpui::StyleRefinement::default();
-        table.overflow.x = Some(gpui::Overflow::Scroll);
+        let mut table = gpui_kit::StyleRefinement::default();
+        table.overflow.x = Some(gpui_kit::Overflow::Scroll);
         // Keep the component's default inline-code background instead of the
         // application's accent override, following the active light/dark mode.
         let default_colors = if cx.theme().is_dark() {
-            gpui_component::theme::ThemeColor::dark()
+            gpui_kit::component::theme::ThemeColor::dark()
         } else {
-            gpui_component::theme::ThemeColor::light()
+            gpui_kit::component::theme::ThemeColor::light()
         };
-        let style = gpui_component::text::TextViewStyle::default()
+        let style = gpui_kit::component::text::TextViewStyle::default()
             .table(table)
-            .inline_code(gpui::HighlightStyle {
+            .inline_code(gpui_kit::HighlightStyle {
                 background_color: Some(default_colors.accent),
                 ..Default::default()
             });
         div().id(SharedString::from(format!("ai-text-{:?}", view.entity_id())))
             .min_w_0().w_full()
-            .child(TextView::new(view).style(style).text_size(gpui::rems(1.)).selectable(true).on_link_click(move |url, event, window, cx| {
-                if !matches!(event, gpui::ClickEvent::Mouse(event) if event.up.button != MouseButton::Left) {
+            .child(TextView::new(view).style(style).text_size(gpui_kit::rems(1.)).selectable(true).on_link_click(move |url, event, window, cx| {
+                if !matches!(event, gpui_kit::ClickEvent::Mouse(event) if event.up.button != MouseButton::Left) {
                     _ = owner.update(cx, |this, cx| this.open_link(url, window, cx));
                 }
             }))
-            .on_mouse_down(MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+            .on_mouse_down(MouseButton::Right, cx.listener(move |this, event: &gpui_kit::MouseDownEvent, window, cx| {
                 this.open_message_menu(&selected_view, event.position, window, cx);
                 cx.stop_propagation();
             })).into_any_element()
@@ -321,13 +321,13 @@ impl AiPanel {
 
     fn open_message_menu(
         &mut self,
-        view: &Entity<gpui_component::text::TextViewState>,
-        position: gpui::Point<gpui::Pixels>,
+        view: &Entity<gpui_kit::component::text::TextViewState>,
+        position: gpui_kit::Point<gpui_kit::Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let local_selection = view.read(cx).selected_text();
-        let selection = gpui_base::TextSelection::selected_text(window, cx);
+        let selection = gpui_kit::base::TextSelection::selected_text(window, cx);
         let text = if local_selection.is_empty() || selection.is_empty() {
             local_selection
         } else {
@@ -387,12 +387,14 @@ impl AiPanel {
             }
             menu
         });
-        self.message_menu_subscription =
-            Some(cx.subscribe(&menu, |this, _, _: &gpui::DismissEvent, cx| {
+        self.message_menu_subscription = Some(cx.subscribe(
+            &menu,
+            |this, _, _: &gpui_kit::DismissEvent, cx| {
                 this.message_menu = None;
                 this.message_menu_subscription = None;
                 cx.notify();
-            }));
+            },
+        ));
         menu.focus_handle(cx).focus(window, cx);
         self.message_menu = Some((menu, position));
         cx.notify();
@@ -608,7 +610,7 @@ impl Render for AiPanel {
                     .size_full()
                     .min_h_0()
                     .child(
-                        gpui::list(scroll.clone(), move |ix, _, cx| {
+                        gpui_kit::list(scroll.clone(), move |ix, _, cx| {
                             div()
                                 .w_full()
                                 .min_w_0()
@@ -847,9 +849,9 @@ impl Render for AiPanel {
             )
             .child(footer)
             .when_some(self.message_menu.clone(), |this, (menu, position)| {
-                this.child(gpui::deferred(gpui::anchored().position(position)
-                    .snap_to_window_with_margin(gpui::rems(0.5).to_pixels(window.rem_size()))
-                    .child(menu)).with_priority(gpui_base::POPUP_PRIORITY))
+                this.child(gpui_kit::deferred(gpui_kit::anchored().position(position)
+                    .snap_to_window_with_margin(gpui_kit::rems(0.5).to_pixels(window.rem_size()))
+                    .child(menu)).with_priority(gpui_kit::base::POPUP_PRIORITY))
             })
             .into_any_element()
     }

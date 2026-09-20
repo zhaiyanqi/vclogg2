@@ -7,12 +7,12 @@ use std::{
     sync::Arc,
 };
 
-use gpui::{
+use gpui_kit::component::{
+    ActiveTheme as _, Icon, IconName, StyledExt as _, h_flex, theme::try_parse_color,
+};
+use gpui_kit::{
     App, Bounds, Hsla, IntoElement, ParentElement as _, Pixels, RenderOnce, SharedString,
     Styled as _, Window, div, prelude::FluentBuilder as _, px, svg,
-};
-use gpui_component::{
-    ActiveTheme as _, Icon, IconName, StyledExt as _, h_flex, theme::try_parse_color,
 };
 use vclogg_core::{CompressedRows, LinePreviewReader, LogDocument, SearchMatcher};
 
@@ -1912,7 +1912,7 @@ mod tests {
         sync::Arc,
     };
 
-    use gpui::Bounds;
+    use gpui_kit::Bounds;
     use vclogg_core::{CompressedRows, LinePreview, LogDocument};
 
     use crate::log_table::LogTableCursor;

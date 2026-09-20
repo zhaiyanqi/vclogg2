@@ -7,10 +7,10 @@ use std::{
 };
 
 pub(super) fn exercise(
-    cx: &mut gpui::TestAppContext,
+    cx: &mut gpui_kit::TestAppContext,
     panel: &Entity<AiPanel>,
     workspace: &Entity<Workspace>,
-    window: gpui::WindowHandle<Root>,
+    window: gpui_kit::WindowHandle<Root>,
 ) {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("attached.log");

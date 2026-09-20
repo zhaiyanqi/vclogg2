@@ -1,4 +1,4 @@
-use gpui::{Action, App, KeyBinding, Keystroke, Unbind, actions};
+use gpui_kit::{Action, App, KeyBinding, Keystroke, Unbind, actions};
 
 use crate::state_store::ShortcutSettings;
 

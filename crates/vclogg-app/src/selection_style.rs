@@ -1,9 +1,9 @@
 //! Application-owned selection appearance. Persisted values contain no GPUI types.
-use gpui::{App, Div, Hsla, Pixels, Styled as _, div, prelude::FluentBuilder as _, px};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _,
     theme::{ThemeMode, try_parse_color},
 };
+use gpui_kit::{App, Div, Hsla, Pixels, Styled as _, div, prelude::FluentBuilder as _, px};
 use serde::{Deserialize, Serialize};
 
 use crate::ui_theme;
@@ -172,8 +172,8 @@ impl ResolvedSelectionStyle {
     pub(crate) fn row_highlights(
         self,
         selected: bool,
-        mut highlights: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>,
-    ) -> Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> {
+        mut highlights: Vec<(std::ops::Range<usize>, gpui_kit::HighlightStyle)>,
+    ) -> Vec<(std::ops::Range<usize>, gpui_kit::HighlightStyle)> {
         if let Some(color) = self.row_foreground.filter(|_| selected) {
             for (_, style) in &mut highlights {
                 style.color = Some(color);

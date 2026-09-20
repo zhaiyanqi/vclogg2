@@ -1,13 +1,7 @@
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use chrono::{DateTime, Local};
-use gpui::{
-    AnyElement, AppContext as _, Context, ElementId, EventEmitter, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Task, UniformListScrollHandle,
-    Window, div, prelude::FluentBuilder as _, rems, svg, uniform_list,
-};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, StyledExt as _,
     WindowExt as _,
     button::{Button, ButtonVariants as _},
@@ -16,6 +10,12 @@ use gpui_component::{
     input::{Input, InputEvent, InputState},
     scroll::{Scrollbar, ScrollbarHandle, ScrollbarMode},
     v_flex,
+};
+use gpui_kit::{
+    AnyElement, AppContext as _, Context, ElementId, EventEmitter, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, UniformListScrollHandle,
+    Window, div, prelude::FluentBuilder as _, rems, svg, uniform_list,
 };
 
 use crate::{
@@ -74,7 +74,7 @@ pub enum HistoryDialogEvent {
 }
 
 pub struct HistoryDialog {
-    filter: gpui::Entity<InputState>,
+    filter: gpui_kit::Entity<InputState>,
     session_scroll: UniformListScrollHandle,
     temporary_result_scroll: ScrollHandle,
     category: HistoryCategory,

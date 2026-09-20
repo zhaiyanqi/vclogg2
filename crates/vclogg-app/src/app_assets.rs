@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
-use gpui::{AssetSource, Result, SharedString};
-use gpui_component::IconNamed;
+use gpui_kit::component::IconNamed;
+use gpui_kit::{AssetSource, Result, SharedString};
 
 /// Additional icons rendered by the standard Icon component.
 /// Lucide 1.27.0 SVGs: https://github.com/lucide-icons/lucide/tree/1.27.0/icons.
@@ -63,11 +63,11 @@ impl AssetSource for Assets {
         {
             return Ok(Some(Cow::Borrowed(icon.data())));
         }
-        gpui_component_assets::Assets.load(path)
+        gpui_kit::assets::Assets.load(path)
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
-        let mut assets = gpui_component_assets::Assets.list(path)?;
+        let mut assets = gpui_kit::assets::Assets.list(path)?;
         assets.extend(
             AppIcon::ALL
                 .into_iter()

@@ -1,14 +1,7 @@
 use std::{cell::Cell, rc::Rc};
 
-use gpui::{
-    App, AppContext as _, Context, Div, DragMoveEvent, Entity, EventEmitter, FocusHandle, Hsla,
-    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseUpEvent,
-    ParentElement as _, Pixels, Point, Render, Rgba, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled as _, StyledText, Subscription,
-    UniformListScrollHandle, Window, div, prelude::FluentBuilder as _, px, uniform_list,
-};
-use gpui_base::{GlobalState, TextSelection};
-use gpui_component::{
+use gpui_kit::base::{GlobalState, TextSelection};
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, IconName, IndexPath, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
@@ -19,6 +12,13 @@ use gpui_component::{
     select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
     slider::{Slider, SliderEvent, SliderState},
     v_flex,
+};
+use gpui_kit::{
+    App, AppContext as _, Context, Div, DragMoveEvent, Entity, EventEmitter, FocusHandle, Hsla,
+    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseUpEvent,
+    ParentElement as _, Pixels, Point, Render, Rgba, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, Styled as _, StyledText, Subscription,
+    UniformListScrollHandle, Window, div, prelude::FluentBuilder as _, px, uniform_list,
 };
 
 use crate::{
@@ -358,7 +358,7 @@ impl RowTagDialog {
     }
 
     pub(crate) fn is_composing(editor: &Entity<Self>, window: &mut Window, cx: &mut App) -> bool {
-        use gpui::EntityInputHandler as _;
+        use gpui_kit::EntityInputHandler as _;
         let input = editor.read(cx).input();
         input.update(cx, |input, cx| {
             input.marked_text_range(window, cx).is_some()

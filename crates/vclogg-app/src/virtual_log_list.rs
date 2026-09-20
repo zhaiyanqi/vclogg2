@@ -6,14 +6,14 @@ use std::{
     rc::Rc,
 };
 
-use gpui::{
+use gpui_kit::base::ScrollbarHandle as _;
+use gpui_kit::component::InteractiveElementExt as _;
+use gpui_kit::{
     AnyElement, App, AvailableSpace, Bounds, ContentMask, Context, Div, Element, ElementId, Entity,
     EventEmitter, GlobalElementId, Hitbox, InteractiveElement as _, IntoElement, Pixels, Point,
     Render, ScrollHandle, ScrollStrategy, Size, Stateful, StatefulInteractiveElement as _,
     StyleRefinement, Styled, Window, div, point, px, size,
 };
-use gpui_base::ScrollbarHandle as _;
-use gpui_component::InteractiveElementExt as _;
 
 const DEFAULT_MEASURED_HEIGHT_LIMIT: usize = 4096;
 
@@ -744,7 +744,7 @@ impl<K: 'static> Deref for VirtualLogListScrollHandle<K> {
     }
 }
 
-impl<K: 'static> gpui_base::ScrollbarHandle for VirtualLogListScrollHandle<K> {
+impl<K: 'static> gpui_kit::base::ScrollbarHandle for VirtualLogListScrollHandle<K> {
     fn viewport_bounds(&self) -> Bounds<Pixels> {
         self.viewport.viewport_bounds()
     }
@@ -770,7 +770,7 @@ impl<K: 'static> gpui_base::ScrollbarHandle for VirtualLogListScrollHandle<K> {
     }
 }
 
-impl<K: 'static> gpui_base::ScrollbarHandle for VirtualLogViewport<K> {
+impl<K: 'static> gpui_kit::base::ScrollbarHandle for VirtualLogViewport<K> {
     fn viewport_bounds(&self) -> Bounds<Pixels> {
         VirtualLogListScrollHandle::new(self).viewport_bounds()
     }
@@ -958,10 +958,10 @@ impl<K: Clone + Ord + 'static> Element for VirtualLogList<K> {
     fn request_layout(
         &mut self,
         global_id: Option<&GlobalElementId>,
-        inspector_id: Option<&gpui::InspectorElementId>,
+        inspector_id: Option<&gpui_kit::InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
-    ) -> (gpui::LayoutId, Self::RequestLayoutState) {
+    ) -> (gpui_kit::LayoutId, Self::RequestLayoutState) {
         let layout_id = self.base.interactivity().request_layout(
             global_id,
             inspector_id,
@@ -975,7 +975,7 @@ impl<K: Clone + Ord + 'static> Element for VirtualLogList<K> {
     fn prepaint(
         &mut self,
         global_id: Option<&GlobalElementId>,
-        inspector_id: Option<&gpui::InspectorElementId>,
+        inspector_id: Option<&gpui_kit::InspectorElementId>,
         bounds: Bounds<Pixels>,
         frame: &mut Self::RequestLayoutState,
         window: &mut Window,
@@ -1085,7 +1085,7 @@ impl<K: Clone + Ord + 'static> Element for VirtualLogList<K> {
     fn paint(
         &mut self,
         global_id: Option<&GlobalElementId>,
-        inspector_id: Option<&gpui::InspectorElementId>,
+        inspector_id: Option<&gpui_kit::InspectorElementId>,
         bounds: Bounds<Pixels>,
         frame: &mut Self::RequestLayoutState,
         hitbox: &mut Self::PrepaintState,
@@ -1218,7 +1218,7 @@ fn resolve_position<K>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::TestAppContext;
+    use gpui_kit::TestAppContext;
 
     struct Harness {
         viewport: VirtualLogViewport<usize>,
@@ -1257,7 +1257,7 @@ mod tests {
         }
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn element_measures_only_the_distant_visible_window(cx: &mut TestAppContext) {
         let viewport = VirtualLogViewport::new();
         let visible_ranges = Rc::new(RefCell::new(Vec::new()));
@@ -1370,7 +1370,7 @@ mod tests {
         viewport.record_layout(400, 400, px(100.), 400..401, Bounds::default());
         let handle = VirtualLogListScrollHandle::new(&viewport);
 
-        gpui_base::ScrollbarHandle::set_offset(&handle, point(px(0.), -px(8_010.)));
+        gpui_kit::base::ScrollbarHandle::set_offset(&handle, point(px(0.), -px(8_010.)));
 
         assert_eq!(viewport.position().row_ix, 400);
         assert_eq!(viewport.position().offset_in_row, px(50.));

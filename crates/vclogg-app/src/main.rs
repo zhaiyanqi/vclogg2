@@ -60,8 +60,8 @@ mod workspace_state;
 
 use std::path::PathBuf;
 
-use gpui::*;
-use gpui_component::{Root, TitleBar, theme::ThemeMode};
+use gpui_kit::component::{Root, TitleBar, theme::ThemeMode};
+use gpui_kit::*;
 
 use crate::workspace::{InitialDocument, Workspace};
 
@@ -215,7 +215,7 @@ fn main() {
         .collect::<Vec<_>>();
     #[cfg(target_os = "macos")]
     i18n::initialize_native_language();
-    let platform = gpui_platform::current_platform(false);
+    let platform = gpui_kit::platform::current_platform(false);
     let system_fonts = system_fonts::SystemFonts::new(platform.text_system());
     let app = Application::with_platform(platform).with_assets(app_assets::Assets);
     let (platform_open_sender, platform_open_receiver) = async_channel::unbounded();
@@ -246,7 +246,7 @@ fn main() {
     app.run(move |cx| {
         ui_performance::init_ui_thread();
         ui_performance::start_framework_monitor(cx);
-        gpui_component::init(cx);
+        gpui_kit::init(cx);
         notifications::init(cx);
         cx.set_global(system_fonts);
         cx.set_cursor_hide_mode(CursorHideMode::Never);

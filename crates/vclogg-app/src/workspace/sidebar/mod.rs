@@ -1,11 +1,11 @@
 //! Retained sidebar tools; document ownership stays with Workspace.
 use super::*;
-use gpui::{EventEmitter, Hsla};
-use gpui_component::{
+use gpui_kit::component::{
     list::ListItem,
     resizable::h_resizable,
     tree::{Tree, TreeEvent, TreeItem, TreeState},
 };
+use gpui_kit::{EventEmitter, Hsla};
 use std::sync::atomic::AtomicUsize;
 use vclogg_core::{CancellationToken, DirectoryEntry, NavigationSummary};
 
@@ -149,7 +149,7 @@ impl SidebarState {
         let owner = workspace.upgrade().expect("sidebar owner exists");
         let subscriptions = vec![
             cx.observe(&owner, |this, owner, cx| this.sync(&owner, cx)),
-            cx.observe_global::<gpui_component::Theme>(|this, cx| this.rebuild_tree(cx)),
+            cx.observe_global::<gpui_kit::component::Theme>(|this, cx| this.rebuild_tree(cx)),
             cx.subscribe(&tree, |this, _, event: &TreeEvent, cx| {
                 let (id, expanded) = match event {
                     TreeEvent::Expanded(id) => (id, true),
@@ -705,7 +705,9 @@ impl Workspace {
                 }
                 this.reset_sidebar_split(cx);
             }),
-            cx.observe_global::<gpui_component::Theme>(|this, cx| this.reset_sidebar_split(cx)),
+            cx.observe_global::<gpui_kit::component::Theme>(|this, cx| {
+                this.reset_sidebar_split(cx)
+            }),
         ];
         (state, surfaces, subscriptions)
     }

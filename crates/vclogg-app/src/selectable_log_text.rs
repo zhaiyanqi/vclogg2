@@ -5,14 +5,14 @@ use std::{
     rc::Rc,
 };
 
-use gpui::{
+use gpui_kit::base::{
+    GlobalState, TextSelection, TextSelectionEvent, TextSelectionHandle, TextSelectionRegistration,
+    TextSelectionRun,
+};
+use gpui_kit::{
     App, BorderStyle, Bounds, Corners, Edges, Element, ElementId, GlobalElementId, Hitbox,
     InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent, PaintQuad, Pixels,
     Point, SharedString, StyledText, Subscription, Window, transparent_black,
-};
-use gpui_base::{
-    GlobalState, TextSelection, TextSelectionEvent, TextSelectionHandle, TextSelectionRegistration,
-    TextSelectionRun,
 };
 
 const CACHE_LIMIT: usize = 2048;
@@ -523,7 +523,8 @@ impl<K: Clone + Ord> TextSelectionCache<K> {
                                 .set(activity.active_count.get().saturating_sub(1));
                         }
                     }
-                    TextSelectionEvent::AutoScroll(_) => {}
+                    TextSelectionEvent::AutoScroll(_)
+                    | TextSelectionEvent::TouchSelectionChanged => {}
                 },
                 cx,
             );
@@ -619,9 +620,9 @@ pub struct SelectableLogText {
     text: LogText,
     styled_text: StyledText,
     document_order: u64,
-    selection_color: gpui::Hsla,
+    selection_color: gpui_kit::Hsla,
     selection_style: Option<crate::selection_style::ResolvedTextSelectionStyle>,
-    highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
+    highlights: Vec<(Range<usize>, gpui_kit::HighlightStyle)>,
     preview_range: Option<Range<usize>>,
     suppress_selection: bool,
     word_boundary_characters: SharedString,
@@ -633,7 +634,7 @@ impl SelectableLogText {
         document_order: u64,
         text: LogText,
         styled_text: StyledText,
-        selection_color: gpui::Hsla,
+        selection_color: gpui_kit::Hsla,
     ) -> Self {
         Self {
             selection,
@@ -652,7 +653,7 @@ impl SelectableLogText {
     pub(crate) fn selection_style(
         mut self,
         style: crate::selection_style::ResolvedTextSelectionStyle,
-        highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
+        highlights: Vec<(Range<usize>, gpui_kit::HighlightStyle)>,
     ) -> Self {
         self.selection_color = style.background;
         self.selection_style = Some(style);
@@ -707,7 +708,7 @@ impl SelectableLogText {
 
     fn paint_custom_selection(
         &mut self,
-        layout: &gpui::TextLayout,
+        layout: &gpui_kit::TextLayout,
         range: &Range<usize>,
         window: &mut Window,
         cx: &mut App,
@@ -728,7 +729,9 @@ impl SelectableLogText {
         let rectangles = Self::selection_bounds(start, end, layout.bounds(), layout.line_height())
             .into_iter()
             .map(|bounds| bounds.intersect(&mask))
-            .filter(|bounds| bounds.size.width > gpui::px(0.) && bounds.size.height > gpui::px(0.))
+            .filter(|bounds| {
+                bounds.size.width > gpui_kit::px(0.) && bounds.size.height > gpui_kit::px(0.)
+            })
             .collect::<Vec<_>>();
         if rectangles.is_empty() {
             return false;
@@ -740,16 +743,16 @@ impl SelectableLogText {
         for selected in &rectangles {
             for outside in [
                 Bounds::from_corners(
-                    gpui::point(mask.left(), top),
-                    gpui::point(mask.right(), selected.top()),
+                    gpui_kit::point(mask.left(), top),
+                    gpui_kit::point(mask.right(), selected.top()),
                 ),
                 Bounds::from_corners(
-                    gpui::point(mask.left(), selected.top()),
-                    gpui::point(selected.left(), selected.bottom()),
+                    gpui_kit::point(mask.left(), selected.top()),
+                    gpui_kit::point(selected.left(), selected.bottom()),
                 ),
                 Bounds::from_corners(
-                    gpui::point(selected.right(), selected.top()),
-                    gpui::point(mask.right(), selected.bottom()),
+                    gpui_kit::point(selected.right(), selected.top()),
+                    gpui_kit::point(mask.right(), selected.bottom()),
                 ),
             ] {
                 self.paint_original_in_mask(outside, layout, window, cx);
@@ -757,13 +760,13 @@ impl SelectableLogText {
             top = selected.bottom();
         }
         self.paint_original_in_mask(
-            Bounds::from_corners(gpui::point(mask.left(), top), mask.bottom_right()),
+            Bounds::from_corners(gpui_kit::point(mask.left(), top), mask.bottom_right()),
             layout,
             window,
             cx,
         );
         for selected in &rectangles {
-            window.paint_quad(gpui::fill(*selected, style.background));
+            window.paint_quad(gpui_kit::fill(*selected, style.background));
         }
 
         // Reuse the exact shaped glyph IDs, offsets and wrap boundaries. Re-shaping with extra
@@ -776,7 +779,7 @@ impl SelectableLogText {
             let line = &wrapped.unwrapped_layout;
             let baseline = (layout.line_height() - line.ascent - line.descent) / 2. + line.ascent;
             let mut wraps = wrapped.wrap_boundaries.iter().peekable();
-            let mut wrap_x = gpui::px(0.);
+            let mut wrap_x = gpui_kit::px(0.);
             let mut y = line_origin.y;
             for (run_ix, run) in line.runs.iter().enumerate() {
                 let max_glyph_size = cx
@@ -796,7 +799,8 @@ impl SelectableLogText {
                     }) else {
                         continue;
                     };
-                    let glyph_origin = gpui::point(line_origin.x + glyph.position.x - wrap_x, y);
+                    let glyph_origin =
+                        gpui_kit::point(line_origin.x + glyph.position.x - wrap_x, y);
                     if !(Bounds {
                         origin: glyph_origin,
                         size: max_glyph_size,
@@ -822,10 +826,10 @@ impl SelectableLogText {
                     let color = style
                         .foreground
                         .map_or(original_color, |color| color.opacity(style.opacity));
-                    let origin = gpui::point(glyph_origin.x, y + baseline + glyph.position.y);
+                    let origin = gpui_kit::point(glyph_origin.x, y + baseline + glyph.position.y);
                     // Clip both vertically and horizontally, including a partially selected ligature.
                     let result = window.with_content_mask(
-                        Some(gpui::ContentMask { bounds: *selected }),
+                        Some(gpui_kit::ContentMask { bounds: *selected }),
                         |window| {
                             if glyph.is_emoji {
                                 window.paint_emoji(origin, run.font_id, glyph.id, line.font_size)
@@ -846,7 +850,7 @@ impl SelectableLogText {
                 }
             }
             if style.underline {
-                let mut visual_start_x = gpui::px(0.);
+                let mut visual_start_x = gpui_kit::px(0.);
                 for visual_line in 0..=wrapped.wrap_boundaries.len() {
                     let visual_end_x = wrapped
                         .wrap_boundaries
@@ -867,13 +871,13 @@ impl SelectableLogText {
                             .min(line_origin.x + visual_end_x - visual_start_x);
                         if right > left {
                             window.with_content_mask(
-                                Some(gpui::ContentMask { bounds: *selected }),
+                                Some(gpui_kit::ContentMask { bounds: *selected }),
                                 |window| {
                                     window.paint_underline(
-                                        gpui::point(left, y + baseline + line.descent * 0.618),
+                                        gpui_kit::point(left, y + baseline + line.descent * 0.618),
                                         right - left,
-                                        &gpui::UnderlineStyle {
-                                            thickness: gpui::px(1.),
+                                        &gpui_kit::UnderlineStyle {
+                                            thickness: gpui_kit::px(1.),
                                             color: Some(
                                                 style
                                                     .foreground
@@ -899,19 +903,24 @@ impl SelectableLogText {
     fn paint_original_in_mask(
         &mut self,
         bounds: Bounds<Pixels>,
-        layout: &gpui::TextLayout,
+        layout: &gpui_kit::TextLayout,
         window: &mut Window,
         cx: &mut App,
     ) {
-        if bounds.size.width > gpui::px(0.) && bounds.size.height > gpui::px(0.) {
-            window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+        if bounds.size.width > gpui_kit::px(0.) && bounds.size.height > gpui_kit::px(0.) {
+            window.with_content_mask(Some(gpui_kit::ContentMask { bounds }), |window| {
                 self.styled_text
                     .paint(None, None, layout.bounds(), &mut (), &mut (), window, cx);
             });
         }
     }
 
-    fn paint_selection(&self, layout: &gpui::TextLayout, range: Range<usize>, window: &mut Window) {
+    fn paint_selection(
+        &self,
+        layout: &gpui_kit::TextLayout,
+        range: Range<usize>,
+        window: &mut Window,
+    ) {
         let (Some(start), Some(end)) = (
             layout.position_for_index(range.start),
             layout.position_for_index(range.end),
@@ -1045,7 +1054,7 @@ impl Element for SelectableLogText {
         self.styled_text
             .prepaint(id, inspector_id, bounds, &mut (), window, cx);
         let text_bounds = self.styled_text.layout().bounds();
-        let hitbox = window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal);
+        let hitbox = window.insert_hitbox(bounds, gpui_kit::HitboxBehavior::Normal);
         // gpui-component 的 register 会向当前全部文本选择参与者发布快照。空闲帧若让
         // 每个可见日志行都注册，会形成 O(可见行数²) 的重复遍历；仅保留鼠标所在行
         // 作为拖选起点，跨行选择激活后再恢复全部可见行。多击选词/整行属于参与者本地选择，
@@ -1193,11 +1202,11 @@ impl Element for SelectableLogText {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{
+    use gpui_kit::base::TextSelectionLayer;
+    use gpui_kit::{
         Context, Hsla, InteractiveElement as _, Modifiers, MouseMoveEvent, MouseUpEvent,
         ParentElement as _, Render, Styled as _, TestAppContext, div, hsla, point, px,
     };
-    use gpui_base::TextSelectionLayer;
 
     const TEST_SELECTION_COLOR: Hsla = hsla(0.37, 0.91, 0.43, 1.);
 
@@ -1321,7 +1330,7 @@ mod tests {
         }
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn double_clicked_word_survives_dragging_outside_the_line(cx: &mut TestAppContext) {
         let (view, cx) = cx.add_window_view(|_, _| SelectableLogTextTestView {
             text: LogText::new("alpha beta".into()),
@@ -1384,7 +1393,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn triple_click_selects_the_whole_line_before_the_row_handler(cx: &mut TestAppContext) {
         let (view, cx) = cx.add_window_view(|_, _| SelectableLogTextTestView {
             text: LogText::new("alpha beta".into()),
@@ -1424,7 +1433,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn second_double_click_on_the_selected_word_selects_the_whole_line(cx: &mut TestAppContext) {
         let (_, cx) = cx.add_window_view(|_, _| SelectableLogTextTestView {
             text: LogText::new("alpha beta".into()),
@@ -1459,7 +1468,7 @@ mod tests {
         );
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn recently_rendered_middle_rows_stay_cached_at_capacity(cx: &mut TestAppContext) {
         let (view, cx) = cx.add_window_view(|_, _| SelectableLogTextTestView {
             text: LogText::new("alpha beta".into()),
@@ -1484,7 +1493,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn middle_row_selection_survives_the_next_render_at_capacity(cx: &mut TestAppContext) {
         let (view, cx) = cx.add_window_view(|_, _| CachedRowsTestView {
             text: LogText::new("alpha beta".into()),
@@ -1559,7 +1568,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn local_selection_is_not_evicted_by_later_rows(cx: &mut TestAppContext) {
         let (view, cx) = cx.add_window_view(|_, _| SelectableLogTextTestView {
             text: LogText::new("alpha beta".into()),

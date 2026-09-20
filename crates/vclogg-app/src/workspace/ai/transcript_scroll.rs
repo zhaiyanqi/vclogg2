@@ -1,7 +1,9 @@
 //! Scroll state owned by the AI transcript. Message content stays in `AiPanel`.
 use std::ops::Range;
 
-use gpui::{Context, FollowMode, ListAlignment, ListOffset, ListState, Pixels, px};
+#[cfg(test)]
+use gpui_kit::ListOffset;
+use gpui_kit::{Context, FollowMode, ListAlignment, ListState, Pixels, px};
 
 pub(super) struct TranscriptScroll {
     pub(super) list: ListState,
@@ -21,10 +23,12 @@ impl TranscriptScroll {
         Self { list }
     }
 
+    #[cfg(test)]
     pub(super) fn item_count(&self) -> usize {
         self.list.item_count()
     }
 
+    #[cfg(test)]
     pub(super) fn is_following_tail(&self) -> bool {
         self.list.is_following_tail()
     }
@@ -65,6 +69,7 @@ impl TranscriptScroll {
         true
     }
 
+    #[cfg(test)]
     pub(super) fn scroll_to_item(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
         if index >= self.list.item_count() {
             return false;

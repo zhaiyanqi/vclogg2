@@ -1,15 +1,15 @@
 use std::{collections::BTreeSet, path::PathBuf};
 
 use chrono::{DateTime, Local};
-use gpui::{
-    Context, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window, div, relative, rems,
-};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex, v_flex,
+};
+use gpui_kit::{
+    Context, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Window, div, relative, rems,
 };
 
 const GLOBAL_SEARCH_FILE_ROW_HEIGHT_REMS: f32 = 3.2;

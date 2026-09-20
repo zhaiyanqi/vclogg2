@@ -1,5 +1,5 @@
 use super::*;
-use gpui_component::tab::{Tab, TabBar};
+use gpui_kit::component::tab::{Tab, TabBar};
 
 impl AiPanel {
     pub(super) fn render_conversation_tabs(

@@ -18,7 +18,7 @@ pub(super) struct VerticalTabState {
 }
 
 struct TabIndicatorMotion {
-    state: gpui::SpringState,
+    state: gpui_kit::SpringState,
     target: f32,
     updated_at: std::time::Instant,
 }
@@ -37,7 +37,7 @@ impl VerticalTabState {
         let target = VERTICAL_TAB_HEIGHT.as_f32() * ix as f32;
         let now = cx.background_executor().now();
         let motion = self.indicator.get_or_insert(TabIndicatorMotion {
-            state: gpui::SpringState {
+            state: gpui_kit::SpringState {
                 position: target,
                 velocity: 0.,
             },
@@ -47,7 +47,7 @@ impl VerticalTabState {
         // Match gpui-component's segmented TabBar: 250 ms response, damping 0.85,
         // and 0.1 px settling tolerance. Product motion does not follow OS preferences.
         let frequency = std::f32::consts::TAU / 0.25;
-        let spring = gpui::SpringConfig::new(frequency * frequency, 2. * 0.85 * frequency, 1.);
+        let spring = gpui_kit::SpringConfig::new(frequency * frequency, 2. * 0.85 * frequency, 1.);
         motion.state = spring.step(
             motion.state,
             motion.target,
@@ -57,7 +57,7 @@ impl VerticalTabState {
         motion.target = target;
         motion.updated_at = now;
         if spring.is_settled(motion.state, target, 0.1) {
-            motion.state = gpui::SpringState {
+            motion.state = gpui_kit::SpringState {
                 position: target,
                 velocity: 0.,
             };
@@ -126,7 +126,7 @@ impl Workspace {
         let menu_workspace = cx.entity();
         v_flex()
             .id("vertical-document-tabs")
-            .role(gpui::Role::TabList)
+            .role(gpui_kit::Role::TabList)
             .size_full()
             .min_h_0()
             .min_w_0()
@@ -451,7 +451,7 @@ impl Workspace {
             )
     }
 
-    fn render_vertical_tab_shell(&self, ix: usize, cx: &mut Context<Self>) -> gpui_base::Tab {
+    fn render_vertical_tab_shell(&self, ix: usize, cx: &mut Context<Self>) -> gpui_kit::base::Tab {
         let tab_id = self.tabs[ix];
         let tab_count = self.tabs.len();
         let source_workspace = cx.weak_entity();
@@ -464,7 +464,7 @@ impl Workspace {
             WorkspaceTabId::Document(id) => ElementId::from(("document-tab-context-target", id)),
             WorkspaceTabId::New(id) => ElementId::from(("new-tab-context-target", id)),
         };
-        gpui_base::Tab::new(shell_id)
+        gpui_kit::base::Tab::new(shell_id)
             .relative()
             .flex()
             .items_center()
@@ -517,7 +517,7 @@ impl Workspace {
         tab_id: WorkspaceTabId,
         vertical: bool,
         cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    ) -> gpui_kit::Div {
         let tab_title = self.workspace_tab_title(tab_id);
         let selected = self.active_tab_id == tab_id;
         let file_icon_color = if selected {

@@ -7,12 +7,12 @@ use std::{
     sync::Arc,
 };
 
-use gpui::{
+use gpui_kit::component::{ActiveTheme as _, h_flex, theme::try_parse_color};
+use gpui_kit::{
     AnyElement, App, Bounds, Context, Div, HighlightStyle, Hsla, IntoElement, ParentElement as _,
     Pixels, SharedString, Styled as _, div, linear_color_stop, linear_gradient,
     prelude::FluentBuilder as _, px,
 };
-use gpui_component::{ActiveTheme as _, h_flex, theme::try_parse_color};
 use vclogg_core::{CompressedRows, LinePreviewReader, LogDocument, SearchMatcher};
 
 #[cfg(test)]
@@ -113,10 +113,10 @@ pub(crate) fn message_column_width(
     font_family: SharedString,
     font_size: u16,
     cx: &App,
-) -> gpui::Pixels {
+) -> gpui_kit::Pixels {
     let max_columns = bounded_message_columns(max_columns);
     let em = px(font_size as f32);
-    let font_id = cx.text_system().resolve_font(&gpui::font(font_family));
+    let font_id = cx.text_system().resolve_font(&gpui_kit::font(font_family));
     let column_advance = cx
         .text_system()
         .ch_advance(font_id, em)

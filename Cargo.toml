@@ -21,11 +21,7 @@ anyhow = "1"
 async-channel = "2"
 chrono = "0.4"
 dirs = "6"
-gpui = { git = "https://github.com/zed-industries/zed" }
-gpui-base = { git = "https://github.com/longbridge/gpui-component", rev = "38b2f652874fec3c31e5a876443ee594c0fd9d04" }
-gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "38b2f652874fec3c31e5a876443ee594c0fd9d04" }
-gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "38b2f652874fec3c31e5a876443ee594c0fd9d04" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "runtime_shaders"] }
+gpui-kit = "=0.6.4"
 log = "0.4"
 notify = "7.0"
 reqwest = { version = "0.12", default-features = false, features = [
@@ -65,8 +61,8 @@ codegen-units = 16
 debug = "limited"
 
 [profile.dev.package]
-gpui = { opt-level = 3 }
-gpui_platform = { opt-level = 3 }
+gpui-pre = { opt-level = 3 }
+gpui-pre-platform = { opt-level = 3 }
 vclogg-core = { opt-level = 3 }
 taffy = { opt-level = 3 }
 rustybuzz = { opt-level = 3 }

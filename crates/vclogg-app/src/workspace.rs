@@ -16,22 +16,11 @@ use std::{
 
 use anyhow::Result;
 use chrono::{DateTime, Local};
-use gpui::{
-    Animation, AnimationExt as _, AnyElement, AnyWindowHandle, App, AppContext as _,
-    BorrowAppContext as _, Bounds, ClickEvent, ClipboardItem, Context, DisplayId, DragMoveEvent,
-    ElementId, Entity, ExternalPaths, FileDropEvent, FocusHandle, Focusable, FontWeight, Global,
-    HighlightStyle, HitboxBehavior, InteractiveElement as _, IntoElement, KeyDownEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
-    PathPromptOptions, Pixels, Point, Render, ScrollHandle, ScrollStrategy, ScrollWheelEvent,
-    SharedString, Size, StatefulInteractiveElement as _, Styled as _, StyledText, Subscription,
-    Task, UniformListScrollHandle, WeakEntity, Window, WindowId, canvas, deferred, div, point,
-    prelude::FluentBuilder as _, px, relative, rems, size, svg, uniform_list,
-};
-use gpui_base::{
+use gpui_kit::base::{
     GlobalState, POPUP_PRIORITY, Scrollbar, ScrollbarHandle, TextSelection, TextSelectionScopeId,
     actions::{SelectDown, SelectFirst, SelectLast, SelectPageDown, SelectPageUp, SelectUp},
 };
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, ElementExt as _, FocusableExt as _, Icon, IconName,
     IndexPath, Root, Selectable as _, Side, Sizable as _, StyledExt as _, TitleBar, WindowExt as _,
     animation::ease_out_cubic,
@@ -49,6 +38,17 @@ use gpui_component::{
     tab::{Tab, TabBar},
     theme::ThemeMode,
     v_flex,
+};
+use gpui_kit::{
+    Animation, AnimationExt as _, AnyElement, AnyWindowHandle, App, AppContext as _,
+    BorrowAppContext as _, Bounds, ClickEvent, ClipboardItem, Context, DisplayId, DragMoveEvent,
+    ElementId, Entity, ExternalPaths, FileDropEvent, FocusHandle, Focusable, FontWeight, Global,
+    HighlightStyle, HitboxBehavior, InteractiveElement as _, IntoElement, KeyDownEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
+    PathPromptOptions, Pixels, Point, Render, ScrollHandle, ScrollStrategy, ScrollWheelEvent,
+    SharedString, Size, StatefulInteractiveElement as _, Styled as _, StyledText, Subscription,
+    Task, UniformListScrollHandle, WeakEntity, Window, WindowId, canvas, deferred, div, point,
+    prelude::FluentBuilder as _, px, relative, rems, size, svg, uniform_list,
 };
 use vclogg_core::{
     CompressedRows, DocumentRefreshKind, LinePreviewReader, LineReader, LogDocument,
@@ -523,27 +523,27 @@ struct TitleBarMenuButton {
     button: Button,
 }
 
-impl gpui::RenderOnce for TitleBarMenuButton {
+impl gpui_kit::RenderOnce for TitleBarMenuButton {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         self.button
     }
 }
 
-impl gpui::Styled for TitleBarMenuButton {
-    fn style(&mut self) -> &mut gpui::StyleRefinement {
+impl gpui_kit::Styled for TitleBarMenuButton {
+    fn style(&mut self) -> &mut gpui_kit::StyleRefinement {
         self.button.style()
     }
 }
 
-impl gpui::InteractiveElement for TitleBarMenuButton {
-    fn interactivity(&mut self) -> &mut gpui::Interactivity {
+impl gpui_kit::InteractiveElement for TitleBarMenuButton {
+    fn interactivity(&mut self) -> &mut gpui_kit::Interactivity {
         self.button.interactivity()
     }
 }
 
-impl gpui::StatefulInteractiveElement for TitleBarMenuButton {}
+impl gpui_kit::StatefulInteractiveElement for TitleBarMenuButton {}
 
-impl gpui_component::Selectable for TitleBarMenuButton {
+impl gpui_kit::component::Selectable for TitleBarMenuButton {
     fn selected(mut self, selected: bool) -> Self {
         self.button = self.button.selected(selected);
         self
@@ -554,14 +554,14 @@ impl gpui_component::Selectable for TitleBarMenuButton {
     }
 }
 
-impl gpui_component::Disableable for TitleBarMenuButton {
+impl gpui_kit::component::Disableable for TitleBarMenuButton {
     fn disabled(mut self, disabled: bool) -> Self {
         self.button = self.button.disabled(disabled);
         self
     }
 }
 
-impl gpui_component::menu::DropdownMenu for TitleBarMenuButton {}
+impl gpui_kit::component::menu::DropdownMenu for TitleBarMenuButton {}
 
 struct LogContextMenuContext {
     selected_text: String,

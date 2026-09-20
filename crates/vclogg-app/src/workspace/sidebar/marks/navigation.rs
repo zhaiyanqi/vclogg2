@@ -7,7 +7,7 @@ pub(in crate::workspace) struct PendingMarkResultJump {
     document_id: u64,
     source: std::sync::Weak<LogDocument>,
     key: LogRowKey,
-    table_id: gpui::EntityId,
+    table_id: gpui_kit::EntityId,
     content_revision: u64,
     layout_revision: u64,
     toggle_revision: u64,

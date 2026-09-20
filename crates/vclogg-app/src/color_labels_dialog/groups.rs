@@ -114,7 +114,7 @@ impl ColorLabelsDialog {
         cx.notify();
     }
 
-    fn rule_snapshot(row: &LogLevelDraft, cx: &gpui::App) -> LogLevelColorRule {
+    fn rule_snapshot(row: &LogLevelDraft, cx: &gpui_kit::App) -> LogLevelColorRule {
         let (text_color, text_alpha) =
             picker_value(&row.text_color, String::new(), cx).unwrap_or((0, 255));
         let (background_color, background_alpha) =
@@ -131,7 +131,7 @@ impl ColorLabelsDialog {
         }
     }
 
-    fn group_snapshot(&self, group: &LogGroupDraft, cx: &gpui::App) -> LogColoringGroup {
+    fn group_snapshot(&self, group: &LogGroupDraft, cx: &gpui_kit::App) -> LogColoringGroup {
         LogColoringGroup {
             id: group.id.clone(),
             name: group.name.read(cx).value().to_string(),
@@ -145,7 +145,7 @@ impl ColorLabelsDialog {
         }
     }
 
-    pub(super) fn refresh_rule_previews(&mut self, cx: &gpui::App) {
+    pub(super) fn refresh_rule_previews(&mut self, cx: &gpui_kit::App) {
         for group in &mut self.groups {
             let mut rules = Vec::with_capacity(group.rows.len());
             for row in &mut group.rows {
@@ -171,7 +171,7 @@ impl ColorLabelsDialog {
         }
     }
 
-    pub(super) fn rule_example(&self, row: &LogLevelDraft, cx: &gpui::App) -> String {
+    pub(super) fn rule_example(&self, row: &LogLevelDraft, cx: &gpui_kit::App) -> String {
         let group = &self.groups[self.selected_group];
         LogColoringGroup {
             id: group.id.clone(),
@@ -183,7 +183,7 @@ impl ColorLabelsDialog {
         .example_for(&Self::rule_snapshot(row, cx))
     }
 
-    fn render_group_preview(&self, cx: &gpui::App) -> impl IntoElement {
+    fn render_group_preview(&self, cx: &gpui_kit::App) -> impl IntoElement {
         let group = &self.groups[self.selected_group];
         let row = group
             .preview_rule_id

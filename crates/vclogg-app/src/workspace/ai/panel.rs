@@ -1,6 +1,6 @@
 use super::transcript_scroll::TranscriptScroll;
 use super::*;
-use gpui_component::{
+use gpui_kit::component::{
     input::{InputEvent, TextareaState},
     text::TextViewState,
 };
@@ -41,7 +41,7 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) reasoning: String,
     pub(super) progress: String,
     pub(super) expanded: BTreeSet<usize>,
-    pub(super) message_menu: Option<(Entity<PopupMenu>, gpui::Point<gpui::Pixels>)>,
+    pub(super) message_menu: Option<(Entity<PopupMenu>, gpui_kit::Point<gpui_kit::Pixels>)>,
     pub(super) message_menu_subscription: Option<Subscription>,
     pub(super) pending_tool: Option<ToolCall>,
     pub(super) scope: Option<SharedScope>,
@@ -612,7 +612,7 @@ impl AiPanel {
                             cx.background_spawn(async move { super::memory::execute_memory_tool(&memory_store, &memory_call, &token) }).await
                         } else { Err(anyhow::anyhow!("Memory is disabled")) };
                         if result.is_ok() && call.name != "search_memory" {
-                            gpui::AsyncApp::update_global::<super::memory::SharedAiMemory, _>(cx, |_, _| {});
+                            gpui_kit::AsyncApp::update_global::<super::memory::SharedAiMemory, _>(cx, |_, _| {});
                         }
                         let result = match result { Ok(value) => ToolResult::ok(value), Err(error) => ToolResult::error(error.to_string()) };
                         if replies.send((call.id, result)).await.is_err() { break; }

@@ -1,5 +1,5 @@
 use super::*;
-use gpui_component::input::{Input, InputState};
+use gpui_kit::component::input::{Input, InputState};
 use vclogg_ai::{Protocol, ProviderConfig};
 
 pub(super) struct ConfigEditor {
@@ -91,7 +91,7 @@ impl AiPanel {
                 })
                 .await;
             // Finish publication even if the originating window has closed.
-            gpui::AsyncApp::update_global::<super::configuration::SharedAiSettings, _>(
+            gpui_kit::AsyncApp::update_global::<super::configuration::SharedAiSettings, _>(
                 cx,
                 |shared, _| {
                     shared.saving = false;

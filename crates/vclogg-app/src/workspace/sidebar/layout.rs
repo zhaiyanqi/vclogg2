@@ -315,7 +315,7 @@ impl SidebarLayout {
 
 #[derive(Clone)]
 pub(in super::super) struct DraggedSidebarPanel {
-    pub(super) owner: gpui::EntityId,
+    pub(super) owner: gpui_kit::EntityId,
     pub(super) panel: SidebarPanelId,
 }
 

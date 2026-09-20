@@ -1,5 +1,5 @@
 use super::*;
-use gpui_component::clipboard::Clipboard;
+use gpui_kit::component::clipboard::Clipboard;
 
 impl Workspace {
     pub(super) fn render_path_breadcrumb(

@@ -843,7 +843,7 @@ impl Workspace {
         let mut tabs = TabBar::new("document-tabs")
             .w_full()
             .track_scroll(&self.document_tab_scroll)
-            .with_size(gpui_component::Size::Large)
+            .with_size(gpui_kit::component::Size::Large)
             .segmented()
             .h(ui_theme::WORKSPACE_BAR_HEIGHT)
             .px(px(5.))
@@ -1970,7 +1970,7 @@ impl Workspace {
             ))
             .when(!self.app_settings.show_horizontal_scrollbar, |bar| {
                 bar.child(deferred_workspace_overlay(
-                    ui_theme::log_scrollbar_edge_shadow(gpui::Axis::Horizontal, cx),
+                    ui_theme::log_scrollbar_edge_shadow(gpui_kit::Axis::Horizontal, cx),
                 ))
             })
     }
@@ -2221,7 +2221,7 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{Context, Render, TestAppContext, rgb};
+    use gpui_kit::{Context, Render, TestAppContext, rgb};
 
     use super::*;
 
@@ -2255,7 +2255,7 @@ mod tests {
         }
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn workspace_overlay_paints_above_deferred_content(cx: &mut TestAppContext) {
         let (_, cx) = cx.add_window_view(|_, _| DeferredOverlayHarness);
         cx.update(|window, cx| window.draw(cx).clear(cx));

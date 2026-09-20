@@ -1064,7 +1064,7 @@ impl Workspace {
                             .w(ui_theme::LOG_SCROLLBAR_WIDTH)
                             .bg(scrollbar_background)
                             .child(ui_theme::log_scrollbar_edge_shadow(
-                                gpui::Axis::Vertical,
+                                gpui_kit::Axis::Vertical,
                                 cx,
                             ))
                             .child(
@@ -1091,7 +1091,7 @@ impl Workspace {
                         .h(ui_theme::LOG_SCROLLBAR_WIDTH)
                         .bg(scrollbar_background)
                         .child(ui_theme::log_scrollbar_edge_shadow(
-                            gpui::Axis::Horizontal,
+                            gpui_kit::Axis::Horizontal,
                             cx,
                         ))
                         .when(word_wrap, |track| {
@@ -2870,7 +2870,7 @@ impl Workspace {
                             .w(ui_theme::LOG_SCROLLBAR_WIDTH)
                             .bg(scrollbar_background)
                             .child(ui_theme::log_scrollbar_edge_shadow(
-                                gpui::Axis::Vertical,
+                                gpui_kit::Axis::Vertical,
                                 cx,
                             ))
                             .child(
@@ -2894,7 +2894,7 @@ impl Workspace {
                         .h(ui_theme::LOG_SCROLLBAR_WIDTH)
                         .bg(scrollbar_background)
                         .child(ui_theme::log_scrollbar_edge_shadow(
-                            gpui::Axis::Horizontal,
+                            gpui_kit::Axis::Horizontal,
                             cx,
                         ))
                         .when(self.global_viewport.is_wrapped(), |track| {
@@ -3471,7 +3471,7 @@ impl Workspace {
                                         .text_size(px(11.))
                                         .disabled(self.open_task.is_some())
                                         .dropdown_menu_with_anchor(
-                                            gpui::Anchor::BottomLeft,
+                                            gpui_kit::Anchor::BottomLeft,
                                             move |menu, window, cx| {
                                                 Self::build_encoding_menu(
                                                     Self::popup_menu_with_workspace_action_context(
