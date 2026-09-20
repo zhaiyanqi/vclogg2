@@ -4,11 +4,11 @@ use std::{
     sync::Arc,
 };
 
-use gpui::{Entity, Pixels, SharedString, Task};
-use gpui_component::{
+use gpui_kit::component::{
     input::InputState,
     select::{SelectItem, SelectState},
 };
+use gpui_kit::{Entity, Pixels, SharedString, Task};
 use vclogg_core::{
     CompressedRows, LogDocument, SearchCancellation, SearchMatcher, SearchQuery, SearchResult,
 };
@@ -742,7 +742,7 @@ mod state_controller_tests {
                     document_id: 3,
                     source_row: 2,
                 },
-                viewport_y: gpui::px(0.),
+                viewport_y: gpui_kit::px(0.),
                 at_end: false,
                 fallback_ix: 1,
             }),

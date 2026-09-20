@@ -1,8 +1,8 @@
-use gpui::{
+use gpui_kit::component::TITLE_BAR_HEIGHT;
+use gpui_kit::{
     AnyElement, HitboxBehavior, IntoElement as _, MouseDownEvent, MouseMoveEvent, ScrollWheelEvent,
     Styled as _, canvas,
 };
-use gpui_component::TITLE_BAR_HEIGHT;
 
 /// Blocks raw pointer listeners owned by workspace content wherever a later
 /// foreground surface occludes this layer.

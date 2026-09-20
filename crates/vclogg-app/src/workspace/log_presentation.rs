@@ -1064,7 +1064,7 @@ impl Workspace {
                             .w(ui_theme::LOG_SCROLLBAR_WIDTH)
                             .bg(scrollbar_background)
                             .child(ui_theme::log_scrollbar_edge_shadow(
-                                gpui::Axis::Vertical,
+                                gpui_kit::Axis::Vertical,
                                 cx,
                             ))
                             .child(
@@ -1078,7 +1078,11 @@ impl Workspace {
                                     scrollbar_background,
                                 )
                                 .max_fps(60),
-                            ),
+                            )
+                            .child(ui_theme::drag_only_log_scrollbar_guard(
+                                logical_scroll.clone(),
+                                gpui_kit::Axis::Vertical,
+                            )),
                     ),
             )
             .when(self.app_settings.show_horizontal_scrollbar, |content| {
@@ -1091,25 +1095,30 @@ impl Workspace {
                         .h(ui_theme::LOG_SCROLLBAR_WIDTH)
                         .bg(scrollbar_background)
                         .child(ui_theme::log_scrollbar_edge_shadow(
-                            gpui::Axis::Horizontal,
+                            gpui_kit::Axis::Horizontal,
                             cx,
                         ))
                         .when(word_wrap, |track| {
                             track.child(ui_theme::disabled_horizontal_log_scrollbar())
                         })
                         .when(!word_wrap, |track| {
-                            track.child(
-                                ui_theme::persistent_log_scrollbar(
-                                    Scrollbar::horizontal(&logical_scroll)
-                                        .id(format!(
-                                            "log-horizontal-scrollbar-{document_id}-{}",
-                                            region as u8
-                                        ))
-                                        .viewport_from_layout(),
-                                    scrollbar_background,
+                            track
+                                .child(
+                                    ui_theme::persistent_log_scrollbar(
+                                        Scrollbar::horizontal(&logical_scroll)
+                                            .id(format!(
+                                                "log-horizontal-scrollbar-{document_id}-{}",
+                                                region as u8
+                                            ))
+                                            .viewport_from_layout(),
+                                        scrollbar_background,
+                                    )
+                                    .max_fps(60),
                                 )
-                                .max_fps(60),
-                            )
+                                .child(ui_theme::drag_only_log_scrollbar_guard(
+                                    logical_scroll.clone(),
+                                    gpui_kit::Axis::Horizontal,
+                                ))
                         }),
                 )
             });
@@ -1791,7 +1800,7 @@ impl Workspace {
         let attachments = workspace.read(cx).ai_attachment_targets(range_region, cx);
         let menu = menu
             .item(
-                PopupMenuItem::new(crate::tr!("添加到 AI 聊天", "Add to AI chat"))
+                PopupMenuItem::new(crate::tr!("添加到对话", "Add to chat"))
                     .disabled(attachments.is_empty())
                     .on_click(window.listener_for(&workspace, move |this, _, window, cx| {
                         this.add_logs_to_ai(attachments.clone(), window, cx);
@@ -2870,7 +2879,7 @@ impl Workspace {
                             .w(ui_theme::LOG_SCROLLBAR_WIDTH)
                             .bg(scrollbar_background)
                             .child(ui_theme::log_scrollbar_edge_shadow(
-                                gpui::Axis::Vertical,
+                                gpui_kit::Axis::Vertical,
                                 cx,
                             ))
                             .child(
@@ -2881,7 +2890,11 @@ impl Workspace {
                                     scrollbar_background,
                                 )
                                 .max_fps(60),
-                            ),
+                            )
+                            .child(ui_theme::drag_only_log_scrollbar_guard(
+                                logical_scroll.clone(),
+                                gpui_kit::Axis::Vertical,
+                            )),
                     ),
             )
             .when(self.app_settings.show_horizontal_scrollbar, |content| {
@@ -2894,22 +2907,27 @@ impl Workspace {
                         .h(ui_theme::LOG_SCROLLBAR_WIDTH)
                         .bg(scrollbar_background)
                         .child(ui_theme::log_scrollbar_edge_shadow(
-                            gpui::Axis::Horizontal,
+                            gpui_kit::Axis::Horizontal,
                             cx,
                         ))
                         .when(self.global_viewport.is_wrapped(), |track| {
                             track.child(ui_theme::disabled_horizontal_log_scrollbar())
                         })
                         .when(!self.global_viewport.is_wrapped(), |track| {
-                            track.child(
-                                ui_theme::persistent_log_scrollbar(
-                                    Scrollbar::horizontal(&logical_scroll)
-                                        .id("global-results-horizontal-scrollbar")
-                                        .viewport_from_layout(),
-                                    scrollbar_background,
+                            track
+                                .child(
+                                    ui_theme::persistent_log_scrollbar(
+                                        Scrollbar::horizontal(&logical_scroll)
+                                            .id("global-results-horizontal-scrollbar")
+                                            .viewport_from_layout(),
+                                        scrollbar_background,
+                                    )
+                                    .max_fps(60),
                                 )
-                                .max_fps(60),
-                            )
+                                .child(ui_theme::drag_only_log_scrollbar_guard(
+                                    logical_scroll.clone(),
+                                    gpui_kit::Axis::Horizontal,
+                                ))
                         }),
                 )
             })
@@ -2933,10 +2951,38 @@ impl Workspace {
         self.render_wrapped_log_table(document_id, region, surface, cx.weak_entity(), cx)
     }
 
-    pub(super) fn render_new_tab_workspace(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_new_tab_workspace(&self, cx: &mut Context<Self>) -> AnyElement {
         let _performance_scope =
             crate::ui_performance::scope("Workspace::render_new_tab_workspace");
+        let draft = match self.active_tab_id {
+            WorkspaceTabId::New(id) => self.new_file_drafts.get(&id).map(|draft| (id, draft)),
+            WorkspaceTabId::Document(_) => None,
+        };
+        if let Some((id, draft)) = draft.filter(|(_, draft)| draft.active) {
+            return div()
+                .id(("new-file-editor", id))
+                .size_full()
+                .min_h_0()
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.exit_new_file_draft(id, window, cx);
+                        cx.stop_propagation();
+                    } else if event.keystroke.key.eq_ignore_ascii_case("s")
+                        && event.keystroke.modifiers.platform
+                    {
+                        this.save_new_file_draft(id, window, cx);
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(
+                    Editor::new(&draft.editor)
+                        .h(relative(1.))
+                        .aria_label(crate::tr!("新文件编辑器", "New file editor")),
+                )
+                .into_any_element();
+        }
         let opening = self.open_task.is_some();
+        let draft_id = draft.map(|(id, _)| id);
         div()
             .id("empty-workspace-scroll")
             .size_full()
@@ -2990,6 +3036,52 @@ impl Workspace {
                                             })),
                                     ),
                             )
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        Button::new("empty-create-file")
+                                            .small()
+                                            .outline()
+                                            .icon(IconName::Plus)
+                                            .label(if draft_id.is_some() {
+                                                crate::tr!("继续编辑", "Continue editing")
+                                            } else {
+                                                crate::tr!("创建新文件", "Create new file")
+                                            })
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.create_editable_file(window, cx);
+                                            })),
+                                    )
+                                    .when(
+                                        draft.is_some_and(|(_, draft)| {
+                                            draft.path.is_some() && !draft.dirty && !draft.saving
+                                        }),
+                                        |row| {
+                                            row.child(
+                                                Button::new("draft-open-saved-file")
+                                                    .small()
+                                                    .ghost()
+                                                    .label(crate::tr!(
+                                                        "查看已保存文件",
+                                                        "View saved file"
+                                                    ))
+                                                    .on_click(cx.listener(
+                                                        move |this, _, window, cx| {
+                                                            if let Some(id) = draft_id {
+                                                                this.exit_new_file_draft(
+                                                                    id, window, cx,
+                                                                );
+                                                            }
+                                                        },
+                                                    )),
+                                            )
+                                        },
+                                    )
+                                    .child(div().flex_1()),
+                            )
                             .when(
                                 !self.history_loading && !self.pinned_files.is_empty(),
                                 |this| this.child(self.render_pinned_files(opening, cx)),
@@ -3001,15 +3093,98 @@ impl Workspace {
                             .child(self.render_recent_files(opening, cx)),
                     ),
             )
+            .into_any_element()
     }
 
     pub(super) fn render_tab_workspace(
         &self,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> AnyElement {
         let _performance_scope = crate::ui_performance::scope("Workspace::render_tab_workspace");
         let tab = self.active_document();
+        if let Some(document_id) = tab
+            .filter(|tab| tab.edit.is_none() && tab.edit_load_task.is_some())
+            .map(|tab| tab.id)
+        {
+            let loading = div()
+                .id(("document-editor-loading", document_id))
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(cx.theme().background)
+                .child(
+                    v_flex()
+                        .w(rems(22.))
+                        .gap_3()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(crate::tr!("正在准备编辑器…", "Preparing editor…")),
+                        )
+                        .child(
+                            Progress::new(("document-editor-progress", document_id))
+                                .loading(true)
+                                .accessibility_label(crate::tr!(
+                                    "正在加载日志文件以供编辑",
+                                    "Loading log file for editing"
+                                )),
+                        ),
+                );
+            return if cx.reduce_motion() {
+                loading.into_any_element()
+            } else {
+                loading
+                    .with_animation(
+                        format!("document-editor-loading-enter-{document_id}"),
+                        Animation::new(TRANSIENT_SURFACE_ENTER_DURATION)
+                            .with_easing(ease_out_cubic),
+                        |loading, delta| loading.opacity(delta),
+                    )
+                    .into_any_element()
+            };
+        }
+        if let Some((document_id, edit)) = tab.and_then(|tab| {
+            tab.edit
+                .as_ref()
+                .filter(|edit| edit.active)
+                .map(|edit| (tab.id, edit))
+        }) {
+            let editor = div()
+                .id(("document-editor", document_id))
+                .size_full()
+                .min_h_0()
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.exit_document_edit(document_id, window, cx);
+                        cx.stop_propagation();
+                    } else if event.keystroke.key.eq_ignore_ascii_case("s")
+                        && event.keystroke.modifiers.platform
+                    {
+                        this.save_document_edit(document_id, window, cx);
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(
+                    Editor::new(&edit.editor)
+                        .h(relative(1.))
+                        .aria_label(crate::tr!("日志文件编辑器", "Log file editor")),
+                );
+            return if cx.reduce_motion() {
+                editor.into_any_element()
+            } else {
+                editor
+                    .with_animation(
+                        format!("document-editor-enter-{document_id}"),
+                        Animation::new(TRANSIENT_SURFACE_ENTER_DURATION)
+                            .with_easing(ease_out_cubic),
+                        |editor, delta| editor.opacity(delta),
+                    )
+                    .into_any_element()
+            };
+        }
         let results_visible = match self.global_search.scope {
             SearchScope::CurrentFile => tab.is_some_and(|tab| tab.results_visible),
             SearchScope::AllOpenFiles | SearchScope::Directory => {
@@ -3367,6 +3542,7 @@ impl Workspace {
                     ),
             )
             .child(search_panel_resize_event_layer)
+            .into_any_element()
     }
 
     pub(super) fn render_status_bar(
@@ -3471,7 +3647,7 @@ impl Workspace {
                                         .text_size(px(11.))
                                         .disabled(self.open_task.is_some())
                                         .dropdown_menu_with_anchor(
-                                            gpui::Anchor::BottomLeft,
+                                            gpui_kit::Anchor::BottomLeft,
                                             move |menu, window, cx| {
                                                 Self::build_encoding_menu(
                                                     Self::popup_menu_with_workspace_action_context(

@@ -4,7 +4,7 @@
 use std::cell::{Cell, RefCell};
 
 use anyhow::{Context as _, Result};
-use gpui::{Pixels, Point, Window, WindowOptions};
+use gpui_kit::{Pixels, Point, Window, WindowOptions};
 use objc2::{
     AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send,
     rc::{Retained, Weak},

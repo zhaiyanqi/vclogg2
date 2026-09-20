@@ -1,6 +1,6 @@
 use std::{cell::Cell, rc::Rc};
 
-use gpui::{
+use gpui_kit::{
     AnyElement, App, AvailableSpace, Bounds, Context, Div, Element, ElementId, GlobalElementId,
     InspectorElementId, InteractiveElement as _, IntoElement, LayoutId, ParentElement as _, Pixels,
     Point, Render, Stateful, Styled as _, Window, div, point, px, size,

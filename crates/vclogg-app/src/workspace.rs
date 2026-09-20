@@ -16,7 +16,31 @@ use std::{
 
 use anyhow::Result;
 use chrono::{DateTime, Local};
-use gpui::{
+use gpui_kit::base::{
+    GlobalState, POPUP_PRIORITY, Scrollbar, ScrollbarHandle, TextSelection, TextSelectionScopeId,
+    actions::{SelectDown, SelectFirst, SelectLast, SelectPageDown, SelectPageUp, SelectUp},
+};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, ElementExt as _, FocusableExt as _, Icon, IconName,
+    IndexPath, Root, Selectable as _, Side, Sizable as _, StyledExt as _, TitleBar, WindowExt as _,
+    animation::ease_out_cubic,
+    button::{Button, ButtonCustomVariant, ButtonRounded, ButtonVariants as _},
+    checkbox::Checkbox,
+    dialog::DialogFooter,
+    h_flex,
+    input::{Editor, EditorState, Input, InputEvent, InputState, Position},
+    menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem},
+    popover::Popover,
+    progress::Progress,
+    resizable::{ResizableState, resizable_panel, v_resizable},
+    scroll::ScrollableElement as _,
+    select::{Select, SelectEvent, SelectState},
+    status_bar::StatusBar,
+    tab::{Tab, TabBar},
+    theme::ThemeMode,
+    v_flex,
+};
+use gpui_kit::{
     Animation, AnimationExt as _, AnyElement, AnyWindowHandle, App, AppContext as _,
     BorrowAppContext as _, Bounds, ClickEvent, ClipboardItem, Context, DisplayId, DragMoveEvent,
     ElementId, Entity, ExternalPaths, FileDropEvent, FocusHandle, Focusable, FontWeight, Global,
@@ -26,29 +50,6 @@ use gpui::{
     SharedString, Size, StatefulInteractiveElement as _, Styled as _, StyledText, Subscription,
     Task, UniformListScrollHandle, WeakEntity, Window, WindowId, canvas, deferred, div, point,
     prelude::FluentBuilder as _, px, relative, rems, size, svg, uniform_list,
-};
-use gpui_base::{
-    GlobalState, POPUP_PRIORITY, Scrollbar, ScrollbarHandle, TextSelection, TextSelectionScopeId,
-    actions::{SelectDown, SelectFirst, SelectLast, SelectPageDown, SelectPageUp, SelectUp},
-};
-use gpui_component::{
-    ActiveTheme as _, Disableable as _, ElementExt as _, FocusableExt as _, Icon, IconName,
-    IndexPath, Root, Selectable as _, Side, Sizable as _, StyledExt as _, TitleBar, WindowExt as _,
-    animation::ease_out_cubic,
-    button::{Button, ButtonCustomVariant, ButtonRounded, ButtonVariants as _},
-    checkbox::Checkbox,
-    dialog::DialogFooter,
-    h_flex,
-    input::{Input, InputEvent, InputState},
-    menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem},
-    popover::Popover,
-    resizable::{ResizableState, resizable_panel, v_resizable},
-    scroll::ScrollableElement as _,
-    select::{Select, SelectEvent, SelectState},
-    status_bar::StatusBar,
-    tab::{Tab, TabBar},
-    theme::ThemeMode,
-    v_flex,
 };
 use vclogg_core::{
     CompressedRows, DocumentRefreshKind, LinePreviewReader, LineReader, LogDocument,
@@ -64,9 +65,9 @@ use crate::{
         ExtendSelectionFirst, ExtendSelectionLast, ExtendSelectionPageDown, ExtendSelectionPageUp,
         ExtendSelectionUp, FocusSearch, GoToLine, JumpToEnd, JumpToStart, LOG_TABLE_CONTEXT,
         MergeSearchResultsInNewTab, NewWindow, OpenFiles, OpenQuickFind, OpenSearchResultsInNewTab,
-        OpenSettings, ReloadActive, SaveSearchResultsToFile, SelectAllRows, StartSearch,
-        ToggleCaseSensitive, ToggleFullscreen, ToggleMarkedRow, ToggleRegex, ToggleWordWrap,
-        WORKSPACE_CONTEXT,
+        OpenSettings, PasteClipboardAsFile, ReloadActive, SaveSearchResultsToFile, SelectAllRows,
+        StartSearch, ToggleCaseSensitive, ToggleFullscreen, ToggleMarkedRow, ToggleRegex,
+        ToggleWordWrap, WORKSPACE_CONTEXT,
     },
     cloud_filters::CloudClient,
     color_labels::{
@@ -516,6 +517,8 @@ struct TabMenuState {
     has_other_window: bool,
     vertical_tabs: bool,
     vertical: bool,
+    can_edit: bool,
+    editing: bool,
 }
 
 #[derive(IntoElement)]
@@ -523,27 +526,27 @@ struct TitleBarMenuButton {
     button: Button,
 }
 
-impl gpui::RenderOnce for TitleBarMenuButton {
+impl gpui_kit::RenderOnce for TitleBarMenuButton {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         self.button
     }
 }
 
-impl gpui::Styled for TitleBarMenuButton {
-    fn style(&mut self) -> &mut gpui::StyleRefinement {
+impl gpui_kit::Styled for TitleBarMenuButton {
+    fn style(&mut self) -> &mut gpui_kit::StyleRefinement {
         self.button.style()
     }
 }
 
-impl gpui::InteractiveElement for TitleBarMenuButton {
-    fn interactivity(&mut self) -> &mut gpui::Interactivity {
+impl gpui_kit::InteractiveElement for TitleBarMenuButton {
+    fn interactivity(&mut self) -> &mut gpui_kit::Interactivity {
         self.button.interactivity()
     }
 }
 
-impl gpui::StatefulInteractiveElement for TitleBarMenuButton {}
+impl gpui_kit::StatefulInteractiveElement for TitleBarMenuButton {}
 
-impl gpui_component::Selectable for TitleBarMenuButton {
+impl gpui_kit::component::Selectable for TitleBarMenuButton {
     fn selected(mut self, selected: bool) -> Self {
         self.button = self.button.selected(selected);
         self
@@ -554,14 +557,14 @@ impl gpui_component::Selectable for TitleBarMenuButton {
     }
 }
 
-impl gpui_component::Disableable for TitleBarMenuButton {
+impl gpui_kit::component::Disableable for TitleBarMenuButton {
     fn disabled(mut self, disabled: bool) -> Self {
         self.button = self.button.disabled(disabled);
         self
     }
 }
 
-impl gpui_component::menu::DropdownMenu for TitleBarMenuButton {}
+impl gpui_kit::component::menu::DropdownMenu for TitleBarMenuButton {}
 
 struct LogContextMenuContext {
     selected_text: String,
@@ -705,6 +708,43 @@ struct DocumentTab {
     results_visible: bool,
     restoring_result_selection: bool,
     load_state: DocumentLoadState,
+    edit: Option<DocumentEditSession>,
+    // Only the initial editor load drives the loading surface; saves belong to the session.
+    edit_load_task: Option<Task<()>>,
+}
+
+struct DocumentEditSession {
+    editor: Entity<EditorState>,
+    encoding: document_editing::EditEncoding,
+    disk_version: document_editing::DiskVersion,
+    dirty: bool,
+    active: bool,
+    saving: bool,
+    saved_since_enter: bool,
+    pending_exit_row: Option<usize>,
+    after_save: EditAfterSave,
+    save_task: Option<Task<()>>,
+    _subscription: Subscription,
+}
+
+struct NewFileDraft {
+    editor: Entity<EditorState>,
+    path: Option<PathBuf>,
+    disk_version: Option<document_editing::DiskVersion>,
+    dirty: bool,
+    active: bool,
+    saving: bool,
+    after_save: EditAfterSave,
+    save_task: Option<Task<()>>,
+    _subscription: Subscription,
+}
+
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+enum EditAfterSave {
+    #[default]
+    None,
+    ExitMode,
+    CloseTab,
 }
 
 struct PreparedTabFrame {
@@ -1639,6 +1679,7 @@ pub struct Workspace {
     transient_paths: BTreeSet<PathMatchKey>,
     pending_tab_moves: BTreeSet<u64>,
     documents: Vec<DocumentTab>,
+    new_file_drafts: BTreeMap<u64, NewFileDraft>,
     tabs: Vec<WorkspaceTabId>,
     active_tab_id: WorkspaceTabId,
     active_ix: Option<usize>,
@@ -1722,8 +1763,10 @@ pub struct Workspace {
 
 impl Workspace {}
 
+mod clipboard_paste;
 mod color_commands;
 mod document_commands;
+mod document_editing;
 mod document_lifecycle;
 mod document_opening;
 mod filter_popover;
@@ -1790,8 +1833,8 @@ impl Workspace {
             let workspace = cx.weak_entity();
             cx.new(move |cx| LogRegionSurface::new(workspace, DisplayRegion::SearchResults, cx))
         };
-        let log_text_selection_scope = TextSelectionScopeId::default();
-        let search_results_text_selection_scope = TextSelectionScopeId::default();
+        let log_text_selection_scope = TextSelectionScopeId::new();
+        let search_results_text_selection_scope = log_text_selection_scope;
         let log_focus_handle = cx.focus_handle().tab_stop(true);
         let search_results_focus_handle = cx.focus_handle().tab_stop(true);
         let search_panel_state = cx.new(|_| ResizableState::default());
@@ -2292,6 +2335,7 @@ impl Workspace {
             transient_paths: BTreeSet::new(),
             pending_tab_moves: BTreeSet::new(),
             documents: Vec::new(),
+            new_file_drafts: BTreeMap::new(),
             tabs: vec![WorkspaceTabId::New(1)],
             active_tab_id: WorkspaceTabId::New(1),
             active_ix: None,
@@ -2392,7 +2436,19 @@ impl Workspace {
                 .find(|tab| tab.id == document_id)
                 .map(|tab| tab.file.title.clone())
                 .unwrap_or_else(|| crate::tr!("日志", "Log").into()),
-            WorkspaceTabId::New(_) => crate::tr!("新标签页", "New tab").into(),
+            WorkspaceTabId::New(id) => self
+                .new_file_drafts
+                .get(&id)
+                .map(|draft| {
+                    draft
+                        .path
+                        .as_ref()
+                        .and_then(|path| path.file_name())
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| crate::tr!("未命名", "Untitled").to_string())
+                        .into()
+                })
+                .unwrap_or_else(|| crate::tr!("新标签页", "New tab").into()),
         }
     }
 
@@ -2591,12 +2647,19 @@ impl Render for Workspace {
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
                     // Root starts drag selection after this bubbles through Workspace.
                     // Preserve that path for visible AI TextViews as well as log text.
-                    if !this.is_text_selection_origin_in_log_region(event.position)
-                        && !this
-                            .sidebar
-                            .read(cx)
-                            .contains_ai_transcript(event.position, window, cx)
-                    {
+                    if this.is_text_selection_origin_in_log_region(event.position) {
+                        TextSelection::activate_scope(
+                            this.log_viewer.text_selection_scope,
+                            window,
+                            cx,
+                        );
+                    } else if this.sidebar.read(cx).contains_ai_transcript(
+                        event.position,
+                        window,
+                        cx,
+                    ) {
+                        TextSelection::activate_scope(TextSelectionScopeId::default(), window, cx);
+                    } else {
                         GlobalState::suppress_text_selection(cx);
                     }
                 }),
@@ -2617,6 +2680,7 @@ impl Render for Workspace {
                 Self::track_cross_window_tab_drag(&dragged, event, window, cx);
             })
             .on_action(cx.listener(Self::open_files))
+            .on_action(cx.listener(Self::paste_clipboard_as_file))
             .on_action(cx.listener(Self::new_window))
             .on_action(cx.listener(Self::reload_active))
             .on_action(cx.listener(Self::close_active_tab))

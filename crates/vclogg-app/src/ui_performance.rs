@@ -18,9 +18,9 @@ mod debug {
     };
 
     #[cfg(feature = "ui-performance-profiler")]
-    use gpui::profiler::hang::{HangDetector, SerializedHangIncident};
+    use gpui_kit::profiler::hang::{HangDetector, SerializedHangIncident};
 
-    use gpui::{
+    use gpui_kit::{
         AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId,
         IntoElement, LayoutId, Pixels, Window,
     };
@@ -186,7 +186,7 @@ mod debug {
     }
 
     #[cfg(feature = "ui-performance-profiler")]
-    pub(crate) fn start_framework_monitor(cx: &mut gpui::App) {
+    pub(crate) fn start_framework_monitor(cx: &mut gpui_kit::App) {
         let settings = settings();
         let startup = Instant::now();
         let mut detector = HangDetector::new(
@@ -246,7 +246,7 @@ mod debug {
 
     #[cfg(not(feature = "ui-performance-profiler"))]
     #[inline(always)]
-    pub(crate) fn start_framework_monitor(_: &mut gpui::App) {}
+    pub(crate) fn start_framework_monitor(_: &mut gpui_kit::App) {}
 
     #[must_use]
     #[inline]
@@ -441,11 +441,11 @@ pub(crate) fn init_ui_thread() {}
 
 #[cfg(not(debug_assertions))]
 #[inline(always)]
-pub(crate) fn start_framework_monitor(_: &mut gpui::App) {}
+pub(crate) fn start_framework_monitor(_: &mut gpui_kit::App) {}
 
 #[cfg(not(debug_assertions))]
 #[inline(always)]
-pub(crate) fn element<E: gpui::IntoElement>(
+pub(crate) fn element<E: gpui_kit::IntoElement>(
     _: &'static str,
     _: &'static str,
     _: &'static str,

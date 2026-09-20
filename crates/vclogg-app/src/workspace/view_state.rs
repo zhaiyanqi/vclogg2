@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use gpui::SharedString;
+use gpui_kit::SharedString;
 use vclogg_core::CompressedRows;
 
 use crate::{

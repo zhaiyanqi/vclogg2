@@ -154,7 +154,7 @@ impl Workspace {
         document_id: u64,
         window_handle: AnyWindowHandle,
         initial_check: bool,
-        cx: &mut gpui::AsyncApp,
+        cx: &mut gpui_kit::AsyncApp,
     ) {
         let document = window_handle
             .update(cx, |_, window, cx| {

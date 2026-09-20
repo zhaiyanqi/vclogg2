@@ -263,6 +263,7 @@ pub struct AppSettings {
     pub viewer_overscan: u16,
     pub reduce_motion: bool,
     pub confirm_close_tab: bool,
+    pub confirm_clipboard_paste: bool,
     pub show_full_path: bool,
     pub show_horizontal_scrollbar: bool,
     pub open_directory_command: String,
@@ -310,6 +311,7 @@ impl Default for AppSettings {
             viewer_overscan: 12,
             reduce_motion: false,
             confirm_close_tab: false,
+            confirm_clipboard_paste: false,
             show_full_path: true,
             show_horizontal_scrollbar: true,
             open_directory_command: String::new(),
@@ -866,6 +868,7 @@ fn app_settings_from_record(record: AppSettingsRecord) -> AppSettings {
         viewer_overscan: bounded_u16(record.viewer_overscan, 4, 40),
         reduce_motion: record.reduce_motion,
         confirm_close_tab: record.confirm_close_tab,
+        confirm_clipboard_paste: record.confirm_clipboard_paste,
         show_full_path: record.show_full_path,
         show_horizontal_scrollbar: record.show_horizontal_scrollbar,
         open_directory_command: record.open_directory_command.chars().take(2048).collect(),
@@ -930,6 +933,7 @@ fn app_settings_to_record(settings: AppSettings) -> AppSettingsRecord {
         scroll_by_line_when_word_wrap: settings.scroll_by_line_when_word_wrap,
         reduce_motion: settings.reduce_motion,
         confirm_close_tab: settings.confirm_close_tab,
+        confirm_clipboard_paste: settings.confirm_clipboard_paste,
         show_full_path: settings.show_full_path,
         show_horizontal_scrollbar: settings.show_horizontal_scrollbar,
         max_search_results: i64::from(settings.max_search_results),
@@ -1286,6 +1290,7 @@ mod session_load_tests {
             dark_log_background_color: Some("#101722".into()),
             default_case_sensitive: true,
             default_use_regex: true,
+            confirm_clipboard_paste: true,
             ..AppSettings::default()
         };
         store

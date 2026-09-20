@@ -5,17 +5,11 @@ use std::{
 };
 
 use chrono::{DateTime, Local, Utc};
-use gpui::{
-    AnyElement, AppContext as _, Context, Entity, EventEmitter, Focusable as _,
-    InteractiveElement as _, IntoElement, Keystroke, ObjectFit, ParentElement as _, Render,
-    SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _, Subscription,
-    Task, UniformListScrollHandle, Window, div, img, prelude::FluentBuilder as _, uniform_list,
-};
-use gpui_base::Link;
-use gpui_component::{
+use gpui_kit::base::Link;
+use gpui_kit::component::{
     ActiveTheme as _, Colorize as _, Disableable as _, IconName, IndexPath, Sizable as _,
     button::{Button, ButtonVariants as _},
-    color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
+    color_picker::{ColorPickerEvent, ColorPickerState},
     description_list::DescriptionList,
     h_flex,
     input::{Input, InputContentType, InputEvent, InputState, NumberInput},
@@ -27,6 +21,12 @@ use gpui_component::{
     switch::Switch,
     theme::{ThemeMode, try_parse_color},
     v_flex,
+};
+use gpui_kit::{
+    AnyElement, AppContext as _, Context, Entity, EventEmitter, Focusable as _,
+    InteractiveElement as _, IntoElement, Keystroke, ObjectFit, ParentElement as _, Render,
+    SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _, Subscription,
+    Task, UniformListScrollHandle, Window, div, img, prelude::FluentBuilder as _, uniform_list,
 };
 
 use crate::{
@@ -50,7 +50,7 @@ const SHORTCUT_INPUT_CONTEXT: &str = "VCLogg2ShortcutInput";
 impl SelectItem for LogFontFamily {
     type Value = Self;
 
-    fn title(&self) -> gpui::SharedString {
+    fn title(&self) -> gpui_kit::SharedString {
         match self {
             Self::CascadiaMono => "Cascadia Mono".into(),
             Self::JetBrainsMono => "JetBrains Mono".into(),
@@ -187,8 +187,8 @@ impl SettingsCategory {
     fn description(self) -> &'static str {
         match self {
             Self::General => crate::tr!(
-                "文件显示、关闭确认与打开目录行为",
-                "File display, close confirmation, and opening folders",
+                "文件显示、粘贴与关闭确认、打开目录行为",
+                "File display, paste and close confirmations, and opening folders",
             ),
             Self::Network => crate::tr!(
                 "云端服务器、用户身份与 Cookie 连接",
@@ -232,8 +232,8 @@ impl SettingsCategory {
 
         let keywords = match self {
             Self::General => crate::tr!(
-                "常规 语言 中文 英文 文件与标签 在文件工具栏显示完整路径 关闭日志标签前确认 打开目录命令 路径 标签 关闭 确认 目录 命令 full path close tab open language Chinese English",
-                "general language Chinese English files tabs full path close confirmation open folder command",
+                "常规 语言 中文 英文 文件与标签 在文件工具栏显示完整路径 关闭日志标签前确认 粘贴时确认 打开目录命令 路径 标签 关闭 粘贴 确认 目录 命令 full path close tab paste open language Chinese English",
+                "general language Chinese English files tabs full path close confirmation paste clipboard open folder command",
             ),
             Self::Network => {
                 "网络 远程服务 云端服务器 服务器地址 用户名 工号 昵称 保存 测试 连接 Cookie HTTP HTTPS network remote server user connect"
@@ -506,7 +506,7 @@ impl SettingsDialog {
         Self::draft_changed(cx);
     }
 
-    fn render_search_size_settings(&self, cx: &gpui::App) -> Vec<AnyElement> {
+    fn render_search_size_settings(&self, cx: &gpui_kit::App) -> Vec<AnyElement> {
         let slider_row = |label: &'static str, slider: &Entity<SliderState>| {
             h_flex()
                 .items_center()
@@ -555,7 +555,7 @@ impl SettingsDialog {
                 .rounded(cx.theme().radius)
                 .border_1()
                 .border_color(cx.theme().border)
-                .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(title))
+                .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(title))
                 .child(div().text_sm().text_color(cx.theme().muted_foreground).child(description))
                 .when_some(height, |section, height| {
                     section.child(slider_row(crate::tr!("控件高度", "Control height"), height))
@@ -566,7 +566,7 @@ impl SettingsDialog {
         .collect()
     }
 
-    fn current_log_color_theme(cx: &gpui::App) -> LogColorTheme {
+    fn current_log_color_theme(cx: &gpui_kit::App) -> LogColorTheme {
         if crate::ui_theme::is_dark(cx) {
             LogColorTheme::Dark
         } else {
@@ -1101,7 +1101,7 @@ impl SettingsDialog {
         dialog
     }
 
-    pub fn settings(&self, cx: &gpui::App) -> Result<AppSettings, String> {
+    pub fn settings(&self, cx: &gpui_kit::App) -> Result<AppSettings, String> {
         let mut settings = self.draft.clone();
         settings.app_log_level = self
             .app_log_level
@@ -1250,7 +1250,7 @@ impl SettingsDialog {
         normalize_search_history(self.search_history.clone())
     }
 
-    pub fn network_settings(&self, cx: &gpui::App) -> CloudSettings {
+    pub fn network_settings(&self, cx: &gpui_kit::App) -> CloudSettings {
         CloudSettings {
             server_url: self.network_server_url.read(cx).value().trim().to_string(),
             display_name: self
@@ -1425,7 +1425,7 @@ impl SettingsDialog {
         Self::draft_changed(cx);
     }
 
-    fn shortcut_value(&self, action: ShortcutAction, cx: &gpui::App) -> String {
+    fn shortcut_value(&self, action: ShortcutAction, cx: &gpui_kit::App) -> String {
         self.shortcut_inputs[&action]
             .read(cx)
             .value()
@@ -1433,7 +1433,7 @@ impl SettingsDialog {
             .to_string()
     }
 
-    fn conflicts(&self, cx: &gpui::App) -> HashMap<ShortcutAction, String> {
+    fn conflicts(&self, cx: &gpui_kit::App) -> HashMap<ShortcutAction, String> {
         let mut by_value: HashMap<String, Vec<ShortcutAction>> = HashMap::new();
         for action in ShortcutAction::ALL {
             let value = self.shortcut_value(action, cx);
@@ -1670,7 +1670,7 @@ impl SettingsDialog {
         action: ShortcutAction,
         conflict: Option<&str>,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let input = self.shortcut_inputs[&action].clone();
         let default_value = action.value(&ShortcutSettings::default()).to_string();
         let input_for_reset = input.clone();
@@ -1689,7 +1689,7 @@ impl SettingsDialog {
                     .gap_0p5()
                     .child(
                         div()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                             .child(action.label()),
                     )
                     .child(
@@ -1739,7 +1739,7 @@ impl SettingsDialog {
                         )
                     }),
             )
-            .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+            .on_mouse_down(gpui_kit::MouseButton::Left, move |_, window, cx| {
                 input.focus_handle(cx).focus(window, cx);
             })
             .into_any_element()
@@ -1802,7 +1802,7 @@ impl SettingsDialog {
                                     let settings = settings.clone();
                                     h_flex()
                                         .id(format!("settings-search-history-row:{query}"))
-                                        .h(gpui::px(44.))
+                                        .h(gpui_kit::px(44.))
                                         .w_full()
                                         .min_w_0()
                                         .justify_between()
@@ -1866,7 +1866,7 @@ impl SettingsDialog {
                             .gap_1()
                             .child(
                                 div()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                     .child(crate::tr!("搜索历史", "Search history")),
                             )
                             .child(
@@ -1924,7 +1924,7 @@ impl SettingsDialog {
             .rounded(cx.theme().radius)
             .border_1()
             .border_color(cx.theme().border)
-            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(crate::tr!("应用图标", "Application icon")))
+            .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("应用图标", "Application icon")))
             .child(div().text_sm().text_color(cx.theme().muted_foreground).child(crate::tr!(
                 "选择后立即预览，保存后下次启动继续使用。",
                 "Preview immediately; save to keep your choice on the next launch."
@@ -1933,7 +1933,7 @@ impl SettingsDialog {
                 RadioGroup::horizontal("settings-application-icon")
                     .selected_index(Some(self.draft.app_icon.index()))
                     .children(AppIcon::ALL.into_iter().map(|icon| {
-                        Radio::new((gpui::ElementId::from("application-icon"), icon.storage_value()))
+                        Radio::new((gpui_kit::ElementId::from("application-icon"), icon.storage_value()))
                             .label(icon.label())
                             .small()
                             .w_56()
@@ -1990,7 +1990,7 @@ impl SettingsDialog {
                             .child(
                                 div()
                                     .text_lg()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                     .child("VCLogg2"),
                             )
                             .child(
@@ -2032,7 +2032,7 @@ impl SettingsDialog {
                     .small()
                     .columns(1)
                     .item(crate::tr!("语言与工具链", "Language & toolchain"), "Rust 2024 Edition · Cargo · native toolchain", 1)
-                    .item(crate::tr!("界面", "Interface"), "GPUI · gpui-component · gpui-base", 1)
+                    .item(crate::tr!("界面", "Interface"), "GPUI Kit", 1)
                     .item(crate::tr!("数据与检索", "Data & search"), crate::tr!("SQLite/WAL · 内存映射 · 正则与多模式匹配", "SQLite/WAL · memory mapping · regex and multi-pattern matching"), 1)
                     .item(crate::tr!("网络", "Networking"), "HTTP/HTTPS · rustls", 1)
                     .item(crate::tr!("平台集成", "Platform integration"), crate::tr!("系统回收站、凭据库、文件打开关联、单实例与原生窗口", "System trash, credential storage, file-opening associations, single-instance routing, and native windows"), 1),
@@ -2054,7 +2054,7 @@ impl SettingsDialog {
                         1,
                     )
                     .item(
-                        "gpui-component / gpui-base",
+                        "gpui-kit",
                         crate::tr!("主题、桌面控件、虚拟列表、表格、弹层与交互基础", "Themes, desktop controls, virtual lists, tables, overlays, and interaction foundations"),
                         1,
                     )
@@ -2156,7 +2156,11 @@ fn about_section(
         .child(
             v_flex()
                 .gap_1()
-                .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(title))
+                .child(
+                    div()
+                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                        .child(title),
+                )
                 .child(
                     div()
                         .text_sm()
@@ -2313,7 +2317,7 @@ impl Render for SettingsDialog {
                                                 .text_color(cx.theme().muted_foreground)
                                                 .child(
                                                     div()
-                                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                                         .child(crate::tr!(
                                                             "未找到匹配的设置",
                                                             "No matching settings",
@@ -2344,7 +2348,7 @@ impl Render for SettingsDialog {
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(crate::tr!("界面主题", "Interface theme")))
+                            .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("界面主题", "Interface theme")))
                             .child(
                                 div()
                                     .text_sm()
@@ -2393,7 +2397,7 @@ impl Render for SettingsDialog {
                             .gap_1()
                             .child(
                                 div()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                     .child(crate::tr!("日志配色", "Log colors")),
                             )
                             .child(
@@ -2416,7 +2420,7 @@ impl Render for SettingsDialog {
                                     .gap_1()
                                     .child(
                                         div()
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                             .child(crate::tr!("日志文字颜色", "Log text color")),
                                     )
                                     .child(
@@ -2449,7 +2453,7 @@ impl Render for SettingsDialog {
                                             }),
                                     )
                                     .child(
-                                        ColorPicker::new(&log_text_picker)
+                                        crate::app_color_picker::new(&log_text_picker)
                                             .small()
                                             .label(crate::tr!(
                                                 "日志文字颜色",
@@ -2477,7 +2481,7 @@ impl Render for SettingsDialog {
                                     .gap_1()
                                     .child(
                                         div()
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                             .child(crate::tr!("日志背景色", "Log background")),
                                     )
                                     .child(
@@ -2510,7 +2514,7 @@ impl Render for SettingsDialog {
                                             }),
                                     )
                                     .child(
-                                        ColorPicker::new(&log_background_picker)
+                                        crate::app_color_picker::new(&log_background_picker)
                                             .small()
                                             .label(crate::tr!(
                                                 "日志背景色",
@@ -2537,7 +2541,7 @@ impl Render for SettingsDialog {
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(crate::tr!("显示行号", "Show line numbers")))
+                            .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("显示行号", "Show line numbers")))
                             .child(
                                 div()
                                     .text_sm()
@@ -2565,7 +2569,7 @@ impl Render for SettingsDialog {
                             .gap_1()
                             .child(
                                 div()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                     .child(crate::tr!("显示行号行间分隔线", "Show line-number separators")),
                             )
                             .child(
@@ -2594,7 +2598,7 @@ impl Render for SettingsDialog {
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(crate::tr!("行号栏宽度", "Line-number column width")))
+                            .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("行号栏宽度", "Line-number column width")))
                             .child(
                                 div()
                                     .text_sm()
@@ -2623,7 +2627,7 @@ impl Render for SettingsDialog {
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(crate::tr!("行号文字颜色", "Line-number text color")))
+                            .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("行号文字颜色", "Line-number text color")))
                             .child(
                                 div()
                                     .text_sm()
@@ -2651,7 +2655,7 @@ impl Render for SettingsDialog {
                                     }),
                             )
                             .child(
-                                ColorPicker::new(&self.line_number_text_color)
+                                crate::app_color_picker::new(&self.line_number_text_color)
                                     .small()
                                     .label(crate::tr!("行号文字颜色", "Line-number text color")),
                             )
@@ -2674,7 +2678,7 @@ impl Render for SettingsDialog {
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(crate::tr!("行号背景色", "Line-number background")))
+                            .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("行号背景色", "Line-number background")))
                             .child(
                                 div()
                                     .text_sm()
@@ -2702,7 +2706,7 @@ impl Render for SettingsDialog {
                                     }),
                             )
                             .child(
-                                ColorPicker::new(&self.line_number_background_color)
+                                crate::app_color_picker::new(&self.line_number_background_color)
                                     .small()
                                     .label(crate::tr!("行号背景色", "Line-number background")),
                             )
@@ -2727,7 +2731,7 @@ impl Render for SettingsDialog {
                             .gap_1()
                             .child(
                                 div()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                     .child(crate::tr!("日志级别着色", "Log-level coloring")),
                             )
                             .child(
@@ -2755,7 +2759,7 @@ impl Render for SettingsDialog {
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(crate::tr!("日志分隔线", "Log separators")))
+                            .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("日志分隔线", "Log separators")))
                             .child(
                                 div()
                                     .text_sm()
@@ -2781,7 +2785,7 @@ impl Render for SettingsDialog {
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(crate::tr!("日志字体", "Log font")))
+                            .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("日志字体", "Log font")))
                             .child(
                                 div()
                                     .text_sm()
@@ -2808,7 +2812,7 @@ impl Render for SettingsDialog {
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(crate::tr!("日志字号", "Log font size")))
+                            .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("日志字号", "Log font size")))
                             .child(
                                 div()
                                     .text_sm()
@@ -2837,7 +2841,7 @@ impl Render for SettingsDialog {
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(crate::tr!("日志行距", "Log line spacing")))
+                            .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("日志行距", "Log line spacing")))
                             .child(
                                 div()
                                     .text_sm()
@@ -2878,7 +2882,7 @@ impl Render for SettingsDialog {
                             .gap_1()
                             .child(
                                 div()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                     .child(crate::tr!("搜索", "Search")),
                             )
                             .child(
@@ -2929,7 +2933,7 @@ impl Render for SettingsDialog {
                                     .gap_1()
                                     .child(
                                         div()
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                             .child(crate::tr!("最大搜索结果数", "Maximum search results")),
                                     )
                                     .child(
@@ -2987,7 +2991,7 @@ impl Render for SettingsDialog {
                                     .gap_1()
                                     .child(
                                         div()
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                             .child(crate::tr!("语言", "Language")),
                                     )
                                     .child(
@@ -3043,14 +3047,14 @@ impl Render for SettingsDialog {
                             .gap_1()
                             .child(
                                 div()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                     .child(crate::tr!("文件与标签", "Files & tabs")),
                             )
                             .child(
                                 div()
                                     .text_sm()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(crate::tr!("控制路径显示和标签关闭前的安全确认。", "Controls path display and confirmation before closing tabs.")),
+                                    .child(crate::tr!("控制路径显示、粘贴确认和标签关闭确认。", "Controls path display and confirmations for clipboard paste and closing tabs.")),
                             ),
                     )
                     .child(
@@ -3086,11 +3090,27 @@ impl Render for SettingsDialog {
                             ),
                     )
                     .child(
+                        h_flex()
+                            .justify_between()
+                            .gap_4()
+                            .child(div().text_sm().child(crate::tr!("粘贴时确认", "Confirm clipboard paste")))
+                            .child(
+                                Switch::new("settings-confirm-clipboard-paste")
+                                    .small()
+                                    .checked(self.draft.confirm_clipboard_paste)
+                                    .tooltip(crate::tr!("粘贴时确认", "Confirm clipboard paste"))
+                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                        this.draft.confirm_clipboard_paste = *checked;
+                                        SettingsDialog::draft_changed(cx);
+                                    })),
+                            ),
+                    )
+                    .child(
                         v_flex()
                             .gap_1()
                             .child(
                                 div()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                     .child(crate::tr!("打开目录命令", "Open-folder command")),
                             )
                             .child(
@@ -3133,7 +3153,7 @@ impl Render for SettingsDialog {
                                                             .child(
                                                                 div()
                                                                     .font_weight(
-                                                                        gpui::FontWeight::SEMIBOLD,
+                                                                        gpui_kit::FontWeight::SEMIBOLD,
                                                                     )
                                                                     .child(crate::tr!("远程服务", "Remote service")),
                                                             )
@@ -3156,7 +3176,7 @@ impl Render for SettingsDialog {
                                                                 div()
                                                                     .text_sm()
                                                                     .font_weight(
-                                                                        gpui::FontWeight::SEMIBOLD,
+                                                                        gpui_kit::FontWeight::SEMIBOLD,
                                                                     )
                                                                     .child(crate::tr!("服务器地址", "Server address")),
                                                             )
@@ -3191,7 +3211,7 @@ impl Render for SettingsDialog {
                                                                 div()
                                                                     .text_sm()
                                                                     .font_weight(
-                                                                        gpui::FontWeight::SEMIBOLD,
+                                                                        gpui_kit::FontWeight::SEMIBOLD,
                                                                     )
                                                                     .child(crate::tr!("用户名", "User name")),
                                                             )
@@ -3270,7 +3290,7 @@ impl Render for SettingsDialog {
                             .gap_1()
                             .child(
                                 div()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                     .child(crate::tr!("滚动与动态效果", "Scrolling & motion")),
                             )
                             .child(
@@ -3307,7 +3327,7 @@ impl Render for SettingsDialog {
                                             .gap_1()
                                             .child(
                                                 div()
-                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                                     .child(crate::tr!("每次滚动行数", "Lines per scroll")),
                                             )
                                             .child(
@@ -3360,7 +3380,7 @@ impl Render for SettingsDialog {
                                     .gap_1()
                                     .child(
                                         div()
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                             .child(crate::tr!("像素滚动距离", "Pixel scroll distance")),
                                     )
                                     .child(
@@ -3393,7 +3413,7 @@ impl Render for SettingsDialog {
                                     .gap_1()
                                     .child(
                                         div()
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                             .child(crate::tr!("分词边界字符", "Word-boundary characters")),
                                     )
                                     .child(
@@ -3444,7 +3464,7 @@ impl Render for SettingsDialog {
                     .child(
                         v_flex()
                             .gap_0p5()
-                            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(crate::tr!("索引缓存", "Index cache")))
+                            .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("索引缓存", "Index cache")))
                             .child(
                                 div()
                                     .text_sm()
@@ -3527,7 +3547,7 @@ impl Render for SettingsDialog {
                                     .gap_0p5()
                                     .child(
                                         div()
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                             .child(crate::tr!("应用日志", "Application log")),
                                     )
                                     .child(
@@ -3594,7 +3614,7 @@ impl Render for SettingsDialog {
                     .child(
                         v_flex()
                             .gap_0p5()
-                            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(crate::tr!("快捷键", "Shortcuts")))
+                            .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("快捷键", "Shortcuts")))
                             .child(
                                 div()
                                     .text_sm()

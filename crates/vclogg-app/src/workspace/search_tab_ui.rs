@@ -1,7 +1,7 @@
 use super::search_tabs::{SearchTabId, SearchTabOwner, SearchTabState};
 use super::*;
 use crate::search_context::{PersistedSearchTab, SearchTabQuery};
-use gpui_base::{Tab as SearchResultTab, Tabs as SearchResultTabs};
+use gpui_kit::base::{Tab as SearchResultTab, Tabs as SearchResultTabs};
 
 #[derive(Clone)]
 struct DraggedSearchTab {

@@ -43,6 +43,12 @@ require_file crates/vclogg-data/src/lib.rs
 require_file crates/vclogg-app/Cargo.toml
 require_file crates/vclogg-app/src/main.rs
 require_file crates/vclogg-ai/src/lib.rs
+if search_quiet '^\[patch\.' Cargo.toml; then
+  fail "workspace must use upstream dependencies without Cargo source patches"
+fi
+if [[ -d vendor ]] && [[ -n "$(find vendor -type f ! -name .DS_Store -print -quit)" ]]; then
+  fail "external dependency source must not be copied into vendor/"
+fi
 for dependency in gpui gpui-base gpui-component vclogg2 vclogg-core vclogg-data; do
   forbid_manifest_dependency crates/vclogg-ai/Cargo.toml "$dependency"
 done
@@ -77,6 +83,10 @@ for layer in core data; do
   for dependency in "${gpui_dependencies[@]}"; do
     forbid_manifest_dependency "crates/vclogg-${layer}/Cargo.toml" "$dependency"
   done
+done
+
+for dependency in gpui gpui-base gpui-component gpui-component-assets gpui_platform; do
+  forbid_manifest_dependency crates/vclogg-app/Cargo.toml "$dependency"
 done
 
 for dependency in rusqlite vclogg-data vclogg-app; do

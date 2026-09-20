@@ -119,6 +119,7 @@ pub struct AppSettingsRecord {
     pub scroll_by_line_when_word_wrap: bool,
     pub reduce_motion: bool,
     pub confirm_close_tab: bool,
+    pub confirm_clipboard_paste: bool,
     pub show_full_path: bool,
     pub show_horizontal_scrollbar: bool,
     pub max_search_results: i64,

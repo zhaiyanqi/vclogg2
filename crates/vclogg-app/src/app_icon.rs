@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use gpui::{App, Global, Image, ImageFormat, Window};
+use gpui_kit::{App, Global, Image, ImageFormat, Window};
 
 use crate::notifications::NotificationWindowExt as _;
 

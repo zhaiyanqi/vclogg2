@@ -1,18 +1,18 @@
 //! Shared group-row presentation for the highlight editor and sidebar.
-use gpui::{
-    ClickEvent, ElementId, InteractiveElement as _, MouseButton, ParentElement as _, SharedString,
-    Styled as _, div, prelude::FluentBuilder as _, relative,
-};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
 };
+use gpui_kit::{
+    ClickEvent, ElementId, InteractiveElement as _, MouseButton, ParentElement as _, SharedString,
+    Styled as _, div, prelude::FluentBuilder as _, relative,
+};
 
 pub(crate) fn ignore_secondary_mouse_down(
-    event: &gpui::MouseDownEvent,
-    window: &mut gpui::Window,
-    cx: &mut gpui::App,
+    event: &gpui_kit::MouseDownEvent,
+    window: &mut gpui_kit::Window,
+    cx: &mut gpui_kit::App,
 ) {
     if event.button != MouseButton::Left {
         // GPUI's default mouse focus transfer happens before a click is dispatched.
@@ -35,7 +35,7 @@ pub(crate) fn group_button(
     rule_count: usize,
     selected: bool,
     active: bool,
-    cx: &gpui::App,
+    cx: &gpui_kit::App,
 ) -> Button {
     let name = name.into();
     let state = if active {

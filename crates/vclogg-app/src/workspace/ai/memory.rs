@@ -1,5 +1,5 @@
 use super::*;
-use gpui_component::{
+use gpui_kit::component::{
     input::{Input, InputState, Textarea, TextareaState},
     switch::Switch,
 };
@@ -7,7 +7,7 @@ use vclogg_data::AiMemoryRecord;
 
 #[derive(Default)]
 pub(super) struct SharedAiMemory;
-impl gpui::Global for SharedAiMemory {}
+impl gpui_kit::Global for SharedAiMemory {}
 
 pub(super) struct MemoryEditor {
     record: AiMemoryRecord,
@@ -147,7 +147,7 @@ impl AiPanel {
                 })
                 .await;
             if result.is_ok() {
-                gpui::AsyncApp::update_global::<SharedAiMemory, _>(cx, |_, _| {});
+                gpui_kit::AsyncApp::update_global::<SharedAiMemory, _>(cx, |_, _| {});
             }
             _ = this.update(cx, |this, cx| {
                 this.busy = false;

@@ -4,6 +4,17 @@ use super::*;
 
 pub(super) const SIDEBAR_RAIL_WIDTH_REM: f32 = 2.25;
 pub(super) const SIDEBAR_MIN_WIDTH_REM: f32 = 0.;
+/// Below this usable content width, an inward divider drag closes the sidebar.
+pub(super) const SIDEBAR_COLLAPSE_WIDTH_REM: f32 = 4.;
+pub(super) const SIDEBAR_REOPEN_WIDTH_REM: f32 = 12.;
+
+pub(super) fn sidebar_drag_should_close(shown_width: f32, measured_width: f32) -> bool {
+    measured_width < SIDEBAR_COLLAPSE_WIDTH_REM && measured_width < shown_width - 0.05
+}
+
+pub(super) fn sidebar_reopen_width(saved_width: f32) -> f32 {
+    saved_width.max(SIDEBAR_REOPEN_WIDTH_REM)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -315,7 +326,7 @@ impl SidebarLayout {
 
 #[derive(Clone)]
 pub(in super::super) struct DraggedSidebarPanel {
-    pub(super) owner: gpui::EntityId,
+    pub(super) owner: gpui_kit::EntityId,
     pub(super) panel: SidebarPanelId,
 }
 
@@ -370,5 +381,18 @@ mod tests {
         assert_eq!(layout.fit(60.)[1], Some(12.));
         assert_eq!(layout.fit(35.)[1], Some(8.75));
         assert_eq!(layout.sides[1].width, 12.);
+    }
+
+    #[test]
+    fn sidebar_closes_only_after_an_inward_drag_below_the_threshold() {
+        assert_eq!(SIDEBAR_COLLAPSE_WIDTH_REM, 4.);
+        assert!(sidebar_drag_should_close(
+            18.,
+            SIDEBAR_COLLAPSE_WIDTH_REM - 0.1
+        ));
+        assert!(!sidebar_drag_should_close(18., SIDEBAR_COLLAPSE_WIDTH_REM));
+        assert!(!sidebar_drag_should_close(5., 5.1));
+        assert_eq!(sidebar_reopen_width(7.), SIDEBAR_REOPEN_WIDTH_REM);
+        assert_eq!(sidebar_reopen_width(18.), 18.);
     }
 }

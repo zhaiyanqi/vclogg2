@@ -6,14 +6,16 @@ pub(super) struct SharedAiSettings {
     pub settings: Option<AiSettings>,
     pub saving: bool,
 }
-impl gpui::Global for SharedAiSettings {}
+impl gpui_kit::Global for SharedAiSettings {}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SettingsTab {
     Models,
     Skills,
+    Tools,
     Prompts,
     Mcp,
+    Workspace,
     Memory,
 }
 struct SettingsSurface {
@@ -92,7 +94,7 @@ impl AiPanel {
                         SettingsTab::Prompts => this.save_prompt_editor(window, cx),
                         SettingsTab::Mcp => this.save_mcp_editor(window, cx),
                         SettingsTab::Memory => this.save_memory_editor(window, cx),
-                        SettingsTab::Skills => {}
+                        SettingsTab::Skills | SettingsTab::Tools | SettingsTab::Workspace => {}
                     });
                     false
                 })
@@ -126,12 +128,18 @@ impl AiPanel {
         for (id, tab, title) in [
             ("models", SettingsTab::Models, crate::tr!("模型", "Models")),
             ("skills", SettingsTab::Skills, "Skills"),
+            ("tools", SettingsTab::Tools, crate::tr!("工具", "Tools")),
             ("mcp", SettingsTab::Mcp, "MCP"),
-            ("memory", SettingsTab::Memory, crate::tr!("记忆", "Memory")),
             (
                 "prompts",
                 SettingsTab::Prompts,
                 crate::tr!("提示词与 RULES", "Prompts and RULES"),
+            ),
+            ("memory", SettingsTab::Memory, crate::tr!("记忆", "Memory")),
+            (
+                "workspace",
+                SettingsTab::Workspace,
+                crate::tr!("工作区", "Workspace"),
             ),
         ] {
             tabs = tabs.child(
@@ -149,9 +157,11 @@ impl AiPanel {
         let content = match self.settings_tab {
             SettingsTab::Models => self.render_model_settings(window, cx),
             SettingsTab::Skills => self.render_skill_settings(cx),
+            SettingsTab::Tools => self.render_tool_settings(cx),
             SettingsTab::Prompts => self.render_prompt_settings(cx),
             SettingsTab::Mcp => self.render_mcp_settings(cx),
             SettingsTab::Memory => self.render_memory_settings(cx),
+            SettingsTab::Workspace => self.render_workspace_settings(cx),
         };
         v_flex()
             .size_full()

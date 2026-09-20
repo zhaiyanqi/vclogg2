@@ -1,9 +1,10 @@
-use gpui::{
-    App, Axis, Background, Div, Hsla, InteractiveElement as _, Pixels, Styled as _, div, hsla,
-    linear_color_stop, linear_gradient, px, rems, rgb,
+use gpui_kit::component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarMode};
+use gpui_kit::component::theme::{Theme, ThemeMode, ThemeTokens, try_parse_color};
+use gpui_kit::{
+    App, Axis, Background, Div, HitboxBehavior, Hsla, InteractiveElement as _, IntoElement,
+    MouseDownEvent, Pixels, Point, Styled as _, canvas, div, hsla, linear_color_stop,
+    linear_gradient, px, rems, rgb,
 };
-use gpui_component::scroll::{Scrollbar, ScrollbarMode};
-use gpui_component::theme::{Theme, ThemeMode, ThemeTokens, try_parse_color};
 
 /// Shared by the log scrollbar's painted track and its reserved layout space.
 pub(crate) const LOG_SCROLLBAR_WIDTH: Pixels = px(12.);
@@ -20,6 +21,80 @@ pub(crate) fn persistent_log_scrollbar(scrollbar: Scrollbar, background: Hsla) -
             .thumb_hover(|thumb| thumb.width(px(6.)).inset(px(3.)))
             .thumb_active(|thumb| thumb.width(px(6.)).inset(px(3.)))
     })
+}
+
+/// The upstream scrollbar listens to raw mouse events even beneath an occluding resize handle.
+/// Paint this after the scrollbar so its bubble listener runs first; a resize handle paints later
+/// and retains priority over both listeners.
+pub(crate) fn drag_only_log_scrollbar_guard(
+    handle: impl ScrollbarHandle + Clone + 'static,
+    axis: Axis,
+) -> impl IntoElement {
+    canvas(
+        |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+        move |_, hitbox, window, _| {
+            let handle = handle.clone();
+            window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+                if phase.bubble()
+                    && hitbox.bounds.contains(&event.position)
+                    && (!hitbox.is_hovered_at(event.position, window)
+                        || !log_scrollbar_thumb_contains(&handle, axis, event.position))
+                {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                }
+            });
+        },
+    )
+    .absolute()
+    .size_full()
+}
+
+fn log_scrollbar_thumb_contains(
+    handle: &impl ScrollbarHandle,
+    axis: Axis,
+    position: Point<Pixels>,
+) -> bool {
+    let viewport = handle.viewport_bounds();
+    let content = handle.content_size();
+    let offset = handle.offset();
+    let (origin, extent, total, scroll, cross_end, cross_position) = match axis {
+        Axis::Vertical => (
+            viewport.origin.y,
+            viewport.size.height,
+            content.height,
+            offset.y,
+            viewport.origin.x + viewport.size.width,
+            position.x,
+        ),
+        Axis::Horizontal => (
+            viewport.origin.x,
+            viewport.size.width,
+            content.width,
+            offset.x,
+            viewport.origin.y + viewport.size.height,
+            position.y,
+        ),
+    };
+    if total <= extent || extent <= Pixels::ZERO {
+        return false;
+    }
+
+    // Match the pinned GPUI Kit thumb geometry and this app's 12 px track style.
+    let inset = px(4.);
+    let logical_length = (extent / total * extent).max(px(48.)).min(extent);
+    let inset = inset.min(logical_length / 2.);
+    let travel = extent - logical_length;
+    let start = origin + inset + (-scroll / (total - extent)).clamp(0., 1.) * travel;
+    let end = start + logical_length - inset * 2.;
+    let along = match axis {
+        Axis::Vertical => position.y,
+        Axis::Horizontal => position.x,
+    };
+    along >= start
+        && along < end
+        && cross_position >= cross_end - inset - LOG_SCROLLBAR_WIDTH
+        && cross_position < cross_end - inset
 }
 
 /// Leave the disabled track empty while blocking pointer hits on content behind it.
@@ -73,8 +148,6 @@ pub(crate) struct ProductColors {
     pub(crate) control_hover: Hsla,
     pub(crate) control_active: Hsla,
     pub(crate) selection: Hsla,
-    pub(crate) chat_selection_background: Hsla,
-    pub(crate) chat_selection_foreground: Hsla,
     pub(crate) row_hover: Hsla,
     pub(crate) row_selected: Hsla,
     pub(crate) row_selected_border: Hsla,
@@ -152,9 +225,7 @@ fn product_colors(mode: ThemeMode) -> ProductColors {
             control: color(0x1d2534),
             control_hover: color(0x273248),
             control_active: color(0x313d55),
-            selection: color(0x426b9a),
-            chat_selection_background: color(0x2563eb),
-            chat_selection_foreground: color(0xffffff),
+            selection: color(0x426b9a).opacity(0.35),
             row_hover: color(0x212d41),
             row_selected: color(0x263f68),
             row_selected_border: color(0x4f87c7),
@@ -215,9 +286,7 @@ fn product_colors(mode: ThemeMode) -> ProductColors {
             control: color(0xfbfaf8),
             control_hover: color(0xe9e7e2),
             control_active: color(0xdfddd7),
-            selection: color(0x80aae4),
-            chat_selection_background: color(0x2563eb),
-            chat_selection_foreground: color(0xffffff),
+            selection: color(0x528bdf).opacity(0.35),
             row_hover: color(0xf0f3f8),
             row_selected: color(0xdce9ff),
             row_selected_border: color(0x7db7e8),
@@ -532,6 +601,221 @@ pub(crate) fn suggestion_match_highlight(cx: &App) -> Hsla {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui_kit::{
+        Bounds, Context, Modifiers, MouseButton, ParentElement as _, Render, Size, TestAppContext,
+        Window, point, size,
+    };
+    use std::{cell::Cell, rc::Rc};
+
+    #[derive(Clone)]
+    struct TestScrollHandle {
+        viewport: Bounds<Pixels>,
+        content: Size<Pixels>,
+        offset: Rc<Cell<Point<Pixels>>>,
+    }
+
+    impl ScrollbarHandle for TestScrollHandle {
+        fn viewport_bounds(&self) -> Bounds<Pixels> {
+            self.viewport
+        }
+
+        fn offset(&self) -> Point<Pixels> {
+            self.offset.get()
+        }
+
+        fn set_offset(&self, offset: Point<Pixels>) {
+            self.offset.set(offset);
+        }
+
+        fn content_size(&self) -> Size<Pixels> {
+            self.content
+        }
+    }
+
+    #[test]
+    fn log_scrollbar_hit_test_accepts_only_the_thumb() {
+        let handle = TestScrollHandle {
+            viewport: Bounds::new(point(px(10.), px(20.)), size(px(100.), px(100.))),
+            content: size(px(500.), px(500.)),
+            offset: Rc::new(Cell::new(point(px(-200.), px(-200.)))),
+        };
+
+        assert!(log_scrollbar_thumb_contains(
+            &handle,
+            Axis::Vertical,
+            point(px(100.), px(70.))
+        ));
+        assert!(!log_scrollbar_thumb_contains(
+            &handle,
+            Axis::Vertical,
+            point(px(100.), px(100.))
+        ));
+        assert!(log_scrollbar_thumb_contains(
+            &handle,
+            Axis::Horizontal,
+            point(px(60.), px(110.))
+        ));
+        assert!(!log_scrollbar_thumb_contains(
+            &handle,
+            Axis::Horizontal,
+            point(px(90.), px(110.))
+        ));
+    }
+
+    struct DragOnlyScrollbarView(TestScrollHandle);
+
+    impl Render for DragOnlyScrollbarView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui_kit::IntoElement {
+            div().relative().size(px(100.)).child(
+                div()
+                    .absolute()
+                    .right_0()
+                    .top_0()
+                    .h_full()
+                    .w(LOG_SCROLLBAR_WIDTH)
+                    .child(persistent_log_scrollbar(
+                        Scrollbar::vertical(&self.0).viewport_from_layout(),
+                        hsla(0., 0., 0., 1.),
+                    ))
+                    .child(drag_only_log_scrollbar_guard(
+                        self.0.clone(),
+                        Axis::Vertical,
+                    )),
+            )
+        }
+    }
+
+    #[gpui_kit::test]
+    fn log_scrollbar_track_click_is_ignored_but_thumb_drag_scrolls(cx: &mut TestAppContext) {
+        let handle = TestScrollHandle {
+            viewport: Bounds::new(point(px(0.), px(0.)), size(px(100.), px(100.))),
+            content: size(px(100.), px(500.)),
+            offset: Rc::new(Cell::new(Point::default())),
+        };
+        let (_, cx) = cx.add_window_view({
+            let handle = handle.clone();
+            move |_, _| DragOnlyScrollbarView(handle)
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        cx.simulate_click(point(px(95.), px(80.)), Modifiers::default());
+        assert_eq!(handle.offset(), Point::default());
+
+        cx.simulate_mouse_down(
+            point(px(95.), px(80.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_move(
+            point(px(95.), px(60.)),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            point(px(95.), px(60.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        assert_eq!(handle.offset(), Point::default());
+
+        cx.simulate_mouse_down(
+            point(px(95.), px(20.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_move(
+            point(px(95.), px(70.)),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            point(px(95.), px(70.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        assert!(handle.offset().y < px(0.));
+    }
+
+    struct OverlappedScrollbarView {
+        handle: TestScrollHandle,
+        resize_hits: Rc<Cell<usize>>,
+    }
+
+    impl Render for OverlappedScrollbarView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui_kit::IntoElement {
+            div()
+                .relative()
+                .size(px(100.))
+                .child(
+                    div()
+                        .absolute()
+                        .right_0()
+                        .top_0()
+                        .h_full()
+                        .w(LOG_SCROLLBAR_WIDTH)
+                        .child(persistent_log_scrollbar(
+                            Scrollbar::vertical(&self.handle).viewport_from_layout(),
+                            hsla(0., 0., 0., 1.),
+                        ))
+                        .child(drag_only_log_scrollbar_guard(
+                            self.handle.clone(),
+                            Axis::Vertical,
+                        )),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .right_0()
+                        .top_0()
+                        .h_full()
+                        .w(px(5.))
+                        .occlude()
+                        .on_mouse_down(MouseButton::Left, {
+                            let resize_hits = self.resize_hits.clone();
+                            move |_, _, _| resize_hits.set(resize_hits.get() + 1)
+                        }),
+                )
+        }
+    }
+
+    #[gpui_kit::test]
+    fn resize_handle_over_scrollbar_does_not_jump(cx: &mut TestAppContext) {
+        let handle = TestScrollHandle {
+            viewport: Bounds::new(point(px(0.), px(0.)), size(px(100.), px(100.))),
+            content: size(px(100.), px(500.)),
+            offset: Rc::new(Cell::new(Point::default())),
+        };
+        let resize_hits = Rc::new(Cell::new(0));
+        let (_, cx) = cx.add_window_view({
+            let handle = handle.clone();
+            let resize_hits = resize_hits.clone();
+            move |_, _| OverlappedScrollbarView {
+                handle,
+                resize_hits,
+            }
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        cx.simulate_click(point(px(97.), px(80.)), Modifiers::default());
+        cx.simulate_click(point(px(95.), px(20.)), Modifiers::default());
+        cx.simulate_mouse_down(
+            point(px(95.), px(20.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_move(
+            point(px(95.), px(70.)),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            point(px(95.), px(70.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        assert_eq!(resize_hits.get(), 3);
+        assert_eq!(handle.offset(), Point::default());
+    }
 
     fn contrast(a: Hsla, b: Hsla) -> f32 {
         let luminance = |color: Hsla| {
@@ -555,17 +839,15 @@ mod tests {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
             let colors = product_colors(mode);
             let bubble = colors.background.blend(colors.primary.opacity(0.12));
-            assert!(contrast(colors.selection, colors.foreground) >= 4.5);
-            assert!(contrast(colors.selection, colors.background) >= 1.5);
-            assert!(contrast(colors.selection, bubble) >= 1.5);
-            assert_eq!(colors.chat_selection_foreground, color(0xffffff));
-            assert!(
-                contrast(
-                    colors.chat_selection_background,
-                    colors.chat_selection_foreground
-                ) >= 4.5
-            );
-            assert!(contrast(colors.chat_selection_background, bubble) >= 3.0);
+            // TextView paints selection over glyphs, so an opaque token hides
+            // selected words even if its RGB color contrasts with foreground.
+            assert!(colors.selection.a < 1.);
+            for surface in [colors.background, bubble] {
+                let selected_background = surface.blend(colors.selection);
+                let selected_foreground = colors.foreground.blend(colors.selection);
+                assert!(contrast(selected_foreground, selected_background) >= 4.5);
+                assert!(contrast(selected_background, surface) >= 1.25);
+            }
         }
     }
 }

@@ -712,6 +712,8 @@ impl Workspace {
                 results_visible,
                 restoring_result_selection: false,
                 load_state: prepared.load_state,
+                edit: None,
+                edit_load_task: None,
             });
             global_sources_changed = true;
             installed_document_ids.insert(document_id);
@@ -1577,6 +1579,10 @@ impl Workspace {
         }
         let highlight_matches = self.app_settings.highlight_matches;
         let tab = &mut self.documents[tab_ix];
+        let edit_restore_row = tab
+            .edit
+            .as_mut()
+            .and_then(|edit| edit.pending_exit_row.take());
         if let Some(cancellation) = tab.result_replace_cancellation.take() {
             cancellation.store(true, Ordering::Release);
         }
@@ -1613,9 +1619,13 @@ impl Workspace {
                     .flatten(),
             );
             if tab.document.line_count() > 0
-                && (plan.follow_end || table.active_log_row().is_none())
+                && (edit_restore_row.is_some()
+                    || plan.follow_end
+                    || table.active_log_row().is_none())
             {
-                let row = if plan.follow_end {
+                let row = if let Some(row) = edit_restore_row {
+                    row.min(tab.document.line_count() - 1)
+                } else if plan.follow_end {
                     tab.document.line_count() - 1
                 } else {
                     plan.selected_source_row
@@ -1684,6 +1694,10 @@ impl Workspace {
                 plan.row_height,
                 cx,
             );
+            if let Some(row) = edit_restore_row {
+                tab.log_viewport
+                    .center_row(row.min(tab.document.line_count().saturating_sub(1)));
+            }
         }
         Self::restore_local_viewport_anchor(
             tab,
@@ -1695,6 +1709,13 @@ impl Workspace {
         tab.results_visible = plan.results_visible;
         tab.load_state = DocumentLoadState::Ready;
         tab.view.pending_restore_row = None;
+        if tab
+            .edit
+            .as_ref()
+            .is_some_and(|edit| !edit.active && !edit.dirty && !edit.saving)
+        {
+            tab.edit = None;
+        }
         if self
             .active_document()
             .is_some_and(|tab| tab.id == plan.document_id)

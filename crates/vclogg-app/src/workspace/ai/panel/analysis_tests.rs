@@ -7,10 +7,10 @@ use std::{
 };
 
 pub(super) fn exercise(
-    cx: &mut gpui::TestAppContext,
+    cx: &mut gpui_kit::TestAppContext,
     panel: &Entity<AiPanel>,
     workspace: &Entity<Workspace>,
-    window: gpui::WindowHandle<Root>,
+    window: gpui_kit::WindowHandle<Root>,
 ) {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("attached.log");
@@ -141,8 +141,7 @@ pub(super) fn exercise(
         }
         let reference: LogReference = serde_json::from_value(reference.clone()).unwrap();
         let citation = reference.url();
-        let summary =
-            format!("分析完成：发现 [attached.log:2]({citation}) 网络异常，已高亮并添加文字标记。");
+        let summary = format!("[attached.log:2]({citation}) 网络异常，已高亮并添加文字标记。");
         socket
             .write_all(
                 b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
@@ -202,6 +201,71 @@ pub(super) fn exercise(
     });
     cx.update_window(window.into(), |_, window, cx| {
         workspace.update(cx, |w, cx| w.activate_tab(1, window, cx));
+    })
+    .unwrap();
+    let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+    let answer = visual.debug_bounds("ai-answer").expect("rendered answer");
+    let citation_position = gpui_kit::point(answer.left() + px(20.), answer.top() + px(12.));
+    visual.simulate_mouse_down(
+        citation_position,
+        MouseButton::Left,
+        gpui_kit::Modifiers::default(),
+    );
+    visual.simulate_mouse_up(
+        citation_position,
+        MouseButton::Left,
+        gpui_kit::Modifiers::default(),
+    );
+    pump_until(cx, panel, |p| !p.ui_busy);
+    workspace.read_with(cx, |w, _| {
+        assert_eq!(
+            w.active_document().unwrap().id,
+            id,
+            "clicking a rendered citation must navigate"
+        );
+        assert_eq!(w.selected_source_row, Some(1));
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        workspace.update(cx, |w, cx| w.activate_tab(1, window, cx));
+    })
+    .unwrap();
+    let selection_end = gpui_kit::point(answer.left() + px(120.), answer.top() + px(12.));
+    visual.simulate_mouse_down(
+        citation_position,
+        MouseButton::Left,
+        gpui_kit::Modifiers::default(),
+    );
+    visual.simulate_mouse_move(
+        selection_end,
+        MouseButton::Left,
+        gpui_kit::Modifiers::default(),
+    );
+    visual.simulate_mouse_up(
+        selection_end,
+        MouseButton::Left,
+        gpui_kit::Modifiers::default(),
+    );
+    assert!(visual.update(gpui_kit::base::TextSelection::has_selection));
+    visual.simulate_mouse_down(
+        citation_position,
+        MouseButton::Left,
+        gpui_kit::Modifiers::default(),
+    );
+    visual.simulate_mouse_up(
+        citation_position,
+        MouseButton::Left,
+        gpui_kit::Modifiers::default(),
+    );
+    pump_until(cx, panel, |p| !p.ui_busy);
+    workspace.read_with(cx, |w, _| {
+        assert_eq!(
+            w.active_document().unwrap().id,
+            id,
+            "a previous text selection must not block a citation"
+        );
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        workspace.update(cx, |w, cx| w.activate_tab(1, window, cx));
         // Starting another turn must not invalidate an unchanged earlier citation.
         let fresh = workspace.read(cx).ai_scope();
         panel.update(cx, |p, cx| {
@@ -216,6 +280,77 @@ pub(super) fn exercise(
         assert_eq!(w.active_document().unwrap().id, id);
         assert_eq!(w.selected_source_row, Some(1));
     });
+    // Reloading persisted history loses run scopes, but keeps local navigation targets.
+    let saved = panel.read_with(cx, |p, _| p.record().unwrap().payload);
+    let scopes = cx
+        .update_window(window.into(), |_, window, cx| {
+            workspace.update(cx, |w, cx| w.activate_tab(1, window, cx));
+            panel.update(cx, |p, cx| {
+                let scopes = (p.scope.take(), std::mem::take(&mut p.reference_scopes));
+                p.conversation = serde_json::from_str(&saved).unwrap();
+                // Expired search IDs in old links must not prevent source-line navigation.
+                p.open_link(
+                    &format!("{citation}&search_id=expired&result_index=999"),
+                    window,
+                    cx,
+                );
+                scopes
+            })
+        })
+        .unwrap();
+    pump_until(cx, panel, |p| !p.ui_busy);
+    panel.read_with(cx, |p, _| assert!(p.error.is_empty(), "{}", p.error));
+    cx.update_window(window.into(), |_, window, cx| {
+        assert!(
+            workspace
+                .read(cx)
+                .log_viewer
+                .focus_handle
+                .contains_focused(window, cx)
+        );
+    })
+    .unwrap();
+    workspace.read_with(cx, |w, cx| {
+        assert_eq!(
+            w.active_document()
+                .unwrap()
+                .log_table
+                .read(cx)
+                .delegate()
+                .selected_source_rows(),
+            vec![1]
+        );
+        assert_eq!(w.active_document().unwrap().id, id);
+        assert_eq!(w.selected_source_row, Some(1));
+    });
+    // Older conversations stored row filenames but no durable source paths.
+    let mut legacy: vclogg_ai::Conversation = serde_json::from_str(&saved).unwrap();
+    legacy.log_sources.clear();
+    for message in &mut legacy.messages {
+        if let AgentMessage::Tool { result, .. } = message {
+            remove_saved_paths(&mut result.value);
+        }
+    }
+    cx.update_window(window.into(), |_, window, cx| {
+        workspace.update(cx, |w, cx| w.activate_tab(1, window, cx));
+        panel.update(cx, |p, cx| {
+            p.conversation = legacy;
+            p.open_link(&citation, window, cx);
+        });
+    })
+    .unwrap();
+    pump_until(cx, panel, |p| !p.ui_busy);
+    panel.read_with(cx, |p, _| assert!(p.error.is_empty(), "{}", p.error));
+    workspace.read_with(cx, |w, _| {
+        assert_eq!(w.active_document().unwrap().id, id);
+        assert_eq!(w.selected_source_row, Some(1));
+    });
+    panel.update(cx, |p, _| {
+        p.conversation = serde_json::from_str(&saved).unwrap();
+        p.scope = scopes.0;
+        p.reference_scopes = scopes.1;
+    });
+
     // A changed source is rejected before the citation can move selection.
     std::fs::write(&path, "changed\n").unwrap();
     cx.update_window(window.into(), |_, window, cx| {
@@ -226,6 +361,50 @@ pub(super) fn exercise(
     pump_until(cx, panel, |p| !p.ui_busy);
     assert!(!panel.read_with(cx, |p, _| p.error.clone()).is_empty());
     workspace.read_with(cx, |w, _| assert_ne!(w.active_document().unwrap().id, id));
+
+    std::fs::write(
+        &path,
+        "INFO ready\nERROR network timeout\nINFO retry\nERROR disconnected\n",
+    )
+    .unwrap();
+    cx.update_window(window.into(), |_, window, cx| {
+        workspace.update(cx, |w, cx| w.close_tab_by_id(id, window, cx));
+        panel.update(cx, |p, cx| {
+            p.scope = None;
+            p.reference_scopes.clear();
+            p.conversation = serde_json::from_str(&saved).unwrap();
+            p.open_link(&citation, window, cx);
+        });
+    })
+    .unwrap();
+    pump_until(cx, panel, |p| !p.ui_busy);
+    panel.read_with(cx, |p, _| assert!(p.error.is_empty(), "{}", p.error));
+    cx.update_window(window.into(), |_, window, cx| {
+        assert!(
+            workspace
+                .read(cx)
+                .log_viewer
+                .focus_handle
+                .contains_focused(window, cx)
+        );
+    })
+    .unwrap();
+    workspace.read_with(cx, |w, cx| {
+        assert_eq!(
+            w.active_document()
+                .unwrap()
+                .log_table
+                .read(cx)
+                .delegate()
+                .selected_source_rows(),
+            vec![1]
+        );
+        assert!(paths_match(
+            w.active_document().unwrap().document.path(),
+            &path
+        ));
+        assert_eq!(w.selected_source_row, Some(1));
+    });
 
     // A manually selected unopened result grants only that source, even without a directory.
     let unopened_path = root.path().join("unopened.log");
@@ -286,6 +465,23 @@ pub(super) fn exercise(
         }
     }
     assert!(scope.lock().unwrap().document(u64::MAX, None).is_err());
+}
+
+fn remove_saved_paths(value: &mut Value) {
+    match value {
+        Value::Object(values) => {
+            values.remove("path");
+            for value in values.values_mut() {
+                remove_saved_paths(value);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                remove_saved_paths(value);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn request(listener: &TcpListener) -> (TcpStream, Value) {

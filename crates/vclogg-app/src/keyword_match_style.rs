@@ -1,6 +1,6 @@
 //! Persisted keyword appearance, resolved only in the presentation layer.
-use gpui::{FontStyle, FontWeight, HighlightStyle, UnderlineStyle, px};
-use gpui_component::theme::{ThemeMode, try_parse_color};
+use gpui_kit::component::theme::{ThemeMode, try_parse_color};
+use gpui_kit::{FontStyle, FontWeight, HighlightStyle, UnderlineStyle, px};
 use serde::{Deserialize, Serialize};
 
 use crate::ui_theme;

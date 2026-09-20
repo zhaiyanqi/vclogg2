@@ -84,7 +84,7 @@ mod tests {
         drop(connection);
         for _ in 0..2 {
             let store = StateRepository::open(path.clone(), &defaults).unwrap();
-            assert_eq!(store.schema_version().unwrap(), 18);
+            assert_eq!(store.schema_version().unwrap(), 19);
             assert_eq!(
                 store.load_ui_value("existing").unwrap().as_deref(),
                 Some("kept")

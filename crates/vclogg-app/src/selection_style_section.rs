@@ -5,21 +5,21 @@ use crate::{
     },
     ui_theme,
 };
-use gpui::{
-    AppContext as _, Context, Entity, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, Rgba, ScrollHandle, SharedString, StatefulInteractiveElement as _,
-    Styled as _, StyledText, Subscription, Window, div, prelude::FluentBuilder as _, px,
-};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
-    color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
+    color_picker::{ColorPickerEvent, ColorPickerState},
     h_flex,
     scroll::{Scrollbar, ScrollbarMode},
     slider::{Slider, SliderEvent, SliderState},
     switch::Switch,
     theme::ThemeMode,
     v_flex,
+};
+use gpui_kit::{
+    AppContext as _, Context, Entity, Hsla, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, Rgba, ScrollHandle, SharedString, StatefulInteractiveElement as _,
+    Styled as _, StyledText, Subscription, Window, div, prelude::FluentBuilder as _, px,
 };
 
 #[derive(Clone, Copy)]
@@ -153,7 +153,7 @@ impl SelectionStyleSection {
             style
                 .row_border_color
                 .as_deref()
-                .and_then(|s| gpui_component::theme::try_parse_color(s).ok())
+                .and_then(|s| gpui_kit::component::theme::try_parse_color(s).ok())
                 .unwrap_or(palette.row_selected_border),
             resolved.text.background,
             resolved.text.foreground.unwrap_or(palette.log_text),
@@ -215,7 +215,7 @@ impl SelectionStyleSection {
         control: impl IntoElement,
         setting: Setting,
         cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    ) -> gpui_kit::Div {
         h_flex()
             .flex_none()
             .gap_3()
@@ -224,11 +224,15 @@ impl SelectionStyleSection {
             .child(self.reset_button(setting, cx))
     }
 
-    fn group(title: SharedString, description: SharedString, cx: &gpui::App) -> gpui::Div {
+    fn group(title: SharedString, description: SharedString, cx: &gpui_kit::App) -> gpui_kit::Div {
         v_flex()
             .gap_1()
             .flex_none()
-            .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(title))
+            .child(
+                div()
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                    .child(title),
+            )
             .child(
                 div()
                     .text_sm()
@@ -263,12 +267,12 @@ impl SelectionStyleSection {
         self.field(label, control, setting, cx)
     }
 
-    fn color_picker_control(&self, index: usize, cx: &Context<Self>) -> gpui::AnyElement {
+    fn color_picker_control(&self, index: usize, cx: &Context<Self>) -> gpui_kit::AnyElement {
         let picker = &self.controls[usize::from(self.dark)].colors[index];
         if self.saving {
             // The styled ColorPicker does not expose disabled; use its standard disabled swatch
             // while saving, so neither pointer nor keyboard can open another popup.
-            gpui_base::ColorSwatch::new(
+            gpui_kit::base::ColorSwatch::new(
                 format!("selection-saving-color-{index}"),
                 picker.read(cx).value().unwrap_or(cx.theme().transparent),
             )
@@ -277,11 +281,13 @@ impl SelectionStyleSection {
             .rounded(cx.theme().radius)
             .into_any_element()
         } else {
-            ColorPicker::new(picker).small().into_any_element()
+            crate::app_color_picker::new(picker)
+                .small()
+                .into_any_element()
         }
     }
 
-    fn choices(&self, setting: Setting, cx: &mut Context<Self>) -> gpui::Div {
+    fn choices(&self, setting: Setting, cx: &mut Context<Self>) -> gpui_kit::Div {
         let style = self.draft.theme(self.dark);
         let (labels, selected): ([SharedString; 3], usize) = match setting {
             Setting::Border => (
@@ -359,7 +365,7 @@ impl SelectionStyleSection {
             }))
     }
 
-    fn foreground_control(&self, row: bool, cx: &mut Context<Self>) -> gpui::Div {
+    fn foreground_control(&self, row: bool, cx: &mut Context<Self>) -> gpui_kit::Div {
         let style = self.draft.theme(self.dark);
         let (index, foreground, scope) = if row {
             (4, &style.row_foreground, "row")
@@ -401,7 +407,7 @@ impl SelectionStyleSection {
             })
     }
 
-    fn render_fields(&self, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_fields(&self, cx: &mut Context<Self>) -> gpui_kit::Div {
         let style = self.draft.theme(self.dark);
         let rows = v_flex()
             .gap_3()
@@ -533,7 +539,7 @@ impl SelectionStyleSection {
                     };
                     vec![(
                         range,
-                        gpui::HighlightStyle {
+                        gpui_kit::HighlightStyle {
                             color: Some(colors.search_match_foreground),
                             background_color: Some(colors.search_match),
                             ..Default::default()

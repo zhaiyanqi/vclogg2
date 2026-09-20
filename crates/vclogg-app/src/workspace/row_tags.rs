@@ -747,52 +747,55 @@ impl Workspace {
                             .await
                     }
                 };
-                gpui::AsyncApp::update_global::<WorkspaceWindowRegistry, _>(cx, |registry, cx| {
-                    if result.is_ok() {
-                        let presets = registry.row_tag_presets.get_or_insert_with(Vec::new);
-                        match &change {
-                            TagPresetChange::Remember(preset) => {
-                                presets.retain(|existing| existing.label != preset.label);
-                                presets.insert(0, preset.clone());
+                gpui_kit::AsyncApp::update_global::<WorkspaceWindowRegistry, _>(
+                    cx,
+                    |registry, cx| {
+                        if result.is_ok() {
+                            let presets = registry.row_tag_presets.get_or_insert_with(Vec::new);
+                            match &change {
+                                TagPresetChange::Remember(preset) => {
+                                    presets.retain(|existing| existing.label != preset.label);
+                                    presets.insert(0, preset.clone());
+                                }
+                                TagPresetChange::Delete { label, .. } => {
+                                    presets.retain(|preset| &preset.label != label)
+                                }
                             }
-                            TagPresetChange::Delete { label, .. } => {
-                                presets.retain(|preset| &preset.label != label)
+                            let presets = presets.clone();
+                            let editors = registry
+                                .windows
+                                .iter()
+                                .filter_map(|entry| {
+                                    entry
+                                        .workspace
+                                        .read(cx)
+                                        .row_tags
+                                        .dialog
+                                        .as_ref()
+                                        .and_then(WeakEntity::upgrade)
+                                })
+                                .collect::<Vec<_>>();
+                            for editor in editors {
+                                editor.update(cx, |editor, cx| {
+                                    editor.replace_presets(presets.clone(), cx)
+                                });
                             }
                         }
-                        let presets = presets.clone();
-                        let editors = registry
-                            .windows
-                            .iter()
-                            .filter_map(|entry| {
-                                entry
-                                    .workspace
-                                    .read(cx)
-                                    .row_tags
-                                    .dialog
-                                    .as_ref()
-                                    .and_then(WeakEntity::upgrade)
-                            })
-                            .collect::<Vec<_>>();
-                        for editor in editors {
-                            editor.update(cx, |editor, cx| {
-                                editor.replace_presets(presets.clone(), cx)
+                        if let TagPresetChange::Delete { editor, .. } = &change {
+                            _ = editor.update(cx, |editor, cx| {
+                                editor.finish_history_delete(
+                                    result.as_ref().err().map(|error| {
+                                        crate::tr_args!(
+                                            "历史标记删除失败：{error}",
+                                            "Couldn’t delete history mark: {error}"
+                                        )
+                                    }),
+                                    cx,
+                                )
                             });
                         }
-                    }
-                    if let TagPresetChange::Delete { editor, .. } = &change {
-                        _ = editor.update(cx, |editor, cx| {
-                            editor.finish_history_delete(
-                                result.as_ref().err().map(|error| {
-                                    crate::tr_args!(
-                                        "历史标记删除失败：{error}",
-                                        "Couldn’t delete history mark: {error}"
-                                    )
-                                }),
-                                cx,
-                            )
-                        });
-                    }
-                });
+                    },
+                );
                 if let Err(error) = result {
                     _ = cx.update(|window, cx| {
                         window.notify_message(

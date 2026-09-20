@@ -1,5 +1,5 @@
 use super::*;
-use gpui_component::input::{Input, InputState};
+use gpui_kit::component::input::{Input, InputState};
 use vclogg_ai::{Protocol, ProviderConfig};
 
 pub(super) struct ConfigEditor {
@@ -8,7 +8,7 @@ pub(super) struct ConfigEditor {
     url: Entity<InputState>,
     key: Entity<InputState>,
     model: Entity<InputState>,
-    limit: Entity<InputState>,
+    context_window: Entity<InputState>,
 }
 impl AiPanel {
     pub(super) fn edit_provider(
@@ -29,7 +29,14 @@ impl AiPanel {
                     .masked(true)
             }),
             model: input(&config.model, window, cx),
-            limit: input(&config.max_output_tokens.to_string(), window, cx),
+            context_window: input(
+                &config
+                    .context_window_tokens
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+                window,
+                cx,
+            ),
             config,
         });
         cx.notify();
@@ -91,7 +98,7 @@ impl AiPanel {
                 })
                 .await;
             // Finish publication even if the originating window has closed.
-            gpui::AsyncApp::update_global::<super::configuration::SharedAiSettings, _>(
+            gpui_kit::AsyncApp::update_global::<super::configuration::SharedAiSettings, _>(
                 cx,
                 |shared, _| {
                     shared.saving = false;
@@ -143,7 +150,20 @@ impl AiPanel {
         config.base_url = editor.url.read(cx).value().trim().into();
         config.api_key = editor.key.read(cx).value().trim().into();
         config.model = editor.model.read(cx).value().trim().into();
-        config.max_output_tokens = editor.limit.read(cx).value().parse().unwrap_or(0);
+        let context_text = editor.context_window.read(cx).value().trim().to_owned();
+        config.context_window_tokens = if context_text.is_empty() {
+            None
+        } else {
+            context_text.parse::<u32>().ok().filter(|value| *value > 0)
+        };
+        if !context_text.is_empty() && config.context_window_tokens.is_none() {
+            self.error =
+                crate::tr!("请输入有效的上下文长度", "Enter a valid context window").into();
+            cx.notify();
+            return;
+        }
+        config.context_window_source = config.context_window_tokens.map(|_| "manual".into());
+        config.max_output_tokens = 4096;
         if config.name.is_empty() {
             self.error = crate::tr!("请输入配置名称", "Enter a configuration name").into();
             cx.notify();
@@ -154,13 +174,38 @@ impl AiPanel {
             cx.notify();
             return;
         }
-        self.settings.providers.retain(|p| p.id != config.id);
-        self.conversation.provider_id = Some(config.id.clone());
-        self.settings.active_provider = Some(config.id.clone());
-        self.settings.providers.push(config);
-        self.editor = None;
+        self.busy = true;
         self.error.clear();
-        self.save_settings(window, cx);
+        cx.spawn_in(window, async move |this, cx| {
+            let discovered = cx
+                .background_spawn({
+                    let config = config.clone();
+                    async move { vclogg_ai::discover_model_limits(&config).await }
+                })
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                let mut config = config;
+                if let Ok(limits) = discovered {
+                    if let Some(limit) = limits.context_window_tokens {
+                        config.context_window_tokens = Some(limit);
+                        config.context_window_source = Some("provider".into());
+                    }
+                    if let Some(limit) = limits.max_output_tokens {
+                        config.max_output_tokens = limit;
+                    }
+                }
+                this.busy = false;
+                this.settings
+                    .providers
+                    .retain(|provider| provider.id != config.id);
+                this.conversation.provider_id = Some(config.id.clone());
+                this.settings.active_provider = Some(config.id.clone());
+                this.settings.providers.push(config);
+                this.editor = None;
+                this.save_settings(window, cx);
+            });
+        })
+        .detach();
     }
     fn test_provider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings_busy(cx) {
@@ -280,8 +325,8 @@ impl AiPanel {
                 ("API Key", &editor.key),
                 (crate::tr!("模型名", "Model"), &editor.model),
                 (
-                    crate::tr!("最大输出 tokens", "Output token limit"),
-                    &editor.limit,
+                    crate::tr!("上下文长度（可选）", "Context window (optional)"),
+                    &editor.context_window,
                 ),
             ] {
                 content = content.child(
@@ -291,7 +336,7 @@ impl AiPanel {
                         .child(Input::new(input).small().disabled(disabled)),
                 );
             }
-            content=content.child(div().text_xs().text_color(cx.theme().muted_foreground).child(crate::tr!("密钥以明文保存在本机应用配置中。日志片段将发送到所选模型服务。","Keys are stored as plaintext in local app configuration. Log excerpts are sent to the selected model service."))).child(Button::new("ai-provider-save").small().primary().text_label(crate::tr!("保存","Save")).disabled(disabled).on_click(cx.listener(|this,_,window,cx|this.save_provider(window,cx))));
+            content=content.child(div().text_xs().text_color(cx.theme().muted_foreground).child(crate::tr!("支持的服务会自动读取上下文长度，未提供时可手动填写。Anthropic 要求输出上限：优先读取模型上限，读取失败时使用 4096。密钥以明文保存在本机，日志片段会发送到所选服务。","Context length is read from supported services or entered manually. Anthropic requires an output cap: the model limit is used when available, otherwise 4096. Keys are stored locally as plaintext and log excerpts are sent to the selected service."))).child(Button::new("ai-provider-save").small().primary().text_label(crate::tr!("保存","Save")).disabled(disabled).on_click(cx.listener(|this,_,window,cx|this.save_provider(window,cx))));
         } else {
             content = content.child(
                 Button::new("ai-provider-add")
@@ -334,6 +379,29 @@ impl AiPanel {
                                     this.edit_provider(edit.clone(), window, cx)
                                 })),
                         ),
+                );
+                content = content.child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(match provider.context_window_tokens {
+                            Some(limit)
+                                if provider.context_window_source.as_deref()
+                                    == Some("provider") =>
+                            {
+                                format!(
+                                    "{}: {limit} tokens ({})",
+                                    crate::tr!("上下文", "Context"),
+                                    crate::tr!("自动读取", "Auto detected")
+                                )
+                            }
+                            Some(limit) => format!(
+                                "{}: {limit} tokens ({})",
+                                crate::tr!("上下文", "Context"),
+                                crate::tr!("手动", "Manual")
+                            ),
+                            None => crate::tr!("上下文长度未知", "Context window unknown").into(),
+                        }),
                 );
             }
             content = content.child(

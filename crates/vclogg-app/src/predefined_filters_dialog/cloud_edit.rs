@@ -1,7 +1,11 @@
 use super::*;
 
 impl PredefinedFiltersDialog {
-    fn cloud_detail_update(&self, detail: &CloudFilterItem, cx: &gpui::App) -> CloudFilterUpdate {
+    fn cloud_detail_update(
+        &self,
+        detail: &CloudFilterItem,
+        cx: &gpui_kit::App,
+    ) -> CloudFilterUpdate {
         CloudFilterUpdate {
             name: self.cloud_detail_name.read(cx).value().trim().to_string(),
             value: self.cloud_detail_value.read(cx).value().trim().to_string(),
@@ -15,7 +19,7 @@ impl PredefinedFiltersDialog {
     pub(super) fn cloud_detail_has_changes(
         &self,
         detail: &CloudFilterItem,
-        cx: &gpui::App,
+        cx: &gpui_kit::App,
     ) -> bool {
         let update = self.cloud_detail_update(detail, cx);
         update.name != detail.name

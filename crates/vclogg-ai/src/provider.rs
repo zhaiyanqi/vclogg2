@@ -89,18 +89,11 @@ pub(crate) fn request_body(
         }
     }
     let mut body = json!({"model":config.model,"messages":wire,"stream":true});
-    // Native OpenAI reasoning models reject the legacy max_tokens parameter.
-    // Compatible servers retain the widely supported legacy field.
-    let native_openai = config.protocol == Protocol::OpenAi
-        && url::Url::parse(&config.base_url)
-            .ok()
-            .and_then(|url| url.host_str().map(str::to_owned))
-            .is_some_and(|host| host == "api.openai.com" || host.ends_with(".api.openai.com"));
-    body[if native_openai {
-        "max_completion_tokens"
-    } else {
-        "max_tokens"
-    }] = json!(config.max_output_tokens);
+    // OpenAI-compatible services choose their own output default. Anthropic
+    // requires max_tokens; use the discovered limit when available.
+    if config.protocol == Protocol::Anthropic {
+        body["max_tokens"] = json!(config.max_output_tokens.max(1));
+    }
     // Providers may require schemas while replaying tool-use history even when
     // the final request is reserved for prose. Keep schemas and disable new calls.
     let has_tool_history = messages
@@ -559,12 +552,18 @@ async fn stream_with_timeouts(
 mod tests {
     use super::*;
     #[test]
-    fn native_openai_uses_completion_token_limit() {
+    fn output_limit_is_provider_managed_where_supported() {
         let mut config = ProviderConfig::default();
         let body = request_body(&config, "", &[], false);
-        assert_eq!(body["max_completion_tokens"], 4096);
+        assert!(body.get("max_completion_tokens").is_none());
         assert!(body.get("max_tokens").is_none());
         config.base_url = "https://compatible.example/v1".into();
+        assert!(
+            request_body(&config, "", &[], false)
+                .get("max_tokens")
+                .is_none()
+        );
+        config.protocol = Protocol::Anthropic;
         assert_eq!(request_body(&config, "", &[], false)["max_tokens"], 4096);
     }
     #[tokio::test]

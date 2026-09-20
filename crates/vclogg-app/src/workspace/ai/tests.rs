@@ -87,13 +87,13 @@ fn conversation_lease_prevents_concurrent_agents() {
     assert!(ConversationLease::acquire(&id).is_ok());
 }
 
-#[gpui::test]
-fn log_agent_commands_share_real_workspace_state(cx: &mut gpui::TestAppContext) {
+#[gpui_kit::test]
+fn log_agent_commands_share_real_workspace_state(cx: &mut gpui_kit::TestAppContext) {
     if std::env::var_os("VCLOGG2_AI_TEST_CHILD").is_none() {
         return;
     }
     cx.update(|cx| {
-        gpui_component::init(cx);
+        gpui_kit::component::init(cx);
         Workspace::init_window_registry(cx);
         crate::notifications::init(cx);
         crate::app_icon::init(cx);

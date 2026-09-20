@@ -1,50 +1,14 @@
-use gpui::{
-    Action, App, ElementId, Entity, Focusable as _, InteractiveElement as _, IntoElement,
-    ParentElement as _, RenderOnce, Window, div,
-};
-use gpui_component::{
+use gpui_kit::component::{
     button::Button,
     color_picker::ColorPickerState,
-    dialog::{Cancel, Confirm},
+    dialog::{DialogAction, DialogClose},
+};
+use gpui_kit::{
+    App, Entity, Focusable as _, InteractiveElement as _, IntoElement, ParentElement as _, Window,
+    div,
 };
 
-#[derive(IntoElement)]
-struct DialogActionButton {
-    id: &'static str,
-    button: Button,
-    action: Box<dyn Action>,
-    enabled: bool,
-}
-
-impl RenderOnce for DialogActionButton {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        // Match GPUI Base's button lifecycle: retain focus while this keyed control
-        // remains mounted. The child namespace keeps focus state separate from the div.
-        let action_focus = window
-            .use_keyed_state((ElementId::from(self.id), "action-focus"), cx, |_, cx| {
-                cx.focus_handle()
-            })
-            .read(cx)
-            .clone();
-        let dispatch_focus = action_focus.clone();
-        let action = self.action;
-        let enabled = self.enabled;
-        let button = self.button.on_click(move |_, window, cx| {
-            if enabled {
-                dispatch_focus.dispatch_action(action.as_ref(), window, cx);
-            }
-        });
-        div().id(self.id).track_focus(&action_focus).child(button)
-    }
-}
-
-/// Wraps a dialog button in a stable focus node and dispatches Confirm from that node.
-///
-/// gpui-component buttons deliberately prevent pointer focus on mouse down. Dispatching a
-/// dialog action through `Window::dispatch_action` therefore depends on whichever control was
-/// focused before the click. That control may already have disappeared with a nested popup,
-/// causing the action to miss the dialog. Dispatching from this rendered wrapper gives the
-/// action a valid path through the dialog regardless of the window's current focus.
+/// Routes confirmation through gpui-kit's dialog-owned dispatch anchor.
 pub(crate) fn dialog_confirm_action(
     id: &'static str,
     button: Button,
@@ -59,26 +23,20 @@ pub(crate) fn dialog_confirm_action_when(
     enabled: bool,
     _cx: &mut App,
 ) -> impl IntoElement {
-    DialogActionButton {
-        id,
-        button,
-        action: Box::new(Confirm { secondary: false }),
-        enabled,
-    }
+    div().id(id).child(if enabled {
+        DialogAction::new().child(button).into_any_element()
+    } else {
+        button.into_any_element()
+    })
 }
 
-/// Wraps a dialog button in a stable focus node and dispatches Cancel from that node.
+/// Routes cancellation through gpui-kit's dialog-owned dispatch anchor.
 pub(crate) fn dialog_cancel_action(
     id: &'static str,
     button: Button,
     _cx: &mut App,
 ) -> impl IntoElement {
-    DialogActionButton {
-        id,
-        button,
-        action: Box::new(Cancel),
-        enabled: true,
-    }
+    div().id(id).child(DialogClose::new().child(button))
 }
 
 /// Restores the parent surface's focus path after a committed color closes its popup.
@@ -102,7 +60,7 @@ pub(crate) fn restore_color_picker_trigger(
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use gpui::{
+    use gpui_kit::{
         Context, FocusHandle, Modifiers, Render, Styled as _, TestAppContext, point,
         prelude::FluentBuilder as _, px,
     };
@@ -135,7 +93,7 @@ mod tests {
                     cx,
                 ));
 
-            gpui_base::Dialog::new(cx)
+            gpui_kit::base::Dialog::new(cx)
                 .focus_handle(self.dialog_focus.clone())
                 .popup(popup)
                 .on_ok(move |_, _, _| {
@@ -145,9 +103,9 @@ mod tests {
         }
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn pointer_confirm_uses_its_rendered_path_when_current_focus_is_stale(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::component::init);
         let confirmed = Rc::new(Cell::new(false));
         let (harness, cx) = cx.add_window_view({
             let confirmed = confirmed.clone();
@@ -178,9 +136,9 @@ mod tests {
         );
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn stable_dialog_action_preserves_keyboard_activation(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::component::init);
         let confirmed = Rc::new(Cell::new(false));
         let (_, cx) = cx.add_window_view({
             let confirmed = confirmed.clone();

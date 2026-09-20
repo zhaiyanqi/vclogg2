@@ -1,5 +1,7 @@
+use super::panel::QueuedPrompt;
+use super::transcript_scroll::TranscriptScroll;
 use super::*;
-use gpui_message_scroller::MessageScrollerState;
+use std::collections::VecDeque;
 use vclogg_ai::Conversation;
 use vclogg_data::AiConversationRecord;
 
@@ -10,12 +12,17 @@ pub(super) struct ConversationTab {
     revision: u64,
     draft: String,
     logs: Vec<attachments::DraftLog>,
+    queued_prompts: VecDeque<QueuedPrompt>,
+    editing_message: Option<usize>,
+    selected_log_ids: Option<BTreeSet<u64>>,
+    selected_workspace_directories: Option<BTreeSet<PathBuf>>,
+    include_search_directory: bool,
     scope: Option<SharedScope>,
     reference_scopes: Vec<SharedScope>,
     error: String,
     expanded: BTreeSet<usize>,
     thinking_expanded: BTreeSet<usize>,
-    scroller: Entity<MessageScrollerState>,
+    scroller: Entity<TranscriptScroll>,
     transcript_rows: Vec<usize>,
 }
 
@@ -32,6 +39,11 @@ impl AiPanel {
                 revision: self.revision,
                 draft: self.input.read(cx).value().to_string(),
                 logs: std::mem::take(&mut self.draft_logs),
+                queued_prompts: std::mem::take(&mut self.queued_prompts),
+                editing_message: self.editing_message.take(),
+                selected_log_ids: self.selected_log_ids.take(),
+                selected_workspace_directories: self.selected_workspace_directories.take(),
+                include_search_directory: self.include_search_directory,
                 scope: self.scope.take(),
                 reference_scopes: std::mem::take(&mut self.reference_scopes),
                 error: std::mem::take(&mut self.error),
@@ -53,6 +65,12 @@ impl AiPanel {
         self.conversation = tab.conversation;
         self.revision = tab.revision;
         self.draft_logs = tab.logs;
+        self.queued_prompts = tab.queued_prompts;
+        self.editing_message = tab.editing_message;
+        self.selected_log_ids = tab.selected_log_ids;
+        self.selected_workspace_directories = tab.selected_workspace_directories;
+        self.include_search_directory = tab.include_search_directory;
+        self.resume_queue_after_stop = false;
         self.scope = tab.scope;
         self.reference_scopes = tab.reference_scopes;
         self.error = tab.error;
@@ -79,7 +97,7 @@ impl AiPanel {
     }
 
     fn reset_conversation_scroller(&mut self, cx: &mut Context<Self>) {
-        self.scroller = cx.new(|cx| MessageScrollerState::new(0, cx));
+        self.scroller = cx.new(|cx| TranscriptScroll::new(0, cx));
         self.scroll_subscription = cx.observe(&self.scroller, |_, _, cx| cx.notify());
     }
 
@@ -151,12 +169,17 @@ impl AiPanel {
                                 revision,
                                 draft: String::new(),
                                 logs: Vec::new(),
+                                queued_prompts: VecDeque::new(),
+                                editing_message: None,
+                                selected_log_ids: None,
+                                selected_workspace_directories: None,
+                                include_search_directory: true,
                                 scope: None,
                                 reference_scopes: Vec::new(),
                                 error: String::new(),
                                 expanded: BTreeSet::new(),
                                 thinking_expanded: BTreeSet::new(),
-                                scroller: cx.new(|cx| MessageScrollerState::new(0, cx)),
+                                scroller: cx.new(|cx| TranscriptScroll::new(0, cx)),
                                 transcript_rows: Vec::new(),
                             },
                             window,
@@ -210,6 +233,8 @@ impl AiPanel {
                 && tab.conversation.messages.is_empty()
                 && tab.draft.trim().is_empty()
                 && tab.logs.is_empty()
+                && tab.queued_prompts.is_empty()
+                && tab.editing_message.is_none()
         }) {
             self.inactive_conversations.remove(id);
         }

@@ -1,18 +1,18 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
-use gpui::{
-    AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    PathPromptOptions, Render, Styled as _, Subscription, Task, Window, div,
-    prelude::FluentBuilder as _,
-};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, IconName, Sizable as _, StyledExt as _,
     button::Button,
     checkbox::Checkbox,
     h_flex,
     input::{Input, InputEvent, InputState},
     v_flex,
+};
+use gpui_kit::{
+    AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+    PathPromptOptions, Render, Styled as _, Subscription, Task, Window, div,
+    prelude::FluentBuilder as _,
 };
 use vclogg_core::SearchCancellation;
 
@@ -259,7 +259,7 @@ impl DirectorySearchDialog {
         }
     }
 
-    pub fn options(&self, cx: &gpui::App) -> Option<DirectorySearchOptions> {
+    pub fn options(&self, cx: &gpui_kit::App) -> Option<DirectorySearchOptions> {
         let file_type_patterns = self.file_type_patterns.read(cx).value().trim().to_string();
         if self.file_type_filter_enabled
             && !DirectorySearchFileFilter::new(true, &file_type_patterns).has_pattern()

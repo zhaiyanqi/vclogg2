@@ -18,7 +18,7 @@ pub(super) struct VerticalTabState {
 }
 
 struct TabIndicatorMotion {
-    state: gpui::SpringState,
+    state: gpui_kit::SpringState,
     target: f32,
     updated_at: std::time::Instant,
 }
@@ -37,7 +37,7 @@ impl VerticalTabState {
         let target = VERTICAL_TAB_HEIGHT.as_f32() * ix as f32;
         let now = cx.background_executor().now();
         let motion = self.indicator.get_or_insert(TabIndicatorMotion {
-            state: gpui::SpringState {
+            state: gpui_kit::SpringState {
                 position: target,
                 velocity: 0.,
             },
@@ -47,7 +47,7 @@ impl VerticalTabState {
         // Match gpui-component's segmented TabBar: 250 ms response, damping 0.85,
         // and 0.1 px settling tolerance. Product motion does not follow OS preferences.
         let frequency = std::f32::consts::TAU / 0.25;
-        let spring = gpui::SpringConfig::new(frequency * frequency, 2. * 0.85 * frequency, 1.);
+        let spring = gpui_kit::SpringConfig::new(frequency * frequency, 2. * 0.85 * frequency, 1.);
         motion.state = spring.step(
             motion.state,
             motion.target,
@@ -57,7 +57,7 @@ impl VerticalTabState {
         motion.target = target;
         motion.updated_at = now;
         if spring.is_settled(motion.state, target, 0.1) {
-            motion.state = gpui::SpringState {
+            motion.state = gpui_kit::SpringState {
                 position: target,
                 velocity: 0.,
             };
@@ -126,7 +126,7 @@ impl Workspace {
         let menu_workspace = cx.entity();
         v_flex()
             .id("vertical-document-tabs")
-            .role(gpui::Role::TabList)
+            .role(gpui_kit::Role::TabList)
             .size_full()
             .min_h_0()
             .min_w_0()
@@ -256,6 +256,15 @@ impl Workspace {
                 .is_some(),
             vertical_tabs: this.vertical_tabs_enabled(cx),
             vertical: true,
+            can_edit: document_id
+                .and_then(|id| this.documents.iter().find(|tab| tab.id == id))
+                .is_some_and(|tab| {
+                    tab.document.metadata().file_size <= document_editing::MAX_EDIT_BYTES
+                }),
+            editing: document_id
+                .and_then(|id| this.documents.iter().find(|tab| tab.id == id))
+                .and_then(|tab| tab.edit.as_ref())
+                .is_some_and(|edit| edit.active),
         };
         match document_id {
             Some(id) => Self::build_tab_menu(menu, id, state, workspace, window),
@@ -368,6 +377,28 @@ impl Workspace {
             has_other_window,
             vertical_tabs: self.vertical_tabs_enabled(cx),
             vertical,
+            can_edit: match tab_id {
+                WorkspaceTabId::Document(id) => self
+                    .documents
+                    .iter()
+                    .find(|tab| tab.id == id)
+                    .is_some_and(|tab| {
+                        tab.document.metadata().file_size <= document_editing::MAX_EDIT_BYTES
+                    }),
+                WorkspaceTabId::New(id) => self.new_file_drafts.contains_key(&id),
+            },
+            editing: match tab_id {
+                WorkspaceTabId::Document(id) => self
+                    .documents
+                    .iter()
+                    .find(|tab| tab.id == id)
+                    .and_then(|tab| tab.edit.as_ref())
+                    .is_some_and(|edit| edit.active),
+                WorkspaceTabId::New(id) => self
+                    .new_file_drafts
+                    .get(&id)
+                    .is_some_and(|draft| draft.active),
+            },
         };
         let context_workspace = workspace.clone();
         let tab_layout = tab_drop_layout.clone();
@@ -451,7 +482,7 @@ impl Workspace {
             )
     }
 
-    fn render_vertical_tab_shell(&self, ix: usize, cx: &mut Context<Self>) -> gpui_base::Tab {
+    fn render_vertical_tab_shell(&self, ix: usize, cx: &mut Context<Self>) -> gpui_kit::base::Tab {
         let tab_id = self.tabs[ix];
         let tab_count = self.tabs.len();
         let source_workspace = cx.weak_entity();
@@ -464,7 +495,7 @@ impl Workspace {
             WorkspaceTabId::Document(id) => ElementId::from(("document-tab-context-target", id)),
             WorkspaceTabId::New(id) => ElementId::from(("new-tab-context-target", id)),
         };
-        gpui_base::Tab::new(shell_id)
+        gpui_kit::base::Tab::new(shell_id)
             .relative()
             .flex()
             .items_center()
@@ -517,10 +548,46 @@ impl Workspace {
         tab_id: WorkspaceTabId,
         vertical: bool,
         cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    ) -> gpui_kit::Div {
         let tab_title = self.workspace_tab_title(tab_id);
         let selected = self.active_tab_id == tab_id;
-        let file_icon_color = if selected {
+        let dirty = match tab_id {
+            WorkspaceTabId::Document(document_id) => self
+                .documents
+                .iter()
+                .find(|tab| tab.id == document_id)
+                .and_then(|tab| tab.edit.as_ref())
+                .is_some_and(|edit| edit.dirty),
+            WorkspaceTabId::New(id) => self
+                .new_file_drafts
+                .get(&id)
+                .is_some_and(|draft| draft.dirty),
+        };
+        let editing = match tab_id {
+            WorkspaceTabId::Document(document_id) => self
+                .documents
+                .iter()
+                .find(|tab| tab.id == document_id)
+                .and_then(|tab| tab.edit.as_ref())
+                .is_some_and(|edit| edit.active),
+            WorkspaceTabId::New(id) => self
+                .new_file_drafts
+                .get(&id)
+                .is_some_and(|draft| draft.active),
+        };
+        let tab_icon: &'static [u8] = if editing {
+            include_bytes!("../../assets/icons/file-pen-line.svg")
+        } else {
+            include_bytes!("../../assets/icons/document-text-20-regular.svg")
+        };
+        let visible_title = if dirty {
+            format!("{tab_title} *")
+        } else {
+            tab_title.to_string()
+        };
+        let file_icon_color = if dirty {
+            cx.theme().danger
+        } else if selected {
             cx.theme().tab_active_foreground
         } else {
             cx.theme().tab_foreground
@@ -546,13 +613,18 @@ impl Workspace {
             .items_center()
             .text_size(px(12.))
             .child(
-                svg()
-                    .data(include_bytes!(
-                        "../../assets/icons/document-text-20-regular.svg"
-                    ))
+                div()
                     .size(px(20.))
-                    .text_color(file_icon_color)
-                    .opacity(0.72),
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        svg()
+                            .data(tab_icon)
+                            .size(px(if editing { 16. } else { 20. }))
+                            .text_color(file_icon_color)
+                            .opacity(if dirty { 1. } else { 0.72 }),
+                    ),
             )
             .child(
                 div()
@@ -560,7 +632,7 @@ impl Workspace {
                     .when(vertical, |this| this.flex_1())
                     .truncate()
                     .line_height(relative(1.5))
-                    .child(tab_title),
+                    .child(visible_title),
             )
             .child(close_button)
     }

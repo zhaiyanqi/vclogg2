@@ -1,5 +1,5 @@
 use super::*;
-use gpui_component::switch::Switch;
+use gpui_kit::component::switch::Switch;
 
 impl AiPanel {
     fn scan_skills(&mut self, system: bool, window: &mut Window, cx: &mut Context<Self>) {

@@ -180,7 +180,7 @@ impl SidebarState {
                                 .tooltip({
                                     let label = label.clone();
                                     move |window, cx| {
-                                        gpui_component::tooltip::Tooltip::new(label.clone())
+                                        gpui_kit::component::tooltip::Tooltip::new(label.clone())
                                             .build(window, cx)
                                     }
                                 })
@@ -306,7 +306,7 @@ impl SidebarState {
                             .tooltip({
                                 let message = message.clone();
                                 move |window, cx| {
-                                    gpui_component::tooltip::Tooltip::new(message.clone())
+                                    gpui_kit::component::tooltip::Tooltip::new(message.clone())
                                         .build(window, cx)
                                 }
                             })
@@ -358,7 +358,7 @@ impl SidebarState {
                 let lane_width = (width - inset * 2.).max(pixel);
                 for lane in 0..lanes {
                     let left = bounds.left() + width * lane as f32;
-                    window.paint_quad(gpui::fill(
+                    window.paint_quad(gpui_kit::fill(
                         Bounds::new(
                             point(left + inset, bounds.top()),
                             size(lane_width, bounds.size.height),
@@ -366,7 +366,7 @@ impl SidebarState {
                         muted.opacity(0.08),
                     ));
                     if lane > 0 {
-                        window.paint_quad(gpui::fill(
+                        window.paint_quad(gpui_kit::fill(
                             Bounds::new(point(left, bounds.top()), size(pixel, bounds.size.height)),
                             border,
                         ));
@@ -389,7 +389,7 @@ impl SidebarState {
                         let density = count as f32 / rows as f32;
                         let top = bounds.size.height * (first as f32 / snapshot.bins as f32);
                         let bottom = bounds.size.height * (last as f32 / snapshot.bins as f32);
-                        window.paint_quad(gpui::fill(
+                        window.paint_quad(gpui_kit::fill(
                             Bounds::new(
                                 point(left, bounds.top() + top),
                                 size(
@@ -407,7 +407,7 @@ impl SidebarState {
                         overview_thumb(rows, &snapshot.range, bounds, pixel)
                     {
                         if snapshot.position_track {
-                            window.paint_quad(gpui::fill(
+                            window.paint_quad(gpui_kit::fill(
                                 Bounds::new(
                                     point(bounds.left() + inset, bounds.top() + top),
                                     size(lane_width, height),
@@ -418,7 +418,7 @@ impl SidebarState {
                         let left = bounds.left() + width * position_lanes as f32;
                         let mark_width = bounds.size.width - width * position_lanes as f32;
                         for edge in [top, top + height - pixel] {
-                            window.paint_quad(gpui::fill(
+                            window.paint_quad(gpui_kit::fill(
                                 Bounds::new(
                                     point(left, bounds.top() + edge),
                                     size(mark_width, pixel),
@@ -433,7 +433,7 @@ impl SidebarState {
                     let height = (bounds.size.height
                         * (hover.bins.len() as f32 / snapshot.bins as f32))
                         .max(pixel);
-                    window.paint_quad(gpui::fill(
+                    window.paint_quad(gpui_kit::fill(
                         Bounds::new(
                             point(
                                 bounds.left() + width * hover.lane as f32,

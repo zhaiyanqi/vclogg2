@@ -1,21 +1,14 @@
 mod cloud_edit;
 
 use chrono::{DateTime, Local};
-use gpui_base::Button as BaseButton;
+use gpui_kit::base::Button as BaseButton;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use gpui::{
-    AnyElement, AppContext as _, ClipboardItem, Context, ElementId, Entity, EventEmitter,
-    FocusHandle, Focusable as _, InteractiveElement as _, IntoElement, ParentElement as _,
-    PathPromptOptions, Pixels, Render, ScrollHandle, SharedString, Size,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Task, WeakEntity, Window, div,
-    point, prelude::FluentBuilder as _, px, rems, size,
-};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
     StyledExt as _, ThemeStyled as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
@@ -28,6 +21,13 @@ use gpui_component::{
     switch::Switch,
     tab::{Tab, TabBar},
     v_flex,
+};
+use gpui_kit::{
+    AnyElement, AppContext as _, ClipboardItem, Context, ElementId, Entity, EventEmitter,
+    FocusHandle, Focusable as _, InteractiveElement as _, IntoElement, ParentElement as _,
+    PathPromptOptions, Pixels, Render, ScrollHandle, SharedString, Size,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, WeakEntity, Window, div,
+    point, prelude::FluentBuilder as _, px, rems, size,
 };
 
 use crate::{
@@ -103,7 +103,7 @@ fn outline_icon_button(
     accessibility_label: impl Into<SharedString>,
     disabled: bool,
     focus: Option<&FocusHandle>,
-    cx: &gpui::App,
+    cx: &gpui_kit::App,
 ) -> BaseButton {
     BaseButton::new(id)
         .accessibility_label(accessibility_label)
@@ -448,7 +448,7 @@ impl PredefinedFiltersDialog {
         filter.tracking_reference(server_url).is_none()
     }
 
-    pub fn filters(&self, cx: &gpui::App) -> Result<Vec<PredefinedFilter>, String> {
+    pub fn filters(&self, cx: &gpui_kit::App) -> Result<Vec<PredefinedFilter>, String> {
         let filters = self.draft_filters(cx);
         for filter in &filters {
             if filter.name.is_empty() {
@@ -467,7 +467,7 @@ impl PredefinedFiltersDialog {
         Ok(filters)
     }
 
-    fn draft_filters(&self, cx: &gpui::App) -> Vec<PredefinedFilter> {
+    fn draft_filters(&self, cx: &gpui_kit::App) -> Vec<PredefinedFilter> {
         self.rows
             .iter()
             .map(|row| {
@@ -1040,7 +1040,7 @@ impl PredefinedFiltersDialog {
         cx.notify();
     }
 
-    fn cloud_settings(&self, cx: &gpui::App) -> CloudSettings {
+    fn cloud_settings(&self, cx: &gpui_kit::App) -> CloudSettings {
         CloudSettings {
             server_url: self.server_url.read(cx).value().trim().to_string(),
             display_name: self.display_name.read(cx).value().trim().to_string(),

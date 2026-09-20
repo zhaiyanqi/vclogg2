@@ -14,6 +14,50 @@ pub(super) fn tree_label(label: &str) -> String {
         .replace('\t', "\\t")
 }
 
+// Keep directory snapshots Send so enumeration and text measurement can run
+// off the UI thread. GPUI's public TreeItem holds UI-thread-only state.
+struct FileTreeNode {
+    id: String,
+    label: String,
+    children: Vec<Self>,
+    expanded: bool,
+    disabled: bool,
+}
+
+impl FileTreeNode {
+    fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            children: Vec::new(),
+            expanded: false,
+            disabled: false,
+        }
+    }
+
+    fn children(mut self, children: Vec<Self>) -> Self {
+        self.children = children;
+        self
+    }
+
+    fn expanded(mut self, expanded: bool) -> Self {
+        self.expanded = expanded;
+        self
+    }
+
+    fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    fn into_tree_item(self) -> TreeItem {
+        TreeItem::new(self.id, self.label)
+            .children(self.children.into_iter().map(Self::into_tree_item))
+            .expanded(self.expanded)
+            .disabled(self.disabled)
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct FileTreeTarget {
     path: PathBuf,
@@ -341,7 +385,7 @@ impl SidebarState {
         let exceptions = self.hidden_tree_paths();
         let installed_exceptions = exceptions.clone();
         let text_system = cx.text_system().clone();
-        let font = gpui::font(cx.theme().font_family.clone());
+        let font = gpui_kit::font(cx.theme().font_family.clone());
         let rem_size = cx.theme().font_size;
         let generation = self.tree_generation;
         let request = self.tree_request;
@@ -359,7 +403,7 @@ impl SidebarState {
                         expanded: &BTreeSet<PathBuf>,
                         exceptions: &BTreeSet<PathBuf>,
                         worker: &CancellationToken,
-                    ) -> Option<TreeItem> {
+                    ) -> Option<FileTreeNode> {
                         if worker.is_cancelled() {
                             return None;
                         }
@@ -384,7 +428,7 @@ impl SidebarState {
                                                 worker,
                                             )?
                                         } else {
-                                            TreeItem::new(
+                                            FileTreeNode::new(
                                                 encode_persisted_path(entry.path()),
                                                 entry
                                                     .path()
@@ -397,7 +441,7 @@ impl SidebarState {
                                     }
                                     if children.is_empty() {
                                         children.push(
-                                            TreeItem::new(
+                                            FileTreeNode::new(
                                                 format!("empty:{id}"),
                                                 crate::tr!("空文件夹", "Empty folder"),
                                             )
@@ -406,11 +450,11 @@ impl SidebarState {
                                     }
                                 }
                                 Some(DirectoryLoad::Failed(error)) => children.push(
-                                    TreeItem::new(format!("error:{id}"), error.clone())
+                                    FileTreeNode::new(format!("error:{id}"), error.clone())
                                         .disabled(true),
                                 ),
                                 _ => children.push(
-                                    TreeItem::new(
+                                    FileTreeNode::new(
                                         format!("pending:{id}"),
                                         crate::tr!("加载中…", "Loading…"),
                                     )
@@ -419,11 +463,12 @@ impl SidebarState {
                             }
                         } else {
                             // Tree's folder semantics require a child; never traverse cached collapsed descendants.
-                            children
-                                .push(TreeItem::new(format!("pending:{id}"), "").disabled(true));
+                            children.push(
+                                FileTreeNode::new(format!("pending:{id}"), "").disabled(true),
+                            );
                         }
                         Some(
-                            TreeItem::new(
+                            FileTreeNode::new(
                                 id,
                                 path.file_name()
                                     .unwrap_or(path.as_os_str())
@@ -438,18 +483,21 @@ impl SidebarState {
                         .iter()
                         .map(|root| folder(root, &directories, &expanded, &exceptions, &worker))
                         .collect::<Option<Vec<_>>>()?;
-                    let prepared =
-                        gpui_base::PreparedTreeItems::new(items, || worker.is_cancelled())?;
-                    // Measure once with the snapshot, off the UI thread. Include
-                    // indentation and the same icon/gap/padding used by the row.
-                    let text_system = gpui::WindowTextSystem::new(text_system);
+                    // Measure expanded rows off the UI thread. The public Tree API
+                    // installs the resulting roots on the UI thread.
+                    let text_system = gpui_kit::WindowTextSystem::new(text_system);
                     let mut width = Pixels::ZERO;
-                    for entry in prepared.entries() {
+                    let mut pending = items
+                        .iter()
+                        .rev()
+                        .map(|item| (item, 0usize))
+                        .collect::<Vec<_>>();
+                    while let Some((item, depth)) = pending.pop() {
                         if worker.is_cancelled() {
                             return None;
                         }
-                        let label = tree_label(&entry.item().label);
-                        let run = gpui::TextRun {
+                        let label = tree_label(&item.label);
+                        let run = gpui_kit::TextRun {
                             len: label.len(),
                             font: font.clone(),
                             ..Default::default()
@@ -458,13 +506,14 @@ impl SidebarState {
                             .layout_line(&label, rem_size * TREE_TEXT_REM, &[run], None)
                             .width;
                         let chrome = rem_size
-                            * (entry.depth() as f32
-                                + TREE_PADDING_REM * 2.
-                                + TREE_ICON_REM
-                                + TREE_GAP_REM);
+                            * (depth as f32 + TREE_PADDING_REM * 2. + TREE_ICON_REM + TREE_GAP_REM);
                         width = width.max((text_width + chrome).ceil());
+                        if item.expanded {
+                            pending
+                                .extend(item.children.iter().rev().map(|child| (child, depth + 1)));
+                        }
                     }
-                    Some((prepared, width))
+                    Some((items, width))
                 })
                 .await;
             _ = this.update(cx, |this, cx| {
@@ -473,21 +522,25 @@ impl SidebarState {
                     return;
                 }
                 this.tree_job = None;
-                if let Some((prepared, width)) = prepared {
+                if let Some((items, width)) = prepared {
                     // Read selection at installation so user clicks during preparation survive.
                     let selected = this
                         .tree
                         .read(cx)
                         .selected_entry()
                         .map(|entry| entry.item().id.clone());
-                    let selected_ix = selected.as_ref().and_then(|id| prepared.index_of(id));
-                    let retired = this.tree.update(cx, |tree, cx| {
-                        let retired = tree.replace_prepared_items(prepared, cx);
-                        tree.set_horizontal_scroll_width(Some(width), cx);
+                    this.tree.update(cx, |tree, cx| {
+                        tree.set_items(
+                            items
+                                .into_iter()
+                                .map(FileTreeNode::into_tree_item)
+                                .collect::<Vec<_>>(),
+                            cx,
+                        );
+                        let selected_ix = selected.as_ref().and_then(|id| tree.index_of(id));
                         tree.set_selected_index(selected_ix, cx);
-                        retired
                     });
-                    release_in_background(retired, cx);
+                    this.tree_width = width;
                     this.tree_dirty = false;
                     this.tree_exceptions = installed_exceptions;
                     this.settle_tree_target(cx);

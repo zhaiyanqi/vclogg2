@@ -311,6 +311,8 @@ impl SidebarState {
         retry: Option<SidebarPanelId>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        use gpui_kit::component::empty::{Empty, EmptyContent, EmptyDescription, EmptyHeader};
+
         v_flex()
             .id("sidebar-empty-state")
             .track_focus(&self.focus[&panel])
@@ -321,28 +323,43 @@ impl SidebarState {
             .gap_2()
             .text_sm()
             .text_color(cx.theme().muted_foreground)
-            .child(message.into())
-            .when_some(retry, |this, panel| {
-                this.child(
-                    Button::new("sidebar-retry")
-                        .small()
-                        .label(crate::tr!("重试", "Retry"))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            match panel {
-                                SidebarPanelId::History => this.refresh_history(cx),
-                                SidebarPanelId::Files => this.refresh_tree(cx),
-                                SidebarPanelId::Colors => {
-                                    this.retry_colors(cx);
-                                }
-                                _ => {
-                                    this.summary_error = None;
-                                    this.start_summary(cx);
-                                }
-                            }
-                            cx.notify();
-                        })),
-                )
-            })
+            .child(
+                Empty::new()
+                    .p_0()
+                    .border_0()
+                    .items_start()
+                    .justify_start()
+                    .text_left()
+                    .gap_2()
+                    .header(
+                        EmptyHeader::new().items_start().description(
+                            EmptyDescription::new()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(message.into()),
+                        ),
+                    )
+                    .when_some(retry, |empty, panel| {
+                        empty.content(
+                            EmptyContent::new().items_start().child(
+                                Button::new("sidebar-retry")
+                                    .small()
+                                    .label(crate::tr!("重试", "Retry"))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        match panel {
+                                            SidebarPanelId::History => this.refresh_history(cx),
+                                            SidebarPanelId::Files => this.refresh_tree(cx),
+                                            SidebarPanelId::Colors => this.retry_colors(cx),
+                                            _ => {
+                                                this.summary_error = None;
+                                                this.start_summary(cx);
+                                            }
+                                        }
+                                        cx.notify();
+                                    })),
+                            ),
+                        )
+                    }),
+            )
             .into_any_element()
     }
 
@@ -767,7 +784,8 @@ impl SidebarState {
 
         let menu_state = cx.entity();
         let state = cx.entity();
-        let scroll = self.tree.read(cx).scroll_handle().clone();
+        let scroll = self.tree_horizontal_scroll.clone();
+        let vertical_scroll = self.tree.read(cx).scroll_handle().clone();
         let tree = Tree::new(&self.tree, move |_, entry, selected, _, _| {
             let path = decode_persisted_path(entry.item().id.as_ref());
             let folder = entry.is_folder();
@@ -934,21 +952,175 @@ impl SidebarState {
                     )
                 },
             )
-            .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .min_w_0()
-                    .child(tree)
-                    .horizontal_scrollbar(&scroll),
-            )
+            .child(file_tree_scroll_view(
+                tree,
+                self.tree_width,
+                &scroll,
+                &vertical_scroll,
+            ))
             .into_any_element()
     }
+}
+
+fn file_tree_scroll_view(
+    tree: Tree,
+    tree_width: Pixels,
+    horizontal_scroll: &ScrollHandle,
+    vertical_scroll: &UniformListScrollHandle,
+) -> impl IntoElement {
+    use gpui_kit::component::scroll::ScrollbarMode;
+
+    div()
+        .id("sidebar-file-tree-horizontal")
+        .relative()
+        .flex_1()
+        .min_h_0()
+        .min_w_0()
+        .child(
+            div()
+                .id("sidebar-file-tree-scroll-area")
+                .debug_selector(|| "sidebar-file-tree-scroll-area".to_string())
+                .size_full()
+                .overflow_x_scroll()
+                .restrict_scroll_to_axis()
+                .track_scroll(horizontal_scroll)
+                .child(tree.w(tree_width).min_w_full()),
+        )
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .debug_selector(|| "sidebar-file-tree-scrollbar-overlay".to_string())
+                .child(
+                    Scrollbar::horizontal(horizontal_scroll)
+                        .id("sidebar-file-tree-horizontal-scrollbar")
+                        .mode(ScrollbarMode::Always)
+                        .viewport_from_layout(),
+                )
+                .child(
+                    Scrollbar::vertical(vertical_scroll)
+                        .id("sidebar-file-tree-vertical-scrollbar")
+                        .mode(ScrollbarMode::Always)
+                        .viewport_from_layout(),
+                ),
+        )
 }
 
 fn format_opened_at(timestamp: i64) -> String {
     DateTime::from_timestamp(timestamp, 0)
         .map(|time| time.with_timezone(&Local).format("%m-%d %H:%M").to_string())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod file_tree_scroll_tests {
+    use super::*;
+    use gpui_kit::{Modifiers, ScrollDelta, TestAppContext, VisualTestContext};
+
+    struct ScrollFixture {
+        tree: Entity<TreeState>,
+        horizontal_scroll: ScrollHandle,
+    }
+
+    impl Render for ScrollFixture {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let vertical_scroll = self.tree.read(cx).scroll_handle().clone();
+            let tree = Tree::new(&self.tree, |_, entry, _, _, _| {
+                ListItem::new(entry.item().id.clone())
+                    .h(px(24.))
+                    .child(entry.item().label.clone())
+            });
+            v_flex().size(px(240.)).child(file_tree_scroll_view(
+                tree,
+                px(600.),
+                &self.horizontal_scroll,
+                &vertical_scroll,
+            ))
+        }
+    }
+
+    #[gpui_kit::test]
+    fn file_tree_scrollbars_remain_at_viewport_edges(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            let tree = cx.new(|cx| TreeState::new(cx));
+            tree.update(cx, |tree, cx| {
+                tree.set_items(
+                    (0..40)
+                        .map(|ix| TreeItem::new(format!("file-{ix}"), format!("File {ix}")))
+                        .collect::<Vec<_>>(),
+                    cx,
+                );
+            });
+            ScrollFixture {
+                tree,
+                horizontal_scroll: ScrollHandle::new(),
+            }
+        });
+        let cx: &mut VisualTestContext = cx;
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let area = cx.debug_bounds("sidebar-file-tree-scroll-area").unwrap();
+        let overlay = cx
+            .debug_bounds("sidebar-file-tree-scrollbar-overlay")
+            .unwrap();
+        assert_eq!(overlay, area);
+
+        let horizontal_thumb = point(area.left() + px(40.), area.bottom() - px(4.));
+        cx.simulate_mouse_down(horizontal_thumb, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(
+            point(horizontal_thumb.x + px(60.), horizontal_thumb.y),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            point(horizontal_thumb.x + px(60.), horizontal_thumb.y),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.update(|_, cx| {
+            assert!(view.read(cx).horizontal_scroll.offset().x < px(0.));
+            view.read(cx)
+                .horizontal_scroll
+                .set_offset(point(px(0.), px(0.)));
+        });
+
+        let vertical_thumb = point(area.right() - px(4.), area.top() + px(30.));
+        cx.simulate_mouse_down(vertical_thumb, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(
+            point(vertical_thumb.x, vertical_thumb.y + px(60.)),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            point(vertical_thumb.x, vertical_thumb.y + px(60.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.update(|_, cx| {
+            assert!(view.read(cx).tree.read(cx).scroll_handle().offset().y < px(0.));
+        });
+
+        let position = point(area.origin.x + px(100.), area.origin.y + px(100.));
+        cx.simulate_event(ScrollWheelEvent {
+            position,
+            delta: ScrollDelta::Pixels(point(px(-60.), px(0.))),
+            ..Default::default()
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let horizontal_offset = cx.update(|_, cx| view.read(cx).horizontal_scroll.offset().x);
+        assert!(horizontal_offset < px(0.));
+
+        cx.simulate_event(ScrollWheelEvent {
+            position,
+            delta: ScrollDelta::Pixels(point(px(0.), px(-60.))),
+            ..Default::default()
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.update(|_, cx| {
+            let fixture = view.read(cx);
+            assert_eq!(fixture.horizontal_scroll.offset().x, horizontal_offset);
+            assert!(fixture.tree.read(cx).scroll_handle().offset().y < px(0.));
+        });
+    }
 }

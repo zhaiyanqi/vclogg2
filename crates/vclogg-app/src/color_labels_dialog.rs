@@ -1,13 +1,8 @@
-use gpui::{
-    AppContext as _, Context, Entity, Focusable as _, HighlightStyle, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, Rgba, ScrollHandle, StatefulInteractiveElement as _,
-    Styled as _, StyledText, Subscription, Window, div, prelude::FluentBuilder as _, rems, rgb,
-};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
-    color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
+    color_picker::{ColorPickerEvent, ColorPickerState},
     h_flex,
     input::{Input, InputEvent, InputState},
     menu::{DropdownMenu, PopupMenuItem},
@@ -15,6 +10,11 @@ use gpui_component::{
     switch::Switch,
     tab::{Tab, TabBar},
     v_flex,
+};
+use gpui_kit::{
+    AppContext as _, Context, Entity, Focusable as _, HighlightStyle, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, Rgba, ScrollHandle, StatefulInteractiveElement as _,
+    Styled as _, StyledText, Subscription, Window, div, prelude::FluentBuilder as _, rems, rgb,
 };
 
 use crate::color_labels::{
@@ -183,7 +183,7 @@ impl ColorLabelsDialog {
         cx.notify();
     }
 
-    pub fn config(&self, cx: &gpui::App) -> Result<LogColoringConfig, String> {
+    pub fn config(&self, cx: &gpui_kit::App) -> Result<LogColoringConfig, String> {
         let groups = self
             .groups
             .iter()
@@ -246,7 +246,7 @@ impl ColorLabelsDialog {
     fn group_config(
         &self,
         group: &LogGroupDraft,
-        cx: &gpui::App,
+        cx: &gpui_kit::App,
     ) -> Result<LogColoringGroup, String> {
         let rules = group
             .rows
@@ -496,9 +496,13 @@ impl ColorLabelsDialog {
             }))
     }
 
-    fn color_picker(&self, picker: &Entity<ColorPickerState>, cx: &gpui::App) -> gpui::AnyElement {
+    fn color_picker(
+        &self,
+        picker: &Entity<ColorPickerState>,
+        cx: &gpui_kit::App,
+    ) -> gpui_kit::AnyElement {
         if self.saving {
-            gpui_base::ColorSwatch::new(
+            gpui_kit::base::ColorSwatch::new(
                 ("saving-highlight-color", picker.entity_id()),
                 picker.read(cx).value().unwrap_or(cx.theme().transparent),
             )
@@ -507,7 +511,9 @@ impl ColorLabelsDialog {
             .rounded(cx.theme().radius)
             .into_any_element()
         } else {
-            ColorPicker::new(picker).small().into_any_element()
+            crate::app_color_picker::new(picker)
+                .small()
+                .into_any_element()
         }
     }
 
@@ -531,7 +537,7 @@ impl ColorLabelsDialog {
                             .gap_1()
                             .child(
                                 div()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                     .child(crate::tr!("日志级别规则", "Log-level rules")),
                             )
                             .child(
@@ -815,7 +821,7 @@ impl ColorLabelsDialog {
                             .gap_1()
                             .child(
                                 div()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                     .child(crate::tr!("颜色标签", "Color labels")),
                             )
                             .child(
@@ -1043,7 +1049,7 @@ fn color_picker(
 fn picker_value(
     picker: &Entity<ColorPickerState>,
     error: String,
-    cx: &gpui::App,
+    cx: &gpui_kit::App,
 ) -> Result<(u32, u8), String> {
     let color = picker.read(cx).value().ok_or(error)?;
     let rgba = u32::from(Rgba::from(color));
@@ -1083,11 +1089,11 @@ impl Render for ColorLabelsDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::TestAppContext;
+    use gpui_kit::TestAppContext;
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn committed_color_restores_focus_to_the_picker_trigger(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::component::init);
         let (dialog, cx) = cx.add_window_view(|window, cx| {
             ColorLabelsDialog::new(
                 false,

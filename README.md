@@ -52,7 +52,7 @@ Issues and pull requests are welcome.
 
 ## Acknowledgments
 
-Thanks to [klogg](https://github.com/variar/klogg) for inspiring work on high-performance log browsing and search, and to the Rust, [GPUI](https://github.com/zed-industries/zed), and [GPUI Component](https://github.com/longbridge/gpui-component) communities.
+Thanks to [klogg](https://github.com/variar/klogg) for inspiring work on high-performance log browsing and search, and to the Rust and [GPUI Kit](https://gpui-kit.com) communities.
 
 ## License
 

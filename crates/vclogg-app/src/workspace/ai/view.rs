@@ -1,6 +1,5 @@
 use super::*;
-use gpui_component::{input::Textarea, text::TextView};
-use gpui_message_scroller::MessageScroller;
+use gpui_kit::component::{input::Textarea, scroll::ScrollableElement as _, text::TextView};
 use vclogg_ai::RunStatus;
 
 impl AiPanel {
@@ -30,7 +29,7 @@ impl AiPanel {
                         cards.child(
                             v_flex()
                                 .w_full()
-                                .max_w(gpui::relative(0.9))
+                                .max_w(gpui_kit::relative(0.9))
                                 .min_w_0()
                                 .p_2()
                                 .gap_1()
@@ -59,13 +58,36 @@ impl AiPanel {
                 .child(
                     div()
                         .debug_selector(|| "ai-user-bubble".into())
-                        .max_w(gpui::relative(0.9))
+                        .max_w(gpui_kit::relative(0.9))
                         .min_w_0()
                         .px_4()
                         .py_3()
                         .rounded(cx.theme().radius_lg)
                         .bg(cx.theme().primary.opacity(0.12))
                         .child(self.markdown_view(&self.messages[start], cx)),
+                )
+                .child(
+                    h_flex()
+                        .gap_1()
+                        .child(
+                            Button::new(("ai-copy-user", start))
+                                .small()
+                                .ghost()
+                                .text_label(crate::tr!("复制消息", "Copy message"))
+                                .on_click(
+                                    cx.listener(move |this, _, _, cx| this.copy_message(start, cx)),
+                                ),
+                        )
+                        .child(
+                            Button::new(("ai-edit-user", start))
+                                .small()
+                                .ghost()
+                                .text_label(crate::tr!("编辑并重试", "Edit and retry"))
+                                .disabled(self.busy || self.ui_busy)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.edit_message(start, window, cx)
+                                })),
+                        ),
                 )
                 .into_any_element();
         }
@@ -89,7 +111,36 @@ impl AiPanel {
             row = row.child(self.render_process(start, end, answer, live, cx));
         }
         if let Some(ix) = answer {
-            row = row.child(self.markdown_view(&self.messages[ix], cx));
+            row = row
+                .child(
+                    div()
+                        .debug_selector(|| "ai-answer".into())
+                        .w_full()
+                        .child(self.markdown_view(&self.messages[ix], cx)),
+                )
+                .child(
+                    h_flex()
+                        .gap_1()
+                        .child(
+                            Button::new(("ai-copy-answer", ix))
+                                .small()
+                                .ghost()
+                                .text_label(crate::tr!("复制回复", "Copy response"))
+                                .on_click(
+                                    cx.listener(move |this, _, _, cx| this.copy_message(ix, cx)),
+                                ),
+                        )
+                        .child(
+                            Button::new(("ai-regenerate", ix))
+                                .small()
+                                .ghost()
+                                .text_label(crate::tr!("重新生成", "Regenerate"))
+                                .disabled(self.busy || self.ui_busy)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.regenerate_message(ix, window, cx)
+                                })),
+                        ),
+                );
         }
         if live && !self.live.is_empty() {
             row = row.child(self.markdown_view(&self.live_view, cx));
@@ -129,7 +180,7 @@ impl AiPanel {
                             .text_label(if live && self.live.is_empty() {
                                 crate::tr!("正在分析", "Analyzing")
                             } else {
-                                crate::tr!("思考过程", "Thought process")
+                                crate::tr!("分析过程", "Analysis activity")
                             })
                             .child(
                                 Icon::new(if expanded {
@@ -149,9 +200,9 @@ impl AiPanel {
                             })),
                     ),
             );
-        if expanded {
+        {
             for ix in start..end {
-                if let Some(view) = &self.reasoning_views[ix] {
+                if expanded && let Some(view) = &self.reasoning_views[ix] {
                     process = process.child(
                         div()
                             .debug_selector(|| "ai-reasoning-text".into())
@@ -162,7 +213,7 @@ impl AiPanel {
                 }
                 match &self.conversation.messages[ix] {
                     AgentMessage::Assistant { text, .. }
-                        if Some(ix) != answer && !text.is_empty() =>
+                        if expanded && Some(ix) != answer && !text.is_empty() =>
                     {
                         process = process.child(self.markdown_view(&self.messages[ix], cx));
                     }
@@ -177,33 +228,58 @@ impl AiPanel {
                                 crate::tr!("完成", "Done")
                             }
                         );
-                        process = process.child(
-                            Button::new(("ai-tool-expand", ix))
-                                .px_0()
-                                .justify_start()
-                                .small()
-                                .ghost()
-                                .icon(if details {
-                                    IconName::ChevronDown
-                                } else {
-                                    IconName::ChevronRight
-                                })
-                                .text_label(label)
-                                .text_color(cx.theme().muted_foreground)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    if !this.expanded.insert(ix) {
-                                        this.expanded.remove(&ix);
-                                    }
-                                    this.remeasure_message(ix, cx);
-                                    cx.notify();
-                                })),
-                        );
+                        let mut card = v_flex()
+                            .debug_selector(|| "ai-tool-result".into())
+                            .w_full()
+                            .min_w_0()
+                            .gap_1()
+                            .p_2()
+                            .rounded(cx.theme().radius_lg)
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .child(
+                                Button::new(("ai-tool-expand", ix))
+                                    .px_0()
+                                    .justify_start()
+                                    .small()
+                                    .ghost()
+                                    .icon(if details {
+                                        IconName::ChevronDown
+                                    } else {
+                                        IconName::ChevronRight
+                                    })
+                                    .text_label(label)
+                                    .text_color(cx.theme().muted_foreground)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if !this.expanded.insert(ix) {
+                                            this.expanded.remove(&ix);
+                                        }
+                                        this.remeasure_message(ix, cx);
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(if result.is_error {
+                                        cx.theme().danger
+                                    } else {
+                                        cx.theme().muted_foreground
+                                    })
+                                    .child(tool_result_summary(result)),
+                            );
                         if details {
-                            process = process.child(self.markdown_view(&self.messages[ix], cx));
+                            card = card.child(
+                                div()
+                                    .pt_2()
+                                    .border_t_1()
+                                    .border_color(cx.theme().border)
+                                    .child(self.markdown_view(&self.messages[ix], cx)),
+                            );
                             let mut references = Vec::new();
                             collect_references(&result.value, &mut references);
                             for (n, reference) in references.into_iter().enumerate() {
-                                process = process.child(
+                                card = card.child(
                                     Button::new(SharedString::from(format!("ai-jump-{ix}-{n}")))
                                         .small()
                                         .ghost()
@@ -219,11 +295,12 @@ impl AiPanel {
                                 );
                             }
                         }
+                        process = process.child(card);
                     }
                     _ => {}
                 }
             }
-            if live && !self.reasoning.is_empty() {
+            if expanded && live && !self.reasoning.is_empty() {
                 process = process.child(self.markdown_view(&self.live_reasoning_view, cx));
             }
             if let Some(call) = self
@@ -245,7 +322,7 @@ impl AiPanel {
         let mut content = v_flex()
             .id("ai-attachments")
             .gap_1()
-            .max_h(gpui::rems(8.))
+            .max_h(gpui_kit::rems(8.))
             .overflow_y_scroll();
         for (ix, log) in self.draft_logs.iter().enumerate() {
             let label = format!(
@@ -285,24 +362,24 @@ impl AiPanel {
 
     fn markdown_view(
         &self,
-        view: &Entity<gpui_component::text::TextViewState>,
+        view: &Entity<gpui_kit::component::text::TextViewState>,
         cx: &Context<Self>,
     ) -> AnyElement {
         let owner = cx.weak_entity();
         let selected_view = view.clone();
-        let colors = ui_theme::palette(cx);
-        let style = gpui_component::text::TextViewStyle::default().selection_colors(
-            colors.chat_selection_background,
-            colors.chat_selection_foreground,
-        );
+        // Let TextView use the active theme for Markdown typography and colors.
+        // Keep tables usable in the narrow chat panel.
+        let mut table = gpui_kit::StyleRefinement::default();
+        table.overflow.x = Some(gpui_kit::Overflow::Scroll);
+        let style = gpui_kit::component::text::TextViewStyle::default().table(table);
         div().id(SharedString::from(format!("ai-text-{:?}", view.entity_id())))
             .min_w_0().w_full()
             .child(TextView::new(view).style(style).selectable(true).on_link_click(move |url, event, window, cx| {
-                if !matches!(event, gpui::ClickEvent::Mouse(event) if event.up.button != MouseButton::Left) {
+                if !matches!(event, gpui_kit::ClickEvent::Mouse(event) if event.up.button != MouseButton::Left) {
                     _ = owner.update(cx, |this, cx| this.open_link(url, window, cx));
                 }
             }))
-            .on_mouse_down(MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+            .on_mouse_down(MouseButton::Right, cx.listener(move |this, event: &gpui_kit::MouseDownEvent, window, cx| {
                 this.open_message_menu(&selected_view, event.position, window, cx);
                 cx.stop_propagation();
             })).into_any_element()
@@ -310,13 +387,13 @@ impl AiPanel {
 
     fn open_message_menu(
         &mut self,
-        view: &Entity<gpui_component::text::TextViewState>,
-        position: gpui::Point<gpui::Pixels>,
+        view: &Entity<gpui_kit::component::text::TextViewState>,
+        position: gpui_kit::Point<gpui_kit::Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let local_selection = view.read(cx).selected_text();
-        let selection = gpui_base::TextSelection::selected_text(window, cx);
+        let selection = gpui_kit::base::TextSelection::selected_text(window, cx);
         let text = if local_selection.is_empty() || selection.is_empty() {
             local_selection
         } else {
@@ -376,12 +453,14 @@ impl AiPanel {
             }
             menu
         });
-        self.message_menu_subscription =
-            Some(cx.subscribe(&menu, |this, _, _: &gpui::DismissEvent, cx| {
+        self.message_menu_subscription = Some(cx.subscribe(
+            &menu,
+            |this, _, _: &gpui_kit::DismissEvent, cx| {
                 this.message_menu = None;
                 this.message_menu_subscription = None;
                 cx.notify();
-            }));
+            },
+        ));
         menu.focus_handle(cx).focus(window, cx);
         self.message_menu = Some((menu, position));
         cx.notify();
@@ -437,7 +516,7 @@ impl AiPanel {
             .arguments
             .get("reference")
             .and_then(|value| serde_json::from_value(value.clone()).ok());
-        let scope = self
+        let mut scope = self
             .scope
             .iter()
             .chain(self.reference_scopes.iter().rev())
@@ -459,7 +538,39 @@ impl AiPanel {
                 })
             })
             .cloned();
+        if call.name == "navigate"
+            && let (Some(scope_state), Some(reference)) = (&scope, &reference)
+        {
+            let closed = scope_state
+                .lock()
+                .ok()
+                .and_then(|state| {
+                    state
+                        .document(reference.document_id, Some(&reference.version))
+                        .ok()
+                })
+                .is_some_and(|doc| {
+                    doc.open
+                        && self
+                            .workspace
+                            .update(cx, |w, _| {
+                                !w.documents.iter().any(|tab| {
+                                    tab.id == doc.id && Arc::ptr_eq(&tab.document, &doc.document)
+                                })
+                            })
+                            .unwrap_or(false)
+                });
+            if closed {
+                scope = None;
+            }
+        }
         let Some(scope) = scope else {
+            if call.name == "navigate"
+                && let Some(reference) = reference
+            {
+                self.open_historical_reference(&reference, window, cx);
+                return;
+            }
             self.error = crate::tr!(
                 "历史引用需要重新分析以确认文件内容",
                 "Analyze again to refresh historical log references"
@@ -494,7 +605,11 @@ impl AiPanel {
             let result = match evidence {
                 Ok(value) => workspace
                     .update_in(cx, |w, window, cx| {
-                        w.ai_commit(&scope, &call, value, window, cx)
+                        let result = w.ai_commit(&scope, &call, value, window, cx)?;
+                        if call.name == "navigate" && result["region"] != "results" {
+                            w.log_viewer.focus_handle.focus(window, cx);
+                        }
+                        Ok(result)
                     })
                     .and_then(|r| r),
                 Err(e) => Err(e),
@@ -547,15 +662,55 @@ impl Render for AiPanel {
         let models = cx.entity();
         let header = self.render_conversation_tabs(window, cx);
         let owner = cx.entity();
-        let messages =
-            MessageScroller::new("ai-transcript", self.scroller.clone(), move |ix, _, cx| {
-                owner.update(cx, |this, cx| this.render_message(ix, cx))
-            })
-            .with_list_style(gpui::StyleRefinement::default().p_3())
-            .with_row_style(gpui::StyleRefinement::default().pb_4())
-            .with_jump_button_label(crate::tr!("回到最新消息", "Jump to latest"))
-            .with_jump_button_renderer(|button| {
-                button.small().text_label(crate::tr!("最新消息", "Latest"))
+        let scroll = self.scroller.read(cx).list.clone();
+        let show_jump = self.scroller.read(cx).is_scrolled_up();
+        let jump_state = self.scroller.clone();
+        let messages = div()
+            .id("ai-transcript")
+            .relative()
+            .size_full()
+            .min_h_0()
+            .overflow_hidden()
+            .child(
+                div()
+                    .size_full()
+                    .min_h_0()
+                    .child(
+                        gpui_kit::list(scroll.clone(), move |ix, _, cx| {
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .px_3()
+                                .pb_4()
+                                .child(owner.update(cx, |this, cx| this.render_message(ix, cx)))
+                                .into_any_element()
+                        })
+                        .size_full()
+                        .min_h_0()
+                        .py_2(),
+                    )
+                    .vertical_scrollbar(&scroll),
+            )
+            .when(show_jump, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom_4()
+                        .flex()
+                        .justify_center()
+                        .child(
+                            Button::new("ai-jump-latest")
+                                .small()
+                                .secondary()
+                                .text_label(crate::tr!("最新消息", "Latest"))
+                                .tooltip(crate::tr!("回到最新消息", "Jump to latest"))
+                                .on_click(move |_, _, cx| {
+                                    jump_state.update(cx, |state, cx| state.scroll_to_end(cx));
+                                }),
+                        ),
+                )
             });
         let footer = v_flex()
             .flex_shrink_0()
@@ -584,6 +739,77 @@ impl Render for AiPanel {
                     )
                 },
             )
+            .when(!self.queued_prompts.is_empty(), |this| {
+                this.child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(format!(
+                                    "{} {}",
+                                    crate::tr!("待发送", "Queued"),
+                                    self.queued_prompts.len()
+                                )),
+                        )
+                        .children(self.queued_prompts.iter().enumerate().map(|(ix, prompt)| {
+                            h_flex()
+                                .gap_1()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_xs()
+                                        .truncate()
+                                        .child(prompt.text.chars().take(80).collect::<String>()),
+                                )
+                                .child(
+                                    Button::new(("ai-remove-queued", ix))
+                                        .small()
+                                        .ghost()
+                                        .icon(IconName::Close)
+                                        .tooltip(crate::tr!(
+                                            "移除待发送消息",
+                                            "Remove queued message"
+                                        ))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.queued_prompts.remove(ix);
+                                            cx.notify();
+                                        })),
+                                )
+                        })),
+                )
+            })
+            .when_some(self.editing_message, |this, _| {
+                this.child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(crate::tr!(
+                                    "编辑后发送将替换这条消息及后续回复",
+                                    "Sending will replace this message and later replies"
+                                )),
+                        )
+                        .child(
+                            Button::new("ai-cancel-edit")
+                                .small()
+                                .ghost()
+                                .text_label(crate::tr!("取消编辑", "Cancel edit"))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.editing_message = None;
+                                    this.draft_logs.clear();
+                                    this.input
+                                        .update(cx, |input, cx| input.set_value("", window, cx));
+                                    cx.notify();
+                                })),
+                        ),
+                )
+            })
             .child(
                 v_flex()
                     .w_full()
@@ -609,7 +835,11 @@ impl Render for AiPanel {
                             .appearance(false)
                             .bordered(false)
                             .aria_label(crate::tr!("分析问题", "Analysis question"))
-                            .disabled(self.busy),
+                            .disabled(
+                                self.ui_busy
+                                    || (self.busy
+                                        && self.conversation.status != RunStatus::Running),
+                            ),
                     )
                     .child(
                         h_flex()
@@ -621,7 +851,10 @@ impl Render for AiPanel {
                                     .ghost()
                                     .icon(IconName::Plus)
                                     .tooltip(crate::tr!("附加所选日志", "Attach selected logs"))
-                                    .disabled(disabled || self.attachments_loading)
+                                    .disabled(
+                                        (disabled && self.run.is_none())
+                                            || self.attachments_loading,
+                                    )
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         let targets = this
                                             .workspace
@@ -651,6 +884,8 @@ impl Render for AiPanel {
                                     .child(crate::tr!("日志访问", "Log access")),
                             )
                             .child(div().flex_1().min_w_0())
+                            .child(self.render_context_sources_popover(cx))
+                            .child(self.render_context_usage_popover(cx))
                             .child(
                                 Button::new("ai-model-menu")
                                     .small()
@@ -704,17 +939,41 @@ impl Render for AiPanel {
                                     )
                                 },
                             )
+                            .when(
+                                self.run.is_none() && !self.busy && !self.queued_prompts.is_empty(),
+                                |this| {
+                                    this.child(
+                                        Button::new("ai-resume-queue")
+                                            .small()
+                                            .ghost()
+                                            .text_label(crate::tr!("发送队列", "Send queued"))
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.start_next_queued(window, cx)
+                                            })),
+                                    )
+                                },
+                            )
                             .child(
                                 if self.run.is_some()
                                     || (self.busy && self.conversation.status == RunStatus::Running)
                                 {
-                                    Button::new("ai-stop")
+                                    Button::new("ai-queue")
                                         .small()
                                         .primary()
+                                        .icon(IconName::ArrowRight)
                                         .rounded(cx.theme().radius_full())
-                                        .tooltip(crate::tr!("停止生成", "Stop generating"))
-                                        .text_label(crate::tr!("停止", "Stop"))
-                                        .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
+                                        .tooltip(crate::tr!(
+                                            "加入发送队列（Enter）",
+                                            "Queue message (Enter)"
+                                        ))
+                                        .disabled(
+                                            self.attachments_loading
+                                                || (self.input.read(cx).value().trim().is_empty()
+                                                    && self.draft_logs.is_empty()),
+                                        )
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.queue_current_prompt(false, window, cx)
+                                        }))
                                 } else {
                                     Button::new("ai-send")
                                         .small()
@@ -732,6 +991,43 @@ impl Render for AiPanel {
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.send(false, window, cx)
                                         }))
+                                },
+                            )
+                            .when(
+                                self.run.is_some()
+                                    || (self.busy
+                                        && self.conversation.status == RunStatus::Running),
+                                |this| {
+                                    this.child(
+                                        Button::new("ai-steer")
+                                            .small()
+                                            .ghost()
+                                            .text_label(crate::tr!(
+                                                "打断并发送",
+                                                "Interrupt and send"
+                                            ))
+                                            .disabled(
+                                                self.attachments_loading
+                                                    || (self
+                                                        .input
+                                                        .read(cx)
+                                                        .value()
+                                                        .trim()
+                                                        .is_empty()
+                                                        && self.draft_logs.is_empty()),
+                                            )
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.queue_current_prompt(true, window, cx)
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("ai-stop")
+                                            .small()
+                                            .ghost()
+                                            .tooltip(crate::tr!("停止生成", "Stop generating"))
+                                            .text_label(crate::tr!("停止", "Stop"))
+                                            .on_click(cx.listener(|this, _, _, cx| this.stop(cx))),
+                                    )
                                 },
                             ),
                     ),
@@ -760,16 +1056,61 @@ impl Render for AiPanel {
             )
             .child(footer)
             .when_some(self.message_menu.clone(), |this, (menu, position)| {
-                this.child(gpui::deferred(gpui::anchored().position(position)
-                    .snap_to_window_with_margin(gpui::rems(0.5).to_pixels(window.rem_size()))
-                    .child(menu)).with_priority(gpui_base::POPUP_PRIORITY))
+                this.child(gpui_kit::deferred(gpui_kit::anchored().position(position)
+                    .snap_to_window_with_margin(gpui_kit::rems(0.5).to_pixels(window.rem_size()))
+                    .child(menu)).with_priority(gpui_kit::base::POPUP_PRIORITY))
             })
             .into_any_element()
     }
 }
 
-fn tool_label(name: &str) -> &str {
+pub(super) fn tool_result_summary(result: &ToolResult) -> String {
+    let value = &result.value;
+    if let Some(error) = value.get("error").and_then(Value::as_str) {
+        return error.chars().take(160).collect();
+    }
+    let count = ["rows", "files", "results", "matches", "symbols"]
+        .iter()
+        .find_map(|key| {
+            value
+                .get(*key)
+                .and_then(Value::as_array)
+                .map(|rows| (key, rows.len()))
+        });
+    if let Some((key, count)) = count {
+        let total = value
+            .get("total")
+            .and_then(Value::as_u64)
+            .unwrap_or(count as u64);
+        return format!("{key}: {count} / {total}");
+    }
+    if let Some(total) = value
+        .get("total")
+        .or_else(|| value.get("count"))
+        .and_then(Value::as_u64)
+    {
+        return format!("{}: {total}", crate::tr!("数量", "Count"));
+    }
+    if let Some(status) = value.get("status").and_then(Value::as_str) {
+        return status.to_owned();
+    }
+    crate::tr!(
+        "结果已就绪，展开查看详情",
+        "Result ready; expand for details"
+    )
+    .into()
+}
+
+pub(super) fn tool_label(name: &str) -> &str {
     match name {
+        "rg_search" => crate::tr!("搜索源码", "Search source"),
+        "read_source" => crate::tr!("读取源码", "Read source"),
+        "find_source_files" => crate::tr!("查找源码文件", "Find source files"),
+        "find_symbols" => crate::tr!("查找符号", "Find symbols"),
+        "source_outline" => crate::tr!("查看源码结构", "Inspect source outline"),
+        "locate_log_origin" => crate::tr!("定位日志来源", "Locate log origin"),
+        "find_definition" => crate::tr!("查找定义", "Find definition"),
+        "find_references" => crate::tr!("查找引用", "Find references"),
         "get_context" => crate::tr!("获取当前日志", "Read current context"),
         "list_logs" => crate::tr!("列出日志文件", "List log files"),
         "read_logs" => crate::tr!("读取日志", "Read logs"),
@@ -789,5 +1130,22 @@ fn tool_label(name: &str) -> &str {
         "text_mark" => crate::tr!("文字标记", "Annotate logs"),
         "navigate" => crate::tr!("定位日志", "Navigate to logs"),
         _ => name,
+    }
+}
+
+#[cfg(test)]
+mod tool_summary_tests {
+    use super::*;
+
+    #[test]
+    fn summarizes_result_counts_and_errors() {
+        assert_eq!(
+            tool_result_summary(&ToolResult::ok(json!({"rows":[{},{}],"total":7}))),
+            "rows: 2 / 7"
+        );
+        assert_eq!(
+            tool_result_summary(&ToolResult::error("source unavailable")),
+            "source unavailable"
+        );
     }
 }

@@ -27,7 +27,15 @@ pub struct ProviderConfig {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
+    #[serde(default)]
+    pub context_window_tokens: Option<u32>,
+    #[serde(default)]
+    pub context_window_source: Option<String>,
+    #[serde(default = "default_output_tokens")]
     pub max_output_tokens: u32,
+}
+fn default_output_tokens() -> u32 {
+    4096
 }
 impl fmt::Debug for ProviderConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -46,7 +54,9 @@ impl Default for ProviderConfig {
             base_url: "https://api.openai.com/v1".into(),
             api_key: String::new(),
             model: String::new(),
-            max_output_tokens: 4096,
+            context_window_tokens: None,
+            context_window_source: None,
+            max_output_tokens: default_output_tokens(),
         }
     }
 }
@@ -62,11 +72,8 @@ impl ProviderConfig {
         {
             bail!("Use an HTTP/HTTPS base URL without credentials, query or fragment");
         }
-        if self.model.trim().is_empty()
-            || self.max_output_tokens == 0
-            || self.max_output_tokens > 131_072
-        {
-            bail!("Set a model and a valid output limit (1–131072)");
+        if self.model.trim().is_empty() {
+            bail!("Set a model name");
         }
         let suffix = match self.protocol {
             Protocol::OpenAi => "chat/completions",
@@ -86,6 +93,8 @@ impl ProviderConfig {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct AiSettings {
+    #[serde(default)]
+    pub workspace_directories: Vec<std::path::PathBuf>,
     #[serde(default)]
     pub mcp_servers: Vec<crate::McpServer>,
     #[serde(default = "memory_enabled_default")]
@@ -111,6 +120,7 @@ fn memory_enabled_default() -> bool {
 impl Default for AiSettings {
     fn default() -> Self {
         Self {
+            workspace_directories: Vec::new(),
             mcp_servers: Vec::new(),
             memory_enabled: true,
             memory_auto_save: false,
@@ -258,6 +268,14 @@ pub enum RunStatus {
     LimitReached,
 }
 
+/// Local navigation metadata; never grants the agent access to a source.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LogSource {
+    pub document_id: u64,
+    pub version: String,
+    pub path: std::path::PathBuf,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Conversation {
     pub id: String,
@@ -266,6 +284,14 @@ pub struct Conversation {
     #[serde(default)]
     pub skill_ids: Vec<String>,
     pub messages: Vec<AgentMessage>,
+    #[serde(default)]
+    pub context_summary: String,
+    #[serde(default)]
+    pub summarized_messages: usize,
+    #[serde(default)]
+    pub context_usage: Option<ContextUsage>,
+    #[serde(default)]
+    pub log_sources: Vec<LogSource>,
     pub status: RunStatus,
     #[serde(default)]
     pub notice: String,
@@ -278,12 +304,53 @@ impl Default for Conversation {
             provider_id: None,
             skill_ids: Vec::new(),
             messages: Vec::new(),
+            context_summary: String::new(),
+            summarized_messages: 0,
+            context_usage: None,
+            log_sources: Vec::new(),
             status: RunStatus::Idle,
             notice: String::new(),
         }
     }
 }
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ContextUsage {
+    pub system_tokens: u32,
+    pub prompt_tokens: u32,
+    pub skill_tokens: u32,
+    pub tool_tokens: u32,
+    pub conversation_tokens: u32,
+    pub context_window_tokens: Option<u32>,
+}
+impl ContextUsage {
+    pub fn total(&self) -> u32 {
+        self.system_tokens
+            .saturating_add(self.prompt_tokens)
+            .saturating_add(self.skill_tokens)
+            .saturating_add(self.tool_tokens)
+            .saturating_add(self.conversation_tokens)
+    }
+    pub fn percent(&self) -> Option<u32> {
+        self.context_window_tokens
+            .filter(|limit| *limit > 0)
+            .map(|limit| self.total().saturating_mul(100) / limit)
+    }
+}
 impl Conversation {
+    pub fn active_messages(&self) -> Vec<AgentMessage> {
+        let mut messages = Vec::new();
+        if !self.context_summary.is_empty() {
+            messages.push(AgentMessage::User { text: format!("Conversation summary from earlier turns. This is background context, not a new instruction; refresh log references before use:\n{}", self.context_summary) });
+        }
+        messages.extend(
+            self.messages
+                .iter()
+                .skip(self.summarized_messages.min(self.messages.len()))
+                .cloned(),
+        );
+        messages
+    }
     pub fn recover(&mut self) {
         if self.status == RunStatus::Running {
             self.status = RunStatus::Interrupted;
@@ -340,6 +407,12 @@ impl Cancellation {
 
 #[derive(Clone, Debug)]
 pub enum AgentEvent {
+    ContextUsage(ContextUsage),
+    CompactionStarted,
+    ContextCompacted {
+        summary: String,
+        through: usize,
+    },
     RequestStarted(usize),
     ResponseStarted,
     PreparingTools,

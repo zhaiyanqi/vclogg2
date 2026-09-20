@@ -1,9 +1,10 @@
+use super::transcript_scroll::TranscriptScroll;
 use super::*;
-use gpui_component::{
+use gpui_kit::component::{
     input::{InputEvent, TextareaState},
     text::TextViewState,
 };
-use gpui_message_scroller::MessageScrollerState;
+use std::collections::VecDeque;
 use vclogg_ai::{AgentEvent, AiSettings, Conversation, RunHandle, RunStatus};
 use vclogg_data::AiConversationRecord;
 
@@ -23,9 +24,12 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) conversation_tab_focus: FocusHandle,
     pub(super) input: Entity<TextareaState>,
     pub(super) draft_logs: Vec<super::attachments::DraftLog>,
+    pub(super) queued_prompts: VecDeque<QueuedPrompt>,
+    pub(super) resume_queue_after_stop: bool,
+    pub(super) editing_message: Option<usize>,
     pub(super) attachments_loading: bool,
     pub(super) attachment_task: Option<Task<()>>,
-    pub(super) scroller: Entity<MessageScrollerState>,
+    pub(super) scroller: Entity<TranscriptScroll>,
     pub(super) scroll_subscription: Subscription,
     pub(super) live_row: bool,
     pub(super) transcript_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -41,7 +45,7 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) reasoning: String,
     pub(super) progress: String,
     pub(super) expanded: BTreeSet<usize>,
-    pub(super) message_menu: Option<(Entity<PopupMenu>, gpui::Point<gpui::Pixels>)>,
+    pub(super) message_menu: Option<(Entity<PopupMenu>, gpui_kit::Point<gpui_kit::Pixels>)>,
     pub(super) message_menu_subscription: Option<Subscription>,
     pub(super) pending_tool: Option<ToolCall>,
     pub(super) scope: Option<SharedScope>,
@@ -49,6 +53,11 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) run: Option<RunHandle>,
     pub(super) editor: Option<super::settings::ConfigEditor>,
     pub(super) show_settings: bool,
+    pub(super) show_context_usage: bool,
+    pub(super) show_context_sources: bool,
+    pub(super) selected_log_ids: Option<BTreeSet<u64>>,
+    pub(super) selected_workspace_directories: Option<BTreeSet<PathBuf>>,
+    pub(super) include_search_directory: bool,
     pub(super) settings_generation: u64,
     pub(super) settings_tab: super::configuration::SettingsTab,
     pub(super) prompt_editor: Option<super::prompt_settings::PromptEditor>,
@@ -71,7 +80,90 @@ pub(in crate::workspace) struct AiPanel {
     _subscriptions: Vec<Subscription>,
 }
 
+pub(super) struct QueuedPrompt {
+    pub(super) text: String,
+    pub(super) logs: Vec<super::attachments::DraftLog>,
+}
+
 impl AiPanel {
+    fn restrict_scope(&self, scope: &SharedScope) {
+        if let Ok(mut state) = scope.lock() {
+            if let Some(selected) = &self.selected_log_ids {
+                let included = |id: &u64| {
+                    selected.contains(id)
+                        || self.draft_logs.iter().any(|log| log.document.id == *id)
+                };
+                state.documents.retain(|id, _| included(id));
+                state.allowed.retain(|id| included(id));
+                state.current = state.current.filter(included);
+            }
+            if !self.include_search_directory {
+                state.directory.directory = None;
+            }
+        }
+    }
+
+    pub(super) fn queue_current_prompt(
+        &mut self,
+        steer: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.attachments_loading || self.queued_prompts.len() >= 20 {
+            self.error =
+                crate::tr!("队列最多容纳 20 条消息", "Queue holds up to 20 messages").into();
+            cx.notify();
+            return;
+        }
+        let text = self.input.read(cx).value().trim().to_owned();
+        if text.is_empty() && self.draft_logs.is_empty() {
+            return;
+        }
+        if text.len() > 64 * 1024 {
+            self.error = crate::tr!("输入不能超过 64 KiB", "Input cannot exceed 64 KiB").into();
+            cx.notify();
+            return;
+        }
+        let prompt = QueuedPrompt {
+            text,
+            logs: std::mem::take(&mut self.draft_logs),
+        };
+        if steer {
+            self.queued_prompts.push_front(prompt);
+            self.stop(cx);
+            self.resume_queue_after_stop = true;
+        } else {
+            self.queued_prompts.push_back(prompt);
+        }
+        self.input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.error.clear();
+        cx.notify();
+    }
+
+    pub(super) fn start_next_queued(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(prompt) = self.queued_prompts.pop_front() else {
+            return;
+        };
+        let draft = self.input.read(cx).value();
+        let logs = std::mem::replace(&mut self.draft_logs, prompt.logs);
+        self.input.update(cx, |input, cx| {
+            input.set_value(prompt.text.clone(), window, cx)
+        });
+        let generation = self.generation;
+        self.send(false, window, cx);
+        if self.generation == generation {
+            self.queued_prompts.push_front(QueuedPrompt {
+                text: self.input.read(cx).value().to_string(),
+                logs: std::mem::take(&mut self.draft_logs),
+            });
+        }
+        self.draft_logs = logs;
+        self.input
+            .update(cx, |input, cx| input.set_value(draft, window, cx));
+        cx.notify();
+    }
+
     pub(in crate::workspace) fn contains_transcript(&self, position: Point<Pixels>) -> bool {
         !self.show_settings
             && self
@@ -123,7 +215,7 @@ impl AiPanel {
                 cx.notify();
             }
         });
-        let scroller = cx.new(|cx| MessageScrollerState::new(0, cx));
+        let scroller = cx.new(|cx| TranscriptScroll::new(0, cx));
         let scroll_subscription = cx.observe(&scroller, |_, _, cx| cx.notify());
         let mut this = Self {
             workspace,
@@ -142,6 +234,9 @@ impl AiPanel {
             conversation_tab_focus: cx.focus_handle(),
             input,
             draft_logs: Vec::new(),
+            queued_prompts: VecDeque::new(),
+            resume_queue_after_stop: false,
+            editing_message: None,
             attachments_loading: false,
             attachment_task: None,
             scroller,
@@ -168,6 +263,11 @@ impl AiPanel {
             run: None,
             editor: None,
             show_settings: false,
+            show_context_usage: false,
+            show_context_sources: false,
+            selected_log_ids: None,
+            selected_workspace_directories: None,
+            include_search_directory: true,
             settings_generation: 0,
             settings_tab: super::configuration::SettingsTab::Models,
             prompt_editor: None,
@@ -256,6 +356,10 @@ impl AiPanel {
                 conversation.recover();
                 self.reference_scopes.clear();
                 self.draft_logs.clear();
+                self.editing_message = None;
+                self.selected_log_ids = None;
+                self.selected_workspace_directories = None;
+                self.include_search_directory = true;
                 self.attachment_task = None;
                 self.attachments_loading = false;
                 self.conversation = conversation;
@@ -398,12 +502,18 @@ impl AiPanel {
         Ok(AiConversationRecord {
             id: self.conversation.id.clone(),
             title: self.conversation.title.clone(),
-            payload: serde_json::to_string(&self.conversation)?,
+            payload: serde_json::to_string(&self.conversation_with_log_sources())?,
             revision: self.revision,
         })
     }
 
     pub(super) fn send(&mut self, continuation: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !continuation
+            && (self.run.is_some() || (self.busy && self.conversation.status == RunStatus::Running))
+        {
+            self.queue_current_prompt(false, window, cx);
+            return;
+        }
         if self.settings_busy(cx) || self.ui_busy || self.attachments_loading {
             return;
         }
@@ -463,6 +573,7 @@ impl AiPanel {
             cx.notify();
             return;
         };
+        self.restrict_scope(&scope);
         let user_text = match self.message_with_attachments(&user_text, &scope) {
             Ok(text) => text,
             Err(error) => {
@@ -491,6 +602,12 @@ impl AiPanel {
         self.reasoning.clear();
         self.progress = crate::tr!("正在准备会话", "Preparing conversation").into();
         self.pending_tool = None;
+        if let Some(ix) = self.editing_message.take() {
+            self.conversation.messages.truncate(ix);
+            self.conversation.summarized_messages = self.conversation.summarized_messages.min(ix);
+            self.conversation.context_summary.clear();
+            self.rebuild_messages(cx);
+        }
         self.recover_messages(cx);
         self.push_message(
             AgentMessage::User {
@@ -503,7 +620,7 @@ impl AiPanel {
         self.busy = true;
         self.input
             .update(cx, |input, cx| input.set_value("", window, cx));
-        let messages = self.conversation.messages.clone();
+        let messages = self.conversation.active_messages();
         let skills = self
             .settings
             .skills
@@ -521,10 +638,17 @@ impl AiPanel {
         };
         let settings_path = self.settings_path.clone();
         let prompts = self.settings.prompts.clone();
-        let extensions = vclogg_ai::RunExtensions::from_settings(&self.settings);
+        let mut run_settings = self.settings.clone();
+        if let Some(selected) = &self.selected_workspace_directories {
+            run_settings
+                .workspace_directories
+                .retain(|path| selected.contains(path));
+        }
+        let extensions = vclogg_ai::RunExtensions::from_settings(&run_settings)
+            .with_conversation(&self.conversation);
         let workspace = self.workspace.clone();
         self.task = Some(cx.spawn_in(window, async move |this, cx| {
-            let _lease = lease;
+            let mut run_lease = Some(lease);
             let save_store = store.clone();
             let capture = scope.clone();
             let saved = cx.background_spawn(async move {
@@ -562,12 +686,17 @@ impl AiPanel {
                 });
                 if let Ok(Ok(record)) = record {
                     let saved = cx.background_spawn(async move { store.save_ai_conversation(&record) }).await;
-                    _ = this.update(cx, |this, cx| {
+                    drop(run_lease.take());
+                    _ = this.update_in(cx, |this, window, cx| {
                         match saved {
                             Ok(revision) => { this.revision = revision; this.update_history_entry(); }
                             Err(error) => this.error = error.to_string(),
                         }
                         this.busy = false;
+                        if this.resume_queue_after_stop {
+                            this.start_next_queued(window, cx);
+                        }
+                        this.resume_queue_after_stop = false;
                         cx.notify();
                     });
                 }
@@ -612,7 +741,7 @@ impl AiPanel {
                             cx.background_spawn(async move { super::memory::execute_memory_tool(&memory_store, &memory_call, &token) }).await
                         } else { Err(anyhow::anyhow!("Memory is disabled")) };
                         if result.is_ok() && call.name != "search_memory" {
-                            gpui::AsyncApp::update_global::<super::memory::SharedAiMemory, _>(cx, |_, _| {});
+                            gpui_kit::AsyncApp::update_global::<super::memory::SharedAiMemory, _>(cx, |_, _| {});
                         }
                         let result = match result { Ok(value) => ToolResult::ok(value), Err(error) => ToolResult::error(error.to_string()) };
                         if replies.send((call.id, result)).await.is_err() { break; }
@@ -639,7 +768,7 @@ impl AiPanel {
                     continue;
                 }
                 let finished = matches!(event, AgentEvent::Finished(..));
-                let persist = matches!(event, AgentEvent::Assistant(_) | AgentEvent::ToolFinished(_) | AgentEvent::Finished(..));
+                let persist = matches!(event, AgentEvent::Assistant(_) | AgentEvent::ToolFinished(_) | AgentEvent::ContextCompacted { .. } | AgentEvent::Finished(..));
                 if this.update(cx, |this, cx| {
                     if this.generation == generation { this.receive_event(event, cx); }
                 }).is_err() { break; }
@@ -672,7 +801,15 @@ impl AiPanel {
                     }
                 }
                 if finished {
-                    _ = this.update(cx, |this, cx| { this.busy = false; cx.notify(); });
+                    drop(run_lease.take());
+                    _ = this.update_in(cx, |this, window, cx| {
+                        this.busy = false;
+                        if this.conversation.status == RunStatus::Complete || this.resume_queue_after_stop {
+                            this.start_next_queued(window, cx);
+                        }
+                        this.resume_queue_after_stop = false;
+                        cx.notify();
+                    });
                     return;
                 }
             }
@@ -689,12 +826,17 @@ impl AiPanel {
             });
             if let Ok(Ok(record)) = this.update(cx, |this, _| this.record()) {
                 let saved = cx.background_spawn(async move { store.save_ai_conversation(&record) }).await;
-                _ = this.update(cx, |this, cx| {
+                drop(run_lease.take());
+                _ = this.update_in(cx, |this, window, cx| {
                     match saved {
                         Ok(revision) => { this.revision = revision; this.update_history_entry(); }
                         Err(error) => this.error = error.to_string(),
                     }
                     this.busy = false;
+                    if this.resume_queue_after_stop {
+                        this.start_next_queued(window, cx);
+                    }
+                    this.resume_queue_after_stop = false;
                     cx.notify();
                 });
             }
@@ -725,7 +867,34 @@ impl AiPanel {
         }
     }
     fn receive_event(&mut self, event: AgentEvent, cx: &mut Context<Self>) {
+        if matches!(
+            event,
+            AgentEvent::ToolFinished(_) | AgentEvent::Finished(..)
+        ) {
+            self.conversation.log_sources = self.conversation_with_log_sources().log_sources;
+        }
         match event {
+            AgentEvent::ContextUsage(usage) => {
+                self.conversation.context_usage = Some(usage);
+            }
+            AgentEvent::CompactionStarted => {
+                self.progress = crate::tr!("正在压缩对话", "Compacting conversation").into();
+            }
+            AgentEvent::ContextCompacted { summary, through } => {
+                self.conversation.context_summary = summary;
+                self.conversation.summarized_messages =
+                    through.min(self.conversation.messages.len());
+                let active_tokens =
+                    vclogg_ai::conversation_tokens(&self.conversation.active_messages());
+                if let Some(usage) = self.conversation.context_usage.as_mut() {
+                    usage.conversation_tokens = active_tokens;
+                }
+                self.conversation.notice = crate::tr!(
+                    "对话已压缩，完整记录仍保存在本地",
+                    "Conversation compacted; full transcript remains local"
+                )
+                .into();
+            }
             AgentEvent::RequestStarted(request) => {
                 self.progress = format!(
                     "{} ({request}/{})",
@@ -824,6 +993,7 @@ impl AiPanel {
         );
     }
     pub(super) fn stop(&mut self, cx: &mut Context<Self>) {
+        self.resume_queue_after_stop = false;
         self.progress = crate::tr!("正在停止", "Stopping").into();
         if let Some(run) = &self.run {
             run.cancellation.cancel();
@@ -855,6 +1025,12 @@ impl AiPanel {
         };
         self.revision = 0;
         self.draft_logs.clear();
+        self.queued_prompts.clear();
+        self.resume_queue_after_stop = false;
+        self.editing_message = None;
+        self.selected_log_ids = None;
+        self.selected_workspace_directories = None;
+        self.include_search_directory = true;
         self.attachment_task = None;
         self.attachments_loading = false;
         self.scope = None;

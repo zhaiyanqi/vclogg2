@@ -9,10 +9,13 @@ mod commands;
 mod evidence;
 mod files;
 mod logs;
+mod navigation;
 mod search;
 mod transcript;
+mod transcript_scroll;
 use logs::*;
 mod configuration;
+mod context_view;
 mod conversation_tab_view;
 mod conversation_tabs;
 mod mcp_settings;
@@ -23,7 +26,9 @@ mod settings;
 mod skill_settings;
 #[cfg(test)]
 mod tests;
+mod tool_settings;
 mod view;
+mod workspace_settings;
 pub(super) use panel::AiPanel;
 
 const AI_LABEL_LINE_HEIGHT: f32 = 1.25;

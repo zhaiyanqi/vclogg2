@@ -3,14 +3,14 @@
 use std::{collections::VecDeque, sync::Arc};
 
 use chrono::Local;
-use gpui::{
-    App, AppContext as _, Context, Entity, Global, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, Styled as _, Subscription, Task, Window, div, rems,
-};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, IconName, Selectable as _, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     v_flex,
+};
+use gpui_kit::{
+    App, AppContext as _, Context, Entity, Global, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, Styled as _, Subscription, Task, Window, div, rems,
 };
 
 use crate::state_store::StateStore;

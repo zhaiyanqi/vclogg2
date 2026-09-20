@@ -1,8 +1,8 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use gpui::{App, FontWeight, Hsla, Pixels, Styled as _, px};
-use gpui_component::ColorName;
-use gpui_component::{ActiveTheme as _, Sizable as _, tag::Tag};
+use gpui_kit::component::ColorName;
+use gpui_kit::component::{ActiveTheme as _, Sizable as _, tag::Tag};
+use gpui_kit::{App, FontWeight, Hsla, Pixels, Styled as _, px};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
@@ -111,10 +111,10 @@ impl TagPreset {
         (
             self.style
                 .text_color
-                .map_or(text, |color| gpui::rgba(color).into()),
+                .map_or(text, |color| gpui_kit::rgba(color).into()),
             self.style
                 .background_color
-                .map_or(background, |color| gpui::rgba(color).into()),
+                .map_or(background, |color| gpui_kit::rgba(color).into()),
         )
     }
 

@@ -335,17 +335,17 @@ impl Workspace {
             move |bounds, (right, bottom, corner), window, cx| {
                 // GPUI resolves these requests again on pointer movement without
                 // repainting. Register every grip even when it is not hovered yet.
-                window.set_cursor_style(gpui::CursorStyle::ResizeLeftRight, &right);
-                window.set_cursor_style(gpui::CursorStyle::ResizeUpDown, &bottom);
-                window.set_cursor_style(gpui::CursorStyle::ResizeUpLeftDownRight, &corner);
+                window.set_cursor_style(gpui_kit::CursorStyle::ResizeLeftRight, &right);
+                window.set_cursor_style(gpui_kit::CursorStyle::ResizeUpDown, &bottom);
+                window.set_cursor_style(gpui_kit::CursorStyle::ResizeUpLeftDownRight, &corner);
                 if let Some(gesture) = workspace
                     .upgrade()
                     .and_then(|this| this.read(cx).filter_popover.gesture)
                 {
                     let cursor = match (gesture.width, gesture.height) {
-                        (true, true) => gpui::CursorStyle::ResizeUpLeftDownRight,
-                        (true, false) => gpui::CursorStyle::ResizeLeftRight,
-                        _ => gpui::CursorStyle::ResizeUpDown,
+                        (true, true) => gpui_kit::CursorStyle::ResizeUpLeftDownRight,
+                        (true, false) => gpui_kit::CursorStyle::ResizeLeftRight,
+                        _ => gpui_kit::CursorStyle::ResizeUpDown,
                     };
                     window.set_window_cursor_style(cursor);
                 }
