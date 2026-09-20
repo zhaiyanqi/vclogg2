@@ -35,6 +35,14 @@ pub fn parse_model_limits(protocol: Protocol, value: &Value) -> ModelLimits {
 }
 
 pub async fn discover_model_limits(config: &ProviderConfig) -> Result<ModelLimits> {
+    let config = config.clone();
+    crate::runner::runtime()
+        .spawn(async move { discover_model_limits_in_runtime(&config).await })
+        .await
+        .context("Model metadata task failed")?
+}
+
+async fn discover_model_limits_in_runtime(config: &ProviderConfig) -> Result<ModelLimits> {
     let mut url = url::Url::parse(&config.base_url).context("Invalid API base URL")?;
     config.endpoint()?;
     if config.protocol == Protocol::OpenAi && url.host_str() == Some("api.openai.com") {
@@ -85,6 +93,34 @@ pub async fn discover_model_limits(config: &ProviderConfig) -> Result<ModelLimit
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::{
+        future::Future,
+        pin::pin,
+        task::{Context as TaskContext, Poll, Waker},
+    };
+
+    #[test]
+    fn discovery_can_be_polled_without_a_tokio_reactor() {
+        let config = ProviderConfig {
+            base_url: "http://127.0.0.1:1/v1".into(),
+            model: "test-model".into(),
+            ..Default::default()
+        };
+        let mut discovery = pin!(discover_model_limits(&config));
+        let waker = Waker::noop();
+        let mut cx = TaskContext::from_waker(waker);
+        let deadline = std::time::Instant::now() + Duration::from_secs(6);
+        loop {
+            match discovery.as_mut().poll(&mut cx) {
+                Poll::Ready(_) => break,
+                Poll::Pending if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Poll::Pending => panic!("Model metadata discovery did not finish"),
+            }
+        }
+    }
+
     #[test]
     fn reads_only_advertised_limits() {
         assert_eq!(
