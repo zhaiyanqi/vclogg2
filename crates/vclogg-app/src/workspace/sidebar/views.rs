@@ -311,6 +311,8 @@ impl SidebarState {
         retry: Option<SidebarPanelId>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        use gpui_kit::component::empty::{Empty, EmptyContent, EmptyDescription, EmptyHeader};
+
         v_flex()
             .id("sidebar-empty-state")
             .track_focus(&self.focus[&panel])
@@ -321,28 +323,43 @@ impl SidebarState {
             .gap_2()
             .text_sm()
             .text_color(cx.theme().muted_foreground)
-            .child(message.into())
-            .when_some(retry, |this, panel| {
-                this.child(
-                    Button::new("sidebar-retry")
-                        .small()
-                        .label(crate::tr!("重试", "Retry"))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            match panel {
-                                SidebarPanelId::History => this.refresh_history(cx),
-                                SidebarPanelId::Files => this.refresh_tree(cx),
-                                SidebarPanelId::Colors => {
-                                    this.retry_colors(cx);
-                                }
-                                _ => {
-                                    this.summary_error = None;
-                                    this.start_summary(cx);
-                                }
-                            }
-                            cx.notify();
-                        })),
-                )
-            })
+            .child(
+                Empty::new()
+                    .p_0()
+                    .border_0()
+                    .items_start()
+                    .justify_start()
+                    .text_left()
+                    .gap_2()
+                    .header(
+                        EmptyHeader::new().items_start().description(
+                            EmptyDescription::new()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(message.into()),
+                        ),
+                    )
+                    .when_some(retry, |empty, panel| {
+                        empty.content(
+                            EmptyContent::new().items_start().child(
+                                Button::new("sidebar-retry")
+                                    .small()
+                                    .label(crate::tr!("重试", "Retry"))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        match panel {
+                                            SidebarPanelId::History => this.refresh_history(cx),
+                                            SidebarPanelId::Files => this.refresh_tree(cx),
+                                            SidebarPanelId::Colors => this.retry_colors(cx),
+                                            _ => {
+                                                this.summary_error = None;
+                                                this.start_summary(cx);
+                                            }
+                                        }
+                                        cx.notify();
+                                    })),
+                            ),
+                        )
+                    }),
+            )
             .into_any_element()
     }
 
