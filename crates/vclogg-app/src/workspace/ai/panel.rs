@@ -4,6 +4,7 @@ use gpui_kit::component::{
     input::{InputEvent, TextareaState},
     text::TextViewState,
 };
+use std::collections::VecDeque;
 use vclogg_ai::{AgentEvent, AiSettings, Conversation, RunHandle, RunStatus};
 use vclogg_data::AiConversationRecord;
 
@@ -23,6 +24,8 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) conversation_tab_focus: FocusHandle,
     pub(super) input: Entity<TextareaState>,
     pub(super) draft_logs: Vec<super::attachments::DraftLog>,
+    pub(super) queued_prompts: VecDeque<QueuedPrompt>,
+    pub(super) resume_queue_after_stop: bool,
     pub(super) attachments_loading: bool,
     pub(super) attachment_task: Option<Task<()>>,
     pub(super) scroller: Entity<TranscriptScroll>,
@@ -72,7 +75,73 @@ pub(in crate::workspace) struct AiPanel {
     _subscriptions: Vec<Subscription>,
 }
 
+pub(super) struct QueuedPrompt {
+    pub(super) text: String,
+    pub(super) logs: Vec<super::attachments::DraftLog>,
+}
+
 impl AiPanel {
+    pub(super) fn queue_current_prompt(
+        &mut self,
+        steer: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.attachments_loading || self.queued_prompts.len() >= 20 {
+            self.error =
+                crate::tr!("队列最多容纳 20 条消息", "Queue holds up to 20 messages").into();
+            cx.notify();
+            return;
+        }
+        let text = self.input.read(cx).value().trim().to_owned();
+        if text.is_empty() && self.draft_logs.is_empty() {
+            return;
+        }
+        if text.len() > 64 * 1024 {
+            self.error = crate::tr!("输入不能超过 64 KiB", "Input cannot exceed 64 KiB").into();
+            cx.notify();
+            return;
+        }
+        let prompt = QueuedPrompt {
+            text,
+            logs: std::mem::take(&mut self.draft_logs),
+        };
+        if steer {
+            self.queued_prompts.push_front(prompt);
+            self.stop(cx);
+            self.resume_queue_after_stop = true;
+        } else {
+            self.queued_prompts.push_back(prompt);
+        }
+        self.input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.error.clear();
+        cx.notify();
+    }
+
+    pub(super) fn start_next_queued(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(prompt) = self.queued_prompts.pop_front() else {
+            return;
+        };
+        let draft = self.input.read(cx).value();
+        let logs = std::mem::replace(&mut self.draft_logs, prompt.logs);
+        self.input.update(cx, |input, cx| {
+            input.set_value(prompt.text.clone(), window, cx)
+        });
+        let generation = self.generation;
+        self.send(false, window, cx);
+        if self.generation == generation {
+            self.queued_prompts.push_front(QueuedPrompt {
+                text: self.input.read(cx).value().to_string(),
+                logs: std::mem::take(&mut self.draft_logs),
+            });
+        }
+        self.draft_logs = logs;
+        self.input
+            .update(cx, |input, cx| input.set_value(draft, window, cx));
+        cx.notify();
+    }
+
     pub(in crate::workspace) fn contains_transcript(&self, position: Point<Pixels>) -> bool {
         !self.show_settings
             && self
@@ -143,6 +212,8 @@ impl AiPanel {
             conversation_tab_focus: cx.focus_handle(),
             input,
             draft_logs: Vec::new(),
+            queued_prompts: VecDeque::new(),
+            resume_queue_after_stop: false,
             attachments_loading: false,
             attachment_task: None,
             scroller,
@@ -406,6 +477,12 @@ impl AiPanel {
     }
 
     pub(super) fn send(&mut self, continuation: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !continuation
+            && (self.run.is_some() || (self.busy && self.conversation.status == RunStatus::Running))
+        {
+            self.queue_current_prompt(false, window, cx);
+            return;
+        }
         if self.settings_busy(cx) || self.ui_busy || self.attachments_loading {
             return;
         }
@@ -565,12 +642,16 @@ impl AiPanel {
                 });
                 if let Ok(Ok(record)) = record {
                     let saved = cx.background_spawn(async move { store.save_ai_conversation(&record) }).await;
-                    _ = this.update(cx, |this, cx| {
+                    _ = this.update_in(cx, |this, window, cx| {
                         match saved {
                             Ok(revision) => { this.revision = revision; this.update_history_entry(); }
                             Err(error) => this.error = error.to_string(),
                         }
                         this.busy = false;
+                        if this.resume_queue_after_stop {
+                            this.start_next_queued(window, cx);
+                        }
+                        this.resume_queue_after_stop = false;
                         cx.notify();
                     });
                 }
@@ -675,7 +756,14 @@ impl AiPanel {
                     }
                 }
                 if finished {
-                    _ = this.update(cx, |this, cx| { this.busy = false; cx.notify(); });
+                    _ = this.update_in(cx, |this, window, cx| {
+                        this.busy = false;
+                        if this.conversation.status == RunStatus::Complete || this.resume_queue_after_stop {
+                            this.start_next_queued(window, cx);
+                        }
+                        this.resume_queue_after_stop = false;
+                        cx.notify();
+                    });
                     return;
                 }
             }
@@ -692,12 +780,16 @@ impl AiPanel {
             });
             if let Ok(Ok(record)) = this.update(cx, |this, _| this.record()) {
                 let saved = cx.background_spawn(async move { store.save_ai_conversation(&record) }).await;
-                _ = this.update(cx, |this, cx| {
+                _ = this.update_in(cx, |this, window, cx| {
                     match saved {
                         Ok(revision) => { this.revision = revision; this.update_history_entry(); }
                         Err(error) => this.error = error.to_string(),
                     }
                     this.busy = false;
+                    if this.resume_queue_after_stop {
+                        this.start_next_queued(window, cx);
+                    }
+                    this.resume_queue_after_stop = false;
                     cx.notify();
                 });
             }
@@ -854,6 +946,7 @@ impl AiPanel {
         );
     }
     pub(super) fn stop(&mut self, cx: &mut Context<Self>) {
+        self.resume_queue_after_stop = false;
         self.progress = crate::tr!("正在停止", "Stopping").into();
         if let Some(run) = &self.run {
             run.cancellation.cancel();
@@ -885,6 +978,8 @@ impl AiPanel {
         };
         self.revision = 0;
         self.draft_logs.clear();
+        self.queued_prompts.clear();
+        self.resume_queue_after_stop = false;
         self.attachment_task = None;
         self.attachments_loading = false;
         self.scope = None;

@@ -666,6 +666,49 @@ impl Render for AiPanel {
                     )
                 },
             )
+            .when(!self.queued_prompts.is_empty(), |this| {
+                this.child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(format!(
+                                    "{} {}",
+                                    crate::tr!("待发送", "Queued"),
+                                    self.queued_prompts.len()
+                                )),
+                        )
+                        .children(self.queued_prompts.iter().enumerate().map(|(ix, prompt)| {
+                            h_flex()
+                                .gap_1()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_xs()
+                                        .truncate()
+                                        .child(prompt.text.chars().take(80).collect::<String>()),
+                                )
+                                .child(
+                                    Button::new(("ai-remove-queued", ix))
+                                        .small()
+                                        .ghost()
+                                        .icon(IconName::Close)
+                                        .tooltip(crate::tr!(
+                                            "移除待发送消息",
+                                            "Remove queued message"
+                                        ))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.queued_prompts.remove(ix);
+                                            cx.notify();
+                                        })),
+                                )
+                        })),
+                )
+            })
             .child(
                 v_flex()
                     .w_full()
@@ -691,7 +734,11 @@ impl Render for AiPanel {
                             .appearance(false)
                             .bordered(false)
                             .aria_label(crate::tr!("分析问题", "Analysis question"))
-                            .disabled(self.busy),
+                            .disabled(
+                                self.ui_busy
+                                    || (self.busy
+                                        && self.conversation.status != RunStatus::Running),
+                            ),
                     )
                     .child(
                         h_flex()
@@ -703,7 +750,10 @@ impl Render for AiPanel {
                                     .ghost()
                                     .icon(IconName::Plus)
                                     .tooltip(crate::tr!("附加所选日志", "Attach selected logs"))
-                                    .disabled(disabled || self.attachments_loading)
+                                    .disabled(
+                                        (disabled && self.run.is_none())
+                                            || self.attachments_loading,
+                                    )
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         let targets = this
                                             .workspace
@@ -787,17 +837,41 @@ impl Render for AiPanel {
                                     )
                                 },
                             )
+                            .when(
+                                self.run.is_none() && !self.busy && !self.queued_prompts.is_empty(),
+                                |this| {
+                                    this.child(
+                                        Button::new("ai-resume-queue")
+                                            .small()
+                                            .ghost()
+                                            .text_label(crate::tr!("发送队列", "Send queued"))
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.start_next_queued(window, cx)
+                                            })),
+                                    )
+                                },
+                            )
                             .child(
                                 if self.run.is_some()
                                     || (self.busy && self.conversation.status == RunStatus::Running)
                                 {
-                                    Button::new("ai-stop")
+                                    Button::new("ai-queue")
                                         .small()
                                         .primary()
+                                        .icon(IconName::ArrowRight)
                                         .rounded(cx.theme().radius_full())
-                                        .tooltip(crate::tr!("停止生成", "Stop generating"))
-                                        .text_label(crate::tr!("停止", "Stop"))
-                                        .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
+                                        .tooltip(crate::tr!(
+                                            "加入发送队列（Enter）",
+                                            "Queue message (Enter)"
+                                        ))
+                                        .disabled(
+                                            self.attachments_loading
+                                                || (self.input.read(cx).value().trim().is_empty()
+                                                    && self.draft_logs.is_empty()),
+                                        )
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.queue_current_prompt(false, window, cx)
+                                        }))
                                 } else {
                                     Button::new("ai-send")
                                         .small()
@@ -815,6 +889,43 @@ impl Render for AiPanel {
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.send(false, window, cx)
                                         }))
+                                },
+                            )
+                            .when(
+                                self.run.is_some()
+                                    || (self.busy
+                                        && self.conversation.status == RunStatus::Running),
+                                |this| {
+                                    this.child(
+                                        Button::new("ai-steer")
+                                            .small()
+                                            .ghost()
+                                            .text_label(crate::tr!(
+                                                "打断并发送",
+                                                "Interrupt and send"
+                                            ))
+                                            .disabled(
+                                                self.attachments_loading
+                                                    || (self
+                                                        .input
+                                                        .read(cx)
+                                                        .value()
+                                                        .trim()
+                                                        .is_empty()
+                                                        && self.draft_logs.is_empty()),
+                                            )
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.queue_current_prompt(true, window, cx)
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("ai-stop")
+                                            .small()
+                                            .ghost()
+                                            .tooltip(crate::tr!("停止生成", "Stop generating"))
+                                            .text_label(crate::tr!("停止", "Stop"))
+                                            .on_click(cx.listener(|this, _, _, cx| this.stop(cx))),
+                                    )
                                 },
                             ),
                     ),

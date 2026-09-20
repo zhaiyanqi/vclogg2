@@ -12,6 +12,7 @@ fn isolated_panel_send_workflow() {
         "transcript",
         "workspace_transcript",
         "tabs",
+        "queue",
         "log_analysis",
         "cancel",
         "preparing_cancel",
@@ -97,6 +98,30 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
     let panel = panel.unwrap();
     pump_until(cx, &panel, |p| !p.busy);
     let mode = std::env::var("VCLOGG2_AI_TEST_MODE").unwrap();
+    if mode == "queue" {
+        cx.update_window(window.into(), |_, window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.busy = true;
+                panel.conversation.status = RunStatus::Running;
+                panel.input.update(cx, |input, cx| {
+                    input.set_value("first follow-up", window, cx)
+                });
+                panel.send(false, window, cx);
+                assert_eq!(panel.queued_prompts.len(), 1);
+                assert_eq!(panel.queued_prompts[0].text, "first follow-up");
+                assert!(panel.input.read(cx).value().is_empty());
+                panel.input.update(cx, |input, cx| {
+                    input.set_value("urgent correction", window, cx)
+                });
+                panel.queue_current_prompt(true, window, cx);
+                assert_eq!(panel.queued_prompts.len(), 2);
+                assert_eq!(panel.queued_prompts[0].text, "urgent correction");
+                assert!(panel.resume_queue_after_stop);
+            });
+        })
+        .unwrap();
+        return;
+    }
     if mode == "tabs" {
         cx.update_window(window.into(), |_, window, cx| {
             panel.update(cx, |panel, cx| {
@@ -106,9 +131,15 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
                 assert_eq!(panel.open_conversations.len(), 4);
                 let ids = panel.open_conversations.clone();
                 panel.close_conversation_tab(&ids[1], window, cx);
-                assert_eq!(panel.open_conversations, vec![ids[0].clone(), ids[2].clone(), ids[3].clone()]);
+                assert_eq!(
+                    panel.open_conversations,
+                    vec![ids[0].clone(), ids[2].clone(), ids[3].clone()]
+                );
                 panel.close_conversation_tab(&ids[0], window, cx);
-                assert_eq!(panel.open_conversations, vec![ids[2].clone(), ids[3].clone()]);
+                assert_eq!(
+                    panel.open_conversations,
+                    vec![ids[2].clone(), ids[3].clone()]
+                );
                 panel.close_conversation_tab(&ids[3], window, cx);
                 assert_eq!(panel.open_conversations, vec![ids[2].clone()]);
                 assert_eq!(panel.conversation.id, ids[2]);
@@ -117,7 +148,8 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
                 assert_eq!(panel.conversation.id, panel.open_conversations[0]);
                 assert_ne!(panel.conversation.id, ids[2]);
             });
-        }).unwrap();
+        })
+        .unwrap();
         return;
     }
     if matches!(mode.as_str(), "transcript" | "workspace_transcript") {
