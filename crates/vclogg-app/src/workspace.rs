@@ -65,9 +65,9 @@ use crate::{
         ExtendSelectionFirst, ExtendSelectionLast, ExtendSelectionPageDown, ExtendSelectionPageUp,
         ExtendSelectionUp, FocusSearch, GoToLine, JumpToEnd, JumpToStart, LOG_TABLE_CONTEXT,
         MergeSearchResultsInNewTab, NewWindow, OpenFiles, OpenQuickFind, OpenSearchResultsInNewTab,
-        OpenSettings, ReloadActive, SaveSearchResultsToFile, SelectAllRows, StartSearch,
-        ToggleCaseSensitive, ToggleFullscreen, ToggleMarkedRow, ToggleRegex, ToggleWordWrap,
-        WORKSPACE_CONTEXT,
+        OpenSettings, PasteClipboardAsFile, ReloadActive, SaveSearchResultsToFile, SelectAllRows,
+        StartSearch, ToggleCaseSensitive, ToggleFullscreen, ToggleMarkedRow, ToggleRegex,
+        ToggleWordWrap, WORKSPACE_CONTEXT,
     },
     cloud_filters::CloudClient,
     color_labels::{
@@ -1753,6 +1753,7 @@ pub struct Workspace {
 
 impl Workspace {}
 
+mod clipboard_paste;
 mod color_commands;
 mod document_commands;
 mod document_editing;
@@ -2669,6 +2670,7 @@ impl Render for Workspace {
                 Self::track_cross_window_tab_drag(&dragged, event, window, cx);
             })
             .on_action(cx.listener(Self::open_files))
+            .on_action(cx.listener(Self::paste_clipboard_as_file))
             .on_action(cx.listener(Self::new_window))
             .on_action(cx.listener(Self::reload_active))
             .on_action(cx.listener(Self::close_active_tab))

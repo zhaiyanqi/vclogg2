@@ -12,6 +12,7 @@ actions!(
     vclogg2,
     [
         OpenFiles,
+        PasteClipboardAsFile,
         NewWindow,
         ReloadActive,
         CloseActiveTab,
@@ -53,6 +54,11 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(
             &format!("{primary}-o"),
             OpenFiles,
+            Some(WORKSPACE_SHORTCUT_CONTEXT),
+        ),
+        KeyBinding::new(
+            &format!("{primary}-v"),
+            PasteClipboardAsFile,
             Some(WORKSPACE_SHORTCUT_CONTEXT),
         ),
         KeyBinding::new(

@@ -106,6 +106,10 @@ impl Workspace {
                 let new_window = window.listener_for(&file_workspace, |this, _, window, cx| {
                     this.new_window(&NewWindow, window, cx);
                 });
+                let paste_clipboard =
+                    window.listener_for(&file_workspace, |this, _, window, cx| {
+                        this.paste_clipboard_as_file(&PasteClipboardAsFile, window, cx);
+                    });
                 let reload = window.listener_for(&file_workspace, |this, _, window, cx| {
                     this.reload_active(&ReloadActive, window, cx);
                 });
@@ -132,6 +136,14 @@ impl Workspace {
                         .icon(IconName::FolderOpen)
                         .action(Box::new(OpenFiles))
                         .on_click(open),
+                )
+                .item(
+                    PopupMenuItem::new(crate::tr!(
+                        "从剪贴板打开临时文件…",
+                        "Open clipboard as temporary file…"
+                    ))
+                    .action(Box::new(PasteClipboardAsFile))
+                    .on_click(paste_clipboard),
                 )
                 .item(
                     PopupMenuItem::new(crate::tr!("新窗口", "New window"))

@@ -187,8 +187,8 @@ impl SettingsCategory {
     fn description(self) -> &'static str {
         match self {
             Self::General => crate::tr!(
-                "文件显示、关闭确认与打开目录行为",
-                "File display, close confirmation, and opening folders",
+                "文件显示、粘贴与关闭确认、打开目录行为",
+                "File display, paste and close confirmations, and opening folders",
             ),
             Self::Network => crate::tr!(
                 "云端服务器、用户身份与 Cookie 连接",
@@ -232,8 +232,8 @@ impl SettingsCategory {
 
         let keywords = match self {
             Self::General => crate::tr!(
-                "常规 语言 中文 英文 文件与标签 在文件工具栏显示完整路径 关闭日志标签前确认 打开目录命令 路径 标签 关闭 确认 目录 命令 full path close tab open language Chinese English",
-                "general language Chinese English files tabs full path close confirmation open folder command",
+                "常规 语言 中文 英文 文件与标签 在文件工具栏显示完整路径 关闭日志标签前确认 粘贴时确认 打开目录命令 路径 标签 关闭 粘贴 确认 目录 命令 full path close tab paste open language Chinese English",
+                "general language Chinese English files tabs full path close confirmation paste clipboard open folder command",
             ),
             Self::Network => {
                 "网络 远程服务 云端服务器 服务器地址 用户名 工号 昵称 保存 测试 连接 Cookie HTTP HTTPS network remote server user connect"
@@ -3054,7 +3054,7 @@ impl Render for SettingsDialog {
                                 div()
                                     .text_sm()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(crate::tr!("控制路径显示和标签关闭前的安全确认。", "Controls path display and confirmation before closing tabs.")),
+                                    .child(crate::tr!("控制路径显示、粘贴确认和标签关闭确认。", "Controls path display and confirmations for clipboard paste and closing tabs.")),
                             ),
                     )
                     .child(
@@ -3085,6 +3085,22 @@ impl Render for SettingsDialog {
                                     .tooltip(crate::tr!("关闭日志标签前确认", "Confirm before closing log tabs"))
                                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                         this.draft.confirm_close_tab = *checked;
+                                        SettingsDialog::draft_changed(cx);
+                                    })),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .gap_4()
+                            .child(div().text_sm().child(crate::tr!("粘贴时确认", "Confirm clipboard paste")))
+                            .child(
+                                Switch::new("settings-confirm-clipboard-paste")
+                                    .small()
+                                    .checked(self.draft.confirm_clipboard_paste)
+                                    .tooltip(crate::tr!("粘贴时确认", "Confirm clipboard paste"))
+                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                        this.draft.confirm_clipboard_paste = *checked;
                                         SettingsDialog::draft_changed(cx);
                                     })),
                             ),

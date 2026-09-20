@@ -20,7 +20,7 @@ use crate::{
 };
 
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
-pub const STATE_SCHEMA_VERSION: u32 = 18;
+pub const STATE_SCHEMA_VERSION: u32 = 19;
 mod ai;
 mod ai_memory;
 pub use ai_memory::AiMemoryRecord;
@@ -528,7 +528,7 @@ impl StateRepository {
                         dark_log_text_color, dark_log_background_color, log_level_color_rules, selection_styles,
                         search_toolbar_height, search_toolbar_font_size,
                         search_input_height, search_input_font_size, shortcut_add_text_mark, app_icon, keyword_match_styles,
-                        show_horizontal_scrollbar, log_coloring
+                        show_horizontal_scrollbar, log_coloring, confirm_clipboard_paste
                  FROM app_settings WHERE id = 1",
                 [],
                 |row| {
@@ -584,6 +584,7 @@ impl StateRepository {
                         keyword_match_styles: row.get(48)?,
                         show_horizontal_scrollbar: row.get::<_, i64>(49)? != 0,
                         log_coloring: row.get(50)?,
+                        confirm_clipboard_paste: row.get::<_, i64>(51)? != 0,
                     })
                 },
             )
@@ -655,6 +656,7 @@ impl StateRepository {
                      scroll_by_line_when_word_wrap = excluded.scroll_by_line_when_word_wrap,
                      reduce_motion = excluded.reduce_motion,
                      confirm_close_tab = excluded.confirm_close_tab,
+                     confirm_clipboard_paste = excluded.confirm_clipboard_paste,
                      show_full_path = excluded.show_full_path,
                      show_horizontal_scrollbar = excluded.show_horizontal_scrollbar,
                      max_search_results = excluded.max_search_results,
@@ -697,8 +699,8 @@ impl StateRepository {
                      dark_log_text_color, dark_log_background_color, log_level_color_rules, selection_styles,
                      search_toolbar_height, search_toolbar_font_size,
                      search_input_height, search_input_font_size, shortcut_add_text_mark, app_icon, keyword_match_styles,
-                     show_horizontal_scrollbar, log_coloring
-                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51)
+                     show_horizontal_scrollbar, log_coloring, confirm_clipboard_paste
+                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52)
                  ON CONFLICT(id) DO UPDATE SET {update}");
         connection
             .execute(
@@ -755,6 +757,7 @@ impl StateRepository {
                     settings.keyword_match_styles,
                     settings.show_horizontal_scrollbar,
                     settings.log_coloring,
+                    settings.confirm_clipboard_paste,
                 ],
             )
             .context("无法保存应用设置")?;
@@ -1354,6 +1357,7 @@ fn initialize_schema(connection: &Connection, defaults: &StateMigrationDefaults)
                  scroll_by_line_when_word_wrap INTEGER NOT NULL DEFAULT 0,
                  reduce_motion INTEGER NOT NULL DEFAULT 0,
                  confirm_close_tab INTEGER NOT NULL DEFAULT 0,
+                 confirm_clipboard_paste INTEGER NOT NULL DEFAULT 0,
                  show_full_path INTEGER NOT NULL DEFAULT 1,
                  show_horizontal_scrollbar INTEGER NOT NULL DEFAULT 1,
                  max_search_results INTEGER NOT NULL DEFAULT 0,
@@ -1546,6 +1550,7 @@ fn ensure_app_settings_columns(connection: &Connection, default_log_level: &str)
         ),
         ("reduce_motion", "INTEGER NOT NULL DEFAULT 0"),
         ("confirm_close_tab", "INTEGER NOT NULL DEFAULT 0"),
+        ("confirm_clipboard_paste", "INTEGER NOT NULL DEFAULT 0"),
         ("show_full_path", "INTEGER NOT NULL DEFAULT 1"),
         ("show_horizontal_scrollbar", "INTEGER NOT NULL DEFAULT 1"),
         ("max_search_results", "INTEGER NOT NULL DEFAULT 0"),
@@ -1623,9 +1628,51 @@ mod tests {
     use rusqlite::Connection;
 
     use super::{
-        FileSessionRecord, StateMigrationDefaults, count_marked_rows, initialize_schema,
-        merge_session_changes, table_columns,
+        FileSessionRecord, StateMigrationDefaults, StateRepository, count_marked_rows,
+        initialize_schema, merge_session_changes, table_columns,
     };
+
+    #[test]
+    fn clipboard_confirmation_defaults_off_and_survives_reopen() {
+        let directory = tempfile::tempdir().expect("应能创建临时目录");
+        let path = directory.path().join("state.db");
+        let defaults = StateMigrationDefaults {
+            app_log_level: "error".into(),
+            color_labels: Vec::new(),
+        };
+        let store = StateRepository::open(path.clone(), &defaults).expect("应能创建数据库");
+        drop(store);
+        let connection = Connection::open(&path).expect("应能打开旧版数据库");
+        connection
+            .execute_batch(
+                "ALTER TABLE app_settings DROP COLUMN confirm_clipboard_paste;
+                 INSERT INTO app_settings(id) VALUES (1);
+                 PRAGMA user_version = 18;",
+            )
+            .expect("应能创建旧版设置");
+        drop(connection);
+
+        let store = StateRepository::open(path.clone(), &defaults).expect("应能迁移设置");
+        let mut settings = store
+            .load_app_settings()
+            .expect("应能读取设置")
+            .expect("应存在旧版设置");
+        assert!(!settings.confirm_clipboard_paste);
+        settings.confirm_clipboard_paste = true;
+        store
+            .save_app_settings(&settings)
+            .expect("应能保存确认选项");
+        drop(store);
+
+        let reopened = StateRepository::open(path, &defaults).expect("应能重新打开设置");
+        assert!(
+            reopened
+                .load_app_settings()
+                .expect("应能读取设置")
+                .expect("应存在设置")
+                .confirm_clipboard_paste
+        );
+    }
 
     #[test]
     fn legacy_marked_rows_count_only_valid_rows() {
