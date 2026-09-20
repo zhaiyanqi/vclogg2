@@ -54,8 +54,8 @@ if ($SigningMode -eq 'Pfx') {
 Push-Location -LiteralPath $repositoryRoot
 $version = $env:VCLOGG2_BUILD_VERSION
 if ([string]::IsNullOrWhiteSpace($version)) {
-    $tag = & git describe --tags --exact-match --match 'v[0-9]*' HEAD 2>$null
-    if ($LASTEXITCODE -eq 0) {
+    $tag = & git tag --points-at HEAD --list 'v[0-9]*' | Select-Object -First 1
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($tag)) {
         $version = $tag
     } else {
         $commit = & git rev-parse --short=12 HEAD 2>$null
