@@ -1078,7 +1078,11 @@ impl Workspace {
                                     scrollbar_background,
                                 )
                                 .max_fps(60),
-                            ),
+                            )
+                            .child(ui_theme::drag_only_log_scrollbar_guard(
+                                logical_scroll.clone(),
+                                gpui_kit::Axis::Vertical,
+                            )),
                     ),
             )
             .when(self.app_settings.show_horizontal_scrollbar, |content| {
@@ -1098,18 +1102,23 @@ impl Workspace {
                             track.child(ui_theme::disabled_horizontal_log_scrollbar())
                         })
                         .when(!word_wrap, |track| {
-                            track.child(
-                                ui_theme::persistent_log_scrollbar(
-                                    Scrollbar::horizontal(&logical_scroll)
-                                        .id(format!(
-                                            "log-horizontal-scrollbar-{document_id}-{}",
-                                            region as u8
-                                        ))
-                                        .viewport_from_layout(),
-                                    scrollbar_background,
+                            track
+                                .child(
+                                    ui_theme::persistent_log_scrollbar(
+                                        Scrollbar::horizontal(&logical_scroll)
+                                            .id(format!(
+                                                "log-horizontal-scrollbar-{document_id}-{}",
+                                                region as u8
+                                            ))
+                                            .viewport_from_layout(),
+                                        scrollbar_background,
+                                    )
+                                    .max_fps(60),
                                 )
-                                .max_fps(60),
-                            )
+                                .child(ui_theme::drag_only_log_scrollbar_guard(
+                                    logical_scroll.clone(),
+                                    gpui_kit::Axis::Horizontal,
+                                ))
                         }),
                 )
             });
@@ -2881,7 +2890,11 @@ impl Workspace {
                                     scrollbar_background,
                                 )
                                 .max_fps(60),
-                            ),
+                            )
+                            .child(ui_theme::drag_only_log_scrollbar_guard(
+                                logical_scroll.clone(),
+                                gpui_kit::Axis::Vertical,
+                            )),
                     ),
             )
             .when(self.app_settings.show_horizontal_scrollbar, |content| {
@@ -2901,15 +2914,20 @@ impl Workspace {
                             track.child(ui_theme::disabled_horizontal_log_scrollbar())
                         })
                         .when(!self.global_viewport.is_wrapped(), |track| {
-                            track.child(
-                                ui_theme::persistent_log_scrollbar(
-                                    Scrollbar::horizontal(&logical_scroll)
-                                        .id("global-results-horizontal-scrollbar")
-                                        .viewport_from_layout(),
-                                    scrollbar_background,
+                            track
+                                .child(
+                                    ui_theme::persistent_log_scrollbar(
+                                        Scrollbar::horizontal(&logical_scroll)
+                                            .id("global-results-horizontal-scrollbar")
+                                            .viewport_from_layout(),
+                                        scrollbar_background,
+                                    )
+                                    .max_fps(60),
                                 )
-                                .max_fps(60),
-                            )
+                                .child(ui_theme::drag_only_log_scrollbar_guard(
+                                    logical_scroll.clone(),
+                                    gpui_kit::Axis::Horizontal,
+                                ))
                         }),
                 )
             })

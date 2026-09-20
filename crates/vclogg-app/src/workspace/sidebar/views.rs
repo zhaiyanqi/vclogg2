@@ -959,6 +959,7 @@ impl SidebarState {
                     .min_h_0()
                     .min_w_0()
                     .overflow_x_scroll()
+                    .restrict_scroll_to_axis()
                     .track_scroll(&scroll)
                     .child(tree.w(self.tree_width).min_w_full())
                     .horizontal_scrollbar(&scroll),
