@@ -12,6 +12,7 @@ impl gpui_kit::Global for SharedAiSettings {}
 pub(super) enum SettingsTab {
     Models,
     Skills,
+    Tools,
     Prompts,
     Mcp,
     Workspace,
@@ -93,7 +94,7 @@ impl AiPanel {
                         SettingsTab::Prompts => this.save_prompt_editor(window, cx),
                         SettingsTab::Mcp => this.save_mcp_editor(window, cx),
                         SettingsTab::Memory => this.save_memory_editor(window, cx),
-                        SettingsTab::Skills | SettingsTab::Workspace => {}
+                        SettingsTab::Skills | SettingsTab::Tools | SettingsTab::Workspace => {}
                     });
                     false
                 })
@@ -127,6 +128,7 @@ impl AiPanel {
         for (id, tab, title) in [
             ("models", SettingsTab::Models, crate::tr!("模型", "Models")),
             ("skills", SettingsTab::Skills, "Skills"),
+            ("tools", SettingsTab::Tools, crate::tr!("工具", "Tools")),
             ("mcp", SettingsTab::Mcp, "MCP"),
             (
                 "prompts",
@@ -155,6 +157,7 @@ impl AiPanel {
         let content = match self.settings_tab {
             SettingsTab::Models => self.render_model_settings(window, cx),
             SettingsTab::Skills => self.render_skill_settings(cx),
+            SettingsTab::Tools => self.render_tool_settings(cx),
             SettingsTab::Prompts => self.render_prompt_settings(cx),
             SettingsTab::Mcp => self.render_mcp_settings(cx),
             SettingsTab::Memory => self.render_memory_settings(cx),

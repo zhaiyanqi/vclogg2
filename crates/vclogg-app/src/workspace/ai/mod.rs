@@ -15,6 +15,7 @@ mod transcript;
 mod transcript_scroll;
 use logs::*;
 mod configuration;
+mod context_view;
 mod conversation_tab_view;
 mod conversation_tabs;
 mod mcp_settings;
@@ -25,6 +26,7 @@ mod settings;
 mod skill_settings;
 #[cfg(test)]
 mod tests;
+mod tool_settings;
 mod view;
 mod workspace_settings;
 pub(super) use panel::AiPanel;

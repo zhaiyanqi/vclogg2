@@ -49,6 +49,7 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) run: Option<RunHandle>,
     pub(super) editor: Option<super::settings::ConfigEditor>,
     pub(super) show_settings: bool,
+    pub(super) show_context_usage: bool,
     pub(super) settings_generation: u64,
     pub(super) settings_tab: super::configuration::SettingsTab,
     pub(super) prompt_editor: Option<super::prompt_settings::PromptEditor>,
@@ -168,6 +169,7 @@ impl AiPanel {
             run: None,
             editor: None,
             show_settings: false,
+            show_context_usage: false,
             settings_generation: 0,
             settings_tab: super::configuration::SettingsTab::Models,
             prompt_editor: None,
@@ -503,7 +505,7 @@ impl AiPanel {
         self.busy = true;
         self.input
             .update(cx, |input, cx| input.set_value("", window, cx));
-        let messages = self.conversation.messages.clone();
+        let messages = self.conversation.active_messages();
         let skills = self
             .settings
             .skills
@@ -521,7 +523,8 @@ impl AiPanel {
         };
         let settings_path = self.settings_path.clone();
         let prompts = self.settings.prompts.clone();
-        let extensions = vclogg_ai::RunExtensions::from_settings(&self.settings);
+        let extensions = vclogg_ai::RunExtensions::from_settings(&self.settings)
+            .with_conversation(&self.conversation);
         let workspace = self.workspace.clone();
         self.task = Some(cx.spawn_in(window, async move |this, cx| {
             let _lease = lease;
@@ -639,7 +642,7 @@ impl AiPanel {
                     continue;
                 }
                 let finished = matches!(event, AgentEvent::Finished(..));
-                let persist = matches!(event, AgentEvent::Assistant(_) | AgentEvent::ToolFinished(_) | AgentEvent::Finished(..));
+                let persist = matches!(event, AgentEvent::Assistant(_) | AgentEvent::ToolFinished(_) | AgentEvent::ContextCompacted { .. } | AgentEvent::Finished(..));
                 if this.update(cx, |this, cx| {
                     if this.generation == generation { this.receive_event(event, cx); }
                 }).is_err() { break; }
@@ -732,6 +735,27 @@ impl AiPanel {
             self.conversation.log_sources = self.conversation_with_log_sources().log_sources;
         }
         match event {
+            AgentEvent::ContextUsage(usage) => {
+                self.conversation.context_usage = Some(usage);
+            }
+            AgentEvent::CompactionStarted => {
+                self.progress = crate::tr!("正在压缩对话", "Compacting conversation").into();
+            }
+            AgentEvent::ContextCompacted { summary, through } => {
+                self.conversation.context_summary = summary;
+                self.conversation.summarized_messages =
+                    through.min(self.conversation.messages.len());
+                let active_tokens =
+                    vclogg_ai::conversation_tokens(&self.conversation.active_messages());
+                if let Some(usage) = self.conversation.context_usage.as_mut() {
+                    usage.conversation_tokens = active_tokens;
+                }
+                self.conversation.notice = crate::tr!(
+                    "对话已压缩，完整记录仍保存在本地",
+                    "Conversation compacted; full transcript remains local"
+                )
+                .into();
+            }
             AgentEvent::RequestStarted(request) => {
                 self.progress = format!(
                     "{} ({request}/{})",

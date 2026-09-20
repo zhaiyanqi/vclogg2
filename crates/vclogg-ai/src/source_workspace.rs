@@ -12,7 +12,7 @@ pub(crate) fn capture_roots(paths: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
-fn scoped_path(root: &Path, relative: &str) -> Result<PathBuf> {
+pub(crate) fn scoped_path(root: &Path, relative: &str) -> Result<PathBuf> {
     let path = Path::new(relative);
     if path.is_absolute()
         || path.components().any(|part| {
@@ -51,6 +51,17 @@ async fn execute_inner(roots: &[PathBuf], call: &ToolCall) -> Result<serde_json:
     // Recheck the directory at use time; a replaced symlink cannot silently widen scope.
     if root.canonicalize().ok().as_deref() != Some(root.as_path()) {
         bail!("Workspace root changed; configure it again");
+    }
+    if matches!(
+        call.name.as_str(),
+        "find_source_files"
+            | "find_symbols"
+            | "source_outline"
+            | "locate_log_origin"
+            | "find_definition"
+            | "find_references"
+    ) {
+        return crate::source_index::execute(root, index, call).await;
     }
     let relative = call.arguments["path"].as_str().unwrap_or("");
     if call.name == "read_source" {

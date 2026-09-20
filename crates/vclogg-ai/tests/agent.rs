@@ -7,6 +7,91 @@ use std::{
 };
 use vclogg_ai::*;
 
+#[tokio::test]
+async fn explicit_compaction_sends_no_tools_and_returns_summary() {
+    let (config, requests, server) = mock(vec![(
+        200,
+        openai_text("Confirmed cause; refresh log references."),
+    )]);
+    let messages = vec![AgentMessage::User {
+        text: "Investigate timeout".into(),
+    }];
+    let summary = compact_conversation(
+        &config,
+        "Earlier finding",
+        &messages,
+        &Cancellation::default(),
+    )
+    .await
+    .unwrap();
+    server.join().unwrap();
+    assert!(summary.contains("Confirmed cause"));
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].get("tools").is_none());
+    assert!(
+        requests[0]["messages"]
+            .to_string()
+            .contains("Earlier finding")
+    );
+}
+
+#[tokio::test]
+async fn agent_automatically_compacts_before_the_context_limit() {
+    let (mut config, requests, server) = mock(vec![
+        (
+            200,
+            openai_text("Earlier timeout was confirmed; references need refresh."),
+        ),
+        (200, openai_text("Continuing from the summary.")),
+    ]);
+    config.context_window_tokens = Some(500);
+    let messages = vec![
+        AgentMessage::User {
+            text: "old log question".into(),
+        },
+        AgentMessage::Assistant {
+            text: "old finding".into(),
+            reasoning: String::new(),
+            thinking: Vec::new(),
+            calls: Vec::new(),
+        },
+        AgentMessage::User {
+            text: "continue".into(),
+        },
+    ];
+    let run = start_run(config, messages, Vec::new(), String::new(), false);
+    let mut compacted = false;
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), run.events.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            AgentEvent::ContextCompacted { summary, through } => {
+                compacted = summary.contains("timeout") && through == 2;
+            }
+            AgentEvent::Finished(status, error) => {
+                assert_eq!(status, RunStatus::Complete, "{error}");
+                break;
+            }
+            _ => {}
+        }
+    }
+    server.join().unwrap();
+    assert!(compacted);
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].get("tools").is_none());
+    assert_eq!(requests[1]["messages"].as_array().unwrap().len(), 3);
+    assert!(
+        requests[1]["messages"][2]["content"]
+            .as_str()
+            .unwrap()
+            .contains("continue")
+    );
+}
+
 fn mock(
     responses: Vec<(u16, String)>,
 ) -> (

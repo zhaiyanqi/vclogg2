@@ -34,6 +34,42 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
             json!(["root", "path"]),
         ),
         make(
+            "find_source_files",
+            "Find source filenames in a configured workspace. query is a case-insensitive path substring; results are bounded and relative to the root.",
+            json!({"root":{"type":"integer","minimum":0},"query":string()}),
+            json!(["root", "query"]),
+        ),
+        make(
+            "find_symbols",
+            "Find Java, C, C++, Rust, Python, JavaScript, TypeScript, Go, and C# definitions by name using local Tree-sitter syntax. Results are syntax candidates, not semantic references. Use a specific name to narrow results.",
+            json!({"root":{"type":"integer","minimum":0},"query":string()}),
+            json!(["root", "query"]),
+        ),
+        make(
+            "source_outline",
+            "List definitions in one Java, C, C++, Rust, Python, JavaScript, TypeScript, Go, or C# source file using Tree-sitter. path is relative to the selected workspace root.",
+            json!({"root":{"type":"integer","minimum":0},"path":string()}),
+            json!(["root", "path"]),
+        ),
+        make(
+            "locate_log_origin",
+            "Find likely source locations for a log line, stack frame, filename:line or logger clue already read from logs. Returns ranked syntax/text candidates; verify with read_source.",
+            json!({"root":{"type":"integer","minimum":0},"clue":string()}),
+            json!(["root", "clue"]),
+        ),
+        make(
+            "find_definition",
+            "Query the installed language server for a precise definition at a 1-based line and column in a source file. Falls back to syntax candidates when unavailable. Returns precision and reason.",
+            json!({"root":{"type":"integer","minimum":0},"path":string(),"line":id(),"column":id()}),
+            json!(["root", "path", "line", "column"]),
+        ),
+        make(
+            "find_references",
+            "Query the installed language server for references at a 1-based line and column. Falls back to bounded text candidates when unavailable. Returns precision and reason.",
+            json!({"root":{"type":"integer","minimum":0},"path":string(),"line":id(),"column":id()}),
+            json!(["root", "path", "line", "column"]),
+        ),
+        make(
             "list_mcp_servers",
             "List MCP servers explicitly enabled by the user for this run. These external capabilities have their own scope; never assume they are limited to captured logs.",
             json!({}),

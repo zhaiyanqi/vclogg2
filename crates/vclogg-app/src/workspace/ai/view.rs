@@ -728,6 +728,7 @@ impl Render for AiPanel {
                                     .child(crate::tr!("日志访问", "Log access")),
                             )
                             .child(div().flex_1().min_w_0())
+                            .child(self.render_context_usage_popover(cx))
                             .child(
                                 Button::new("ai-model-menu")
                                     .small()
@@ -845,8 +846,16 @@ impl Render for AiPanel {
     }
 }
 
-fn tool_label(name: &str) -> &str {
+pub(super) fn tool_label(name: &str) -> &str {
     match name {
+        "rg_search" => crate::tr!("搜索源码", "Search source"),
+        "read_source" => crate::tr!("读取源码", "Read source"),
+        "find_source_files" => crate::tr!("查找源码文件", "Find source files"),
+        "find_symbols" => crate::tr!("查找符号", "Find symbols"),
+        "source_outline" => crate::tr!("查看源码结构", "Inspect source outline"),
+        "locate_log_origin" => crate::tr!("定位日志来源", "Locate log origin"),
+        "find_definition" => crate::tr!("查找定义", "Find definition"),
+        "find_references" => crate::tr!("查找引用", "Find references"),
         "get_context" => crate::tr!("获取当前日志", "Read current context"),
         "list_logs" => crate::tr!("列出日志文件", "List log files"),
         "read_logs" => crate::tr!("读取日志", "Read logs"),
