@@ -713,8 +713,10 @@ impl Workspace {
     }
 
     fn reset_sidebar_split(&mut self, cx: &mut Context<Self>) {
-        self.sidebar_split
-            .update(cx, |split, _| *split = ResizableState::default());
+        // Mouse handlers from the previous frame still hold the old state. Replacing
+        // its contents would clear the panels while a handler may still carry a
+        // dragged panel index, causing gpui-base to panic on the next mouse move.
+        self.sidebar_split = cx.new(|_| ResizableState::default());
         cx.notify();
     }
 
@@ -806,6 +808,8 @@ impl Workspace {
             .layout
             .fit(window.viewport_size().width / rem);
         let state = self.sidebar.clone();
+        let workspace = cx.weak_entity();
+        let split_id = self.sidebar_split.entity_id();
         let vertical_tabs = self.vertical_tabs_enabled(cx);
         let center = v_flex()
             .min_w_0()
@@ -823,6 +827,11 @@ impl Workspace {
         h_resizable("workspace-sidebars")
             .with_state(&self.sidebar_split)
             .on_resize(move |sizes, window, cx| {
+                if !workspace.upgrade().is_some_and(|workspace| {
+                    workspace.read(cx).sidebar_split.entity_id() == split_id
+                }) {
+                    return;
+                }
                 let sizes = sizes.read(cx).sizes().clone();
                 let mut ix = 0;
                 let left = widths[0].and_then(|_| {
