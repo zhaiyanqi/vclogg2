@@ -289,26 +289,14 @@ impl AiPanel {
     ) -> AnyElement {
         let owner = cx.weak_entity();
         let selected_view = view.clone();
-        // Match gpui-kit's example-markdown preview: default typography and
-        // adaptive tables that scroll horizontally once columns reach their floor.
+        // Let TextView use the active theme for Markdown typography and colors.
+        // Keep tables usable in the narrow chat panel.
         let mut table = gpui_kit::StyleRefinement::default();
         table.overflow.x = Some(gpui_kit::Overflow::Scroll);
-        // Keep the component's default inline-code background instead of the
-        // application's accent override, following the active light/dark mode.
-        let default_colors = if cx.theme().is_dark() {
-            gpui_kit::component::theme::ThemeColor::dark()
-        } else {
-            gpui_kit::component::theme::ThemeColor::light()
-        };
-        let style = gpui_kit::component::text::TextViewStyle::default()
-            .table(table)
-            .inline_code(gpui_kit::HighlightStyle {
-                background_color: Some(default_colors.accent),
-                ..Default::default()
-            });
+        let style = gpui_kit::component::text::TextViewStyle::default().table(table);
         div().id(SharedString::from(format!("ai-text-{:?}", view.entity_id())))
             .min_w_0().w_full()
-            .child(TextView::new(view).style(style).text_size(gpui_kit::rems(1.)).selectable(true).on_link_click(move |url, event, window, cx| {
+            .child(TextView::new(view).style(style).selectable(true).on_link_click(move |url, event, window, cx| {
                 if !matches!(event, gpui_kit::ClickEvent::Mouse(event) if event.up.button != MouseButton::Left) {
                     _ = owner.update(cx, |this, cx| this.open_link(url, window, cx));
                 }

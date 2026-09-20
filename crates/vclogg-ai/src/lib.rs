@@ -8,6 +8,7 @@ mod prompts;
 mod provider;
 mod runner;
 mod skills;
+mod source_workspace;
 mod tools;
 
 pub use discovery::*;

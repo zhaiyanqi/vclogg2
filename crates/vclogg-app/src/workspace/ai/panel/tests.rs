@@ -586,6 +586,32 @@ fn verify_chat_geometry(
     let sent = visual.debug_bounds("ai-user-bubble").unwrap();
     let from = gpui_kit::point(sent.left() + px(17.), sent.top() + px(22.));
     let to = gpui_kit::point(sent.right() - px(17.), sent.top() + px(22.));
+    visual.simulate_event(gpui_kit::MouseDownEvent {
+        position: from,
+        modifiers: gpui_kit::Modifiers::default(),
+        button: MouseButton::Left,
+        click_count: 2,
+        first_mouse: false,
+    });
+    visual.simulate_event(gpui_kit::MouseUpEvent {
+        position: from,
+        modifiers: gpui_kit::Modifiers::default(),
+        button: MouseButton::Left,
+        click_count: 2,
+    });
+    visual.update(|window, cx| {
+        _ = window.draw(cx);
+        assert!(window.painted_quads().iter().any(|quad| {
+            quad.background == cx.theme().selection.into()
+                && quad.bounds.intersects(&sent.scale(window.scale_factor()))
+        }));
+    });
+    assert!(
+        !panel
+            .read_with(cx, |p, cx| p.messages[0].read(cx).selected_text())
+            .is_empty(),
+        "double-click selects a word in the message"
+    );
     visual.simulate_mouse_down(from, MouseButton::Left, gpui_kit::Modifiers::default());
     visual.update(|window, cx| {
         _ = window.draw(cx);

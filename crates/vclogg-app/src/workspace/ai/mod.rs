@@ -26,6 +26,7 @@ mod skill_settings;
 #[cfg(test)]
 mod tests;
 mod view;
+mod workspace_settings;
 pub(super) use panel::AiPanel;
 
 const AI_LABEL_LINE_HEIGHT: f32 = 1.25;

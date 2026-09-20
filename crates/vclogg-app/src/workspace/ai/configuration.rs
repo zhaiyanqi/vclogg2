@@ -14,6 +14,7 @@ pub(super) enum SettingsTab {
     Skills,
     Prompts,
     Mcp,
+    Workspace,
     Memory,
 }
 struct SettingsSurface {
@@ -92,7 +93,7 @@ impl AiPanel {
                         SettingsTab::Prompts => this.save_prompt_editor(window, cx),
                         SettingsTab::Mcp => this.save_mcp_editor(window, cx),
                         SettingsTab::Memory => this.save_memory_editor(window, cx),
-                        SettingsTab::Skills => {}
+                        SettingsTab::Skills | SettingsTab::Workspace => {}
                     });
                     false
                 })
@@ -127,11 +128,16 @@ impl AiPanel {
             ("models", SettingsTab::Models, crate::tr!("模型", "Models")),
             ("skills", SettingsTab::Skills, "Skills"),
             ("mcp", SettingsTab::Mcp, "MCP"),
-            ("memory", SettingsTab::Memory, crate::tr!("记忆", "Memory")),
             (
                 "prompts",
                 SettingsTab::Prompts,
                 crate::tr!("提示词与 RULES", "Prompts and RULES"),
+            ),
+            ("memory", SettingsTab::Memory, crate::tr!("记忆", "Memory")),
+            (
+                "workspace",
+                SettingsTab::Workspace,
+                crate::tr!("工作区", "Workspace"),
             ),
         ] {
             tabs = tabs.child(
@@ -152,6 +158,7 @@ impl AiPanel {
             SettingsTab::Prompts => self.render_prompt_settings(cx),
             SettingsTab::Mcp => self.render_mcp_settings(cx),
             SettingsTab::Memory => self.render_memory_settings(cx),
+            SettingsTab::Workspace => self.render_workspace_settings(cx),
         };
         v_flex()
             .size_full()
