@@ -133,6 +133,31 @@ impl EditEncoding {
 }
 
 impl Workspace {
+    pub(super) fn enter_document_edit_action(
+        &mut self,
+        _: &EnterEditMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if window.has_active_dialog(cx) || window.has_active_sheet(cx) {
+            return;
+        }
+        let Some(tab) = self.active_document() else {
+            return;
+        };
+        if tab.document.metadata().file_size > MAX_EDIT_BYTES {
+            window.notify_message(
+                crate::tr!(
+                    "仅支持编辑不超过 100 MB 的文件",
+                    "Only files up to 100 MB can be edited"
+                ),
+                cx,
+            );
+            return;
+        }
+        self.enter_document_edit(tab.id, window, cx);
+    }
+
     pub(super) fn enter_document_edit(
         &mut self,
         document_id: u64,
@@ -147,25 +172,55 @@ impl Workspace {
         let path = tab.document.path().to_path_buf();
         let encoding_name = tab.document.metadata().encoding_name.clone();
         let source_row = {
-            let table = tab.log_table.read(cx);
-            let row_count = table.delegate().row_count();
-            table
+            let selected_table = match tab.view.selection_table {
+                SelectionTable::Log => &tab.log_table,
+                SelectionTable::Results => &tab.result_table,
+            };
+            let selected = selected_table.read(cx);
+            let selected_row = selected
                 .active_log_row()
-                .or_else(|| {
-                    (row_count > 0).then(|| {
-                        tab.log_viewport
-                            .first_visible(row_count, self.log_row_height())
-                    })
+                .and_then(|row| selected.delegate().source_row(row));
+            let global_row = (self.active_log_region == LogRegion::GlobalResults)
+                .then(|| {
+                    let global = self.global_table.read(cx);
+                    global
+                        .active_log_row()
+                        .and_then(|row| global.delegate().row_key(row))
                 })
-                .and_then(|row| table.delegate().source_row(row))
+                .flatten()
+                .and_then(|key| match key {
+                    LogRowKey::Row {
+                        document_id: selected_document_id,
+                        source_row,
+                    } if selected_document_id == document_id => Some(source_row),
+                    _ => None,
+                });
+            let body = tab.log_table.read(cx);
+            let row_count = body.delegate().row_count();
+            global_row
+                .or(selected_row)
+                .or_else(|| {
+                    body.active_log_row()
+                        .and_then(|row| body.delegate().source_row(row))
+                })
+                .or_else(|| {
+                    (row_count > 0)
+                        .then(|| {
+                            tab.log_viewport
+                                .first_visible(row_count, self.log_row_height())
+                        })
+                        .and_then(|row| body.delegate().source_row(row))
+                })
                 .unwrap_or(0)
         };
         if let Some(edit) = self.documents[ix].edit.as_mut() {
             edit.active = true;
+            let editor = edit.editor.clone();
             edit.editor.update(cx, |editor, cx| {
                 editor.set_cursor_position(Position::new(source_row as u32, 0), window, cx);
             });
             edit.editor.focus_handle(cx).focus(window, cx);
+            self.schedule_editor_entry_reveal(document_id, editor, source_row, 4, window, cx);
             cx.notify();
             return;
         }
@@ -262,6 +317,14 @@ impl Workspace {
                         });
                         if this.active_tab_id == WorkspaceTabId::Document(document_id) {
                             editor.focus_handle(cx).focus(window, cx);
+                            this.schedule_editor_entry_reveal(
+                                document_id,
+                                editor,
+                                source_row,
+                                4,
+                                window,
+                                cx,
+                            );
                         }
                         cx.notify();
                     }
@@ -276,6 +339,55 @@ impl Workspace {
             });
         }));
         cx.notify();
+    }
+
+    fn schedule_editor_entry_reveal(
+        &self,
+        document_id: u64,
+        editor: Entity<EditorState>,
+        source_row: usize,
+        remaining_frames: u8,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if remaining_frames == 0 {
+            return;
+        }
+        cx.on_next_frame(window, move |this, window, cx| {
+            let still_editing = this.active_tab_id == WorkspaceTabId::Document(document_id)
+                && this
+                    .documents
+                    .iter()
+                    .find(|tab| tab.id == document_id)
+                    .and_then(|tab| tab.edit.as_ref())
+                    .is_some_and(|edit| edit.active && edit.editor == editor);
+            if !still_editing {
+                return;
+            }
+            let needs_reveal = editor
+                .read(cx)
+                .visible_row_range()
+                .is_none_or(|range| !range.contains(&source_row));
+            if !needs_reveal {
+                return;
+            }
+            let target = Position::new(source_row as u32, 0);
+            editor.update(cx, |editor, cx| {
+                if editor.cursor_position() == target && editor.line_height().is_some() {
+                    editor.set_cursor_position(target, window, cx);
+                }
+            });
+            if editor.read(cx).cursor_position() == target {
+                this.schedule_editor_entry_reveal(
+                    document_id,
+                    editor,
+                    source_row,
+                    remaining_frames - 1,
+                    window,
+                    cx,
+                );
+            }
+        });
     }
 
     pub(super) fn exit_document_edit(
@@ -841,6 +953,53 @@ fn atomic_write_edit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui_kit::TestAppContext;
+
+    struct EditorEntryHarness {
+        editor: Entity<EditorState>,
+    }
+
+    impl Render for EditorEntryHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size(px(400.))
+                .child(Editor::new(&self.editor).h(px(400.)))
+        }
+    }
+
+    #[gpui_kit::test]
+    fn editor_reveals_a_distant_source_row_after_first_layout(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let text = (0..500)
+                .map(|row| format!("line {row}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let editor = cx.new(|cx| {
+                EditorState::new(window, cx)
+                    .soft_wrap(false)
+                    .default_value(text)
+            });
+            editor.update(cx, |editor, cx| {
+                editor.set_cursor_position(Position::new(400, 0), window, cx);
+            });
+            EditorEntryHarness { editor }
+        });
+        let editor = view.read_with(cx, |view, _| view.editor.clone());
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            editor.update(cx, |editor, cx| {
+                assert_eq!(editor.cursor_position().line, 400);
+                editor.set_cursor_position(Position::new(400, 0), window, cx);
+            });
+            window.draw(cx).clear(cx);
+        });
+        let visible = editor.read_with(cx, |editor, _| editor.visible_row_range().unwrap());
+        assert!(
+            visible.contains(&400),
+            "visible rows after entry: {visible:?}"
+        );
+    }
 
     #[test]
     fn saving_replaces_the_complete_file() {

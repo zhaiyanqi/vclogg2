@@ -74,6 +74,7 @@ pub struct ShortcutSettings {
     pub cycle_color_label: String,
     pub toggle_word_wrap: String,
     pub add_text_mark: String,
+    pub enter_edit_mode: String,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -226,6 +227,7 @@ impl Default for ShortcutSettings {
             cycle_color_label: format!("{primary}+D"),
             toggle_word_wrap: "W".into(),
             add_text_mark: "N".into(),
+            enter_edit_mode: "I".into(),
         }
     }
 }
@@ -893,6 +895,7 @@ fn app_settings_from_record(record: AppSettingsRecord) -> AppSettings {
             cycle_color_label: record.shortcut_cycle_color_label,
             toggle_word_wrap: record.shortcut_toggle_word_wrap,
             add_text_mark: record.shortcut_add_text_mark,
+            enter_edit_mode: record.shortcut_enter_edit_mode,
         },
     }
 }
@@ -927,6 +930,7 @@ fn app_settings_to_record(settings: AppSettings) -> AppSettingsRecord {
         shortcut_cycle_color_label: settings.shortcuts.cycle_color_label,
         shortcut_toggle_word_wrap: settings.shortcuts.toggle_word_wrap,
         shortcut_add_text_mark: settings.shortcuts.add_text_mark,
+        shortcut_enter_edit_mode: settings.shortcuts.enter_edit_mode,
         mouse_wheel_scroll_percent: i64::from(settings.mouse_wheel_scroll_percent),
         scroll_by_line: settings.scroll_by_line,
         mouse_wheel_scroll_lines: i64::from(settings.mouse_wheel_scroll_lines),
@@ -1293,6 +1297,7 @@ mod session_load_tests {
             confirm_clipboard_paste: true,
             ..AppSettings::default()
         };
+        expected.shortcuts.enter_edit_mode = "Ctrl+I".into();
         store
             .save_app_settings(expected.clone())
             .expect("应能保存应用设置记录");

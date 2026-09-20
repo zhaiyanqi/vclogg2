@@ -541,6 +541,7 @@ impl Workspace {
                     });
                     completion.finish(installed, cx);
                 }
+                this.finish_pending_clipboard_edit(window, cx);
                 this.open_queued_external_paths_if_idle(window, cx);
             });
         }));

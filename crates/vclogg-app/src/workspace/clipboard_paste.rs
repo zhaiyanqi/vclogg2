@@ -57,8 +57,8 @@ impl Workspace {
                 .child(
                     div().text_sm().text_color(cx.theme().muted_foreground).child(
                         crate::tr_args!(
-                            "将剪贴板中的 {byte_count} 字节文本写入临时文件，并在新标签中打开。",
-                            "Write {byte_count} bytes of clipboard text to a temporary file and open it in a new tab."
+                            "将剪贴板中的 {byte_count} 字节文本写入临时文件，并在新标签中进入编辑模式。",
+                            "Write {byte_count} bytes of clipboard text to a temporary file and edit it in a new tab."
                         ),
                     ),
                 )
@@ -75,7 +75,7 @@ impl Workspace {
                             "paste-clipboard-confirm-action",
                             Button::new("paste-clipboard-confirm")
                                 .primary()
-                                .label(crate::tr!("打开临时文件", "Open temporary file")),
+                                .label(crate::tr!("创建并编辑", "Create and edit")),
                             cx,
                         )),
                 )
@@ -114,7 +114,11 @@ impl Workspace {
                 match result {
                     Ok(path) => {
                         this.transient_paths.insert(path_match_key(&path));
+                        this.pending_clipboard_edit_path = Some(path.clone());
                         this.begin_open_paths(vec![path], window, cx);
+                        if this.open_task.is_none() {
+                            this.finish_pending_clipboard_edit(window, cx);
+                        }
                     }
                     Err(error) => {
                         window.notify_message(
@@ -129,6 +133,27 @@ impl Workspace {
                 }
             });
         }));
+    }
+
+    pub(super) fn finish_pending_clipboard_edit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = self.pending_clipboard_edit_path.take() else {
+            return;
+        };
+        if let Some(document_id) = self
+            .documents
+            .iter()
+            .find(|tab| {
+                paths_match(tab.document.path(), &path)
+                    && tab.load_state == DocumentLoadState::Ready
+            })
+            .map(|tab| tab.id)
+        {
+            self.enter_document_edit(document_id, window, cx);
+        }
     }
 }
 
@@ -147,4 +172,72 @@ fn write_clipboard_temp_file(text: &str) -> anyhow::Result<PathBuf> {
     let (file, path) = file.keep()?;
     drop(file);
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui_kit::TestAppContext;
+
+    #[test]
+    fn clipboard_text_is_written_to_a_temp_log_file() {
+        let path = write_clipboard_temp_file("first\nsecond\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "first\nsecond\n");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn completed_clipboard_open_starts_editing(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            Workspace::init_window_registry(cx);
+            crate::notifications::init(cx);
+            crate::app_icon::init(cx);
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("clipboard.log");
+        std::fs::write(&path, "pasted text\n").unwrap();
+        let document = Arc::new(LogDocument::open(&path).unwrap());
+        let mut workspace = None;
+        let window = cx.add_window(|window, cx| {
+            let entity = cx.new(|cx| Workspace::new(false, Vec::new(), window, cx));
+            workspace = Some(entity.clone());
+            Root::new(entity, window, cx)
+        });
+        let workspace = workspace.unwrap();
+        cx.update_window(window.into(), |_, window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                let prepared = PreparedDocument {
+                    document: document.clone(),
+                    cached_complete_document: None,
+                    session: None,
+                    color_labels_snapshot: None,
+                    resolved_color_rules: Arc::default(),
+                    search_result: SearchResult::default(),
+                    search_range: SearchRange::default(),
+                    search_matcher: None,
+                    search_case_sensitive: false,
+                    search_regex: false,
+                    warning: None,
+                    load_state: DocumentLoadState::Ready,
+                    pending_index_cache: None,
+                    upgrade_frame: None,
+                };
+                workspace.install_documents(
+                    vec![(path.clone(), Ok(prepared))],
+                    Some(&path),
+                    &BTreeMap::new(),
+                    None,
+                    true,
+                    window,
+                    cx,
+                );
+                workspace.pending_clipboard_edit_path = Some(path.clone());
+                workspace.finish_pending_clipboard_edit(window, cx);
+                assert!(workspace.pending_clipboard_edit_path.is_none());
+                assert!(workspace.documents[0].edit_load_task.is_some());
+            });
+        })
+        .unwrap();
+    }
 }

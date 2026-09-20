@@ -61,13 +61,13 @@ use vclogg_core::{
 use crate::{
     actions::{
         AddTextMark, CancelSearch, ClearSearch, CloseActiveTab, CopyCurrentLine,
-        CopyCurrentLineWithNumber, CopyFilePath, CycleColorLabel, ExtendSelectionDown,
-        ExtendSelectionFirst, ExtendSelectionLast, ExtendSelectionPageDown, ExtendSelectionPageUp,
-        ExtendSelectionUp, FocusSearch, GoToLine, JumpToEnd, JumpToStart, LOG_TABLE_CONTEXT,
-        MergeSearchResultsInNewTab, NewWindow, OpenFiles, OpenQuickFind, OpenSearchResultsInNewTab,
-        OpenSettings, PasteClipboardAsFile, ReloadActive, SaveSearchResultsToFile, SelectAllRows,
-        StartSearch, ToggleCaseSensitive, ToggleFullscreen, ToggleMarkedRow, ToggleRegex,
-        ToggleWordWrap, WORKSPACE_CONTEXT,
+        CopyCurrentLineWithNumber, CopyFilePath, CycleColorLabel, EnterEditMode,
+        ExtendSelectionDown, ExtendSelectionFirst, ExtendSelectionLast, ExtendSelectionPageDown,
+        ExtendSelectionPageUp, ExtendSelectionUp, FocusSearch, GoToLine, JumpToEnd, JumpToStart,
+        LOG_TABLE_CONTEXT, MergeSearchResultsInNewTab, NewWindow, OpenFiles, OpenQuickFind,
+        OpenSearchResultsInNewTab, OpenSettings, PasteClipboardAsFile, ReloadActive,
+        SaveSearchResultsToFile, SelectAllRows, StartSearch, ToggleCaseSensitive, ToggleFullscreen,
+        ToggleMarkedRow, ToggleRegex, ToggleWordWrap, WORKSPACE_CONTEXT,
     },
     cloud_filters::CloudClient,
     color_labels::{
@@ -1677,6 +1677,7 @@ pub struct Workspace {
     active_log_region: LogRegion,
     last_user_log_region: LogRegion,
     transient_paths: BTreeSet<PathMatchKey>,
+    pending_clipboard_edit_path: Option<PathBuf>,
     pending_tab_moves: BTreeSet<u64>,
     documents: Vec<DocumentTab>,
     new_file_drafts: BTreeMap<u64, NewFileDraft>,
@@ -2333,6 +2334,7 @@ impl Workspace {
             active_log_region: LogRegion::Body,
             last_user_log_region: LogRegion::Body,
             transient_paths: BTreeSet::new(),
+            pending_clipboard_edit_path: None,
             pending_tab_moves: BTreeSet::new(),
             documents: Vec::new(),
             new_file_drafts: BTreeMap::new(),
@@ -2681,6 +2683,7 @@ impl Render for Workspace {
             })
             .on_action(cx.listener(Self::open_files))
             .on_action(cx.listener(Self::paste_clipboard_as_file))
+            .on_action(cx.listener(Self::enter_document_edit_action))
             .on_action(cx.listener(Self::new_window))
             .on_action(cx.listener(Self::reload_active))
             .on_action(cx.listener(Self::close_active_tab))

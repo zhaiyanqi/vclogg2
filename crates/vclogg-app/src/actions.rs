@@ -13,6 +13,7 @@ actions!(
     [
         OpenFiles,
         PasteClipboardAsFile,
+        EnterEditMode,
         NewWindow,
         ReloadActive,
         CloseActiveTab,
@@ -150,6 +151,7 @@ pub fn init(cx: &mut App) {
             Some(WORKSPACE_SHORTCUT_CONTEXT),
         ),
         KeyBinding::new("w", ToggleWordWrap, Some(WORKSPACE_SHORTCUT_CONTEXT)),
+        KeyBinding::new("i", EnterEditMode, Some(WORKSPACE_SHORTCUT_CONTEXT)),
         KeyBinding::new(
             &format!("{primary}-home"),
             JumpToStart,
@@ -164,11 +166,14 @@ pub fn init(cx: &mut App) {
     ]);
 
     #[cfg(target_os = "macos")]
-    cx.bind_keys([KeyBinding::new(
-        "ctrl-cmd-f",
-        ToggleFullscreen,
-        Some(WORKSPACE_CONTEXT),
-    )]);
+    cx.bind_keys([
+        KeyBinding::new(
+            "ctrl-v",
+            PasteClipboardAsFile,
+            Some(WORKSPACE_SHORTCUT_CONTEXT),
+        ),
+        KeyBinding::new("ctrl-cmd-f", ToggleFullscreen, Some(WORKSPACE_CONTEXT)),
+    ]);
 }
 
 pub fn shortcut_to_key_binding(shortcut: &str) -> Option<String> {
@@ -269,6 +274,13 @@ pub fn apply_shortcuts(previous: &ShortcutSettings, next: &ShortcutSettings, cx:
         &next.add_text_mark,
         AddTextMark,
         LOG_TABLE_SHORTCUT_CONTEXT,
+    );
+    rebind(
+        &mut bindings,
+        &previous.enter_edit_mode,
+        &next.enter_edit_mode,
+        EnterEditMode,
+        WORKSPACE_SHORTCUT_CONTEXT,
     );
     cx.bind_keys(bindings);
 }

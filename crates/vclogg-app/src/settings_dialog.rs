@@ -251,7 +251,7 @@ impl SettingsCategory {
                 "存储 索引缓存 缓存大小 打开缓存文件夹 清理缓存 文件夹 清理 storage index cache"
             }
             Self::Shortcuts => {
-                "快捷键 打开文件 聚焦搜索框 快速查找 关闭当前标签 打开设置 切换区分大小写 跳到日志底部 轮换颜色标签 切换自动换行 按键 绑定 冲突 keyboard shortcut keymap"
+                "快捷键 打开文件 聚焦搜索框 快速查找 关闭当前标签 打开设置 切换区分大小写 跳到日志底部 轮换颜色标签 切换自动换行 进入编辑模式 按键 绑定 冲突 keyboard shortcut keymap edit mode"
             }
             Self::Advanced => {
                 "高级 应用图标 啄木鸟 软萌 立体 坐姿 插画 贴纸 应用日志 日志等级 关闭 Error Warn Info Debug Trace 导出 诊断 advanced application icon mascot log level export diagnostics"
@@ -292,10 +292,11 @@ enum ShortcutAction {
     CycleColorLabel,
     ToggleWordWrap,
     AddTextMark,
+    EnterEditMode,
 }
 
 impl ShortcutAction {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::OpenFile,
         Self::FocusSearch,
         Self::QuickFind,
@@ -306,6 +307,7 @@ impl ShortcutAction {
         Self::CycleColorLabel,
         Self::ToggleWordWrap,
         Self::AddTextMark,
+        Self::EnterEditMode,
     ];
 
     fn id(self) -> &'static str {
@@ -320,6 +322,7 @@ impl ShortcutAction {
             Self::CycleColorLabel => "cycle-color-label",
             Self::ToggleWordWrap => "toggle-word-wrap",
             Self::AddTextMark => "add-text-mark",
+            Self::EnterEditMode => "enter-edit-mode",
         }
     }
 
@@ -335,6 +338,7 @@ impl ShortcutAction {
             Self::CycleColorLabel => crate::tr!("轮换颜色标签", "Cycle color label"),
             Self::ToggleWordWrap => crate::tr!("切换自动换行", "Toggle word wrap"),
             Self::AddTextMark => crate::tr!("新增文字标记", "New text mark"),
+            Self::EnterEditMode => crate::tr!("进入编辑模式", "Enter edit mode"),
         }
     }
 
@@ -370,6 +374,10 @@ impl ShortcutAction {
                 "切换正文、当前结果和全局结果的长行换行显示",
                 "Toggle wrapping in the log, current results, and global results"
             ),
+            Self::EnterEditMode => crate::tr!(
+                "从选中的日志行开始编辑当前文件",
+                "Edit the current file at the selected log line"
+            ),
         }
     }
 
@@ -385,6 +393,7 @@ impl ShortcutAction {
             Self::CycleColorLabel => &settings.cycle_color_label,
             Self::ToggleWordWrap => &settings.toggle_word_wrap,
             Self::AddTextMark => &settings.add_text_mark,
+            Self::EnterEditMode => &settings.enter_edit_mode,
         }
     }
 
@@ -400,6 +409,7 @@ impl ShortcutAction {
             Self::CycleColorLabel => settings.cycle_color_label = value,
             Self::ToggleWordWrap => settings.toggle_word_wrap = value,
             Self::AddTextMark => settings.add_text_mark = value,
+            Self::EnterEditMode => settings.enter_edit_mode = value,
         }
     }
 }
