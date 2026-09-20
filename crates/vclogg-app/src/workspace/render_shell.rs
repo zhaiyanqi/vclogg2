@@ -707,6 +707,22 @@ impl Workspace {
         } else {
             crate::tr!("打开日志…（Ctrl+O）", "Open log… (Ctrl+O)")
         };
+        let edit_document_id = self
+            .active_document()
+            .and_then(|tab| tab.edit.as_ref().filter(|edit| edit.active).map(|_| tab.id));
+        let active_draft = match self.active_tab_id {
+            WorkspaceTabId::New(id) => self.new_file_drafts.get(&id).map(|draft| (id, draft)),
+            WorkspaceTabId::Document(_) => None,
+        };
+        let draft_editing = active_draft.is_some_and(|(_, draft)| draft.active);
+        let edit_dirty = self
+            .active_document()
+            .and_then(|tab| tab.edit.as_ref())
+            .is_some_and(|edit| edit.dirty);
+        let edit_saving = self
+            .active_document()
+            .and_then(|tab| tab.edit.as_ref())
+            .is_some_and(|edit| edit.saving);
         let auto_follow = self
             .active_document()
             .is_some_and(|tab| tab.view.auto_follow);
@@ -786,16 +802,47 @@ impl Workspace {
                     ))
                     .child(toolbar_icon_button(
                         Button::new("toggle-auto-follow")
-                            .icon(crate::app_assets::AppIcon::FollowEnd)
-                            .selected(auto_follow)
-                            .tooltip(if auto_follow {
+                            .icon(if edit_document_id.is_some() || draft_editing {
+                                Icon::new(crate::app_assets::AppIcon::Save)
+                            } else {
+                                Icon::new(crate::app_assets::AppIcon::FollowEnd)
+                            })
+                            .selected(edit_document_id.is_none() && !draft_editing && auto_follow)
+                            .tooltip(if edit_document_id.is_some() || draft_editing {
+                                crate::tr!("保存文件", "Save file")
+                            } else if auto_follow {
                                 crate::tr!("关闭末尾跟随", "Disable follow end")
                             } else {
                                 crate::tr!("开启末尾跟随", "Enable follow end")
                             })
-                            .disabled(!follow_available)
+                            .disabled(
+                                if let Some((_, draft)) =
+                                    active_draft.filter(|(_, draft)| draft.active)
+                                {
+                                    draft.saving || (draft.path.is_some() && !draft.dirty)
+                                } else if edit_document_id.is_some() {
+                                    !edit_dirty || edit_saving
+                                } else {
+                                    !follow_available
+                                },
+                            )
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_auto_follow(window, cx);
+                                if let WorkspaceTabId::New(id) = this.active_tab_id
+                                    && this
+                                        .new_file_drafts
+                                        .get(&id)
+                                        .is_some_and(|draft| draft.active)
+                                {
+                                    this.save_new_file_draft(id, window, cx);
+                                } else if let Some(document_id) =
+                                    this.active_document().and_then(|tab| {
+                                        tab.edit.as_ref().filter(|edit| edit.active).map(|_| tab.id)
+                                    })
+                                {
+                                    this.save_document_edit(document_id, window, cx);
+                                } else {
+                                    this.toggle_auto_follow(window, cx);
+                                }
                             })),
                     )),
             )

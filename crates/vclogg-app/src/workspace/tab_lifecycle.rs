@@ -70,6 +70,11 @@ impl Workspace {
         self.sync_active_document_ix();
         self.pending_document_tab_reveal.set(None);
         self.sync_active_document(window, cx);
+        if let WorkspaceTabId::New(id) = tab_id
+            && let Some(draft) = self.new_file_drafts.get(&id).filter(|draft| draft.active)
+        {
+            draft.editor.focus_handle(cx).focus(window, cx);
+        }
         self.refresh_active_log_search_presentation(cx);
         if active_tab_changed {
             if prepared_frame {
@@ -473,6 +478,24 @@ impl Workspace {
         if ids.is_empty() {
             return;
         }
+        if self.documents.iter().any(|tab| {
+            ids.contains(&WorkspaceTabId::Document(tab.id))
+                && tab
+                    .edit
+                    .as_ref()
+                    .is_some_and(|edit| edit.dirty || edit.saving)
+        }) || self.new_file_drafts.iter().any(|(id, draft)| {
+            ids.contains(&WorkspaceTabId::New(*id)) && (draft.dirty || draft.saving)
+        }) {
+            window.notify_message(
+                crate::tr!(
+                    "请先保存编辑内容，再关闭标签",
+                    "Save the edited file before closing its tab"
+                ),
+                cx,
+            );
+            return;
+        }
         let document_ids = ids
             .iter()
             .filter_map(|tab_id| tab_id.document_id())
@@ -547,6 +570,24 @@ impl Workspace {
         if ids.is_empty() {
             return;
         }
+        if self.documents.iter().any(|tab| {
+            ids.contains(&WorkspaceTabId::Document(tab.id))
+                && tab
+                    .edit
+                    .as_ref()
+                    .is_some_and(|edit| edit.dirty || edit.saving)
+        }) || self.new_file_drafts.iter().any(|(id, draft)| {
+            ids.contains(&WorkspaceTabId::New(*id)) && (draft.dirty || draft.saving)
+        }) {
+            window.notify_message(
+                crate::tr!(
+                    "请先保存编辑内容，再关闭标签",
+                    "Save the edited file before closing its tab"
+                ),
+                cx,
+            );
+            return;
+        }
         self.cancel_tag_drag(window, cx);
         self.cancel_pending_tab_activation();
         let previous_active_id = self.active_tab_id;
@@ -581,6 +622,8 @@ impl Workspace {
         }
 
         self.tabs.retain(|tab_id| !ids.contains(tab_id));
+        self.new_file_drafts
+            .retain(|id, _| !ids.contains(&WorkspaceTabId::New(*id)));
         self.documents.retain(|tab| !document_ids.contains(&tab.id));
         self.row_drag_bounds
             .retain(|(tab_id, _), _| !document_ids.contains(tab_id));
@@ -1235,7 +1278,27 @@ impl Workspace {
             this.restore_tab_title(document_id, window, cx)
         });
 
+        let edit = {
+            let workspace = workspace.clone();
+            window.listener_for(&workspace, move |this, _, window, cx| {
+                if state.editing {
+                    this.exit_document_edit(document_id, window, cx);
+                } else {
+                    this.enter_document_edit(document_id, window, cx);
+                }
+            })
+        };
         let menu = menu
+            .item(
+                PopupMenuItem::new(if state.editing {
+                    crate::tr!("退出编辑模式", "Exit edit mode")
+                } else {
+                    crate::tr!("编辑日志", "Edit log")
+                })
+                .disabled(!state.can_edit)
+                .on_click(edit),
+            )
+            .separator()
             .item(PopupMenuItem::new(crate::tr!("关闭标签", "Close tab")).on_click(close))
             .item(
                 PopupMenuItem::new(crate::tr!("关闭其他标签", "Close other tabs"))
@@ -1308,6 +1371,18 @@ impl Workspace {
         workspace: Entity<Self>,
         window: &mut Window,
     ) -> PopupMenu {
+        let edit_toggle = {
+            let workspace = workspace.clone();
+            window.listener_for(&workspace, move |this, _, window, cx| {
+                if let WorkspaceTabId::New(id) = tab_id {
+                    if state.editing {
+                        this.exit_new_file_draft(id, window, cx);
+                    } else {
+                        this.resume_new_file_draft(id, window, cx);
+                    }
+                }
+            })
+        };
         let close = {
             let workspace = workspace.clone();
             window.listener_for(&workspace, move |this, _, window, cx| {
@@ -1336,6 +1411,18 @@ impl Workspace {
             this.close_tab_group(tab_id, TabCloseGroup::All, window, cx)
         });
 
+        let menu = if state.can_edit {
+            menu.item(
+                PopupMenuItem::new(if state.editing {
+                    crate::tr!("退出编辑模式", "Exit edit mode")
+                } else {
+                    crate::tr!("继续编辑", "Continue editing")
+                })
+                .on_click(edit_toggle),
+            )
+        } else {
+            menu
+        };
         let menu = menu
             .item(PopupMenuItem::new(crate::tr!("关闭标签", "Close tab")).on_click(close))
             .item(

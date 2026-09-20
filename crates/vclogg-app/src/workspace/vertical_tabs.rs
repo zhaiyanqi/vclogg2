@@ -256,6 +256,15 @@ impl Workspace {
                 .is_some(),
             vertical_tabs: this.vertical_tabs_enabled(cx),
             vertical: true,
+            can_edit: document_id
+                .and_then(|id| this.documents.iter().find(|tab| tab.id == id))
+                .is_some_and(|tab| {
+                    tab.document.metadata().file_size <= document_editing::MAX_EDIT_BYTES
+                }),
+            editing: document_id
+                .and_then(|id| this.documents.iter().find(|tab| tab.id == id))
+                .and_then(|tab| tab.edit.as_ref())
+                .is_some_and(|edit| edit.active),
         };
         match document_id {
             Some(id) => Self::build_tab_menu(menu, id, state, workspace, window),
@@ -368,6 +377,28 @@ impl Workspace {
             has_other_window,
             vertical_tabs: self.vertical_tabs_enabled(cx),
             vertical,
+            can_edit: match tab_id {
+                WorkspaceTabId::Document(id) => self
+                    .documents
+                    .iter()
+                    .find(|tab| tab.id == id)
+                    .is_some_and(|tab| {
+                        tab.document.metadata().file_size <= document_editing::MAX_EDIT_BYTES
+                    }),
+                WorkspaceTabId::New(id) => self.new_file_drafts.contains_key(&id),
+            },
+            editing: match tab_id {
+                WorkspaceTabId::Document(id) => self
+                    .documents
+                    .iter()
+                    .find(|tab| tab.id == id)
+                    .and_then(|tab| tab.edit.as_ref())
+                    .is_some_and(|edit| edit.active),
+                WorkspaceTabId::New(id) => self
+                    .new_file_drafts
+                    .get(&id)
+                    .is_some_and(|draft| draft.active),
+            },
         };
         let context_workspace = workspace.clone();
         let tab_layout = tab_drop_layout.clone();
@@ -520,7 +551,26 @@ impl Workspace {
     ) -> gpui_kit::Div {
         let tab_title = self.workspace_tab_title(tab_id);
         let selected = self.active_tab_id == tab_id;
-        let file_icon_color = if selected {
+        let dirty = match tab_id {
+            WorkspaceTabId::Document(document_id) => self
+                .documents
+                .iter()
+                .find(|tab| tab.id == document_id)
+                .and_then(|tab| tab.edit.as_ref())
+                .is_some_and(|edit| edit.dirty),
+            WorkspaceTabId::New(id) => self
+                .new_file_drafts
+                .get(&id)
+                .is_some_and(|draft| draft.dirty),
+        };
+        let visible_title = if dirty {
+            format!("{tab_title} *")
+        } else {
+            tab_title.to_string()
+        };
+        let file_icon_color = if dirty {
+            cx.theme().danger
+        } else if selected {
             cx.theme().tab_active_foreground
         } else {
             cx.theme().tab_foreground
@@ -552,7 +602,7 @@ impl Workspace {
                     ))
                     .size(px(20.))
                     .text_color(file_icon_color)
-                    .opacity(0.72),
+                    .opacity(if dirty { 1. } else { 0.72 }),
             )
             .child(
                 div()
@@ -560,7 +610,7 @@ impl Workspace {
                     .when(vertical, |this| this.flex_1())
                     .truncate()
                     .line_height(relative(1.5))
-                    .child(tab_title),
+                    .child(visible_title),
             )
             .child(close_button)
     }

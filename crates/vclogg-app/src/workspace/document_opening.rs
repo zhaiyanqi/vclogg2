@@ -307,7 +307,8 @@ impl Workspace {
             replace_new_tab
                 .then_some(self.active_tab_id)
                 .and_then(|tab_id| match tab_id {
-                    WorkspaceTabId::New(id) => Some(id),
+                    WorkspaceTabId::New(id) if !self.new_file_drafts.contains_key(&id) => Some(id),
+                    WorkspaceTabId::New(_) => None,
                     WorkspaceTabId::Document(_) => None,
                 });
         let shells = paths

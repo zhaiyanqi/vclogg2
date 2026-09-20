@@ -28,9 +28,10 @@ use gpui_kit::component::{
     checkbox::Checkbox,
     dialog::DialogFooter,
     h_flex,
-    input::{Input, InputEvent, InputState},
+    input::{Editor, EditorState, Input, InputEvent, InputState, Position},
     menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem},
     popover::Popover,
+    progress::Progress,
     resizable::{ResizableState, resizable_panel, v_resizable},
     scroll::ScrollableElement as _,
     select::{Select, SelectEvent, SelectState},
@@ -516,6 +517,8 @@ struct TabMenuState {
     has_other_window: bool,
     vertical_tabs: bool,
     vertical: bool,
+    can_edit: bool,
+    editing: bool,
 }
 
 #[derive(IntoElement)]
@@ -705,6 +708,33 @@ struct DocumentTab {
     results_visible: bool,
     restoring_result_selection: bool,
     load_state: DocumentLoadState,
+    edit: Option<DocumentEditSession>,
+    edit_task: Option<Task<()>>,
+}
+
+struct DocumentEditSession {
+    editor: Entity<EditorState>,
+    encoding: document_editing::EditEncoding,
+    disk_version: document_editing::DiskVersion,
+    dirty: bool,
+    active: bool,
+    saving: bool,
+    saved_since_enter: bool,
+    pending_exit_row: Option<usize>,
+    exit_after_save: bool,
+    _subscription: Subscription,
+}
+
+struct NewFileDraft {
+    editor: Entity<EditorState>,
+    path: Option<PathBuf>,
+    disk_version: Option<document_editing::DiskVersion>,
+    dirty: bool,
+    active: bool,
+    saving: bool,
+    exit_after_save: bool,
+    save_task: Option<Task<()>>,
+    _subscription: Subscription,
 }
 
 struct PreparedTabFrame {
@@ -1639,6 +1669,7 @@ pub struct Workspace {
     transient_paths: BTreeSet<PathMatchKey>,
     pending_tab_moves: BTreeSet<u64>,
     documents: Vec<DocumentTab>,
+    new_file_drafts: BTreeMap<u64, NewFileDraft>,
     tabs: Vec<WorkspaceTabId>,
     active_tab_id: WorkspaceTabId,
     active_ix: Option<usize>,
@@ -1724,6 +1755,7 @@ impl Workspace {}
 
 mod color_commands;
 mod document_commands;
+mod document_editing;
 mod document_lifecycle;
 mod document_opening;
 mod filter_popover;
@@ -2292,6 +2324,7 @@ impl Workspace {
             transient_paths: BTreeSet::new(),
             pending_tab_moves: BTreeSet::new(),
             documents: Vec::new(),
+            new_file_drafts: BTreeMap::new(),
             tabs: vec![WorkspaceTabId::New(1)],
             active_tab_id: WorkspaceTabId::New(1),
             active_ix: None,
@@ -2392,7 +2425,19 @@ impl Workspace {
                 .find(|tab| tab.id == document_id)
                 .map(|tab| tab.file.title.clone())
                 .unwrap_or_else(|| crate::tr!("日志", "Log").into()),
-            WorkspaceTabId::New(_) => crate::tr!("新标签页", "New tab").into(),
+            WorkspaceTabId::New(id) => self
+                .new_file_drafts
+                .get(&id)
+                .map(|draft| {
+                    draft
+                        .path
+                        .as_ref()
+                        .and_then(|path| path.file_name())
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| crate::tr!("未命名", "Untitled").to_string())
+                        .into()
+                })
+                .unwrap_or_else(|| crate::tr!("新标签页", "New tab").into()),
         }
     }
 
