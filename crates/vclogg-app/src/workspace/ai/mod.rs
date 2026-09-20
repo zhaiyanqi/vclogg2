@@ -12,6 +12,7 @@ mod logs;
 mod navigation;
 mod search;
 mod transcript;
+mod transcript_scroll;
 use logs::*;
 mod configuration;
 mod conversation_tab_view;

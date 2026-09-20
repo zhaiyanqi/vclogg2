@@ -12,7 +12,7 @@ use gpui_component::{
     ActiveTheme as _, Disableable as _, IconName, IndexPath, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
-    color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
+    color_picker::{ColorPickerEvent, ColorPickerState},
     h_flex,
     input::{Input, InputEvent, InputState},
     scroll::{Scrollbar, ScrollbarMode},
@@ -667,14 +667,14 @@ impl Render for RowTagDialog {
                             .flex_1()
                             .gap_2()
                             .child(crate::tr!("文字颜色", "Text color"))
-                            .child(ColorPicker::new(&self.text_color)),
+                            .child(crate::app_color_picker::new(&self.text_color)),
                     )
                     .child(
                         v_flex()
                             .flex_1()
                             .gap_2()
                             .child(crate::tr!("标记颜色", "Mark color"))
-                            .child(ColorPicker::new(&self.background)),
+                            .child(crate::app_color_picker::new(&self.background)),
                     ),
             )
             .child(

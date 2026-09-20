@@ -136,15 +136,23 @@ impl Workspace {
                 cx,
             );
         }
-        // Cancellation callbacks may update this workspace (settings preview, dialog
-        // subscriptions), so dismiss outside its entity update before starting the load.
+        // A modal may own unsaved settings. Check it outside the workspace
+        // update; closing it programmatically would skip its cancel callback.
         let workspace = cx.weak_entity();
         window.defer(cx, move |window, cx| {
-            if gpui_base::dismiss_window_overlays(window, cx) {
-                _ = workspace.update(cx, |workspace, cx| {
-                    workspace.begin_open_paths(files, window, cx);
-                });
+            if window.has_active_dialog(cx) || window.has_active_sheet(cx) {
+                window.notify_message(
+                    crate::tr!(
+                        "请先关闭当前对话框，再拖入文件",
+                        "Close the current dialog before dropping files",
+                    ),
+                    cx,
+                );
+                return;
             }
+            _ = workspace.update(cx, |workspace, cx| {
+                workspace.begin_open_paths(files, window, cx);
+            });
         });
     }
 

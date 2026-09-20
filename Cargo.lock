@@ -704,6 +704,8 @@ dependencies = [
 [[package]]
 name = "block"
 version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d8c1fef690941d3e7788d328517591fecc684c084084702d6ff1641e993699a"
 
 [[package]]
 name = "block-buffer"
@@ -2416,6 +2418,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.5.2"
+source = "git+https://github.com/longbridge/gpui-component?rev=38b2f652874fec3c31e5a876443ee594c0fd9d04#38b2f652874fec3c31e5a876443ee594c0fd9d04"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -2447,6 +2450,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.5.2"
+source = "git+https://github.com/longbridge/gpui-component?rev=38b2f652874fec3c31e5a876443ee594c0fd9d04#38b2f652874fec3c31e5a876443ee594c0fd9d04"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2510,14 +2514,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "gpui-message-scroller"
-version = "0.1.0"
-dependencies = [
- "gpui",
- "gpui-component",
 ]
 
 [[package]]
@@ -7614,7 +7610,6 @@ dependencies = [
  "gpui-base",
  "gpui-component",
  "gpui-component-assets",
- "gpui-message-scroller",
  "gpui_platform",
  "image",
  "log",

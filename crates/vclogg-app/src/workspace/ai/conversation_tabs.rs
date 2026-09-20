@@ -1,5 +1,5 @@
+use super::transcript_scroll::TranscriptScroll;
 use super::*;
-use gpui_message_scroller::MessageScrollerState;
 use vclogg_ai::Conversation;
 use vclogg_data::AiConversationRecord;
 
@@ -15,7 +15,7 @@ pub(super) struct ConversationTab {
     error: String,
     expanded: BTreeSet<usize>,
     thinking_expanded: BTreeSet<usize>,
-    scroller: Entity<MessageScrollerState>,
+    scroller: Entity<TranscriptScroll>,
     transcript_rows: Vec<usize>,
 }
 
@@ -79,7 +79,7 @@ impl AiPanel {
     }
 
     fn reset_conversation_scroller(&mut self, cx: &mut Context<Self>) {
-        self.scroller = cx.new(|cx| MessageScrollerState::new(0, cx));
+        self.scroller = cx.new(|cx| TranscriptScroll::new(0, cx));
         self.scroll_subscription = cx.observe(&self.scroller, |_, _, cx| cx.notify());
     }
 
@@ -156,7 +156,7 @@ impl AiPanel {
                                 error: String::new(),
                                 expanded: BTreeSet::new(),
                                 thinking_expanded: BTreeSet::new(),
-                                scroller: cx.new(|cx| MessageScrollerState::new(0, cx)),
+                                scroller: cx.new(|cx| TranscriptScroll::new(0, cx)),
                                 transcript_rows: Vec::new(),
                             },
                             window,

@@ -7,7 +7,7 @@ use gpui_component::{
     ActiveTheme as _, Disableable as _, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
-    color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
+    color_picker::{ColorPickerEvent, ColorPickerState},
     h_flex,
     input::{Input, InputEvent, InputState},
     menu::{DropdownMenu, PopupMenuItem},
@@ -507,7 +507,9 @@ impl ColorLabelsDialog {
             .rounded(cx.theme().radius)
             .into_any_element()
         } else {
-            ColorPicker::new(picker).small().into_any_element()
+            crate::app_color_picker::new(picker)
+                .small()
+                .into_any_element()
         }
     }
 

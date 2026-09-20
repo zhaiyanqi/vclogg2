@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "vendor/gpui-message-scroller",
     "crates/vclogg-ai",
     "crates/vclogg-app",
     "crates/vclogg-core",
@@ -56,17 +55,6 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Pipes",
     "Win32_System_Threading",
 ] }
-
-[patch.crates-io]
-# block 0.1.6 models an extern static with an uninhabited type. Keep its
-# public API while applying the rustc future-incompatibility fix locally.
-block = { path = "vendor/block" }
-
-[patch."https://github.com/longbridge/gpui-component"]
-# Keep single-line inputs vertically stationary before painting at every DPI.
-gpui-base = { path = "vendor/gpui-base" }
-# Add opt-in foreground/background selection colors to Markdown TextView.
-gpui-component = { path = "vendor/gpui-component" }
 
 [workspace.lints.clippy]
 dbg_macro = "deny"

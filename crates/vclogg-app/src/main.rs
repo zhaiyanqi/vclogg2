@@ -5,6 +5,7 @@
 
 mod actions;
 mod app_assets;
+mod app_color_picker;
 mod app_icon;
 mod app_log;
 mod app_paths;

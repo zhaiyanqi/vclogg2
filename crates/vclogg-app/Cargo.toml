@@ -19,7 +19,6 @@ async-channel.workspace = true
 chrono.workspace = true
 dirs.workspace = true
 gpui.workspace = true
-gpui-message-scroller = { path = "../../vendor/gpui-message-scroller" }
 gpui-base.workspace = true
 gpui-component.workspace = true
 gpui-component-assets.workspace = true

@@ -1,9 +1,9 @@
+use super::transcript_scroll::TranscriptScroll;
 use super::*;
 use gpui_component::{
     input::{InputEvent, TextareaState},
     text::TextViewState,
 };
-use gpui_message_scroller::MessageScrollerState;
 use vclogg_ai::{AgentEvent, AiSettings, Conversation, RunHandle, RunStatus};
 use vclogg_data::AiConversationRecord;
 
@@ -25,7 +25,7 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) draft_logs: Vec<super::attachments::DraftLog>,
     pub(super) attachments_loading: bool,
     pub(super) attachment_task: Option<Task<()>>,
-    pub(super) scroller: Entity<MessageScrollerState>,
+    pub(super) scroller: Entity<TranscriptScroll>,
     pub(super) scroll_subscription: Subscription,
     pub(super) live_row: bool,
     pub(super) transcript_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -123,7 +123,7 @@ impl AiPanel {
                 cx.notify();
             }
         });
-        let scroller = cx.new(|cx| MessageScrollerState::new(0, cx));
+        let scroller = cx.new(|cx| TranscriptScroll::new(0, cx));
         let scroll_subscription = cx.observe(&scroller, |_, _, cx| cx.notify());
         let mut this = Self {
             workspace,

@@ -1,6 +1,5 @@
 use super::*;
-use gpui_component::{input::Textarea, text::TextView};
-use gpui_message_scroller::MessageScroller;
+use gpui_component::{input::Textarea, scroll::ScrollableElement as _, text::TextView};
 use vclogg_ai::RunStatus;
 
 impl AiPanel {
@@ -290,7 +289,6 @@ impl AiPanel {
     ) -> AnyElement {
         let owner = cx.weak_entity();
         let selected_view = view.clone();
-        let colors = ui_theme::palette(cx);
         // Match gpui-kit's example-markdown preview: default typography and
         // adaptive tables that scroll horizontally once columns reach their floor.
         let mut table = gpui::StyleRefinement::default();
@@ -307,11 +305,7 @@ impl AiPanel {
             .inline_code(gpui::HighlightStyle {
                 background_color: Some(default_colors.accent),
                 ..Default::default()
-            })
-            .selection_colors(
-                colors.chat_selection_background,
-                colors.chat_selection_foreground,
-            );
+            });
         div().id(SharedString::from(format!("ai-text-{:?}", view.entity_id())))
             .min_w_0().w_full()
             .child(TextView::new(view).style(style).text_size(gpui::rems(1.)).selectable(true).on_link_click(move |url, event, window, cx| {
@@ -600,15 +594,55 @@ impl Render for AiPanel {
         let models = cx.entity();
         let header = self.render_conversation_tabs(window, cx);
         let owner = cx.entity();
-        let messages =
-            MessageScroller::new("ai-transcript", self.scroller.clone(), move |ix, _, cx| {
-                owner.update(cx, |this, cx| this.render_message(ix, cx))
-            })
-            .with_list_style(gpui::StyleRefinement::default().p_3())
-            .with_row_style(gpui::StyleRefinement::default().pb_4())
-            .with_jump_button_label(crate::tr!("回到最新消息", "Jump to latest"))
-            .with_jump_button_renderer(|button| {
-                button.small().text_label(crate::tr!("最新消息", "Latest"))
+        let scroll = self.scroller.read(cx).list.clone();
+        let show_jump = self.scroller.read(cx).is_scrolled_up();
+        let jump_state = self.scroller.clone();
+        let messages = div()
+            .id("ai-transcript")
+            .relative()
+            .size_full()
+            .min_h_0()
+            .overflow_hidden()
+            .child(
+                div()
+                    .size_full()
+                    .min_h_0()
+                    .child(
+                        gpui::list(scroll.clone(), move |ix, _, cx| {
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .px_3()
+                                .pb_4()
+                                .child(owner.update(cx, |this, cx| this.render_message(ix, cx)))
+                                .into_any_element()
+                        })
+                        .size_full()
+                        .min_h_0()
+                        .py_2(),
+                    )
+                    .vertical_scrollbar(&scroll),
+            )
+            .when(show_jump, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom_4()
+                        .flex()
+                        .justify_center()
+                        .child(
+                            Button::new("ai-jump-latest")
+                                .small()
+                                .secondary()
+                                .text_label(crate::tr!("最新消息", "Latest"))
+                                .tooltip(crate::tr!("回到最新消息", "Jump to latest"))
+                                .on_click(move |_, _, cx| {
+                                    jump_state.update(cx, |state, cx| state.scroll_to_end(cx));
+                                }),
+                        ),
+                )
             });
         let footer = v_flex()
             .flex_shrink_0()

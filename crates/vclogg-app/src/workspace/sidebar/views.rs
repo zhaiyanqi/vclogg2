@@ -1,4 +1,5 @@
 use super::*;
+use gpui::StatefulInteractiveElement as _;
 
 impl ColorGroup {
     pub(super) fn paint_color(&self) -> Hsla {
@@ -767,7 +768,7 @@ impl SidebarState {
 
         let menu_state = cx.entity();
         let state = cx.entity();
-        let scroll = self.tree.read(cx).scroll_handle().clone();
+        let scroll = self.tree_horizontal_scroll.clone();
         let tree = Tree::new(&self.tree, move |_, entry, selected, _, _| {
             let path = decode_persisted_path(entry.item().id.as_ref());
             let folder = entry.is_folder();
@@ -936,11 +937,14 @@ impl SidebarState {
             )
             .child(
                 div()
+                    .id("sidebar-file-tree-horizontal")
                     .relative()
                     .flex_1()
                     .min_h_0()
                     .min_w_0()
-                    .child(tree)
+                    .overflow_x_scroll()
+                    .track_scroll(&scroll)
+                    .child(tree.w(self.tree_width).min_w_full())
                     .horizontal_scrollbar(&scroll),
             )
             .into_any_element()
