@@ -613,11 +613,18 @@ impl Workspace {
             .items_center()
             .text_size(px(12.))
             .child(
-                svg()
-                    .data(tab_icon)
+                div()
                     .size(px(20.))
-                    .text_color(file_icon_color)
-                    .opacity(if dirty { 1. } else { 0.72 }),
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        svg()
+                            .data(tab_icon)
+                            .size(px(if editing { 16. } else { 20. }))
+                            .text_color(file_icon_color)
+                            .opacity(if dirty { 1. } else { 0.72 }),
+                    ),
             )
             .child(
                 div()
