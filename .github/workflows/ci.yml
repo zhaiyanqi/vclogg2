@@ -40,7 +40,8 @@ jobs:
             libx11-xcb-dev \
             libxcb1-dev \
             libxkbcommon-x11-dev \
-            pkg-config
+            pkg-config \
+            ripgrep
 
       - name: Initialize Rust toolchain
         run: |
