@@ -141,8 +141,7 @@ pub(super) fn exercise(
         }
         let reference: LogReference = serde_json::from_value(reference.clone()).unwrap();
         let citation = reference.url();
-        let summary =
-            format!("分析完成：发现 [attached.log:2]({citation}) 网络异常，已高亮并添加文字标记。");
+        let summary = format!("[attached.log:2]({citation}) 网络异常，已高亮并添加文字标记。");
         socket
             .write_all(
                 b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
@@ -199,6 +198,71 @@ pub(super) fn exercise(
         assert_eq!(w.query.read(cx).value(), "timeout");
         assert_eq!(w.selected_source_row, Some(1));
         assert!(w.documents[1].file.marked_rows.is_empty());
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        workspace.update(cx, |w, cx| w.activate_tab(1, window, cx));
+    })
+    .unwrap();
+    let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+    let answer = visual.debug_bounds("ai-answer").expect("rendered answer");
+    let citation_position = gpui_kit::point(answer.left() + px(20.), answer.top() + px(12.));
+    visual.simulate_mouse_down(
+        citation_position,
+        MouseButton::Left,
+        gpui_kit::Modifiers::default(),
+    );
+    visual.simulate_mouse_up(
+        citation_position,
+        MouseButton::Left,
+        gpui_kit::Modifiers::default(),
+    );
+    pump_until(cx, panel, |p| !p.ui_busy);
+    workspace.read_with(cx, |w, _| {
+        assert_eq!(
+            w.active_document().unwrap().id,
+            id,
+            "clicking a rendered citation must navigate"
+        );
+        assert_eq!(w.selected_source_row, Some(1));
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        workspace.update(cx, |w, cx| w.activate_tab(1, window, cx));
+    })
+    .unwrap();
+    let selection_end = gpui_kit::point(answer.left() + px(120.), answer.top() + px(12.));
+    visual.simulate_mouse_down(
+        citation_position,
+        MouseButton::Left,
+        gpui_kit::Modifiers::default(),
+    );
+    visual.simulate_mouse_move(
+        selection_end,
+        MouseButton::Left,
+        gpui_kit::Modifiers::default(),
+    );
+    visual.simulate_mouse_up(
+        selection_end,
+        MouseButton::Left,
+        gpui_kit::Modifiers::default(),
+    );
+    assert!(visual.update(gpui_kit::base::TextSelection::has_selection));
+    visual.simulate_mouse_down(
+        citation_position,
+        MouseButton::Left,
+        gpui_kit::Modifiers::default(),
+    );
+    visual.simulate_mouse_up(
+        citation_position,
+        MouseButton::Left,
+        gpui_kit::Modifiers::default(),
+    );
+    pump_until(cx, panel, |p| !p.ui_busy);
+    workspace.read_with(cx, |w, _| {
+        assert_eq!(
+            w.active_document().unwrap().id,
+            id,
+            "a previous text selection must not block a citation"
+        );
     });
     cx.update_window(window.into(), |_, window, cx| {
         workspace.update(cx, |w, cx| w.activate_tab(1, window, cx));
@@ -259,7 +323,30 @@ pub(super) fn exercise(
         assert_eq!(w.active_document().unwrap().id, id);
         assert_eq!(w.selected_source_row, Some(1));
     });
+    // Older conversations stored row filenames but no durable source paths.
+    let mut legacy: vclogg_ai::Conversation = serde_json::from_str(&saved).unwrap();
+    legacy.log_sources.clear();
+    for message in &mut legacy.messages {
+        if let AgentMessage::Tool { result, .. } = message {
+            remove_saved_paths(&mut result.value);
+        }
+    }
+    cx.update_window(window.into(), |_, window, cx| {
+        workspace.update(cx, |w, cx| w.activate_tab(1, window, cx));
+        panel.update(cx, |p, cx| {
+            p.conversation = legacy;
+            p.open_link(&citation, window, cx);
+        });
+    })
+    .unwrap();
+    pump_until(cx, panel, |p| !p.ui_busy);
+    panel.read_with(cx, |p, _| assert!(p.error.is_empty(), "{}", p.error));
+    workspace.read_with(cx, |w, _| {
+        assert_eq!(w.active_document().unwrap().id, id);
+        assert_eq!(w.selected_source_row, Some(1));
+    });
     panel.update(cx, |p, _| {
+        p.conversation = serde_json::from_str(&saved).unwrap();
         p.scope = scopes.0;
         p.reference_scopes = scopes.1;
     });
@@ -378,6 +465,23 @@ pub(super) fn exercise(
         }
     }
     assert!(scope.lock().unwrap().document(u64::MAX, None).is_err());
+}
+
+fn remove_saved_paths(value: &mut Value) {
+    match value {
+        Value::Object(values) => {
+            values.remove("path");
+            for value in values.values_mut() {
+                remove_saved_paths(value);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                remove_saved_paths(value);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn request(listener: &TcpListener) -> (TcpStream, Value) {

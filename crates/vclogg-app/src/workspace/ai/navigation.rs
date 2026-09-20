@@ -31,25 +31,58 @@ impl AiPanel {
         cx: &mut Context<Self>,
     ) {
         let conversation = self.conversation_with_log_sources();
-        let path = conversation
-            .log_sources
-            .iter()
-            .find(|source| {
-                source.document_id == reference.document_id && source.version == reference.version
-            })
-            .map(|source| source.path.clone())
-            .or_else(|| {
-                self.conversation
-                    .messages
-                    .iter()
-                    .rev()
-                    .find_map(|message| match message {
-                        AgentMessage::Tool { result, .. } if !result.is_error => {
-                            historical_path(&result.value, reference)
-                        }
-                        _ => None,
-                    })
-            });
+        let path =
+            conversation
+                .log_sources
+                .iter()
+                .find(|source| {
+                    source.document_id == reference.document_id
+                        && source.version == reference.version
+                })
+                .map(|source| source.path.clone())
+                .or_else(|| {
+                    self.conversation
+                        .messages
+                        .iter()
+                        .rev()
+                        .find_map(|message| match message {
+                            AgentMessage::Tool { result, .. } if !result.is_error => {
+                                historical_path(&result.value, reference)
+                            }
+                            _ => None,
+                        })
+                })
+                .or_else(|| {
+                    let file =
+                        self.conversation.messages.iter().rev().find_map(
+                            |message| match message {
+                                AgentMessage::Tool { result, .. } if !result.is_error => {
+                                    historical_file(&result.value, reference)
+                                }
+                                _ => None,
+                            },
+                        )?;
+                    self.workspace
+                        .update(cx, |w, _| {
+                            if let Some(tab) = w.documents.iter().find(|tab| {
+                                tab.id == reference.document_id
+                                    && tab
+                                        .document
+                                        .path()
+                                        .file_name()
+                                        .is_some_and(|name| name == file.as_str())
+                            }) {
+                                return Some(tab.document.path().to_path_buf());
+                            }
+                            let candidates =
+                                w.documents.iter().map(|tab| tab.document.path()).chain(
+                                    w.recent_files.iter().map(|recent| recent.path.as_path()),
+                                );
+                            unique_file_path(candidates, &file)
+                        })
+                        .ok()
+                        .flatten()
+                });
         let Some(path) = path.filter(|path| path.is_absolute()) else {
             self.error = crate::tr!(
                 "这条历史记录未保存源文件路径",
@@ -214,6 +247,39 @@ fn historical_path(value: &Value, reference: &LogReference) -> Option<PathBuf> {
     }
 }
 
+fn historical_file(value: &Value, reference: &LogReference) -> Option<String> {
+    if value
+        .get("reference")
+        .and_then(|value| serde_json::from_value::<LogReference>(value.clone()).ok())
+        .as_ref()
+        == Some(reference)
+        && let Some(file) = value["file"].as_str()
+        && !file.is_empty()
+    {
+        return Some(file.to_owned());
+    }
+    match value {
+        Value::Object(values) => values
+            .values()
+            .find_map(|value| historical_file(value, reference)),
+        Value::Array(values) => values
+            .iter()
+            .find_map(|value| historical_file(value, reference)),
+        _ => None,
+    }
+}
+
+fn unique_file_path<'a>(paths: impl IntoIterator<Item = &'a Path>, file: &str) -> Option<PathBuf> {
+    let mut matches = paths
+        .into_iter()
+        .filter(|path| path.file_name().is_some_and(|name| name == file) && path.is_absolute());
+    let first = matches.next()?;
+    if matches.any(|path| !paths_match(path, first)) {
+        return None;
+    }
+    Some(first.to_path_buf())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,5 +301,30 @@ mod tests {
         );
         let missing = json!({"document_id":7,"version":"old-run","file":"source.log"});
         assert_eq!(historical_path(&missing, &reference), None);
+        let row = json!({"rows":[
+            {"reference":{"document_id":7,"version":"new-run","line":2},"file":"wrong.log"},
+            {"reference":reference,"file":"source.log"}
+        ]});
+        assert_eq!(
+            historical_file(&row, &reference).as_deref(),
+            Some("source.log")
+        );
+        assert_eq!(
+            unique_file_path(
+                [Path::new("/logs/source.log"), Path::new("/logs/source.log")],
+                "source.log"
+            ),
+            Some(PathBuf::from("/logs/source.log"))
+        );
+        assert_eq!(
+            unique_file_path(
+                [
+                    Path::new("/logs/source.log"),
+                    Path::new("/other/source.log")
+                ],
+                "source.log"
+            ),
+            None
+        );
     }
 }

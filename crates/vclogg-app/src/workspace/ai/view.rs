@@ -88,7 +88,12 @@ impl AiPanel {
             row = row.child(self.render_process(start, end, answer, live, cx));
         }
         if let Some(ix) = answer {
-            row = row.child(self.markdown_view(&self.messages[ix], cx));
+            row = row.child(
+                div()
+                    .debug_selector(|| "ai-answer".into())
+                    .w_full()
+                    .child(self.markdown_view(&self.messages[ix], cx)),
+            );
         }
         if live && !self.live.is_empty() {
             row = row.child(self.markdown_view(&self.live_view, cx));
