@@ -3,7 +3,10 @@ use gpui_kit::component::{
     color_picker::ColorPickerState,
     dialog::{DialogAction, DialogClose},
 };
-use gpui_kit::{App, Entity, Focusable as _, IntoElement, ParentElement as _, Window, div};
+use gpui_kit::{
+    App, Entity, Focusable as _, InteractiveElement as _, IntoElement, ParentElement as _, Window,
+    div,
+};
 
 /// Routes confirmation through gpui-kit's dialog-owned dispatch anchor.
 pub(crate) fn dialog_confirm_action(
