@@ -13,6 +13,7 @@ fn isolated_panel_send_workflow() {
         "workspace_transcript",
         "tabs",
         "queue",
+        "queued_run",
         "context",
         "log_analysis",
         "cancel",
@@ -239,6 +240,7 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
     }
     let preparing_cancel = mode == "preparing_cancel";
     let cancelling = mode == "cancel";
+    let queued_run = mode == "queued_run";
     let failed = matches!(mode.as_str(), "error" | "non_sse");
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -253,6 +255,8 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
             0
         } else if cancelling || failed {
             1
+        } else if queued_run {
+            3
         } else {
             2
         } {
@@ -309,6 +313,12 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
                 assert_eq!(
                     body["messages"].as_array().unwrap().last().unwrap()["role"],
                     "tool"
+                );
+            }
+            if queued_run && round == 2 {
+                assert_eq!(
+                    body["messages"].as_array().unwrap().last().unwrap()["content"],
+                    "追加问题"
                 );
             }
             if failed {
@@ -433,8 +443,29 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
         return;
     }
     assert!(panel.read_with(cx, |p, _| p.run.is_some()));
+    if queued_run {
+        cx.update_window(window.into(), |_, window, cx| {
+            panel.update(cx, |p, cx| {
+                p.input
+                    .update(cx, |input, cx| input.set_value("追加问题", window, cx));
+                p.send(false, window, cx);
+                assert_eq!(p.queued_prompts.len(), 1);
+            });
+        })
+        .unwrap();
+    }
     release.send(()).unwrap();
     pump_until(cx, &panel, |p| !p.busy && p.run.is_none());
+    if queued_run {
+        panel.read_with(cx, |p, cx| {
+            assert!(p.queued_prompts.is_empty(), "status={:?} error={} draft={} queued={}", p.conversation.status, p.error, p.input.read(cx).value(), p.queued_prompts.len());
+            assert_eq!(p.conversation.status, RunStatus::Complete);
+            assert_eq!(p.conversation.messages.len(), 6);
+            assert!(matches!(&p.conversation.messages[4], AgentMessage::User { text } if text == "追加问题"));
+        });
+        server.join().unwrap();
+        return;
+    }
     panel.read_with(cx, |p, cx| {
         assert!(!p.live_row);
         assert!(p.reasoning_views[1].is_some());

@@ -648,7 +648,7 @@ impl AiPanel {
             .with_conversation(&self.conversation);
         let workspace = self.workspace.clone();
         self.task = Some(cx.spawn_in(window, async move |this, cx| {
-            let _lease = lease;
+            let mut run_lease = Some(lease);
             let save_store = store.clone();
             let capture = scope.clone();
             let saved = cx.background_spawn(async move {
@@ -686,6 +686,7 @@ impl AiPanel {
                 });
                 if let Ok(Ok(record)) = record {
                     let saved = cx.background_spawn(async move { store.save_ai_conversation(&record) }).await;
+                    drop(run_lease.take());
                     _ = this.update_in(cx, |this, window, cx| {
                         match saved {
                             Ok(revision) => { this.revision = revision; this.update_history_entry(); }
@@ -800,6 +801,7 @@ impl AiPanel {
                     }
                 }
                 if finished {
+                    drop(run_lease.take());
                     _ = this.update_in(cx, |this, window, cx| {
                         this.busy = false;
                         if this.conversation.status == RunStatus::Complete || this.resume_queue_after_stop {
@@ -824,6 +826,7 @@ impl AiPanel {
             });
             if let Ok(Ok(record)) = this.update(cx, |this, _| this.record()) {
                 let saved = cx.background_spawn(async move { store.save_ai_conversation(&record) }).await;
+                drop(run_lease.take());
                 _ = this.update_in(cx, |this, window, cx| {
                     match saved {
                         Ok(revision) => { this.revision = revision; this.update_history_entry(); }
