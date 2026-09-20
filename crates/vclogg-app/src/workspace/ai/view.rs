@@ -1101,23 +1101,6 @@ pub(super) fn tool_result_summary(result: &ToolResult) -> String {
     .into()
 }
 
-#[cfg(test)]
-mod tool_summary_tests {
-    use super::*;
-
-    #[test]
-    fn summarizes_result_counts_and_errors() {
-        assert_eq!(
-            tool_result_summary(&ToolResult::ok(json!({"rows":[{},{}],"total":7}))),
-            "rows: 2 / 7"
-        );
-        assert_eq!(
-            tool_result_summary(&ToolResult::error("source unavailable")),
-            "source unavailable"
-        );
-    }
-}
-
 pub(super) fn tool_label(name: &str) -> &str {
     match name {
         "rg_search" => crate::tr!("搜索源码", "Search source"),
@@ -1147,5 +1130,22 @@ pub(super) fn tool_label(name: &str) -> &str {
         "text_mark" => crate::tr!("文字标记", "Annotate logs"),
         "navigate" => crate::tr!("定位日志", "Navigate to logs"),
         _ => name,
+    }
+}
+
+#[cfg(test)]
+mod tool_summary_tests {
+    use super::*;
+
+    #[test]
+    fn summarizes_result_counts_and_errors() {
+        assert_eq!(
+            tool_result_summary(&ToolResult::ok(json!({"rows":[{},{}],"total":7}))),
+            "rows: 2 / 7"
+        );
+        assert_eq!(
+            tool_result_summary(&ToolResult::error("source unavailable")),
+            "source unavailable"
+        );
     }
 }
