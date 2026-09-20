@@ -180,7 +180,7 @@ impl AiPanel {
                             .text_label(if live && self.live.is_empty() {
                                 crate::tr!("正在分析", "Analyzing")
                             } else {
-                                crate::tr!("思考过程", "Thought process")
+                                crate::tr!("分析过程", "Analysis activity")
                             })
                             .child(
                                 Icon::new(if expanded {
@@ -200,9 +200,9 @@ impl AiPanel {
                             })),
                     ),
             );
-        if expanded {
+        {
             for ix in start..end {
-                if let Some(view) = &self.reasoning_views[ix] {
+                if expanded && let Some(view) = &self.reasoning_views[ix] {
                     process = process.child(
                         div()
                             .debug_selector(|| "ai-reasoning-text".into())
@@ -213,7 +213,7 @@ impl AiPanel {
                 }
                 match &self.conversation.messages[ix] {
                     AgentMessage::Assistant { text, .. }
-                        if Some(ix) != answer && !text.is_empty() =>
+                        if expanded && Some(ix) != answer && !text.is_empty() =>
                     {
                         process = process.child(self.markdown_view(&self.messages[ix], cx));
                     }
@@ -300,7 +300,7 @@ impl AiPanel {
                     _ => {}
                 }
             }
-            if live && !self.reasoning.is_empty() {
+            if expanded && live && !self.reasoning.is_empty() {
                 process = process.child(self.markdown_view(&self.live_reasoning_view, cx));
             }
             if let Some(call) = self
