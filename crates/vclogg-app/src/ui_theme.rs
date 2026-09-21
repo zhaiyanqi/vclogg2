@@ -38,7 +38,12 @@ pub(crate) fn drag_only_log_scrollbar_guard(
                 if phase.bubble()
                     && hitbox.bounds.contains(&event.position)
                     && (!hitbox.is_hovered_at(event.position, window)
-                        || !log_scrollbar_thumb_contains(&handle, axis, event.position))
+                        || !log_scrollbar_thumb_contains(
+                            &handle,
+                            axis,
+                            hitbox.bounds,
+                            event.position,
+                        ))
                 {
                     window.prevent_default();
                     cx.stop_propagation();
@@ -53,26 +58,26 @@ pub(crate) fn drag_only_log_scrollbar_guard(
 fn log_scrollbar_thumb_contains(
     handle: &impl ScrollbarHandle,
     axis: Axis,
+    track_bounds: gpui_kit::Bounds<Pixels>,
     position: Point<Pixels>,
 ) -> bool {
-    let viewport = handle.viewport_bounds();
     let content = handle.content_size();
     let offset = handle.offset();
     let (origin, extent, total, scroll, cross_end, cross_position) = match axis {
         Axis::Vertical => (
-            viewport.origin.y,
-            viewport.size.height,
+            track_bounds.origin.y,
+            track_bounds.size.height,
             content.height,
             offset.y,
-            viewport.origin.x + viewport.size.width,
+            track_bounds.origin.x + track_bounds.size.width,
             position.x,
         ),
         Axis::Horizontal => (
-            viewport.origin.x,
-            viewport.size.width,
+            track_bounds.origin.x,
+            track_bounds.size.width,
             content.width,
             offset.x,
-            viewport.origin.y + viewport.size.height,
+            track_bounds.origin.y + track_bounds.size.height,
             position.y,
         ),
     };
@@ -643,21 +648,25 @@ mod tests {
         assert!(log_scrollbar_thumb_contains(
             &handle,
             Axis::Vertical,
+            handle.viewport,
             point(px(100.), px(70.))
         ));
         assert!(!log_scrollbar_thumb_contains(
             &handle,
             Axis::Vertical,
+            handle.viewport,
             point(px(100.), px(100.))
         ));
         assert!(log_scrollbar_thumb_contains(
             &handle,
             Axis::Horizontal,
+            handle.viewport,
             point(px(60.), px(110.))
         ));
         assert!(!log_scrollbar_thumb_contains(
             &handle,
             Axis::Horizontal,
+            handle.viewport,
             point(px(90.), px(110.))
         ));
     }
@@ -734,6 +743,61 @@ mod tests {
             Modifiers::default(),
         );
         assert!(handle.offset().y < px(0.));
+    }
+
+    struct HorizontalDragOnlyScrollbarView(TestScrollHandle);
+
+    impl Render for HorizontalDragOnlyScrollbarView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui_kit::IntoElement {
+            div().relative().size(px(100.)).child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right(LOG_SCROLLBAR_WIDTH)
+                    .bottom_0()
+                    .h(LOG_SCROLLBAR_WIDTH)
+                    .child(persistent_log_scrollbar(
+                        Scrollbar::horizontal(&self.0).viewport_from_layout(),
+                        hsla(0., 0., 0., 1.),
+                    ))
+                    .child(drag_only_log_scrollbar_guard(
+                        self.0.clone(),
+                        Axis::Horizontal,
+                    )),
+            )
+        }
+    }
+
+    #[gpui_kit::test]
+    fn horizontal_log_scrollbar_thumb_drag_uses_reserved_track_width(cx: &mut TestAppContext) {
+        let handle = TestScrollHandle {
+            viewport: Bounds::new(point(px(0.), px(0.)), size(px(100.), px(100.))),
+            content: size(px(500.), px(100.)),
+            offset: Rc::new(Cell::new(point(px(-400.), px(0.)))),
+        };
+        let (_, cx) = cx.add_window_view({
+            let handle = handle.clone();
+            move |_, _| HorizontalDragOnlyScrollbarView(handle)
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        cx.simulate_mouse_down(
+            point(px(50.), px(95.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_move(
+            point(px(30.), px(95.)),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            point(px(30.), px(95.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+
+        assert!(handle.offset().x > px(-400.));
     }
 
     struct OverlappedScrollbarView {
