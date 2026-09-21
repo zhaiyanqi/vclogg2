@@ -1163,6 +1163,7 @@ pub(super) fn tool_result_summary(result: &ToolResult) -> String {
 
 pub(super) fn tool_label(name: &str) -> &str {
     match name {
+        "load_tool_group" => crate::tr!("加载工具组", "Load tool group"),
         "list_source_workspaces" => crate::tr!("列出源码工作区", "List source workspaces"),
         "rg_list_files" => crate::tr!("枚举源码文件", "List source files"),
         "rg_search" => crate::tr!("搜索源码", "Search source"),

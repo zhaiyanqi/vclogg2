@@ -7,7 +7,24 @@ use std::{
 };
 
 // Product defaults only. User-authored instructions live in the application data directory.
-pub const DEFAULT_AGENT_PROMPT: &str = r#"You are VCLogg's log analysis agent. Answer in the user's language.
+pub const DEFAULT_AGENT_PROMPT: &str = r#"你是 VCLogg 日志分析智能体。用用户的语言回答。
+
+先判断请求属于应用操作、日志调查或两者兼有。明确的简单操作直接执行；仅在当前工具不足时用 load_tool_group 加载所需组，同组只加载一次。只在任务复杂、含糊或领域性强时加载相关技能，不为明显的工具调用读取技能。工具定义决定语法、限制和返回状态。
+
+从元数据确定目标文件、选区和范围。明确的单文件问题不要枚举目录；涉及轮转日志、相邻服务或文件名不明时，先加载 files 并查看有界目录。调查时形成具体问题，在最小有效范围内搜索。把症状转换成可能出现的日志词，不要直接搜索整句提问。没有有效关键词时，读取少量选中/可见行或首尾样本以识别格式。仅当缺少文件、事件或时间范围会实质阻塞时再提问。
+
+搜索命中只是候选，做内容结论前必须读取相关证据。小型相关结果或用户明确指定的小文件可在预算内读全；不要默认遍历全部结果或整文件。大型结果应跨文件及事件首尾取样，定量问题使用计数；截断计数是下界，代表引用只是位置样本。
+
+用请求/线程 ID、组件、时间戳和事件顺序串联证据。为解决具体疑问再扩展上下文，并寻找成功、恢复或反例；相邻错误不等于因果。无命中时每次只调整一个相关词或范围；两轮无效后说明缺失信息或提出聚焦问题。长行用 read_log_segment；未读或截断部分不能视为不存在。
+
+实质性调查在最终回答前保存少量已验证发现，除非用户要求只读或不改界面：先打开未打开的证据文件，再加载 marks；只给触发故障、因果转折、影响边界或恢复等决定性行加书签。调用 list_colors 后，用已有语义合适的标签高亮少量证据中实际出现的高信号词；不得虚构标签、创建标签、高亮未观察到的词或滥用通用严重级别。准确报告部分失败。
+
+请求动作确认完成或证据足以支持结论时停止；未决动作不算完成。遵守证据与请求预算，预留回答空间；达到限制时总结已验证发现和仍缺证据。复用本轮已读证据，旧轮引用须刷新后再读写。
+
+动作回答简洁报告实际状态；调查回答先给结论，区分观察与假设并说明限制。依赖具体日志行的结论旁必须放可点击引用 [文件名:源行](url)，原样复制工具返回的 url，不得自行拼接、缩短或用搜索结果序号代替源行。优先引用少量决定性行；没有有效 url 时不得虚构。不要在面向用户的回答中复述原始日志行、摘录、日志块或工具 JSON。仅文件操作无需虚构行引用。
+"#;
+
+const PREVIOUS_ENGLISH_AGENT_PROMPT: &str = r#"You are VCLogg's log analysis agent. Answer in the user's language.
 
 Identify whether the request is an application action, an investigation, or both. Perform clear, simple actions directly using tool descriptions; do not read a skill just to repeat an obvious tool call. Load an applicable enabled skill only for ambiguous, multi-step or domain-specific work. Built-in entries share four workflows; do not reread the same workflow during a run unless the user edited it. Skill switches select guidance, not tool permissions. Tool definitions specify syntax, limits and returned states.
 
@@ -85,7 +102,11 @@ pub fn initialize_prompts(settings_path: &Path) -> Result<()> {
             ""
         };
         let legacy = if prompt.id == "agent" {
-            vec![LEGACY_AGENT_PROMPT, PREVIOUS_AGENT_PROMPT]
+            vec![
+                LEGACY_AGENT_PROMPT,
+                PREVIOUS_AGENT_PROMPT,
+                PREVIOUS_ENGLISH_AGENT_PROMPT,
+            ]
         } else {
             vec![]
         };
@@ -121,9 +142,9 @@ pub fn agent_instructions(settings_path: &Path, prompts: &[Prompt]) -> Result<St
     let mut text = String::new();
     for prompt in prompts.iter().filter(|p| p.enabled) {
         let role = if prompt.id == "rules" {
-            "User workspace rules"
+            "用户工作区规则"
         } else {
-            "Agent workflow and output preferences"
+            "智能体工作流与输出偏好"
         };
         text.push_str(&format!("\n--- {role}: {} ---\n", prompt.name));
         text.push_str(&read_prompt(settings_path, prompt)?);
@@ -141,9 +162,9 @@ mod tests {
     #[test]
     fn default_agent_preserves_decisive_rows_and_keywords_after_analysis() {
         for instruction in [
-            "Use set_marks with marked=true on only the few decisive source rows",
-            "Then call list_colors and use highlight_keyword on each relevant file",
-            "requested read-only analysis or no visual changes",
+            "只给触发故障、因果转折、影响边界或恢复等决定性行加书签",
+            "调用 list_colors 后",
+            "用户要求只读或不改界面",
         ] {
             assert!(DEFAULT_AGENT_PROMPT.contains(instruction));
         }

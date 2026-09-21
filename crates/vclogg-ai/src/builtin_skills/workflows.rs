@@ -1,50 +1,46 @@
-pub(super) const ANALYSIS: &str = r#"# Workflow: search-and-analysis
+pub(super) const ANALYSIS: &str = r#"# 工作流：搜索与分析
 
-Use this guide for investigations and searches whose intent is ambiguous. Direct searches with a clear query can use tool definitions immediately. The search-logs and execute-search entries share this guide; read it once per run.
+用于意图含糊的调查或搜索；查询明确时可直接使用工具。`search-logs` 与 `execute-search` 共用本指南，每轮只读一次。
 
-1. Choose the requested outcome. Background evidence gathering uses search_logs. A request to display/filter results uses show_search, followed by control_search status/results. Appending text without execution uses append_search. A request to explain existing results does not authorize changing the user's search.
-2. Turn a symptom into a falsifiable question. For slow login, look for login/authentication events, elapsed durations and timeout/retry events; a generic ERROR hit alone does not establish the delay's cause. For unknown formats, read a few selected or head/tail rows first. Keep inferred keywords distinct from terms actually observed in the file. Literal query | means OR; spaces do not mean AND. If the user needs an exact pipe, escape it in regex mode.
-3. Search by the strongest observed identifier or event. On zero hits, change the relevant spelling, case, identifier or scope and remember what was already tried. On many hits, summarize counts and choose source references across affected files and event boundaries. Positionally spaced samples are not distinct error categories; inspect minority files and rare failures deliberately.
-4. Read evidence, then investigate the remaining gap. For a long truncated line, read_log_segment with search_id centers on the original match; start_character reads a continuation. Check both line truncation and match_truncated before interpreting a payload. For correlations, follow a request ID through start, error and completion/recovery and use timestamps carefully when timezone or clock order is unknown.
-5. Separate a quantitative question from causal analysis. Exact retained match counts do not count unique incidents. Grouping by a request ID needs evidence of that identity; truncated search totals are lower bounds. All rows in a small relevant set may be read within budget. For large sets, use bounded samples and describe coverage.
-6. Preserve verified key points before answering, unless the user requested read-only analysis or no visual changes. Open any unopened evidence file, then call set_marks with marked=true for only the decisive source rows: the triggering failure, causal transition, impact boundary, or confirmed recovery. Keep the set small (normally no more than eight rows across the investigation); do not mark every match, samples chosen only by position, unverified hypotheses, or generic severity rows.
-7. Add useful keyword color after the row targets are verified. Call list_colors once, choose an existing semantically appropriate label, and call highlight_keyword separately for each relevant open file. Prefer one to three exact, discriminative terms actually observed in that file—an error code, exception, request/state name, or distinctive component. Do not invent a color ID or keyword, create labels, or broadly color INFO/ERROR/WARN unless that severity itself is the finding. If no suitable label or stable term exists, skip highlighting instead of guessing.
-8. Finish when the question is answered by evidence or a specific missing observation blocks it. After two unproductive revisions, report the missing clue or ask for it. Do not exhaust the request budget polling a running UI search; return its running status when necessary. Report which rows were marked and which per-file keywords were highlighted; a failed or pending mutation must be described as partial completion, not success.
+1. 先确认结果形式：后台取证用 `search_logs`；在界面显示/过滤用 `show_search`，再用 `control_search`；只追加搜索文字用 `append_search`。解释现有结果不等于获准修改用户搜索。
+2. 把症状转成可证伪问题。慢登录应寻找认证事件、耗时、超时和重试，单个 ERROR 不能证明原因。格式未知时先读少量选中行或首尾样本。区分推测关键词与文件中实际出现的词。字面量 `|` 表示 OR，空格不是 AND；精确搜索管道符时用正则转义。
+3. 用最强的已观察标识符或事件搜索。无结果时有目的地调整拼写、大小写、标识符或范围；结果多时先汇总，再跨文件和事件边界选引用，并主动检查少数文件及罕见失败。
+4. 先读证据，再补剩余缺口。长行用带 `search_id` 的 `read_log_segment` 定位原匹配，或用 `start_character` 继续读取。关联分析应沿请求 ID 检查开始、错误、完成/恢复；时区或时钟顺序未知时谨慎使用时间戳。
+5. 区分计数与因果。匹配数不等于独立事件数，按请求 ID 分组必须有身份依据；截断总数是下界。小型结果可在预算内读全，大型结果使用有界样本并说明覆盖范围。
+6. 回答前保存已验证关键点，除非用户要求只读或不改界面。先打开证据文件，只给触发失败、因果转折、影响边界或确认恢复等少量决定性行加书签，通常不超过八行。
+7. 行目标确认后调用一次 `list_colors`，为各相关文件高亮 1–3 个实际观察到的精确高信号词。不得虚构颜色 ID/关键词、创建标签或泛化高亮 INFO/ERROR/WARN；没有合适标签或稳定词时跳过。
+8. 证据已回答问题或缺少某个具体观察时停止。两次有效调整仍无结果，说明缺失线索或向用户询问。准确报告书签、高亮及部分失败或未决状态。
 "#;
 
-pub(super) const FILES: &str = r#"# Workflow: file-operations
+pub(super) const FILES: &str = r#"# 工作流：文件操作
 
-Use this guide for ambiguous targets or combined file operations. Simple open/close/switch/reveal requests can use their tool definitions directly. Four file-operation entries share this guide; read it once per run.
+用于目标含糊或组合文件操作；明确的打开、关闭、切换、侧栏定位可直接使用工具。四个文件操作技能共用本指南，每轮只读一次。
 
-Resolve identity before changing state. 'This file' follows current context; a named file uses list_logs paths and versions. Equal basenames in different directories are ambiguous: prefer the explicit path or ask which one. Use list_log_directory when directory grouping, rotations, sibling services or nearby files may identify related logs; use locate_files for a known filename/path fragment. Both stay within the captured directory and its configured filters. Configured project files discovered with source tools can be opened with their root and relative path, including when the project is outside the app's current log directory. No matches may mean a wrong directory or filter, not that the file does not exist on the device.
+改变状态前先确认身份：“这个文件”取当前上下文；命名文件使用 `list_logs` 的路径和版本。同名不同路径时优先采用明确路径，否则询问。目录分组、轮转日志或相邻服务用 `list_log_directory`；已知路径片段用 `locate_files`。源码工具发现的项目文件可用 root 和相对路径打开。无匹配也可能是目录或过滤器不对。
 
-Choose the intended action: list_log_directory browses related files, locate_files finds paths, reveal_file shows a path in the sidebar, switch_file activates an existing tab while preserving its position, and open_file opens or activates a known target. Line navigation uses navigate. Do not jump to line 1 simply to switch files. If the target is outside the captured capabilities, explain the concrete action needed to make it available in the app.
+按意图选择操作：浏览相关文件用 `list_log_directory`，查路径用 `locate_files`，侧栏定位用 `reveal_file`，保留位置切换标签用 `switch_file`，打开/激活目标用 `open_file`，行定位用 `navigate`。不要为了切换文件跳到第一行。目标超出能力范围时说明如何在应用中使其可用。
 
-For 'open then search/mark', open first and carry forward the returned document_id/version; an unopened search-result ID may be replaced by the actual tab ID. Pass the resulting ID explicitly to later file-specific searches. Do not substitute a different current tab if the requested target disappeared.
-
-For closing, preserve the application's confirmation flow. confirmation_pending means waiting for the user's choice, not closed. Do not reissue close while confirmation is pending. A later status refresh can establish the outcome. For multiple requested operations, report which finished and which are pending/failed, and stop dependent actions when their prerequisite did not complete. File sources remain read-only; closing a tab does not delete its file.
+“打开后搜索/标记”必须先打开，并把返回的新 `document_id/version` 传给后续操作；目标消失时不得用其他当前标签替代。关闭时遵守确认流程：`confirmation_pending` 表示等待用户，不是已关闭，不得重复关闭。多项操作分别报告完成、待确认和失败，前置失败时停止依赖操作。关闭标签不会删除文件。
 "#;
 
-pub(super) const MARKS: &str = r#"# Workflow: marks-and-highlighting
+pub(super) const MARKS: &str = r#"# 工作流：标记与高亮
 
-Use this guide for semantic targets, mixed mark types or recovery after partial edits. A clear action on an explicit row/keyword can use tool definitions directly. Three mark entries share this guide; read it once per run.
+用于语义目标、混合标记类型或部分失败恢复；目标明确的单项操作可直接使用工具。三个标记技能共用本指南，每轮只读一次。
 
-First identify the intended representation. set_marks sets/removes source-row bookmarks and is the default way to preserve verified decisive evidence from an investigation. text_mark adds/updates/removes user-visible annotation text; do not add prose annotations automatically when a line bookmark is sufficient. highlight_keyword applies an existing color-label rule to a keyword in one file and all its projections. Keyword colors do not create color labels, do not assign arbitrary whole-line colors, and do not set text annotation colors. If an unavailable capability was requested, explain that specific limitation instead of silently substituting a different action.
+先选择正确表示：`set_marks` 设置源行书签，适合保存调查中的决定性证据；`text_mark` 管理可见文字注释，不应在书签足够时自动添加说明；`highlight_keyword` 把现有颜色标签规则应用到一个文件及其投影。不可用能力须明确说明，不得静默替换成另一种操作。
 
-For explicit rows or keywords, avoid content reads that do not change the decision. For an investigation, establish the target rows first and mark only the causal or decision-relevant events, normally no more than eight rows total. Distinguish failed from recovered attempts; do not mark every generic error just because it matched a broad query. Open unopened targets before changing marks and use the returned new identity. Skip automatic visual changes when the user asks for read-only analysis.
+明确行或关键词无需做不会改变决策的内容读取。调查时先验证目标，通常最多标记八个因果或决策相关事件，区分失败与恢复，不标记每个宽泛命中。未打开目标先打开并使用新身份；用户要求只读时跳过自动视觉修改。
 
-Use explicit marked=true/false rather than toggling; set_marks is idempotent for an already-marked row. Inspect list_marks before an ambiguous text-annotation update or retry, use actual mark_id values, avoid duplicates, and preserve existing styling on updates. Before highlighting, call list_colors and use an actual returned ID. Choose one to three exact high-signal terms observed in each relevant file and apply highlight_keyword per file; never invent a term or use a broad severity token that would color unrelated events. For an explicit user color request, ask only if it is ambiguous or unavailable; for automatic investigation highlighting, skip the highlight when no semantic match exists rather than blocking the answer.
-
-For batch operations, retain per-file targets and report partial completion accurately. After an error, inspect state before retrying a mutation; repeated 'add' actions may duplicate annotations. A tool failure or pending open operation is not evidence that marks were applied.
+使用明确的 `marked=true/false`，不要切换状态。含糊的文字注释更新或重试前先用 `list_marks` 取得真实 `mark_id`，避免重复并保留样式。高亮前调用 `list_colors`，每文件选择 1–3 个实际观察到的高信号词；没有语义合适颜色时跳过。批量操作保留各文件目标并准确报告部分完成；写操作失败后先查状态再重试。
 "#;
 
-pub(super) const NAVIGATION: &str = r#"# Workflow: log-navigation
+pub(super) const NAVIGATION: &str = r#"# 工作流：日志导航
 
-Use this guide when source lines, search result indices or historical references could be confused. Direct navigation to a known row can use the tool definition immediately.
+用于可能混淆源行、搜索结果序号或历史引用的情况；已知行可直接导航。
 
-Distinguish the target coordinate: a source reference is document_id/version plus a 1-based source line; a result_index is 1-based within a particular search_id and may refer to a different file. Never use a result index as a source line. 'Next' or 'previous' refers to the resolved search, while start/end refers to the resolved file. Clarify the intended search only when current context cannot resolve it.
+源引用由 `document_id/version` 和 1-based 源行组成；`result_index` 是特定 `search_id` 中的 1-based 结果序号，可能属于另一文件，绝不能当作源行。“下一条/上一条”针对已解析搜索，“开头/结尾”针对文件；只有当前上下文无法确定时才询问搜索目标。
 
-Prefer navigate action=result for a search result so the application selects that result projection when available. For a specific source row, use action=line with its reference. A collapsed or unavailable projection may navigate to the source instead; report the actual returned region. To reveal the file's path use reveal_file, not a row jump.
+搜索结果优先用 `navigate action=result`，具体源行用 `action=line`。投影不可用时可能回退到源文件，应报告实际返回区域。侧栏显示路径用 `reveal_file`，不是行跳转。
 
-Old-turn references require refreshed identity before new tool operations. A changed source can move a formerly relevant event to a different line: rerun a targeted search when the user means the event, rather than blindly reusing its old line number. Plain navigation needs no content read. If explanation is also requested, read only the relevant target and context after resolving the reference.
+跨轮旧引用必须刷新。源文件变化后事件可能移动；用户指事件时重新做目标搜索，不盲用旧行号。纯导航无需读取内容；同时要求解释时，只读解析后的目标及附近上下文。
 "#;

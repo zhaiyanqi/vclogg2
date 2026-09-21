@@ -158,8 +158,11 @@ fn event(value: Value) -> String {
     format!("data: {value}\n\n")
 }
 fn openai_tool(id: &str, args: &str) -> String {
+    openai_named_tool(id, "list_logs", args)
+}
+fn openai_named_tool(id: &str, name: &str, args: &str) -> String {
     event(
-        json!({"choices":[{"delta":{"content":"检查日志","tool_calls":[{"index":0,"id":id,"type":"function","function":{"name":"list_logs","arguments":args}}]},"finish_reason":"tool_calls"}]}),
+        json!({"choices":[{"delta":{"content":"检查日志","tool_calls":[{"index":0,"id":id,"type":"function","function":{"name":name,"arguments":args}}]},"finish_reason":"tool_calls"}]}),
     ) + "data: [DONE]\n\n"
 }
 fn openai_text(text: &str) -> String {
@@ -218,6 +221,57 @@ async fn openai_runs_tools_returns_results_and_does_not_repeat_call_ids() {
             .unwrap()
             .contains("app.log")
     );
+}
+
+#[tokio::test]
+async fn tool_groups_are_loaded_only_after_discovery() {
+    let (config, requests, server) = mock(vec![
+        (
+            200,
+            openai_named_tool(
+                "load-evidence",
+                "load_tool_group",
+                r#"{"group":"evidence"}"#,
+            ),
+        ),
+        (200, openai_text("工具已就绪")),
+    ]);
+    let run = start_run(
+        config,
+        vec![AgentMessage::User {
+            text: "读取更多证据".into(),
+        }],
+        vec![],
+        String::new(),
+        false,
+    );
+    loop {
+        if let AgentEvent::Finished(status, error) =
+            tokio::time::timeout(Duration::from_secs(5), run.events.recv())
+                .await
+                .unwrap()
+                .unwrap()
+        {
+            assert_eq!(status, RunStatus::Complete, "{error}");
+            break;
+        }
+    }
+    server.join().unwrap();
+    let requests = requests.lock().unwrap();
+    let names = |request: &Value| {
+        request["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["function"]["name"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let first = names(&requests[0]);
+    assert_eq!(first.len(), 5);
+    assert!(!first.iter().any(|name| name == "read_logs"));
+    let second = names(&requests[1]);
+    assert!(second.iter().any(|name| name == "read_logs"));
+    assert!(!second.iter().any(|name| name == "open_file"));
 }
 #[tokio::test]
 async fn anthropic_native_protocol_returns_tool_result_blocks() {

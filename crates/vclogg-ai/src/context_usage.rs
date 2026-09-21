@@ -1,6 +1,6 @@
 //! Conservative, provider-independent context estimate for display only.
 use crate::tools::ToolDefinition;
-use crate::{AgentMessage, ContextUsage, ProviderConfig, tool_definitions};
+use crate::{AgentMessage, ContextUsage, ProviderConfig};
 
 pub fn estimate_tokens(text: &str) -> u32 {
     let mut ascii = 0u32;
@@ -21,13 +21,12 @@ pub(crate) fn usage(
     prompt: &str,
     skill_summaries: &str,
     messages: &[AgentMessage],
-    with_tools: bool,
+    tools: &[ToolDefinition],
 ) -> ContextUsage {
     let prompt_tokens = estimate_tokens(prompt);
     let skill_tokens = estimate_tokens(skill_summaries);
     let full_system = estimate_tokens(system);
-    let tool_tokens = if with_tools {
-        let tools: Vec<ToolDefinition> = tool_definitions();
+    let tool_tokens = if !tools.is_empty() {
         let wire = tools
             .iter()
             .map(|tool| format!("{} {} {}", tool.name, tool.description, tool.parameters))

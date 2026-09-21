@@ -1,5 +1,6 @@
 use crate::{
     AgentEvent, AgentMessage, Cancellation, Protocol, ProviderConfig, ToolCall, tool_definitions,
+    tools::ToolDefinition,
 };
 use anyhow::{Context as _, Result, bail};
 use futures_util::StreamExt as _;
@@ -11,8 +12,8 @@ pub(crate) fn request_body(
     system: &str,
     messages: &[AgentMessage],
     with_tools: bool,
+    definitions: &[ToolDefinition],
 ) -> Value {
-    let definitions = tool_definitions();
     let mut wire = Vec::<Value>::new();
     if config.protocol == Protocol::OpenAi {
         wire.push(json!({"role":"system","content":system}));
@@ -403,11 +404,35 @@ pub async fn stream_completion(
     cancellation: &Cancellation,
     events: &async_channel::Sender<AgentEvent>,
 ) -> Result<AgentMessage> {
+    let definitions = tool_definitions();
+    stream_completion_with_definitions(
+        config,
+        system,
+        messages,
+        with_tools,
+        &definitions,
+        cancellation,
+        events,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn stream_completion_with_definitions(
+    config: &ProviderConfig,
+    system: &str,
+    messages: &[AgentMessage],
+    with_tools: bool,
+    definitions: &[ToolDefinition],
+    cancellation: &Cancellation,
+    events: &async_channel::Sender<AgentEvent>,
+) -> Result<AgentMessage> {
     stream_with_timeouts(
         config,
         system,
         messages,
         with_tools,
+        definitions,
         cancellation,
         events,
         Duration::from_secs(60),
@@ -421,6 +446,7 @@ async fn stream_with_timeouts(
     system: &str,
     messages: &[AgentMessage],
     with_tools: bool,
+    definitions: &[ToolDefinition],
     cancellation: &Cancellation,
     events: &async_channel::Sender<AgentEvent>,
     idle_timeout: Duration,
@@ -434,7 +460,13 @@ async fn stream_with_timeouts(
         let mut request = client
             .post(config.endpoint()?)
             .header("accept", "text/event-stream")
-            .json(&request_body(config, system, messages, with_tools));
+            .json(&request_body(
+                config,
+                system,
+                messages,
+                with_tools,
+                definitions,
+            ));
         match config.protocol {
             Protocol::OpenAi => {
                 if !config.api_key.is_empty() {
@@ -554,17 +586,21 @@ mod tests {
     #[test]
     fn output_limit_is_provider_managed_where_supported() {
         let mut config = ProviderConfig::default();
-        let body = request_body(&config, "", &[], false);
+        let definitions = tool_definitions();
+        let body = request_body(&config, "", &[], false, &definitions);
         assert!(body.get("max_completion_tokens").is_none());
         assert!(body.get("max_tokens").is_none());
         config.base_url = "https://compatible.example/v1".into();
         assert!(
-            request_body(&config, "", &[], false)
+            request_body(&config, "", &[], false, &definitions)
                 .get("max_tokens")
                 .is_none()
         );
         config.protocol = Protocol::Anthropic;
-        assert_eq!(request_body(&config, "", &[], false)["max_tokens"], 4096);
+        assert_eq!(
+            request_body(&config, "", &[], false, &definitions)["max_tokens"],
+            4096
+        );
     }
     #[tokio::test]
     async fn stalled_http_streams_timeout_and_cancel_for_both_protocols() {
@@ -598,6 +634,7 @@ mod tests {
                     "test",
                     &[],
                     false,
+                    &[],
                     &token,
                     &events,
                     Duration::from_millis(80),
