@@ -5,6 +5,7 @@ members = [
     "crates/vclogg-core",
     "crates/vclogg-data",
 ]
+exclude = ["vendor/block"]
 resolver = "2"
 
 [workspace.package]
@@ -55,6 +56,11 @@ windows-sys = { version = "0.61", features = [
 [workspace.lints.clippy]
 dbg_macro = "deny"
 todo = "deny"
+
+# GPUI's macOS dependency chain still uses block 0.1.6. Keep its public API,
+# but replace the uninhabited opaque Class type that rustc is phasing out.
+[patch.crates-io]
+block = { path = "vendor/block" }
 
 [profile.dev]
 codegen-units = 16
