@@ -62,8 +62,17 @@ rm -f -- "$disk_image_path"
 mkdir -p "$contents_directory/MacOS" "$resources_directory" "$iconset_directory"
 
 install -m 755 "$repository_root/target/release/vclogg2" "$contents_directory/MacOS/vclogg2"
+ripgrep_path="$(command -v rg || true)"
+if [[ -z "$ripgrep_path" || ! -x "$ripgrep_path" ]]; then
+  echo "ripgrep (rg) is required to build the macOS release package." >&2
+  exit 1
+fi
+install -m 755 "$ripgrep_path" "$contents_directory/MacOS/rg"
 install -m 644 "$repository_root/README.md" "$resources_directory/README.md"
 install -m 644 "$repository_root/LICENSE" "$resources_directory/LICENSE"
+install -m 644 \
+  "$repository_root/third-party/ripgrep-LICENSE-MIT" \
+  "$resources_directory/ripgrep-LICENSE-MIT"
 
 sips -z 16 16 "$source_icon" --out "$iconset_directory/icon_16x16.png" >/dev/null
 sips -z 32 32 "$source_icon" --out "$iconset_directory/icon_16x16@2x.png" >/dev/null
@@ -109,6 +118,7 @@ plutil -replace CFBundleShortVersionString -string "$version" "$contents_directo
 plutil -replace CFBundleVersion -string "$version" "$contents_directory/Info.plist"
 
 plutil -lint "$contents_directory/Info.plist"
+codesign --force --sign - "$contents_directory/MacOS/rg"
 codesign --force --sign - "$app_directory"
 ln -s /Applications "$disk_image_root/Applications"
 hdiutil create \

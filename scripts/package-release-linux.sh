@@ -51,8 +51,17 @@ rm -f -- "$archive_path"
 mkdir -p "$stage_directory"
 
 install -m 755 "$repository_root/target/release/vclogg2" "$stage_directory/vclogg2"
+ripgrep_path="$(command -v rg || true)"
+if [[ -z "$ripgrep_path" || ! -x "$ripgrep_path" ]]; then
+  echo "ripgrep (rg) is required to build the Linux release package." >&2
+  exit 1
+fi
+install -m 755 "$ripgrep_path" "$stage_directory/rg"
 install -m 644 "$repository_root/README.md" "$stage_directory/README.md"
 install -m 644 "$repository_root/LICENSE" "$stage_directory/LICENSE"
+install -m 644 \
+  "$repository_root/third-party/ripgrep-LICENSE-MIT" \
+  "$stage_directory/ripgrep-LICENSE-MIT"
 install -m 644 \
   "$repository_root/crates/vclogg-app/resources/windows/vclogg2.png" \
   "$stage_directory/vclogg2.png"

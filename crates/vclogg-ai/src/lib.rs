@@ -9,6 +9,7 @@ mod model;
 mod model_limits;
 mod prompts;
 mod provider;
+mod ripgrep;
 mod runner;
 mod skills;
 mod source_index;

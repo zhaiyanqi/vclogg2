@@ -45,6 +45,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Install ripgrep
+        shell: powershell
+        run: choco install ripgrep --yes --no-progress
+
       - name: Initialize Rust toolchain
         shell: powershell
         run: |
@@ -244,6 +248,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Install ripgrep
+        run: brew install ripgrep
+
       - name: Initialize Rust toolchain
         run: |
           rustc --version
@@ -292,7 +299,8 @@ jobs:
             libx11-xcb-dev \
             libxcb1-dev \
             libxkbcommon-x11-dev \
-            pkg-config
+            pkg-config \
+            ripgrep
 
       - name: Initialize Rust toolchain
         run: |

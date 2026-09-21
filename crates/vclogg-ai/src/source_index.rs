@@ -56,7 +56,7 @@ fn grammar(path: &Path) -> Option<(Language, &'static str)> {
 }
 
 async fn files(root: &Path) -> Result<(Vec<PathBuf>, bool)> {
-    let mut command = tokio::process::Command::new("rg");
+    let mut command = crate::ripgrep::command();
     command.args([
         "--files",
         "--hidden",
@@ -102,7 +102,7 @@ async fn files(root: &Path) -> Result<(Vec<PathBuf>, bool)> {
 }
 
 async fn symbol_files(root: &Path, query: &str) -> Result<(Vec<PathBuf>, bool)> {
-    let mut command = tokio::process::Command::new("rg");
+    let mut command = crate::ripgrep::command();
     command.args([
         "--files-with-matches",
         "--fixed-strings",
@@ -332,7 +332,7 @@ pub(crate) async fn execute(root: &Path, index: usize, call: &ToolCall) -> Resul
 }
 
 async fn text_candidates(root: &Path, query: &str, limit: usize) -> Result<Vec<Value>> {
-    let mut command = tokio::process::Command::new("rg");
+    let mut command = crate::ripgrep::command();
     command.args([
         "--line-number",
         "--with-filename",

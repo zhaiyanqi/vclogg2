@@ -121,6 +121,27 @@ if ($SigningMode -ne 'None') {
 
 $packagedExecutable = Join-Path $stageDirectory 'vclogg2.exe'
 Copy-Item -LiteralPath $releaseExecutable -Destination $packagedExecutable
+$ripgrepCommand = Get-Command 'rg.exe' -CommandType Application -ErrorAction SilentlyContinue
+if ($null -eq $ripgrepCommand) {
+    throw 'ripgrep (rg.exe) is required to build the Windows release package.'
+}
+$ripgrepExecutable = $ripgrepCommand.Source
+$chocolateyBin = if ([string]::IsNullOrWhiteSpace($env:ChocolateyInstall)) {
+    $null
+} else {
+    Join-Path $env:ChocolateyInstall 'bin'
+}
+if ($null -ne $chocolateyBin -and
+    $ripgrepExecutable.StartsWith($chocolateyBin, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $ripgrepExecutable = Get-ChildItem -LiteralPath (Join-Path $env:ChocolateyInstall 'lib') `
+        -Directory -Filter 'ripgrep*' | Get-ChildItem -Filter 'rg.exe' -File -Recurse |
+        Select-Object -First 1 -ExpandProperty FullName
+}
+if ([string]::IsNullOrWhiteSpace($ripgrepExecutable) -or
+    -not (Test-Path -LiteralPath $ripgrepExecutable -PathType Leaf)) {
+    throw 'Could not resolve the real rg.exe behind the package-manager shim.'
+}
+Copy-Item -LiteralPath $ripgrepExecutable -Destination (Join-Path $stageDirectory 'rg.exe')
 if ($SigningMode -ne 'None') {
     $packagedSignature = Get-AuthenticodeSignature -LiteralPath $packagedExecutable
     if ($packagedSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
@@ -131,14 +152,15 @@ if ($SigningMode -ne 'None') {
 }
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'README.md') -Destination $stageDirectory
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination $stageDirectory
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'third-party\ripgrep-LICENSE-MIT') -Destination $stageDirectory
 
-$expectedPackageEntries = @('LICENSE', 'README.md', 'vclogg2.exe') | Sort-Object
+$expectedPackageEntries = @('LICENSE', 'README.md', 'rg.exe', 'ripgrep-LICENSE-MIT', 'vclogg2.exe') | Sort-Object
 $actualPackageEntries = @(Get-ChildItem -LiteralPath $stageDirectory -Force | ForEach-Object Name) | Sort-Object
 $packageDifference = @(
     Compare-Object -ReferenceObject $expectedPackageEntries -DifferenceObject $actualPackageEntries
 )
 if ($packageDifference.Count -ne 0) {
-    throw 'Windows 用户分发包必须且只能包含 LICENSE、README.md 与 vclogg2.exe。'
+    throw 'Windows 用户分发包内容与预期文件清单不一致。'
 }
 
 $archiveName = "vclogg-$version-windows-x86_64-portable.zip"

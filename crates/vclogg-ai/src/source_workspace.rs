@@ -105,7 +105,7 @@ async fn execute_inner(roots: &[PathBuf], call: &ToolCall) -> Result<serde_json:
     } else {
         scoped_path(root, relative)?
     };
-    let mut command = tokio::process::Command::new("rg");
+    let mut command = crate::ripgrep::command();
     command.args([
         "--line-number",
         "--no-heading",

@@ -44,8 +44,10 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; Flags: unchecked
 ; The generated configuration is tracked by Inno's install/rollback/uninstall log.
 Source: "{tmp}\vclogg2-data-dir.txt"; DestDir: "{app}"; Flags: external ignoreversion; ExternalSize: 1024
 Source: "{#PackageDirectory}\vclogg2.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PackageDirectory}\rg.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PackageDirectory}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PackageDirectory}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PackageDirectory}\ripgrep-LICENSE-MIT"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{userprograms}\VCLogg2"; Filename: "{app}\vclogg2.exe"; WorkingDir: "{app}"
