@@ -14,16 +14,18 @@ pub(crate) enum AppIcon {
     Refresh,
     FollowEnd,
     SaveCheck,
+    Edit,
     ColorLabel,
     LetterM,
 }
 
 impl AppIcon {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::History,
         Self::Refresh,
         Self::FollowEnd,
         Self::SaveCheck,
+        Self::Edit,
         Self::ColorLabel,
         Self::LetterM,
     ];
@@ -34,6 +36,7 @@ impl AppIcon {
             Self::Refresh => "vclogg/icons/refresh-cw.svg",
             Self::FollowEnd => "vclogg/icons/arrow-down-to-line.svg",
             Self::SaveCheck => "vclogg/icons/save-check.svg",
+            Self::Edit => "vclogg/icons/file-pen-line.svg",
             Self::ColorLabel => "vclogg/icons/tag.svg",
             Self::LetterM => "vclogg/icons/letter-m.svg",
         }
@@ -45,6 +48,7 @@ impl AppIcon {
             Self::Refresh => include_bytes!("../assets/icons/refresh-cw.svg"),
             Self::FollowEnd => include_bytes!("../assets/icons/arrow-down-to-line.svg"),
             Self::SaveCheck => include_bytes!("../assets/icons/save-check.svg"),
+            Self::Edit => include_bytes!("../assets/icons/file-pen-line.svg"),
             Self::ColorLabel => include_bytes!("../assets/icons/tag.svg"),
             Self::LetterM => include_bytes!("../assets/icons/letter-m.svg"),
         }
@@ -79,5 +83,23 @@ impl AssetSource for Assets {
                 .map(IconNamed::path),
         );
         Ok(assets)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edit_action_icon_is_available_from_application_assets() {
+        let path = AppIcon::Edit.asset_path();
+        assert!(Assets.load(path).unwrap().is_some());
+        assert!(
+            Assets
+                .list("vclogg/icons/")
+                .unwrap()
+                .iter()
+                .any(|item| item.as_ref() == path)
+        );
     }
 }

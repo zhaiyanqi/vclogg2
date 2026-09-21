@@ -84,7 +84,7 @@ impl AiPanel {
                             Button::new(("ai-edit-user", start))
                                 .small()
                                 .ghost()
-                                .icon(gpui_kit::assets::IconName::SquarePen)
+                                .icon(crate::app_assets::AppIcon::Edit)
                                 .tooltip(crate::tr!("编辑并重试", "Edit and retry"))
                                 .accessibility_label(crate::tr!("编辑并重试", "Edit and retry"))
                                 .disabled(self.busy || self.ui_busy)
