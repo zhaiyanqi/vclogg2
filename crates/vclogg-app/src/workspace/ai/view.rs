@@ -1163,7 +1163,10 @@ pub(super) fn tool_result_summary(result: &ToolResult) -> String {
 
 pub(super) fn tool_label(name: &str) -> &str {
     match name {
+        "list_source_workspaces" => crate::tr!("列出源码工作区", "List source workspaces"),
+        "rg_list_files" => crate::tr!("枚举源码文件", "List source files"),
         "rg_search" => crate::tr!("搜索源码", "Search source"),
+        "rg_count" => crate::tr!("统计源码匹配", "Count source matches"),
         "read_source" => crate::tr!("读取源码", "Read source"),
         "find_source_files" => crate::tr!("查找源码文件", "Find source files"),
         "find_symbols" => crate::tr!("查找符号", "Find symbols"),
@@ -1175,6 +1178,7 @@ pub(super) fn tool_label(name: &str) -> &str {
         "list_logs" => crate::tr!("列出日志文件", "List log files"),
         "read_logs" => crate::tr!("读取日志", "Read logs"),
         "locate_files" => crate::tr!("查找日志文件", "Find log files"),
+        "list_log_directory" => crate::tr!("读取日志目录", "List log directory"),
         "open_file" => crate::tr!("打开文件", "Open file"),
         "close_file" => crate::tr!("关闭文件", "Close file"),
         "switch_file" => crate::tr!("切换文件", "Switch file"),

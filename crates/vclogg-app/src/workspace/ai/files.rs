@@ -1,20 +1,45 @@
 use super::*;
 
 impl AiScope {
-    fn file_target(&self, args: &Value) -> Result<(PathBuf, Option<DocumentSnapshot>)> {
-        match (args["document_id"].as_u64(), args["file_id"].as_str()) {
-            (Some(id), None) => {
+    fn file_target(
+        &self,
+        args: &Value,
+    ) -> Result<(PathBuf, Option<DocumentSnapshot>, Option<PathBuf>)> {
+        match (
+            args["document_id"].as_u64(),
+            args["file_id"].as_str(),
+            args["root"].as_u64(),
+            args["path"].as_str(),
+        ) {
+            (Some(id), None, None, None) => {
                 let doc = self.document(id, Some(text(args, "version")?))?;
-                Ok((doc.document.path().to_path_buf(), Some(doc)))
+                Ok((doc.document.path().to_path_buf(), Some(doc), None))
             }
-            (None, Some(id)) if args.get("version").is_none() => Ok((
-                self.file_candidates
-                    .get(id)
-                    .context("File handle expired; call locate_files again")?
-                    .clone(),
-                None,
-            )),
-            _ => bail!("Provide document_id with version, or file_id, exclusively"),
+            (None, Some(id), None, None) if args.get("version").is_none() => {
+                let root = self
+                    .directory
+                    .directory
+                    .clone()
+                    .context("Selected log directory is unavailable")?;
+                Ok((
+                    self.file_candidates
+                        .get(id)
+                        .context("File handle expired; call locate_files again")?
+                        .clone(),
+                    None,
+                    Some(root),
+                ))
+            }
+            (None, None, Some(root), Some(relative)) if args.get("version").is_none() => {
+                let root = self.workspace_directories.get(root as usize).context(
+                    "Workspace root unavailable; check the selected project directories",
+                )?;
+                let path = scoped_workspace_file(root, relative)?;
+                Ok((path, None, Some(root.clone())))
+            }
+            _ => bail!(
+                "Provide document_id with version, file_id, or project root with path, exclusively"
+            ),
         }
     }
 
@@ -43,6 +68,19 @@ impl Workspace {
             .lock()
             .map_err(|_| anyhow::anyhow!("Analysis unavailable"))?;
         let args = &call.arguments;
+        if call.name == "list_log_directory" {
+            let options = state.directory.clone();
+            let cancellation = state.cancellation.clone();
+            let path = args["path"].as_str().unwrap_or("").to_owned();
+            let depth = args["depth"].as_u64().unwrap_or(3) as usize;
+            let offset = args["offset"].as_u64().unwrap_or(0) as usize;
+            let limit = args["limit"].as_u64().unwrap_or(100) as usize;
+            drop(state);
+            return Ok(Box::new(move || {
+                list_log_directory(scope, options, &path, depth, offset, limit, cancellation)
+                    .map(Evidence::Json)
+            }));
+        }
         if call.name == "locate_files" {
             let options = state.directory.clone();
             let cancellation = state.cancellation.clone();
@@ -56,7 +94,7 @@ impl Workspace {
                 locate_files(scope, options, &query, offset, cancellation).map(Evidence::Json)
             }));
         }
-        let (path, doc) = state.file_target(args)?;
+        let (path, doc, access_root) = state.file_target(args)?;
         let doc = doc.or_else(|| {
             state
                 .documents
@@ -64,7 +102,6 @@ impl Workspace {
                 .find(|doc| doc.open && paths_match(doc.document.path(), &path))
                 .cloned()
         });
-        let directory = state.directory.directory.clone();
         let cancellation = state.cancellation.clone();
         let reveal = call.name == "reveal_file";
         let store = self.persistence.store.clone();
@@ -78,9 +115,12 @@ impl Workspace {
             if let Some(doc) = &doc {
                 doc.verify()?;
             } else {
-                let root =
-                    approved_directory(directory.as_deref().context("Select a directory first")?)?;
-                if path.canonicalize()? != path || !path.starts_with(root) || !path.is_file() {
+                let root = approved_directory(
+                    access_root
+                        .as_deref()
+                        .context("Captured file directory is unavailable")?,
+                )?;
+                if path.canonicalize()? != path || !path.starts_with(&root) || !path.is_file() {
                     bail!("File moved or escaped the captured directory; locate it again");
                 }
             }
@@ -124,12 +164,12 @@ impl Workspace {
     ) -> Result<Value> {
         let args = &call.arguments;
         if call.name == "reveal_file" {
-            let (path, _) = state.file_target(args)?;
+            let (path, _, _) = state.file_target(args)?;
             self.reveal_in_sidebar(path.clone(), false, window, cx);
             return Ok(json!({"status":"revealed","path":path.display().to_string()}));
         }
         if call.name == "open_file" {
-            let (path, expected) = state.file_target(args)?;
+            let (path, expected, _) = state.file_target(args)?;
             if let Some(tab) = self
                 .documents
                 .iter()
@@ -231,6 +271,186 @@ fn file_metadata(doc: &DocumentSnapshot, status: &str) -> Value {
     json!({"document_id":doc.id,"version":doc.version,"name":doc.document.file_name(),"path":doc.document.path().display().to_string(),"lines":doc.document.source_line_count(),"open":doc.open,"status":status,"content_included":false})
 }
 
+fn scoped_workspace_file(root: &Path, relative: &str) -> Result<PathBuf> {
+    let relative = Path::new(relative);
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || relative.components().any(|part| {
+            !matches!(
+                part,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        })
+    {
+        bail!("Use a relative file path within the selected project directory");
+    }
+    let root = approved_directory(root)?;
+    let path = root
+        .join(relative)
+        .canonicalize()
+        .context("Project file unavailable")?;
+    if !path.starts_with(&root) || !path.is_file() {
+        bail!("Project path is not a file within the selected project directory");
+    }
+    Ok(path)
+}
+
+fn list_log_directory(
+    scope: SharedScope,
+    options: DirectorySearchOptions,
+    relative: &str,
+    max_depth: usize,
+    offset: usize,
+    limit: usize,
+    cancellation: SearchCancellation,
+) -> Result<Value> {
+    let root = approved_directory(
+        options
+            .directory
+            .as_deref()
+            .context("Select a search directory in the app first")?,
+    )?;
+    let relative_path = Path::new(relative);
+    if relative_path.is_absolute()
+        || relative_path.components().any(|part| {
+            !matches!(
+                part,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        })
+    {
+        bail!("Use a relative directory path within the selected log directory");
+    }
+    let subtree = root
+        .join(relative_path)
+        .canonicalize()
+        .context("Log directory path unavailable")?;
+    if !subtree.starts_with(&root) || !subtree.is_dir() {
+        bail!("Log directory path is outside the selected directory or is not a directory");
+    }
+    let enumeration =
+        crate::directory_search_dialog::enumerate_directory_search_paths(&options, &cancellation)?
+            .context("Log directory listing cancelled")?;
+    let mut nodes = BTreeMap::<PathBuf, (bool, bool, PathBuf)>::new();
+    for path in enumeration.paths {
+        if cancellation.is_cancelled() {
+            bail!("Log directory listing cancelled");
+        }
+        let Ok(path) = path.canonicalize() else {
+            continue;
+        };
+        if !path.starts_with(&subtree) || !path.starts_with(&root) || !path.is_file() {
+            continue;
+        }
+        let within_subtree = path.strip_prefix(&subtree)?;
+        let components = within_subtree.components().collect::<Vec<_>>();
+        if components.is_empty() {
+            continue;
+        }
+        let directory_count = components.len().saturating_sub(1);
+        for directory_depth in 1..=directory_count.min(max_depth) {
+            let mut directory = subtree.clone();
+            for component in components.iter().take(directory_depth) {
+                directory.push(component.as_os_str());
+            }
+            let relative_to_root = directory.strip_prefix(&root)?.to_path_buf();
+            let has_more = directory_depth == max_depth && directory_count >= max_depth;
+            nodes
+                .entry(relative_to_root)
+                .and_modify(|node| node.1 |= has_more)
+                .or_insert((false, has_more, directory));
+        }
+        if components.len() <= max_depth {
+            nodes.insert(path.strip_prefix(&root)?.to_path_buf(), (true, false, path));
+        }
+    }
+    let total = nodes.len();
+    let page = nodes
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .collect::<Vec<_>>();
+    let mut state = scope
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Analysis unavailable"))?;
+    if state.cancellation.is_cancelled() {
+        bail!("Log directory listing cancelled");
+    }
+    let mut entries = Vec::new();
+    for (relative_path, (is_file, has_more, absolute_path)) in page {
+        let name = relative_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy();
+        let depth = absolute_path
+            .strip_prefix(&subtree)
+            .map(|path| path.components().count())
+            .unwrap_or(0);
+        if is_file {
+            let id = state
+                .file_candidates
+                .iter()
+                .find(|(_, known)| *known == &absolute_path)
+                .map(|(id, _)| id.clone())
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            if state.file_candidates.len() >= 2000 && !state.file_candidates.contains_key(&id) {
+                bail!(
+                    "Too many file handles in this run; narrow the directory subtree or start a new analysis"
+                );
+            }
+            state
+                .file_candidates
+                .insert(id.clone(), absolute_path.clone());
+            let doc = state
+                .documents
+                .values()
+                .find(|doc| paths_match(doc.document.path(), &absolute_path));
+            let metadata = absolute_path.metadata().ok();
+            let modified_ms = metadata
+                .as_ref()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis() as u64);
+            entries.push(json!({
+                "kind": "file",
+                "name": name,
+                "path": relative_path,
+                "depth": depth,
+                "file_id": id,
+                "size_bytes": metadata.map(|metadata| metadata.len()),
+                "modified_unix_ms": modified_ms,
+                "document_id": doc.map(|doc| doc.id),
+                "version": doc.map(|doc| &doc.version),
+                "open": doc.is_some_and(|doc| doc.open)
+            }));
+        } else {
+            entries.push(json!({
+                "kind": "directory",
+                "name": name,
+                "path": relative_path,
+                "depth": depth,
+                "has_more": has_more
+            }));
+        }
+    }
+    let next = offset.saturating_add(entries.len());
+    Ok(json!({
+        "root": root,
+        "path": relative,
+        "entries": entries,
+        "total": total,
+        "next_offset": (next < total).then_some(next),
+        "unreadable_directories": enumeration.unreadable_directory_count,
+        "filters": {
+            "include_subdirectories": options.include_subdirectories,
+            "include_hidden_directories": options.include_hidden_directories,
+            "file_type_filter_enabled": options.file_type_filter_enabled,
+            "file_type_patterns": options.file_type_patterns
+        },
+        "content_included": false
+    }))
+}
+
 fn locate_files(
     scope: SharedScope,
     options: DirectorySearchOptions,
@@ -306,4 +526,135 @@ fn locate_files(
     Ok(
         json!({"files":files,"total":paths.len(),"next_offset":(next<paths.len()).then_some(next),"unreadable_directories":enumeration.unreadable_directory_count,"content_included":false}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_scope(options: DirectorySearchOptions) -> SharedScope {
+        Arc::new(Mutex::new(AiScope {
+            file_candidates: BTreeMap::new(),
+            workspace_directories: Vec::new(),
+            read_document: None,
+            explicit: BTreeSet::new(),
+            allowed: BTreeSet::new(),
+            current: None,
+            documents: BTreeMap::new(),
+            directory: options,
+            searches: BTreeMap::new(),
+            tabs: BTreeMap::new(),
+            cancellation: SearchCancellation::default(),
+        }))
+    }
+
+    #[test]
+    fn log_directory_tree_is_filtered_bounded_and_returns_file_handles() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(directory.path().join("service/deep")).unwrap();
+        std::fs::write(directory.path().join("root.log"), "root\n").unwrap();
+        std::fs::write(directory.path().join("service/app.log"), "app\n").unwrap();
+        std::fs::write(directory.path().join("service/deep/worker.log"), "worker\n").unwrap();
+        std::fs::write(directory.path().join("service/ignored.bin"), [0_u8]).unwrap();
+        let options = DirectorySearchOptions {
+            directory: Some(directory.path().canonicalize().unwrap()),
+            ..Default::default()
+        };
+        let scope = empty_scope(options.clone());
+
+        let root = list_log_directory(
+            scope.clone(),
+            options.clone(),
+            "",
+            1,
+            0,
+            100,
+            SearchCancellation::default(),
+        )
+        .unwrap();
+        let entries = root["entries"].as_array().unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry["path"] == "root.log" && entry["kind"] == "file")
+        );
+        assert!(entries.iter().any(|entry| {
+            entry["path"] == "service" && entry["kind"] == "directory" && entry["has_more"] == true
+        }));
+        assert!(
+            !entries
+                .iter()
+                .any(|entry| entry["path"] == "service/ignored.bin")
+        );
+
+        let subtree = list_log_directory(
+            scope.clone(),
+            options,
+            "service",
+            2,
+            0,
+            100,
+            SearchCancellation::default(),
+        )
+        .unwrap();
+        let files = subtree["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["kind"] == "file")
+            .collect::<Vec<_>>();
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().all(|entry| entry["file_id"].is_string()));
+        assert_eq!(scope.lock().unwrap().file_candidates.len(), 3);
+
+        assert!(
+            list_log_directory(
+                scope,
+                DirectorySearchOptions {
+                    directory: Some(directory.path().canonicalize().unwrap()),
+                    ..Default::default()
+                },
+                "../outside",
+                2,
+                0,
+                100,
+                SearchCancellation::default(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn project_file_targets_stay_within_the_captured_workspace() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(workspace.path().join("src")).unwrap();
+        std::fs::write(workspace.path().join("src/service.rs"), "fn service() {}\n").unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+        let scope = empty_scope(DirectorySearchOptions::default());
+        scope.lock().unwrap().workspace_directories = vec![root.clone()];
+
+        let (path, document, access_root) = scope
+            .lock()
+            .unwrap()
+            .file_target(&json!({"root":0,"path":"src/service.rs"}))
+            .unwrap();
+        assert_eq!(path, root.join("src/service.rs"));
+        assert!(document.is_none());
+        assert_eq!(access_root.as_deref(), Some(root.as_path()));
+
+        assert!(
+            scope
+                .lock()
+                .unwrap()
+                .file_target(&json!({"root":0,"path":"../outside.log"}))
+                .is_err()
+        );
+        assert!(
+            scope
+                .lock()
+                .unwrap()
+                .file_target(&json!({"root":1,"path":"src/service.rs"}))
+                .is_err()
+        );
+    }
 }

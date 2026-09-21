@@ -646,6 +646,21 @@ impl AiPanel {
         }
         let extensions = vclogg_ai::RunExtensions::from_settings(&run_settings)
             .with_conversation(&self.conversation);
+        let workspace_directories = extensions.workspace_directories().to_vec();
+        let capture_failed = match scope.lock() {
+            Ok(mut state) => {
+                state.workspace_directories = workspace_directories;
+                false
+            }
+            Err(_) => true,
+        };
+        if capture_failed {
+            self.error = crate::tr!("分析状态不可用", "Analysis state unavailable").into();
+            self.conversation.status = RunStatus::Failed;
+            self.busy = false;
+            cx.notify();
+            return;
+        }
         let workspace = self.workspace.clone();
         self.task = Some(cx.spawn_in(window, async move |this, cx| {
             let mut run_lease = Some(lease);
@@ -895,12 +910,8 @@ impl AiPanel {
                 )
                 .into();
             }
-            AgentEvent::RequestStarted(request) => {
-                self.progress = format!(
-                    "{} ({request}/{})",
-                    crate::tr!("等待模型响应", "Waiting for model"),
-                    vclogg_ai::MAX_REQUESTS
-                );
+            AgentEvent::RequestStarted(_) => {
+                self.progress = crate::tr!("等待模型响应", "Waiting for model").into();
             }
             AgentEvent::ResponseStarted => {
                 self.progress =

@@ -2,16 +2,24 @@ use super::*;
 
 fn category(name: &str) -> (&'static str, &'static str) {
     match name {
-        "find_source_files" | "find_symbols" | "source_outline" | "locate_log_origin"
-        | "find_definition" | "find_references" | "rg_search" | "read_source" => {
-            ("source", crate::tr!("源码定位", "Source code"))
-        }
+        "list_source_workspaces"
+        | "rg_list_files"
+        | "rg_search"
+        | "rg_count"
+        | "find_source_files"
+        | "find_symbols"
+        | "source_outline"
+        | "locate_log_origin"
+        | "find_definition"
+        | "find_references"
+        | "read_source" => ("source", crate::tr!("源码定位", "Source code")),
         "search_memory" | "save_memory" | "delete_memory" => {
             ("memory", crate::tr!("记忆", "Memory"))
         }
         "list_mcp_servers" | "list_mcp_tools" | "call_mcp_tool" => ("mcp", "MCP"),
-        "get_context" | "list_logs" | "locate_files" | "read_logs" | "search_logs"
-        | "search_results" | "summarize_search" | "read_log_context" | "read_log_segment" => (
+        "get_context" | "list_logs" | "locate_files" | "list_log_directory" | "read_logs"
+        | "search_logs" | "search_results" | "summarize_search" | "read_log_context"
+        | "read_log_segment" => (
             "logs",
             crate::tr!("日志查找与读取", "Log search and reading"),
         ),

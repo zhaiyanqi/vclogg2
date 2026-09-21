@@ -79,6 +79,20 @@ pub(super) fn exercise(
     };
     let server = std::thread::spawn(move || {
         let (mut socket, first_request) = request(&listener);
+        let system = first_request["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|message| message["role"] == "system")
+            .unwrap()["content"]
+            .as_str()
+            .unwrap();
+        assert!(
+            system.contains("Use set_marks with marked=true on only the few decisive source rows")
+        );
+        assert!(
+            system.contains("call list_colors and use highlight_keyword on each relevant file")
+        );
         let user = first_request["messages"]
             .as_array()
             .unwrap()
@@ -105,7 +119,8 @@ pub(super) fn exercise(
             ("read_logs", json!({"document_id":id,"version":reference["version"],"start_line":1,"limit":4})),
             ("search_logs", json!({"scope":"open","query":"ERROR"})),
             ("set_marks", json!({"references":[reference],"marked":true})),
-            ("highlight_keyword", json!({"document_id":id,"version":reference["version"],"action":"set","keyword":"ERROR","color_label_id":label})),
+            ("list_colors", json!({})),
+            ("highlight_keyword", json!({"document_id":id,"version":reference["version"],"action":"set","keyword":"ERROR","color_label_id":label.clone()})),
             ("text_mark", json!({"reference":reference,"action":"add","text":"网络故障"})),
             ("append_search", json!({"document_id":id,"version":reference["version"],"text":"timeout"})),
             ("navigate", json!({"action":"line","reference":reference})),
@@ -130,13 +145,22 @@ pub(super) fn exercise(
             .iter()
             .filter(|m| m["role"] == "tool")
             .collect::<Vec<_>>();
-        assert_eq!(tools.len(), 7);
+        assert_eq!(tools.len(), 8);
         for tool in tools {
             let result: Value = serde_json::from_str(tool["content"].as_str().unwrap()).unwrap();
             assert!(result.get("error").is_none(), "{result}");
             if tool["tool_call_id"] == "call-0" {
                 assert_eq!(result["rows"][1]["text"], "ERROR network timeout");
                 assert_eq!(result["rows"][1]["reference"], *reference);
+            }
+            if tool["tool_call_id"] == "call-3" {
+                assert!(
+                    result["colors"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|color| color["id"] == label)
+                );
             }
         }
         let reference: LogReference = serde_json::from_value(reference.clone()).unwrap();

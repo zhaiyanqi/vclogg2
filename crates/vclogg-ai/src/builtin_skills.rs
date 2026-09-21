@@ -15,13 +15,13 @@ const BUILTINS: &[BuiltinSkill] = &[
     BuiltinSkill {
         id: "search-logs",
         name: "搜索日志 · Search logs",
-        description: "搜索与分析：模糊症状、关联请求、验证原因 / Investigate symptoms and correlate evidence.",
+        description: "搜索与分析：验证原因，标记关键证据并高亮关键词 / Investigate, mark decisive evidence and highlight keywords.",
         workflow: workflows::ANALYSIS,
     },
     BuiltinSkill {
         id: "execute-search",
         name: "执行搜索 · Execute search",
-        description: "搜索与分析：区分后台取证、展示搜索和编辑草稿 / Choose analysis, displayed search or draft editing.",
+        description: "搜索与分析：区分搜索操作，并保留已验证的关键证据 / Choose search actions and preserve verified findings.",
         workflow: workflows::ANALYSIS,
     },
     BuiltinSkill {
@@ -169,4 +169,36 @@ pub(crate) fn initialize_builtin_skills(
         }
     }
     Ok(changed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_analysis_skills_preserve_verified_evidence_visually() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("config");
+        fs::create_dir_all(&config).unwrap();
+        let settings_path = config.join("ai.json");
+        let mut settings = AiSettings::default();
+
+        assert!(initialize_builtin_skills(&mut settings, &settings_path).unwrap());
+        let read = |id: &str| {
+            let skill = settings.skills.iter().find(|skill| skill.id == id).unwrap();
+            fs::read_to_string(skill.directory.join("SKILL.md")).unwrap()
+        };
+        let analysis = read("vclogg:search-logs");
+        for instruction in [
+            "set_marks with marked=true",
+            "Call list_colors once",
+            "call highlight_keyword separately for each relevant open file",
+            "requested read-only analysis",
+        ] {
+            assert!(analysis.contains(instruction), "missing {instruction}");
+        }
+        let marking = read("vclogg:color-labels");
+        assert!(marking.contains("do not add prose annotations automatically"));
+        assert!(marking.contains("exact high-signal terms observed in each relevant file"));
+    }
 }

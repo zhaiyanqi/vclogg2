@@ -544,10 +544,11 @@ async fn both_protocols_assemble_interleaved_chinese_and_multiple_tool_arguments
 }
 
 #[tokio::test]
-async fn request_limit_returns_a_continuation_state() {
-    let responses = (0..MAX_REQUESTS)
+async fn more_than_twenty_tool_round_trips_continue_until_the_answer() {
+    let mut responses = (0..25)
         .map(|ix| (200, openai_tool(&format!("call-{ix}"), "{}")))
-        .collect();
+        .collect::<Vec<_>>();
+    responses.push((200, openai_text("Investigation complete")));
     let (config, requests, server) = mock(responses);
     let run = start_run(
         config,
@@ -566,14 +567,14 @@ async fn request_limit_returns_a_continuation_state() {
                 .await
                 .unwrap(),
             AgentEvent::Finished(status, _) => {
-                assert_eq!(status, RunStatus::LimitReached);
+                assert_eq!(status, RunStatus::Complete);
                 break;
             }
             _ => {}
         }
     }
     server.join().unwrap();
-    assert_eq!(requests.lock().unwrap().len(), MAX_REQUESTS);
+    assert_eq!(requests.lock().unwrap().len(), 26);
 }
 
 #[test]
