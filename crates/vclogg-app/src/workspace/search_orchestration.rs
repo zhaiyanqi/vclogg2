@@ -159,18 +159,28 @@ impl Workspace {
             DirectorySearchDialog::new(self.global_search.directory_options.clone(), window, cx)
         });
         let workspace = cx.entity();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let picker_for_submit = picker.clone();
             let workspace = workspace.clone();
             dialog
                 .title(crate::tr!("目录搜索设置", "Directory search settings"))
                 .close_button(false)
                 .child(picker.clone())
-                .button_props(
-                    gpui_kit::component::dialog::DialogButtonProps::default()
-                        .show_cancel(true)
-                        .cancel_text(crate::tr!("取消", "Cancel"))
-                        .ok_text(crate::tr!("保存", "Save")),
+                .footer(
+                    DialogFooter::new()
+                        .child(crate::dialog_focus::dialog_cancel_action(
+                            "directory-search-cancel-action",
+                            Button::new("directory-search-cancel")
+                                .label(crate::tr!("取消", "Cancel")),
+                            cx,
+                        ))
+                        .child(crate::dialog_focus::dialog_confirm_action(
+                            "directory-search-save-action",
+                            Button::new("directory-search-save")
+                                .primary()
+                                .label(crate::tr!("保存", "Save")),
+                            cx,
+                        )),
                 )
                 .on_ok(move |_, window, cx| {
                     let Some(options) = picker_for_submit.read(cx).options(cx) else {

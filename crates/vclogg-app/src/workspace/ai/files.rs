@@ -68,6 +68,15 @@ impl Workspace {
             .lock()
             .map_err(|_| anyhow::anyhow!("Analysis unavailable"))?;
         let args = &call.arguments;
+        if call.name == "add_source_workspace" {
+            let requested = text(args, "path")?.to_owned();
+            ensure_requested_source_directory(&state.source_directory_request, &requested)?;
+            drop(state);
+            return Ok(Box::new(move || {
+                let path = canonical_source_directory(&requested)?;
+                Ok(Evidence::Json(json!({"path":path.display().to_string()})))
+            }));
+        }
         if call.name == "list_log_directory" {
             let options = state.directory.clone();
             let cancellation = state.cancellation.clone();
@@ -163,6 +172,33 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Result<Value> {
         let args = &call.arguments;
+        if call.name == "add_source_workspace" {
+            let requested = text(args, "path")?;
+            ensure_requested_source_directory(&state.source_directory_request, requested)?;
+            let prepared_path = PathBuf::from(
+                evidence.value()?["path"]
+                    .as_str()
+                    .context("Prepared workspace path is missing")?,
+            );
+            let path = canonical_source_directory(requested)?;
+            if prepared_path != path {
+                bail!("Requested project directory changed while it was being prepared");
+            }
+            let root = state
+                .workspace_directories
+                .iter()
+                .position(|existing| existing == &path)
+                .unwrap_or_else(|| {
+                    state.workspace_directories.push(path.clone());
+                    state.workspace_directories.len() - 1
+                });
+            return Ok(json!({
+                "root": root,
+                "path": path.display().to_string(),
+                "access": "read_only",
+                "persistence": "this_run"
+            }));
+        }
         if call.name == "reveal_file" {
             let (path, _, _) = state.file_target(args)?;
             self.reveal_in_sidebar(path.clone(), false, window, cx);
@@ -291,6 +327,31 @@ fn scoped_workspace_file(root: &Path, relative: &str) -> Result<PathBuf> {
         .context("Project file unavailable")?;
     if !path.starts_with(&root) || !path.is_file() {
         bail!("Project path is not a file within the selected project directory");
+    }
+    Ok(path)
+}
+
+fn ensure_requested_source_directory(request: &str, path: &str) -> Result<()> {
+    let mentioned = request.match_indices(path).any(|(start, _)| {
+        request[start + path.len()..]
+            .chars()
+            .next()
+            .is_none_or(|next| {
+                !next.is_ascii_alphanumeric() && !matches!(next, '/' | '\\' | '.' | '_' | '-' | '~')
+            })
+    });
+    if path.trim().is_empty() || !Path::new(path).is_absolute() || !mentioned {
+        bail!("Use an absolute project directory explicitly written in the current user request");
+    }
+    Ok(())
+}
+
+fn canonical_source_directory(path: &str) -> Result<PathBuf> {
+    let path = Path::new(path)
+        .canonicalize()
+        .context("Requested project directory is unavailable")?;
+    if !path.is_dir() || path.parent().is_none() {
+        bail!("Requested project path must be a non-root directory");
     }
     Ok(path)
 }
@@ -536,6 +597,7 @@ mod tests {
         Arc::new(Mutex::new(AiScope {
             file_candidates: BTreeMap::new(),
             workspace_directories: Vec::new(),
+            source_directory_request: String::new(),
             read_document: None,
             explicit: BTreeSet::new(),
             allowed: BTreeSet::new(),
@@ -656,5 +718,28 @@ mod tests {
                 .file_target(&json!({"root":1,"path":"src/service.rs"}))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn source_workspace_can_be_added_only_from_the_current_user_request() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().canonicalize().unwrap();
+        let requested = format!("请分析目录 {} 中的问题", path.display());
+
+        ensure_requested_source_directory(&requested, path.to_str().unwrap()).unwrap();
+        assert_eq!(
+            canonical_source_directory(path.to_str().unwrap()).unwrap(),
+            path
+        );
+        assert!(
+            ensure_requested_source_directory("请分析另一个目录", path.to_str().unwrap()).is_err()
+        );
+        let child = path.join("child");
+        let child_request = format!("分析 {} 的问题", child.display());
+        assert!(
+            ensure_requested_source_directory(&child_request, path.to_str().unwrap()).is_err(),
+            "a mentioned child path must not authorize its broader parent"
+        );
+        assert!(ensure_requested_source_directory(&requested, "relative/project").is_err());
     }
 }

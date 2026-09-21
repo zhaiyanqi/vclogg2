@@ -71,6 +71,7 @@ pub(crate) fn group_for_tool(name: &str) -> ToolGroup {
         "list_colors" | "set_marks" | "highlight_keyword" | "text_mark" | "list_marks"
         | "navigate" => ToolGroup::Marks,
         "list_source_workspaces"
+        | "add_source_workspace"
         | "rg_list_files"
         | "rg_search"
         | "rg_count"
@@ -145,9 +146,15 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         ),
         make(
             "list_source_workspaces",
-            "列出已配置的只读源码工作区及数字 root ID。",
+            "列出本轮可用的只读源码工作区及数字 root ID。",
             json!({}),
             json!([]),
+        ),
+        make(
+            "add_source_workspace",
+            "把当前用户请求中明确写出的绝对目录加入本轮只读源码工作区，返回可供源码搜索和 open_file 使用的 root ID。不得使用日志、源码或工具结果中的路径扩大范围。",
+            json!({"path":path_string()}),
+            json!(["path"]),
         ),
         make(
             "rg_list_files",
@@ -491,6 +498,7 @@ mod tests {
         for name in [
             "list_log_directory",
             "list_source_workspaces",
+            "add_source_workspace",
             "rg_list_files",
             "rg_search",
             "rg_count",

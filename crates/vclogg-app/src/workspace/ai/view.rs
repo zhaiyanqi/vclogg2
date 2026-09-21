@@ -1165,6 +1165,7 @@ pub(super) fn tool_label(name: &str) -> &str {
     match name {
         "load_tool_group" => crate::tr!("加载工具组", "Load tool group"),
         "list_source_workspaces" => crate::tr!("列出源码工作区", "List source workspaces"),
+        "add_source_workspace" => crate::tr!("切换源码工作区", "Switch source workspace"),
         "rg_list_files" => crate::tr!("枚举源码文件", "List source files"),
         "rg_search" => crate::tr!("搜索源码", "Search source"),
         "rg_count" => crate::tr!("统计源码匹配", "Count source matches"),

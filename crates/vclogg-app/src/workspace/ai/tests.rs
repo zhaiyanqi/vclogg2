@@ -47,6 +47,7 @@ fn fixture() -> (tempfile::TempDir, DocumentSnapshot, SharedScope) {
     let scope = Arc::new(Mutex::new(AiScope {
         file_candidates: BTreeMap::new(),
         workspace_directories: Vec::new(),
+        source_directory_request: String::new(),
         read_document: None,
         explicit: BTreeSet::new(),
         allowed: [7].into(),

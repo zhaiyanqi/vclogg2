@@ -87,6 +87,7 @@ struct SearchSnapshot {
 struct AiScope {
     file_candidates: BTreeMap<String, PathBuf>,
     workspace_directories: Vec<PathBuf>,
+    source_directory_request: String,
     read_document: Option<DocumentSnapshot>,
     explicit: BTreeSet<u64>,
     allowed: BTreeSet<u64>,
@@ -232,6 +233,7 @@ impl Workspace {
         Arc::new(Mutex::new(AiScope {
             file_candidates: BTreeMap::new(),
             workspace_directories: Vec::new(),
+            source_directory_request: String::new(),
             read_document: None,
             explicit: BTreeSet::new(),
             allowed: documents.keys().copied().collect(),
@@ -293,7 +295,11 @@ impl Workspace {
         vclogg_ai::validate_call(call)?;
         if matches!(
             call.name.as_str(),
-            "list_log_directory" | "locate_files" | "open_file" | "reveal_file"
+            "add_source_workspace"
+                | "list_log_directory"
+                | "locate_files"
+                | "open_file"
+                | "reveal_file"
         ) {
             return self.ai_prepare_file(scope, call);
         }

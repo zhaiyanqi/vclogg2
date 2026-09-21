@@ -574,6 +574,7 @@ impl AiPanel {
             return;
         };
         self.restrict_scope(&scope);
+        let source_directory_request = user_text.clone();
         let user_text = match self.message_with_attachments(&user_text, &scope) {
             Ok(text) => text,
             Err(error) => {
@@ -645,11 +646,13 @@ impl AiPanel {
                 .retain(|path| selected.contains(path));
         }
         let extensions = vclogg_ai::RunExtensions::from_settings(&run_settings)
-            .with_conversation(&self.conversation);
+            .with_conversation(&self.conversation)
+            .with_user_request(&source_directory_request);
         let workspace_directories = extensions.workspace_directories().to_vec();
         let capture_failed = match scope.lock() {
             Ok(mut state) => {
                 state.workspace_directories = workspace_directories;
+                state.source_directory_request = source_directory_request;
                 false
             }
             Err(_) => true,

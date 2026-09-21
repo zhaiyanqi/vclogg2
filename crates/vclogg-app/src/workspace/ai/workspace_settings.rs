@@ -33,8 +33,8 @@ impl AiPanel {
                 .on_click(cx.listener(|this, _, window, cx| this.add_workspace_directory(window, cx))))
             .child(div().text_sm().text_color(cx.theme().muted_foreground)
                 .child(crate::tr!(
-                    "分析日志时，AI 可使用 rg 在以下项目目录中查找代码，并读取相关源码。目录仅供只读分析，变更在下一轮对话生效。",
-                    "When analyzing logs, AI can use rg to search these project folders and read related source code. Access is read-only and changes apply to the next run."
+                    "这些目录是 AI 源码分析的默认范围。你也可以在问题中明确写出另一个绝对目录路径，AI 会在该轮临时切换或加入该目录，并可打开其中的文件。访问始终只读；这里的变更从下一轮生效。",
+                    "These folders are the default scope for AI source analysis. You can also name another absolute folder path in your question; AI can add or switch to it for that run and open files from it. Access stays read-only, and changes here apply to the next run."
                 )));
         if self.settings.workspace_directories.is_empty() {
             content = content.child(

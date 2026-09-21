@@ -57,7 +57,7 @@ impl Workspace {
         let args = &call.arguments;
         if matches!(
             call.name.as_str(),
-            "open_file" | "close_file" | "switch_file" | "reveal_file"
+            "add_source_workspace" | "open_file" | "close_file" | "switch_file" | "reveal_file"
         ) {
             return self.ai_commit_file(&mut state, call, evidence, window, cx);
         }
