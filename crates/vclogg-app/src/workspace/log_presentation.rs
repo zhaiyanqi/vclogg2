@@ -2961,17 +2961,16 @@ impl Workspace {
         if let Some((id, draft)) = draft.filter(|(_, draft)| draft.active) {
             return div()
                 .id(("new-file-editor", id))
+                .key_context(EDITOR_CONTEXT)
                 .relative()
                 .size_full()
                 .min_h_0()
+                .on_action(cx.listener(move |this, _: &SaveEditor, window, cx| {
+                    this.save_new_file_draft(id, window, cx);
+                }))
                 .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                     if event.keystroke.key == "escape" {
                         this.exit_new_file_draft(id, window, cx);
-                        cx.stop_propagation();
-                    } else if event.keystroke.key.eq_ignore_ascii_case("s")
-                        && event.keystroke.modifiers.platform
-                    {
-                        this.save_new_file_draft(id, window, cx);
                         cx.stop_propagation();
                     }
                 }))
@@ -3157,17 +3156,16 @@ impl Workspace {
         }) {
             let editor = div()
                 .id(("document-editor", document_id))
+                .key_context(EDITOR_CONTEXT)
                 .relative()
                 .size_full()
                 .min_h_0()
+                .on_action(cx.listener(move |this, _: &SaveEditor, window, cx| {
+                    this.save_document_edit(document_id, window, cx);
+                }))
                 .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                     if event.keystroke.key == "escape" {
                         this.exit_document_edit(document_id, window, cx);
-                        cx.stop_propagation();
-                    } else if event.keystroke.key.eq_ignore_ascii_case("s")
-                        && event.keystroke.modifiers.platform
-                    {
-                        this.save_document_edit(document_id, window, cx);
                         cx.stop_propagation();
                     }
                 }))

@@ -4,6 +4,7 @@ use crate::state_store::ShortcutSettings;
 
 pub const WORKSPACE_CONTEXT: &str = "VCLogg2Workspace";
 pub const LOG_TABLE_CONTEXT: &str = "VCLogg2LogTable";
+pub const EDITOR_CONTEXT: &str = "VCLogg2Editor";
 // Keep application commands from preempting text entry in gpui-component inputs.
 const WORKSPACE_SHORTCUT_CONTEXT: &str = "VCLogg2Workspace && !Input";
 const LOG_TABLE_SHORTCUT_CONTEXT: &str = "VCLogg2LogTable && !Input";
@@ -14,6 +15,7 @@ actions!(
         OpenFiles,
         PasteClipboardAsFile,
         EnterEditMode,
+        SaveEditor,
         NewWindow,
         ReloadActive,
         CloseActiveTab,
@@ -152,6 +154,7 @@ pub fn init(cx: &mut App) {
         ),
         KeyBinding::new("w", ToggleWordWrap, Some(WORKSPACE_SHORTCUT_CONTEXT)),
         KeyBinding::new("i", EnterEditMode, Some(WORKSPACE_SHORTCUT_CONTEXT)),
+        KeyBinding::new("secondary-s", SaveEditor, Some(EDITOR_CONTEXT)),
         KeyBinding::new(
             &format!("{primary}-home"),
             JumpToStart,

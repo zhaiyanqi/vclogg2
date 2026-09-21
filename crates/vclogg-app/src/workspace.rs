@@ -61,11 +61,11 @@ use vclogg_core::{
 use crate::{
     actions::{
         AddTextMark, CancelSearch, ClearSearch, CloseActiveTab, CopyCurrentLine,
-        CopyCurrentLineWithNumber, CopyFilePath, CycleColorLabel, EnterEditMode,
+        CopyCurrentLineWithNumber, CopyFilePath, CycleColorLabel, EDITOR_CONTEXT, EnterEditMode,
         ExtendSelectionDown, ExtendSelectionFirst, ExtendSelectionLast, ExtendSelectionPageDown,
         ExtendSelectionPageUp, ExtendSelectionUp, FocusSearch, GoToLine, JumpToEnd, JumpToStart,
         LOG_TABLE_CONTEXT, MergeSearchResultsInNewTab, NewWindow, OpenFiles, OpenQuickFind,
-        OpenSearchResultsInNewTab, OpenSettings, PasteClipboardAsFile, ReloadActive,
+        OpenSearchResultsInNewTab, OpenSettings, PasteClipboardAsFile, ReloadActive, SaveEditor,
         SaveSearchResultsToFile, SelectAllRows, StartSearch, ToggleCaseSensitive, ToggleFullscreen,
         ToggleMarkedRow, ToggleRegex, ToggleWordWrap, WORKSPACE_CONTEXT,
     },

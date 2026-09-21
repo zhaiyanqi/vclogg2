@@ -1136,6 +1136,134 @@ mod tests {
     use super::*;
     use gpui_kit::TestAppContext;
 
+    #[gpui_kit::test]
+    fn new_file_editor_saves_with_platform_shortcut(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::actions::init(cx);
+            Workspace::init_window_registry(cx);
+            crate::notifications::init(cx);
+            crate::app_icon::init(cx);
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("draft.log");
+        std::fs::write(&path, "before").unwrap();
+        let mut workspace = None;
+        let window = cx.add_window(|window, cx| {
+            let entity = cx.new(|cx| Workspace::new(false, Vec::new(), window, cx));
+            workspace = Some(entity.clone());
+            Root::new(entity, window, cx)
+        });
+        let workspace = workspace.unwrap();
+        cx.update_window(window.into(), |_, window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.create_editable_file(window, cx);
+                let draft = workspace.new_file_drafts.get_mut(&1).unwrap();
+                draft.path = Some(path.clone());
+                draft.disk_version = Some(DiskVersion::read(&path).unwrap());
+            });
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
+
+        cx.simulate_keystrokes(window.into(), "x");
+        cx.simulate_keystrokes(window.into(), "secondary-s");
+        cx.run_until_parked();
+
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "x");
+    }
+
+    #[gpui_kit::test]
+    fn document_editor_saves_with_platform_shortcut(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::actions::init(cx);
+            Workspace::init_window_registry(cx);
+            crate::notifications::init(cx);
+            crate::app_icon::init(cx);
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.log");
+        std::fs::write(&path, "before\n").unwrap();
+        let document = Arc::new(LogDocument::open(&path).unwrap());
+        let mut workspace = None;
+        let window = cx.add_window(|window, cx| {
+            let entity = cx.new(|cx| Workspace::new(false, Vec::new(), window, cx));
+            workspace = Some(entity.clone());
+            Root::new(entity, window, cx)
+        });
+        let workspace = workspace.unwrap();
+        cx.update_window(window.into(), |_, window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                let prepared = PreparedDocument {
+                    document: document.clone(),
+                    cached_complete_document: None,
+                    session: None,
+                    color_labels_snapshot: None,
+                    resolved_color_rules: Arc::default(),
+                    search_result: SearchResult::default(),
+                    search_range: SearchRange::default(),
+                    search_matcher: None,
+                    search_case_sensitive: false,
+                    search_regex: false,
+                    warning: None,
+                    load_state: DocumentLoadState::Ready,
+                    pending_index_cache: None,
+                    upgrade_frame: None,
+                };
+                workspace.install_documents(
+                    vec![(path.clone(), Ok(prepared))],
+                    Some(&path),
+                    &BTreeMap::new(),
+                    None,
+                    true,
+                    window,
+                    cx,
+                );
+                let document_id = workspace.documents[0].id;
+                let editor = cx.new(|cx| {
+                    EditorState::new(window, cx)
+                        .soft_wrap(false)
+                        .default_value("before\n")
+                });
+                let subscription = cx.subscribe(&editor, move |this, _, event: &InputEvent, cx| {
+                    if matches!(event, InputEvent::Change)
+                        && let Some(edit) = this
+                            .documents
+                            .iter_mut()
+                            .find(|tab| tab.id == document_id)
+                            .and_then(|tab| tab.edit.as_mut())
+                    {
+                        edit.dirty = true;
+                        cx.notify();
+                    }
+                });
+                workspace.documents[0].edit = Some(DocumentEditSession {
+                    editor: editor.clone(),
+                    encoding: EditEncoding::Utf8,
+                    disk_version: DiskVersion::read(&path).unwrap(),
+                    dirty: false,
+                    active: true,
+                    saving: false,
+                    saved_since_enter: false,
+                    pending_exit_row: None,
+                    after_save: EditAfterSave::None,
+                    save_task: None,
+                    _subscription: subscription,
+                });
+                editor.focus_handle(cx).focus(window, cx);
+            });
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
+
+        cx.simulate_keystrokes(window.into(), "x");
+        cx.simulate_keystrokes(window.into(), "secondary-s");
+        cx.run_until_parked();
+
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "xbefore\n");
+    }
+
     struct EditorEntryHarness {
         editor: Entity<EditorState>,
     }

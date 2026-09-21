@@ -821,7 +821,14 @@ impl Workspace {
                             })
                             .selected(edit_document_id.is_none() && !draft_editing && auto_follow)
                             .tooltip(if edit_document_id.is_some() || draft_editing {
-                                crate::tr!("保存文件", "Save file")
+                                #[cfg(target_os = "macos")]
+                                {
+                                    crate::tr!("保存文件（⌘S）", "Save file (⌘S)")
+                                }
+                                #[cfg(not(target_os = "macos"))]
+                                {
+                                    crate::tr!("保存文件（Ctrl+S）", "Save file (Ctrl+S)")
+                                }
                             } else if auto_follow {
                                 crate::tr!("关闭末尾跟随", "Disable follow end")
                             } else {
