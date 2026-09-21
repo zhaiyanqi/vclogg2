@@ -1203,9 +1203,11 @@ impl Element for SelectableLogText {
 mod tests {
     use super::*;
     use gpui_kit::base::TextSelectionLayer;
+    use gpui_kit::component::Root;
     use gpui_kit::{
-        Context, Hsla, InteractiveElement as _, Modifiers, MouseMoveEvent, MouseUpEvent,
-        ParentElement as _, Render, Styled as _, TestAppContext, div, hsla, point, px,
+        AppContext as _, Context, Hsla, InteractiveElement as _, Modifiers, MouseMoveEvent,
+        MouseUpEvent, ParentElement as _, Render, Styled as _, TestAppContext, div, hsla, point,
+        px,
     };
 
     const TEST_SELECTION_COLOR: Hsla = hsla(0.37, 0.91, 0.43, 1.);
@@ -1219,6 +1221,11 @@ mod tests {
         text: LogText,
         selections: TextSelectionCache<usize>,
         visible_keys: Vec<usize>,
+    }
+
+    struct RootSelectableLogTextTestView {
+        text: LogText,
+        selections: TextSelectionCache<usize>,
     }
 
     #[test]
@@ -1328,6 +1335,67 @@ mod tests {
                 });
             div().size_full().child(TextSelectionLayer).children(rows)
         }
+    }
+
+    impl Render for RootSelectableLogTextTestView {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let selection = self.selections.handle(0, &self.text, window, cx);
+            div().size_full().child(
+                div()
+                    .absolute()
+                    .left(px(10.))
+                    .top(px(10.))
+                    .text_size(px(14.))
+                    .child(SelectableLogText::new(
+                        selection,
+                        0,
+                        self.text.clone(),
+                        StyledText::new(self.text.display().clone()),
+                        TEST_SELECTION_COLOR,
+                    )),
+            )
+        }
+    }
+
+    #[gpui_kit::test]
+    fn drag_selection_works_inside_root(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|_| RootSelectableLogTextTestView {
+                text: LogText::new("alpha beta".into()),
+                selections: TextSelectionCache::default(),
+            });
+            Root::new(view, window, cx)
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        cx.simulate_mouse_move(point(px(20.), px(18.)), None, Modifiers::default());
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        cx.simulate_mouse_down(
+            point(px(20.), px(18.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_move(
+            point(px(50.), px(18.)),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            point(px(50.), px(18.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert!(!TextSelection::selected_text(window, cx).is_empty());
+        });
     }
 
     #[gpui_kit::test]

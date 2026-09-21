@@ -1835,7 +1835,7 @@ impl Workspace {
             let workspace = cx.weak_entity();
             cx.new(move |cx| LogRegionSurface::new(workspace, DisplayRegion::SearchResults, cx))
         };
-        let log_text_selection_scope = TextSelectionScopeId::new();
+        let log_text_selection_scope = TextSelectionScopeId::default();
         let search_results_text_selection_scope = log_text_selection_scope;
         let log_focus_handle = cx.focus_handle().tab_stop(true);
         let search_results_focus_handle = cx.focus_handle().tab_stop(true);
@@ -2649,21 +2649,14 @@ impl Render for Workspace {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                    // Root starts drag selection after this bubbles through Workspace.
-                    // Preserve that path for visible AI TextViews as well as log text.
-                    if this.is_text_selection_origin_in_log_region(event.position) {
-                        TextSelection::activate_scope(
-                            this.log_viewer.text_selection_scope,
-                            window,
-                            cx,
-                        );
-                    } else if this.sidebar.read(cx).contains_ai_transcript(
-                        event.position,
-                        window,
-                        cx,
-                    ) {
-                        TextSelection::activate_scope(TextSelectionScopeId::default(), window, cx);
-                    } else {
+                    // Root owns the default window selection scope. Log rows and visible AI
+                    // transcripts participate in that scope; controls suppress selection.
+                    if !this.is_text_selection_origin_in_log_region(event.position)
+                        && !this
+                            .sidebar
+                            .read(cx)
+                            .contains_ai_transcript(event.position, window, cx)
+                    {
                         GlobalState::suppress_text_selection(cx);
                     }
                 }),
