@@ -73,7 +73,9 @@ impl AiPanel {
                             Button::new(("ai-copy-user", start))
                                 .small()
                                 .ghost()
-                                .text_label(crate::tr!("复制消息", "Copy message"))
+                                .icon(IconName::Copy)
+                                .tooltip(crate::tr!("复制消息", "Copy message"))
+                                .accessibility_label(crate::tr!("复制消息", "Copy message"))
                                 .on_click(
                                     cx.listener(move |this, _, _, cx| this.copy_message(start, cx)),
                                 ),
@@ -82,7 +84,9 @@ impl AiPanel {
                             Button::new(("ai-edit-user", start))
                                 .small()
                                 .ghost()
-                                .text_label(crate::tr!("编辑并重试", "Edit and retry"))
+                                .icon(gpui_kit::assets::IconName::SquarePen)
+                                .tooltip(crate::tr!("编辑并重试", "Edit and retry"))
+                                .accessibility_label(crate::tr!("编辑并重试", "Edit and retry"))
                                 .disabled(self.busy || self.ui_busy)
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.edit_message(start, window, cx)
