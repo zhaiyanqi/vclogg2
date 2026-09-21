@@ -1,5 +1,35 @@
 use super::*;
 
+#[test]
+fn log_jump_labels_use_file_name_and_source_line() {
+    let reference = LogReference {
+        document_id: 7,
+        version: "snapshot-1".into(),
+        line: 42,
+    };
+    let sources = [vclogg_ai::LogSource {
+        document_id: 7,
+        version: "snapshot-1".into(),
+        path: PathBuf::from("/logs/source.log"),
+    }];
+    assert_eq!(
+        view::reference_label(&reference, Some("/other/current.log"), &sources),
+        "current.log:42"
+    );
+    assert_eq!(
+        view::reference_label(&reference, None, &sources),
+        "source.log:42"
+    );
+
+    let value = json!({"rows": [
+        {"reference": reference},
+        {"reference": reference, "file": "source.log"}
+    ]});
+    let mut references = Vec::new();
+    view::collect_references(&value, &mut references);
+    assert_eq!(references, vec![(reference, Some("source.log".into()))]);
+}
+
 fn fixture() -> (tempfile::TempDir, DocumentSnapshot, SharedScope) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("test.log");

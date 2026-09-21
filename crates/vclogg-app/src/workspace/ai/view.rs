@@ -287,16 +287,14 @@ impl AiPanel {
                             );
                             let mut references = Vec::new();
                             collect_references(&result.value, &mut references);
-                            for (n, reference) in references.into_iter().enumerate() {
+                            let sources = self.conversation_with_log_sources().log_sources;
+                            for (n, (reference, file)) in references.into_iter().enumerate() {
+                                let label = reference_label(&reference, file.as_deref(), &sources);
                                 card = card.child(
                                     Button::new(SharedString::from(format!("ai-jump-{ix}-{n}")))
                                         .small()
                                         .ghost()
-                                        .text_label(format!(
-                                            "{} {}",
-                                            crate::tr!("日志行", "Log line"),
-                                            reference.line
-                                        ))
+                                        .text_label(label)
                                         .disabled(self.busy || self.ui_busy)
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             this.jump_reference(reference.clone(), window, cx)
@@ -650,16 +648,26 @@ fn final_answer_index(
     }
     end.checked_sub(1).filter(|ix| matches!(&messages[*ix], AgentMessage::Assistant { calls, text, .. } if calls.is_empty() && !text.is_empty()))
 }
-fn collect_references(value: &Value, refs: &mut Vec<LogReference>) {
+pub(super) fn collect_references(value: &Value, refs: &mut Vec<(LogReference, Option<String>)>) {
     if refs.len() >= 100 {
         return;
     }
     if let Some(reference) = value
         .get("reference")
         .and_then(|r| serde_json::from_value::<LogReference>(r.clone()).ok())
-        && !refs.contains(&reference)
     {
-        refs.push(reference);
+        let file = value
+            .get("file")
+            .and_then(Value::as_str)
+            .filter(|file| !file.is_empty())
+            .map(str::to_owned);
+        if let Some((_, found_file)) = refs.iter_mut().find(|(found, _)| found == &reference) {
+            if found_file.is_none() {
+                *found_file = file;
+            }
+        } else {
+            refs.push((reference, file));
+        }
     }
     match value {
         Value::Object(values) => {
@@ -674,6 +682,33 @@ fn collect_references(value: &Value, refs: &mut Vec<LogReference>) {
         }
         _ => {}
     }
+}
+
+pub(super) fn reference_label(
+    reference: &LogReference,
+    file: Option<&str>,
+    sources: &[vclogg_ai::LogSource],
+) -> String {
+    let name = file
+        .map(std::path::Path::new)
+        .and_then(std::path::Path::file_name)
+        .or_else(|| {
+            sources
+                .iter()
+                .find(|source| {
+                    source.document_id == reference.document_id
+                        && source.version == reference.version
+                })
+                .and_then(|source| source.path.file_name())
+        });
+    format!(
+        "{}:{}",
+        name.map_or_else(
+            || crate::tr!("未知文件", "Unknown file").into(),
+            |name| name.to_string_lossy().into_owned()
+        ),
+        reference.line
+    )
 }
 impl Render for AiPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
