@@ -627,6 +627,10 @@ impl GlobalSearchTableDelegate {
             resolve_log_level_rules(settings.log_coloring.active_rules());
     }
 
+    pub(crate) fn set_log_font_size(&mut self, font_size: u16) {
+        self.presenter.log_font_size = font_size.clamp(8, 32);
+    }
+
     pub fn set_word_boundary_characters(&mut self, characters: impl Into<SharedString>) {
         self.interaction.word_boundary_characters = characters.into();
     }

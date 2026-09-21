@@ -1300,6 +1300,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.pending_editor_font_zoom = None;
         if preserve_highlights {
             // General settings drafts do not own the independently committed highlight styles.
             settings.highlight_log_levels = self.app_settings.highlight_log_levels;
@@ -1379,6 +1380,7 @@ impl Workspace {
         for workspace in other_workspaces {
             let shared_settings = settings.clone();
             workspace.update(cx, |workspace, cx| {
+                workspace.pending_editor_font_zoom = None;
                 let font_viewport_anchors =
                     log_font_layout_changed(&workspace.app_settings, &shared_settings)
                         .then(|| workspace.capture_font_viewport_anchors(cx));
@@ -1505,6 +1507,7 @@ impl Workspace {
             return;
         }
 
+        self.pending_editor_font_zoom = None;
         let current = self.app_settings.log_font_size;
         let next = if delta_y > px(0.) {
             current.saturating_add(1).min(32)
@@ -1515,13 +1518,22 @@ impl Workspace {
             return;
         }
 
+        self.apply_log_font_size(next, window, cx);
+    }
+
+    fn apply_log_font_size(&mut self, next: u16, window: &mut Window, cx: &mut Context<Self>) {
         let font_viewport_anchors = self.capture_font_viewport_anchors(cx);
         self.app_settings.log_font_size = next;
         for tab in &self.documents {
-            tab.refresh_appearance(&self.app_settings, cx);
+            for table in [&tab.log_table, &tab.result_table] {
+                table.update(cx, |table, cx| {
+                    table.delegate_mut().set_log_font_size(next);
+                    table.refresh(cx);
+                });
+            }
         }
         self.global_table.update(cx, |table, cx| {
-            table.delegate_mut().set_appearance(&self.app_settings);
+            table.delegate_mut().set_log_font_size(next);
             table.refresh(cx);
         });
         self.restore_font_viewport_anchors(font_viewport_anchors, cx);
@@ -1538,13 +1550,19 @@ impl Workspace {
         for workspace in other_workspaces {
             let shared_settings = shared_settings.clone();
             workspace.update(cx, |workspace, cx| {
+                workspace.pending_editor_font_zoom = None;
                 let font_viewport_anchors = workspace.capture_font_viewport_anchors(cx);
                 workspace.app_settings = shared_settings.clone();
                 for tab in &workspace.documents {
-                    tab.refresh_appearance(&shared_settings, cx);
+                    for table in [&tab.log_table, &tab.result_table] {
+                        table.update(cx, |table, cx| {
+                            table.delegate_mut().set_log_font_size(next);
+                            table.refresh(cx);
+                        });
+                    }
                 }
                 workspace.global_table.update(cx, |table, cx| {
-                    table.delegate_mut().set_appearance(&shared_settings);
+                    table.delegate_mut().set_log_font_size(next);
                     table.refresh(cx);
                 });
                 workspace.restore_font_viewport_anchors(font_viewport_anchors, cx);
@@ -1553,6 +1571,57 @@ impl Workspace {
         }
         self.schedule_appearance_save(window, cx);
         cx.notify();
+    }
+
+    pub(super) fn adjust_editor_font_size_from_wheel(
+        &mut self,
+        event: &ScrollWheelEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !Self::is_log_font_size_wheel(event) {
+            return;
+        }
+        let delta_y = event.delta.pixel_delta(window.line_height()).y;
+        if delta_y == px(0.) {
+            return;
+        }
+        cx.stop_propagation();
+        if self.persistence.store.is_none() {
+            return;
+        }
+
+        let current = self
+            .pending_editor_font_zoom
+            .as_ref()
+            .map_or(self.app_settings.log_font_size, |(size, _)| *size);
+        let next = if delta_y > px(0.) {
+            current.saturating_add(1).min(32)
+        } else {
+            current.saturating_sub(1).max(8)
+        };
+        if next == current {
+            return;
+        }
+
+        // A font change rebuilds the editor's display map for the entire document.
+        // Coalesce wheel ticks so a gesture pays that cost once.
+        let task = cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(100))
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                let Some((next, _)) = this.pending_editor_font_zoom.as_ref() else {
+                    return;
+                };
+                let next = *next;
+                if next != this.app_settings.log_font_size {
+                    this.apply_log_font_size(next, window, cx);
+                }
+                this.pending_editor_font_zoom = None;
+            });
+        });
+        self.pending_editor_font_zoom = Some((next, task));
     }
 
     fn is_log_font_size_wheel(event: &ScrollWheelEvent) -> bool {
@@ -1607,7 +1676,7 @@ impl Workspace {
                         return;
                     }
                     workspace.update(cx, |workspace, cx| {
-                        workspace.adjust_log_font_size_from_wheel(event, window, cx);
+                        workspace.adjust_editor_font_size_from_wheel(event, window, cx);
                     });
                 });
             },
