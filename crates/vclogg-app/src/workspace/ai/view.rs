@@ -92,10 +92,12 @@ impl AiPanel {
                 .into_any_element();
         }
         let live = self.live_row && row_ix + 1 == self.transcript_rows.len();
+        let current_row = row_ix + 1 == self.transcript_rows.len();
         let answer = final_answer_index(
             &self.conversation.messages,
             end,
             live,
+            current_row,
             &self.conversation.status,
         );
         let has_process = (start..end)
@@ -636,9 +638,10 @@ fn final_answer_index(
     messages: &[AgentMessage],
     end: usize,
     live: bool,
+    current_row: bool,
     status: &RunStatus,
 ) -> Option<usize> {
-    if live || !matches!(status, RunStatus::Complete | RunStatus::LimitReached) {
+    if live || (current_row && !matches!(status, RunStatus::Complete | RunStatus::LimitReached)) {
         return None;
     }
     end.checked_sub(1).filter(|ix| matches!(&messages[*ix], AgentMessage::Assistant { calls, text, .. } if calls.is_empty() && !text.is_empty()))
@@ -1176,19 +1179,23 @@ mod tool_summary_tests {
             calls: Vec::new(),
         }];
         assert_eq!(
-            final_answer_index(&messages, 1, false, &RunStatus::Running),
+            final_answer_index(&messages, 1, false, true, &RunStatus::Running),
             None
         );
         assert_eq!(
-            final_answer_index(&messages, 1, true, &RunStatus::Complete),
+            final_answer_index(&messages, 1, true, true, &RunStatus::Complete),
             None
         );
         assert_eq!(
-            final_answer_index(&messages, 1, false, &RunStatus::Interrupted),
+            final_answer_index(&messages, 1, false, true, &RunStatus::Interrupted),
             None
         );
         assert_eq!(
-            final_answer_index(&messages, 1, false, &RunStatus::Complete),
+            final_answer_index(&messages, 1, false, true, &RunStatus::Complete),
+            Some(0)
+        );
+        assert_eq!(
+            final_answer_index(&messages, 1, false, false, &RunStatus::Running),
             Some(0)
         );
     }
