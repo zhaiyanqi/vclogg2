@@ -660,8 +660,25 @@ fn verify_chat_geometry(
             );
             p.push_message(
                 AgentMessage::Assistant {
-                    text: "发现两条相关日志".into(),
+                    text: "正在检查日志".into(),
                     reasoning: "Check source lines.\n\n".repeat(4),
+                    thinking: Vec::new(),
+                    calls: Vec::new(),
+                },
+                cx,
+            );
+            p.push_message(
+                AgentMessage::Tool {
+                    call_id: "inspection".into(),
+                    name: "read_logs".into(),
+                    result: ToolResult::ok(json!({"rows":[{"reference":{"document_id":1,"version":"v1","line":2}}],"total":1})),
+                },
+                cx,
+            );
+            p.push_message(
+                AgentMessage::Assistant {
+                    text: "发现两条相关日志".into(),
+                    reasoning: String::new(),
                     thinking: Vec::new(),
                     calls: Vec::new(),
                 },
@@ -805,6 +822,7 @@ fn verify_chat_geometry(
         .unwrap()
         .size
         .height;
+    assert!(visual.debug_bounds("ai-tool-result").is_none());
     let toggle = visual.debug_bounds("ai-thinking-toggle").unwrap();
     visual.simulate_click(
         gpui_kit::point(toggle.left() + px(20.), toggle.top() + px(12.)),
@@ -819,15 +837,17 @@ fn verify_chat_geometry(
             .height
             > collapsed
     );
+    assert!(visual.debug_bounds("ai-tool-result").is_some());
     let thought = visual.debug_bounds("ai-reasoning-text").unwrap();
     let reply = visual.debug_bounds("ai-reply").unwrap();
+    let process = visual.debug_bounds("ai-thinking-region").unwrap();
     assert!(
         (thought.left() - reply.left()).abs() <= px(1.),
         "thoughts align with the reply"
     );
     assert!(
-        (thought.right() - reply.right()).abs() <= px(1.),
-        "thoughts use the full reply width"
+        process.size.width < reply.size.width && thought.size.width <= process.size.width,
+        "thoughts fit content instead of filling the reply: process={process:?}, thought={thought:?}, reply={reply:?}"
     );
     let from = gpui_kit::point(thought.left() + px(2.), thought.top() + px(10.));
     let to = gpui_kit::point(thought.left() + px(120.), thought.top() + px(10.));

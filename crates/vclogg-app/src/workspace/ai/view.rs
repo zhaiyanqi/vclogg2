@@ -92,14 +92,15 @@ impl AiPanel {
                 .into_any_element();
         }
         let live = self.live_row && row_ix + 1 == self.transcript_rows.len();
-        let answer = if live {
-            None
-        } else {
-            end.checked_sub(1).filter(|ix| matches!(&self.conversation.messages[*ix], AgentMessage::Assistant { calls, text, .. } if calls.is_empty() && !text.is_empty()))
-        };
+        let answer = final_answer_index(
+            &self.conversation.messages,
+            end,
+            live,
+            &self.conversation.status,
+        );
         let has_process = (start..end)
             .any(|ix| Some(ix) != answer || self.reasoning_views[ix].is_some())
-            || (live && !self.reasoning.is_empty())
+            || (live && (!self.reasoning.is_empty() || !self.live.is_empty()))
             || (row_ix + 1 == self.transcript_rows.len() && self.pending_tool.is_some());
         let mut row = v_flex()
             .id(row_id)
@@ -125,7 +126,9 @@ impl AiPanel {
                             Button::new(("ai-copy-answer", ix))
                                 .small()
                                 .ghost()
-                                .text_label(crate::tr!("复制回复", "Copy response"))
+                                .icon(IconName::Copy)
+                                .tooltip(crate::tr!("复制回复", "Copy response"))
+                                .accessibility_label(crate::tr!("复制回复", "Copy response"))
                                 .on_click(
                                     cx.listener(move |this, _, _, cx| this.copy_message(ix, cx)),
                                 ),
@@ -134,16 +137,15 @@ impl AiPanel {
                             Button::new(("ai-regenerate", ix))
                                 .small()
                                 .ghost()
-                                .text_label(crate::tr!("重新生成", "Regenerate"))
+                                .icon(IconName::RotateCw)
+                                .tooltip(crate::tr!("重新生成", "Regenerate"))
+                                .accessibility_label(crate::tr!("重新生成", "Regenerate"))
                                 .disabled(self.busy || self.ui_busy)
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.regenerate_message(ix, window, cx)
                                 })),
                         ),
                 );
-        }
-        if live && !self.live.is_empty() {
-            row = row.child(self.markdown_view(&self.live_view, cx));
         }
         row.into_any_element()
     }
@@ -161,13 +163,14 @@ impl AiPanel {
             .debug_selector(|| "ai-thinking-region".into())
             .items_start()
             .text_left()
-            .w_full()
+            .w_auto()
+            .max_w(gpui_kit::relative(0.9))
             .min_w_0()
             .gap_3()
             .child(
                 h_flex()
                     .debug_selector(|| "ai-thinking-toggle".into())
-                    .w_full()
+                    .w_auto()
                     .pb_2()
                     .border_b_1()
                     .border_color(cx.theme().border)
@@ -177,7 +180,7 @@ impl AiPanel {
                             .justify_start()
                             .small()
                             .ghost()
-                            .text_label(if live && self.live.is_empty() {
+                            .text_label(if live {
                                 crate::tr!("正在分析", "Analyzing")
                             } else {
                                 crate::tr!("分析过程", "Analysis activity")
@@ -200,20 +203,20 @@ impl AiPanel {
                             })),
                     ),
             );
-        {
+        if expanded {
             for ix in start..end {
-                if expanded && let Some(view) = &self.reasoning_views[ix] {
+                if let Some(view) = &self.reasoning_views[ix] {
                     process = process.child(
                         div()
                             .debug_selector(|| "ai-reasoning-text".into())
-                            .w_full()
+                            .w_auto()
                             .min_w_0()
                             .child(self.markdown_view(view, cx)),
                     );
                 }
                 match &self.conversation.messages[ix] {
                     AgentMessage::Assistant { text, .. }
-                        if expanded && Some(ix) != answer && !text.is_empty() =>
+                        if Some(ix) != answer && !text.is_empty() =>
                     {
                         process = process.child(self.markdown_view(&self.messages[ix], cx));
                     }
@@ -230,7 +233,7 @@ impl AiPanel {
                         );
                         let mut card = v_flex()
                             .debug_selector(|| "ai-tool-result".into())
-                            .w_full()
+                            .w_auto()
                             .min_w_0()
                             .gap_1()
                             .p_2()
@@ -300,8 +303,11 @@ impl AiPanel {
                     _ => {}
                 }
             }
-            if expanded && live && !self.reasoning.is_empty() {
+            if live && !self.reasoning.is_empty() {
                 process = process.child(self.markdown_view(&self.live_reasoning_view, cx));
+            }
+            if live && !self.live.is_empty() {
+                process = process.child(self.markdown_view(&self.live_view, cx));
             }
             if let Some(call) = self
                 .pending_tool
@@ -624,6 +630,18 @@ impl AiPanel {
         }));
         cx.notify();
     }
+}
+
+fn final_answer_index(
+    messages: &[AgentMessage],
+    end: usize,
+    live: bool,
+    status: &RunStatus,
+) -> Option<usize> {
+    if live || !matches!(status, RunStatus::Complete | RunStatus::LimitReached) {
+        return None;
+    }
+    end.checked_sub(1).filter(|ix| matches!(&messages[*ix], AgentMessage::Assistant { calls, text, .. } if calls.is_empty() && !text.is_empty()))
 }
 fn collect_references(value: &Value, refs: &mut Vec<LogReference>) {
     if refs.len() >= 100 {
@@ -1146,6 +1164,32 @@ mod tool_summary_tests {
         assert_eq!(
             tool_result_summary(&ToolResult::error("source unavailable")),
             "source unavailable"
+        );
+    }
+
+    #[test]
+    fn interim_assistant_text_waits_in_thinking_until_run_finishes() {
+        let messages = vec![AgentMessage::Assistant {
+            text: "正在检查日志".into(),
+            reasoning: String::new(),
+            thinking: Vec::new(),
+            calls: Vec::new(),
+        }];
+        assert_eq!(
+            final_answer_index(&messages, 1, false, &RunStatus::Running),
+            None
+        );
+        assert_eq!(
+            final_answer_index(&messages, 1, true, &RunStatus::Complete),
+            None
+        );
+        assert_eq!(
+            final_answer_index(&messages, 1, false, &RunStatus::Interrupted),
+            None
+        );
+        assert_eq!(
+            final_answer_index(&messages, 1, false, &RunStatus::Complete),
+            Some(0)
         );
     }
 }
