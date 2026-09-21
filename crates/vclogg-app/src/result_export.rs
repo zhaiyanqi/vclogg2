@@ -15,6 +15,8 @@ use std::{
 use anyhow::{Context as _, Result, anyhow, bail};
 use vclogg_core::{CompressedRows, LineReader, LogDocument};
 
+use crate::path_identity::paths_match;
+
 static UNIQUE_PATH_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug)]
@@ -152,6 +154,23 @@ impl ResultExport {
             Self::Global { groups } => groups.iter().map(|group| group.rows.len()).sum(),
         }
     }
+
+    fn release_target_source_handle(&self, target: &Path) {
+        match self {
+            Self::Single { document, .. } if paths_match(document.path(), target) => {
+                document.release_source_handle();
+            }
+            Self::Global { groups } => {
+                for group in groups
+                    .iter()
+                    .filter(|group| paths_match(&group.path, target))
+                {
+                    group.document.release_source_handle();
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 pub(crate) fn save(export: &ResultExport, target: &Path) -> Result<usize> {
@@ -169,6 +188,9 @@ pub(crate) fn save(export: &ResultExport, target: &Path) -> Result<usize> {
     let (staging_path, staging_file) = create_staging_file(parent, target.file_name())?;
 
     let write_result = write_export(export, staging_file).and_then(|row_count| {
+        // An export can overwrite its own open source. Release that reader before
+        // replacing the destination, especially on Windows where it can block replacement.
+        export.release_target_source_handle(target);
         commit_staging(&staging_path, target)?;
         Ok(row_count)
     });
@@ -606,9 +628,24 @@ mod tests {
     use vclogg_core::LogDocument;
 
     use super::{
-        ExportGroup, TimestampResolutionState, is_temporary_result_path_in,
-        prepare_timestamp_merge_groups, resolve_row_timestamp_with,
+        ExportGroup, ResultExport, TimestampResolutionState, is_temporary_result_path_in,
+        prepare_timestamp_merge_groups, resolve_row_timestamp_with, save,
     };
+
+    #[test]
+    fn export_can_replace_its_open_source_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.log");
+        fs::write(&path, b"first\nsecond\n").unwrap();
+        let document = Arc::new(LogDocument::open(&path).unwrap());
+        let export = ResultExport::Single {
+            document,
+            rows: [1].into_iter().collect(),
+        };
+
+        assert_eq!(save(&export, &path).unwrap(), 1);
+        assert_eq!(fs::read(&path).unwrap(), b"second\n");
+    }
 
     #[test]
     fn portable_temporary_result_is_confined_to_its_managed_root() {

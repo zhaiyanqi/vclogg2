@@ -834,6 +834,9 @@ impl Workspace {
         let encoding = edit.encoding;
         let disk_version = edit.disk_version;
         let path = tab.document.path().to_path_buf();
+        // A retained source handle can block replacement on Windows.
+        // The editor owns the text now, and the document will be reloaded after editing.
+        tab.document.release_source_handle();
         edit.saving = true;
         let task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
@@ -1266,6 +1269,21 @@ mod tests {
         .unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "new\n日志\n");
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn saving_replaces_an_open_document_after_releasing_its_source_handle() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("example.log");
+        std::fs::write(&path, "original text\n").unwrap();
+        let document = LogDocument::open(&path).unwrap();
+        let version = DiskVersion::read(&path).unwrap();
+
+        document.release_source_handle();
+        atomic_write_edit(&path, b"edited text\n", version).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "edited text\n");
+        assert!(document.source_changed().unwrap());
     }
 
     #[test]

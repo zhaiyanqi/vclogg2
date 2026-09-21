@@ -4,7 +4,8 @@ use chrono::{DateTime, Local};
 use gpui_kit::base::Button as BaseButton;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
+    io::Write as _,
+    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -59,6 +60,18 @@ const LOCAL_ACTIONS_WIDTH_REMS: f32 = 5.5;
 const CLOUD_ACTIONS_WIDTH_REMS: f32 = 11.;
 const FILTER_DIALOG_MAX_WIDTH_REMS: f32 = 72.;
 const FILTER_DIALOG_MAX_HEIGHT_REMS: f32 = 46.;
+
+fn save_export_filter_json(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(bytes)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path)?;
+    Ok(())
+}
 
 pub(crate) fn predefined_filters_dialog_size(window: &Window) -> Size<Pixels> {
     let viewport = window.viewport_size();
@@ -1005,7 +1018,7 @@ impl PredefinedFiltersDialog {
                 Ok(Ok(Some(path))) => Some(
                     cx.background_spawn(async move {
                         let json = export_filter_json(&filters)?;
-                        std::fs::write(&path, json)?;
+                        save_export_filter_json(&path, json.as_bytes())?;
                         Ok::<_, anyhow::Error>(path)
                     })
                     .await,

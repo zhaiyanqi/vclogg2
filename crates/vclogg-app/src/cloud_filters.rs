@@ -1343,22 +1343,22 @@ fn persist_atomic(path: &Path, bytes: &[u8], label: &str) -> CloudResult<()> {
             "Couldn’t create the {label} directory"
         ))
     })?;
-    let temporary = path.with_extension("tmp");
-    fs::write(&temporary, bytes).map_err(|_| {
+    let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|_| {
         CloudError::message(crate::tr_args!(
             "无法保存{label}",
             "Couldn’t save the {label}"
         ))
     })?;
-    if path.exists() {
-        fs::remove_file(path).map_err(|_| {
+    temporary
+        .write_all(bytes)
+        .and_then(|()| temporary.as_file().sync_all())
+        .map_err(|_| {
             CloudError::message(crate::tr_args!(
-                "无法更新{label}",
-                "Couldn’t update the {label}"
+                "无法保存{label}",
+                "Couldn’t save the {label}"
             ))
         })?;
-    }
-    fs::rename(temporary, path).map_err(|_| {
+    temporary.persist(path).map(|_| ()).map_err(|_| {
         CloudError::message(crate::tr_args!(
             "无法更新{label}",
             "Couldn’t update the {label}"
@@ -1403,6 +1403,30 @@ fn insert_header(headers: &mut HeaderMap, name: &str, value: &str) -> CloudResul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn atomic_config_save_replaces_existing_file_without_leaving_staging_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("profile.json");
+        fs::write(&path, b"old").unwrap();
+
+        persist_atomic(&path, b"new", "profile").unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn failed_atomic_config_save_keeps_the_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("profile.json");
+        fs::create_dir(&path).unwrap();
+
+        assert!(persist_atomic(&path, b"new", "profile").is_err());
+
+        assert!(path.is_dir());
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
 
     #[test]
     fn revision_conflict_is_structured() {
