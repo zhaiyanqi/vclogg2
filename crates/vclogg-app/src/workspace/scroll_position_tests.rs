@@ -251,3 +251,29 @@ fn only_cross_row_line_drag_changes_selection_after_initial_select() {
     assert!(!drag(4, RowDragMode::Text).changed_row_selection());
     assert!(drag(4, RowDragMode::Lines).changed_row_selection());
 }
+
+#[test]
+fn row_drag_only_owns_wheel_events_from_its_log_region() {
+    let local_drag = RowDragSelection {
+        document_id: 7,
+        region: WrappedRegion::Log,
+        pointer: Point::default(),
+        start_row: 3,
+        target_row: 3,
+        mode: RowDragMode::Text,
+    };
+    assert!(local_drag.owns_region(7, WrappedRegion::Log));
+    assert!(!local_drag.owns_region(7, WrappedRegion::Results));
+    assert!(!local_drag.owns_region(8, WrappedRegion::Log));
+
+    let global_drag = RowDragSelection {
+        document_id: 0,
+        region: WrappedRegion::GlobalResults,
+        pointer: Point::default(),
+        start_row: 3,
+        target_row: 4,
+        mode: RowDragMode::Lines,
+    };
+    assert!(global_drag.owns_region(99, WrappedRegion::GlobalResults));
+    assert!(!global_drag.owns_region(99, WrappedRegion::Results));
+}

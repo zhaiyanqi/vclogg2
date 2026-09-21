@@ -928,6 +928,15 @@ impl RowDragSelection {
     fn changed_row_selection(self) -> bool {
         self.mode == RowDragMode::Lines && self.target_row != self.start_row
     }
+
+    fn owns_region(self, document_id: u64, region: WrappedRegion) -> bool {
+        let document_id = if region == WrappedRegion::GlobalResults {
+            0
+        } else {
+            document_id
+        };
+        self.document_id == document_id && self.region == region
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
