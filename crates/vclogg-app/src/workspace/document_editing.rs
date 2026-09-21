@@ -155,6 +155,50 @@ fn select_editor_source_line(
     editor.set_selected_range(range, cx);
 }
 
+fn position_editor_source_line(
+    editor: &mut EditorState,
+    source_row: usize,
+    anchor_viewport_y: Option<Pixels>,
+    fallback_line_height: Pixels,
+    cx: &mut Context<EditorState>,
+) {
+    let Some(viewport_y) = anchor_viewport_y else {
+        return;
+    };
+    let line_height = editor.line_height().unwrap_or(fallback_line_height);
+    let offset_y = (viewport_y - line_height * source_row).min(px(0.));
+    editor.set_scroll_offset(point(editor.scroll_offset().x, offset_y), cx);
+}
+
+fn align_editor_source_line(
+    editor: &mut EditorState,
+    source_row: usize,
+    screen_y: Pixels,
+    cx: &mut Context<EditorState>,
+) -> bool {
+    let range = editor_source_line_range(editor, source_row);
+    let Some(bounds) = editor.range_to_bounds(&(range.start..range.start)) else {
+        return false;
+    };
+    let offset = editor.scroll_offset();
+    editor.set_scroll_offset(point(offset.x, offset.y + screen_y - bounds.top()), cx);
+    true
+}
+
+#[derive(Clone, Copy)]
+struct EditorEntryAnchor {
+    viewport_y: Pixels,
+    screen_y: Pixels,
+}
+
+#[derive(Clone, Copy)]
+struct EditorEntryReveal {
+    document_id: u64,
+    source_row: usize,
+    anchor: Option<EditorEntryAnchor>,
+    remaining_frames: u8,
+}
+
 impl Workspace {
     pub(super) fn enter_document_edit_action(
         &mut self,
@@ -236,14 +280,76 @@ impl Workspace {
                 })
                 .unwrap_or(0)
         };
+        let anchor_position = if self.active_log_region == LogRegion::GlobalResults {
+            let table = self.global_table.read(cx);
+            let row_ix = table.delegate().row_ix_for_key(LogRowKey::Row {
+                document_id,
+                source_row,
+            });
+            row_ix.and_then(|row_ix| {
+                self.global_viewport
+                    .capture_viewport_position(
+                        table.delegate().rows_len(),
+                        Some(row_ix),
+                        self.log_row_height(),
+                    )
+                    .filter(|position| position.row_ix == row_ix)
+                    .map(|position| EditorEntryAnchor {
+                        viewport_y: position.viewport_y,
+                        screen_y: self.global_viewport.viewport().viewport_bounds().top()
+                            + position.viewport_y,
+                    })
+            })
+        } else {
+            let (table, viewport) = match tab.view.selection_table {
+                SelectionTable::Log => (&tab.log_table, &tab.log_viewport),
+                SelectionTable::Results => (&tab.result_table, &tab.result_viewport),
+            };
+            let table = table.read(cx);
+            let row_ix = table.delegate().row_ix_for_key(LogRowKey::Row {
+                document_id,
+                source_row,
+            });
+            row_ix.and_then(|row_ix| {
+                viewport
+                    .capture_viewport_position(
+                        table.delegate().row_count(),
+                        Some(row_ix),
+                        self.log_row_height(),
+                    )
+                    .filter(|position| position.row_ix == row_ix)
+                    .map(|position| EditorEntryAnchor {
+                        viewport_y: position.viewport_y,
+                        screen_y: viewport.viewport().viewport_bounds().top() + position.viewport_y,
+                    })
+            })
+        };
+        let fallback_line_height = self.log_row_height();
         if let Some(edit) = self.documents[ix].edit.as_mut() {
             edit.active = true;
             let editor = edit.editor.clone();
             edit.editor.update(cx, |editor, cx| {
                 select_editor_source_line(editor, source_row, window, cx);
+                position_editor_source_line(
+                    editor,
+                    source_row,
+                    anchor_position.map(|anchor| anchor.viewport_y),
+                    fallback_line_height,
+                    cx,
+                );
             });
             edit.editor.focus_handle(cx).focus(window, cx);
-            self.schedule_editor_entry_reveal(document_id, editor, source_row, 4, window, cx);
+            self.schedule_editor_entry_reveal(
+                editor,
+                EditorEntryReveal {
+                    document_id,
+                    source_row,
+                    anchor: anchor_position,
+                    remaining_frames: 4,
+                },
+                window,
+                cx,
+            );
             cx.notify();
             return;
         }
@@ -307,6 +413,13 @@ impl Workspace {
                         });
                         editor.update(cx, |editor, cx| {
                             select_editor_source_line(editor, source_row, window, cx);
+                            position_editor_source_line(
+                                editor,
+                                source_row,
+                                anchor_position.map(|anchor| anchor.viewport_y),
+                                fallback_line_height,
+                                cx,
+                            );
                         });
                         let subscription =
                             cx.subscribe(&editor, move |this, _, event: &InputEvent, cx| {
@@ -337,10 +450,13 @@ impl Workspace {
                         if this.active_tab_id == WorkspaceTabId::Document(document_id) {
                             editor.focus_handle(cx).focus(window, cx);
                             this.schedule_editor_entry_reveal(
-                                document_id,
                                 editor,
-                                source_row,
-                                4,
+                                EditorEntryReveal {
+                                    document_id,
+                                    source_row,
+                                    anchor: anchor_position,
+                                    remaining_frames: 4,
+                                },
                                 window,
                                 cx,
                             );
@@ -362,46 +478,89 @@ impl Workspace {
 
     fn schedule_editor_entry_reveal(
         &self,
-        document_id: u64,
         editor: Entity<EditorState>,
-        source_row: usize,
-        remaining_frames: u8,
+        request: EditorEntryReveal,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if remaining_frames == 0 {
+        if request.remaining_frames == 0 {
             return;
         }
         cx.on_next_frame(window, move |this, window, cx| {
-            let still_editing = this.active_tab_id == WorkspaceTabId::Document(document_id)
+            let still_editing = this.active_tab_id == WorkspaceTabId::Document(request.document_id)
                 && this
                     .documents
                     .iter()
-                    .find(|tab| tab.id == document_id)
+                    .find(|tab| tab.id == request.document_id)
                     .and_then(|tab| tab.edit.as_ref())
                     .is_some_and(|edit| edit.active && edit.editor == editor);
             if !still_editing {
                 return;
             }
+            let expected_range = editor_source_line_range(editor.read(cx), request.source_row);
+            if editor.read(cx).selected_range() != expected_range {
+                return;
+            }
+            if let Some(anchor) = request.anchor {
+                if let Some(line_height) = editor.read(cx).line_height() {
+                    let aligned = editor.update(cx, |editor, cx| {
+                        if align_editor_source_line(editor, request.source_row, anchor.screen_y, cx)
+                        {
+                            true
+                        } else {
+                            position_editor_source_line(
+                                editor,
+                                request.source_row,
+                                Some(anchor.viewport_y),
+                                line_height,
+                                cx,
+                            );
+                            false
+                        }
+                    });
+                    if !aligned {
+                        this.schedule_editor_entry_reveal(
+                            editor,
+                            EditorEntryReveal {
+                                remaining_frames: request.remaining_frames - 1,
+                                ..request
+                            },
+                            window,
+                            cx,
+                        );
+                    }
+                } else {
+                    this.schedule_editor_entry_reveal(
+                        editor,
+                        EditorEntryReveal {
+                            remaining_frames: request.remaining_frames - 1,
+                            ..request
+                        },
+                        window,
+                        cx,
+                    );
+                }
+                return;
+            }
             let needs_reveal = editor
                 .read(cx)
                 .visible_row_range()
-                .is_none_or(|range| !range.contains(&source_row));
+                .is_none_or(|range| !range.contains(&request.source_row));
             if !needs_reveal {
                 return;
             }
-            let expected_range = editor_source_line_range(editor.read(cx), source_row);
             editor.update(cx, |editor, cx| {
                 if editor.selected_range() == expected_range && editor.line_height().is_some() {
-                    select_editor_source_line(editor, source_row, window, cx);
+                    select_editor_source_line(editor, request.source_row, window, cx);
                 }
             });
             if editor.read(cx).selected_range() == expected_range {
                 this.schedule_editor_entry_reveal(
-                    document_id,
                     editor,
-                    source_row,
-                    remaining_frames - 1,
+                    EditorEntryReveal {
+                        remaining_frames: request.remaining_frames - 1,
+                        ..request
+                    },
                     window,
                     cx,
                 );
@@ -1023,6 +1182,49 @@ mod tests {
             editor.read_with(cx, |editor, _| editor.selected_value()),
             "line 400"
         );
+    }
+
+    #[gpui_kit::test]
+    fn edit_entry_aligns_anchor_line_to_its_previous_screen_height(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let text = (0..500)
+                .map(|row| format!("line {row}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let editor = cx.new(|cx| {
+                EditorState::new(window, cx)
+                    .soft_wrap(false)
+                    .default_value(text)
+            });
+            editor.update(cx, |editor, cx| {
+                select_editor_source_line(editor, 400, window, cx);
+                position_editor_source_line(editor, 400, Some(px(80.)), px(20.), cx);
+            });
+            EditorEntryHarness { editor }
+        });
+        let editor = view.read_with(cx, |view, _| view.editor.clone());
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            editor.update(cx, |editor, cx| {
+                position_editor_source_line(editor, 400, Some(px(80.)), px(20.), cx);
+            });
+            window.draw(cx).clear(cx);
+            let target_y = editor
+                .read(cx)
+                .range_to_bounds(&editor_source_line_range(editor.read(cx), 400));
+            let target_y = target_y.expect("anchor row should be visible").top() + px(30.);
+            editor.update(cx, |editor, cx| {
+                assert!(align_editor_source_line(editor, 400, target_y, cx));
+            });
+            window.draw(cx).clear(cx);
+            let bounds = editor
+                .read(cx)
+                .range_to_bounds(&editor_source_line_range(editor.read(cx), 400))
+                .expect("anchor row should remain visible");
+            assert!((f32::from(bounds.top() - target_y)).abs() < 2.);
+            assert_eq!(editor.read(cx).selected_value().as_ref(), "line 400");
+        });
     }
 
     #[gpui_kit::test]
