@@ -45,7 +45,8 @@ done
 binary_directory="${HOME}/.local/bin"
 data_directory="${XDG_DATA_HOME:-${HOME}/.local/share}"
 application_directory="$data_directory/applications"
-icon_directory="$data_directory/icons/hicolor/1024x1024/apps"
+icon_directory="$data_directory/icons/hicolor/512x512/apps"
+legacy_icon_directory="$data_directory/icons/hicolor/1024x1024/apps"
 mime_package_directory="$data_directory/mime/packages"
 mkdir -p \
   "$binary_directory" \
@@ -55,8 +56,10 @@ mkdir -p \
 ln -sfn "$installed_executable" "$binary_directory/vclogg2"
 if [ -f "$source_icon" ]; then
   install -m 644 "$source_icon" "$icon_directory/com.vclogg2.desktop.png"
-  # Replace the older installer's size entry so it cannot mask the new default.
-  rm -f "$data_directory/icons/hicolor/512x512/apps/com.vclogg2.desktop.png"
+  # hicolor 0.17 (including Ubuntu 22.04) does not index 1024x1024/apps.
+  # Remove the entry written by affected installers so icon lookup cannot find
+  # a stale copy through a desktop-specific fallback.
+  rm -f "$legacy_icon_directory/com.vclogg2.desktop.png"
 fi
 
 desktop_file="$application_directory/com.vclogg2.desktop.desktop"
@@ -71,6 +74,7 @@ desktop_file="$application_directory/com.vclogg2.desktop.desktop"
   echo 'Categories=Utility;Development;'
   echo 'MimeType=application/x-vclogg2-log;text/plain;application/json;text/csv;'
   echo 'StartupNotify=true'
+  echo 'StartupWMClass=com.vclogg2.desktop'
 } >"$desktop_file"
 chmod 644 "$desktop_file"
 
@@ -82,6 +86,7 @@ for icon in compact illustration sticker; do
   if [ -f "$alternate_icon" ]; then
     desktop_id="com.vclogg2.desktop.$icon"
     install -m 644 "$alternate_icon" "$icon_directory/$desktop_id.png"
+    rm -f "$legacy_icon_directory/$desktop_id.png"
     {
       echo '[Desktop Entry]'
       echo 'Type=Application'
@@ -91,6 +96,7 @@ for icon in compact illustration sticker; do
       echo 'NoDisplay=true'
       echo 'Terminal=false'
       echo 'StartupNotify=true'
+      printf 'StartupWMClass=%s\n' "$desktop_id"
     } >"$application_directory/$desktop_id.desktop"
     chmod 644 "$application_directory/$desktop_id.desktop"
   fi
