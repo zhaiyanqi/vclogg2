@@ -301,7 +301,7 @@ impl Default for AppSettings {
             selection_styles: Default::default(),
             keyword_match_styles: Default::default(),
             log_font_size: 13,
-            search_toolbar_height: 36,
+            search_toolbar_height: 30,
             search_toolbar_font_size: 13,
             search_input_font_size: 13,
             log_line_spacing: 6,
