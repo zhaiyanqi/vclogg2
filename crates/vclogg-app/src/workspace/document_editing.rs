@@ -1,5 +1,7 @@
 use std::io::Write as _;
 
+use gpui_kit::base::input::RopeExt as _;
+
 use super::*;
 
 pub(super) const MAX_EDIT_BYTES: u64 = 100 * 1024 * 1024;
@@ -132,6 +134,27 @@ impl EditEncoding {
     }
 }
 
+fn editor_source_line_range(editor: &EditorState, source_row: usize) -> std::ops::Range<usize> {
+    let text = editor.text();
+    let start = text.line_start_offset(source_row);
+    let mut end = text.line_end_offset(source_row);
+    if text.slice_line(source_row).chars().last() == Some('\r') {
+        end -= 1;
+    }
+    start..end
+}
+
+fn select_editor_source_line(
+    editor: &mut EditorState,
+    source_row: usize,
+    window: &mut Window,
+    cx: &mut Context<EditorState>,
+) {
+    let range = editor_source_line_range(editor, source_row);
+    editor.set_cursor_position(Position::new(source_row as u32, 0), window, cx);
+    editor.set_selected_range(range, cx);
+}
+
 impl Workspace {
     pub(super) fn enter_document_edit_action(
         &mut self,
@@ -217,7 +240,7 @@ impl Workspace {
             edit.active = true;
             let editor = edit.editor.clone();
             edit.editor.update(cx, |editor, cx| {
-                editor.set_cursor_position(Position::new(source_row as u32, 0), window, cx);
+                select_editor_source_line(editor, source_row, window, cx);
             });
             edit.editor.focus_handle(cx).focus(window, cx);
             self.schedule_editor_entry_reveal(document_id, editor, source_row, 4, window, cx);
@@ -283,11 +306,7 @@ impl Workspace {
                                 .default_value(text)
                         });
                         editor.update(cx, |editor, cx| {
-                            editor.set_cursor_position(
-                                Position::new(source_row as u32, 0),
-                                window,
-                                cx,
-                            );
+                            select_editor_source_line(editor, source_row, window, cx);
                         });
                         let subscription =
                             cx.subscribe(&editor, move |this, _, event: &InputEvent, cx| {
@@ -371,13 +390,13 @@ impl Workspace {
             if !needs_reveal {
                 return;
             }
-            let target = Position::new(source_row as u32, 0);
+            let expected_range = editor_source_line_range(editor.read(cx), source_row);
             editor.update(cx, |editor, cx| {
-                if editor.cursor_position() == target && editor.line_height().is_some() {
-                    editor.set_cursor_position(target, window, cx);
+                if editor.selected_range() == expected_range && editor.line_height().is_some() {
+                    select_editor_source_line(editor, source_row, window, cx);
                 }
             });
-            if editor.read(cx).cursor_position() == target {
+            if editor.read(cx).selected_range() == expected_range {
                 this.schedule_editor_entry_reveal(
                     document_id,
                     editor,
@@ -981,7 +1000,7 @@ mod tests {
                     .default_value(text)
             });
             editor.update(cx, |editor, cx| {
-                editor.set_cursor_position(Position::new(400, 0), window, cx);
+                select_editor_source_line(editor, 400, window, cx);
             });
             EditorEntryHarness { editor }
         });
@@ -990,7 +1009,8 @@ mod tests {
             window.draw(cx).clear(cx);
             editor.update(cx, |editor, cx| {
                 assert_eq!(editor.cursor_position().line, 400);
-                editor.set_cursor_position(Position::new(400, 0), window, cx);
+                assert_eq!(editor.selected_value().as_ref(), "line 400");
+                select_editor_source_line(editor, 400, window, cx);
             });
             window.draw(cx).clear(cx);
         });
@@ -999,6 +1019,36 @@ mod tests {
             visible.contains(&400),
             "visible rows after entry: {visible:?}"
         );
+        assert_eq!(
+            editor.read_with(cx, |editor, _| editor.selected_value()),
+            "line 400"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn edit_entry_selects_only_the_anchor_line_text(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let editor = cx.new(|cx| {
+                EditorState::new(window, cx)
+                    .soft_wrap(false)
+                    .default_value("first\r\n中文 log\r\n\r\nlast")
+            });
+            editor.update(cx, |editor, cx| {
+                select_editor_source_line(editor, 1, window, cx);
+            });
+            EditorEntryHarness { editor }
+        });
+        let editor = view.read_with(cx, |view, _| view.editor.clone());
+        cx.update(|window, cx| {
+            assert_eq!(editor.read(cx).selected_value().as_ref(), "中文 log");
+            editor.update(cx, |editor, cx| {
+                select_editor_source_line(editor, 2, window, cx);
+                assert!(editor.selected_range().is_empty());
+                select_editor_source_line(editor, 3, window, cx);
+                assert_eq!(editor.selected_value().as_ref(), "last");
+            });
+        });
     }
 
     #[test]
