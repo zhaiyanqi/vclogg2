@@ -620,6 +620,14 @@ impl StateRepository {
         Self::write_app_settings(&connection, settings, false)
     }
 
+    pub fn reset_app_settings(&self) -> Result<()> {
+        let connection = self.lock()?;
+        connection
+            .execute("DELETE FROM app_settings WHERE id = 1", [])
+            .context("无法删除应用设置")?;
+        Ok(())
+    }
+
     fn write_app_settings(
         connection: &Connection,
         settings: &AppSettingsRecord,
@@ -1284,6 +1292,13 @@ fn initialize_schema(connection: &Connection, defaults: &StateMigrationDefaults)
         anyhow::bail!("状态库版本 {schema_version} 高于当前支持的 {STATE_SCHEMA_VERSION}");
     }
     if schema_version == STATE_SCHEMA_VERSION {
+        // An earlier upgrade may have recorded the current version without this column.
+        // Repair that database before load_app_settings selects the shortcut.
+        ensure_columns(
+            connection,
+            "app_settings",
+            &[("shortcut_enter_edit_mode", "TEXT NOT NULL DEFAULT 'I'")],
+        )?;
         return Ok(());
     }
     connection
@@ -1640,6 +1655,38 @@ mod tests {
     };
 
     #[test]
+    fn resetting_app_settings_removes_only_the_settings_record() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.db");
+        let defaults = StateMigrationDefaults {
+            app_log_level: "error".into(),
+            color_labels: Vec::new(),
+        };
+        let store = StateRepository::open(path.clone(), &defaults).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute("INSERT INTO app_settings(id) VALUES (1)", [])
+            .unwrap();
+        drop(connection);
+        store
+            .save_ui_value("settings.active_category", "appearance")
+            .unwrap();
+        assert!(store.load_app_settings().unwrap().is_some());
+
+        store.reset_app_settings().unwrap();
+        assert!(store.load_app_settings().unwrap().is_none());
+        assert_eq!(
+            store.load_ui_value("settings.active_category").unwrap(),
+            Some("appearance".into())
+        );
+        store.reset_app_settings().unwrap();
+
+        drop(store);
+        let reopened = StateRepository::open(path, &defaults).unwrap();
+        assert!(reopened.load_app_settings().unwrap().is_none());
+    }
+
+    #[test]
     fn clipboard_confirmation_defaults_off_and_survives_reopen() {
         let directory = tempfile::tempdir().expect("应能创建临时目录");
         let path = directory.path().join("state.db");
@@ -1717,6 +1764,38 @@ mod tests {
                 .shortcut_enter_edit_mode,
             "Ctrl+I"
         );
+    }
+
+    #[test]
+    fn current_version_repairs_missing_edit_shortcut_column() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.db");
+        let defaults = StateMigrationDefaults {
+            app_log_level: "error".into(),
+            color_labels: Vec::new(),
+        };
+        drop(StateRepository::open(path.clone(), &defaults).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "ALTER TABLE app_settings DROP COLUMN shortcut_enter_edit_mode;
+                 INSERT INTO app_settings(id, log_font_size) VALUES (1, 19);",
+            )
+            .unwrap();
+        drop(connection);
+
+        let store = StateRepository::open(path.clone(), &defaults).unwrap();
+        let mut settings = store.load_app_settings().unwrap().unwrap();
+        assert_eq!(settings.log_font_size, 19);
+        assert_eq!(settings.shortcut_enter_edit_mode, "I");
+        settings.shortcut_enter_edit_mode = "Ctrl+I".into();
+        store.save_app_settings(&settings).unwrap();
+        drop(store);
+
+        let reopened = StateRepository::open(path, &defaults).unwrap();
+        let settings = reopened.load_app_settings().unwrap().unwrap();
+        assert_eq!(settings.log_font_size, 19);
+        assert_eq!(settings.shortcut_enter_edit_mode, "Ctrl+I");
     }
 
     #[test]

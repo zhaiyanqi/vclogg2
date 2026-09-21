@@ -625,7 +625,9 @@ impl Workspace {
             let workspace_for_save = workspace.clone();
             let workspace_for_cancel = workspace.clone();
             let workspace_for_close = workspace.clone();
+            let workspace_for_reset = workspace.clone();
             let original_settings = original_settings.clone();
+            let original_settings_for_reset = original_settings.clone();
             let original_coloring_enabled = original_settings.highlight_log_levels;
             let original_search_history = original_search_history.clone();
             dialog
@@ -638,21 +640,39 @@ impl Workspace {
                 .footer(
                     h_flex()
                         .w_full()
-                        .justify_end()
+                        .justify_between()
                         .gap_2()
-                        .child(crate::dialog_focus::dialog_cancel_action(
-                            "settings-dialog-cancel-action",
-                            Button::new("settings-dialog-cancel")
-                                .label(crate::tr!("取消", "Cancel")),
-                            cx,
-                        ))
-                        .child(crate::dialog_focus::dialog_confirm_action(
-                            "settings-dialog-save-action",
-                            Button::new("settings-dialog-save")
-                                .primary()
-                                .label(crate::tr!("保存", "Save")),
-                            cx,
-                        )),
+                        .child(
+                            Button::new("settings-dialog-reset")
+                                .outline()
+                                .label(crate::tr!("恢复默认设置", "Restore default settings"))
+                                .on_click(move |_, window, cx| {
+                                    workspace_for_reset.update(cx, |this, cx| {
+                                        this.confirm_reset_app_settings(
+                                            original_settings_for_reset.clone(),
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                }),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(crate::dialog_focus::dialog_cancel_action(
+                                    "settings-dialog-cancel-action",
+                                    Button::new("settings-dialog-cancel")
+                                        .label(crate::tr!("取消", "Cancel")),
+                                    cx,
+                                ))
+                                .child(crate::dialog_focus::dialog_confirm_action(
+                                    "settings-dialog-save-action",
+                                    Button::new("settings-dialog-save")
+                                        .primary()
+                                        .label(crate::tr!("保存", "Save")),
+                                    cx,
+                                )),
+                        ),
                 )
                 .on_ok(move |_, window, cx| {
                     let (draft, search_history, network_settings) = {
@@ -1136,6 +1156,111 @@ impl Workspace {
             }));
     }
 
+    fn confirm_reset_app_settings(
+        &mut self,
+        original_settings: AppSettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let workspace = cx.entity();
+        window.open_alert_dialog(cx, move |alert, _, cx| {
+            let workspace = workspace.clone();
+            let original_settings = original_settings.clone();
+            alert
+                .title(crate::tr!("恢复默认设置？", "Restore default settings?"))
+                .description(crate::tr!(
+                    "将删除已保存的应用设置，并立即使用默认值。云端连接、历史记录和缓存不受影响。",
+                    "Saved application settings will be deleted and defaults applied immediately. Cloud connections, history, and cache are unaffected."
+                ))
+                .footer(
+                    DialogFooter::new()
+                        .justify_center()
+                        .child(crate::dialog_focus::dialog_cancel_action(
+                            "settings-reset-cancel-action",
+                            Button::new("settings-reset-cancel")
+                                .label(crate::tr!("取消", "Cancel")),
+                            cx,
+                        ))
+                        .child(crate::dialog_focus::dialog_confirm_action(
+                            "settings-reset-confirm-action",
+                            Button::new("settings-reset-confirm")
+                                .danger()
+                                .label(crate::tr!("恢复默认设置", "Restore defaults")),
+                            cx,
+                        )),
+                )
+                .on_ok(move |_, window, cx| {
+                    let started = workspace.update(cx, |this, cx| {
+                        this.reset_app_settings(original_settings.clone(), window, cx)
+                    });
+                    if started {
+                        window.close_all_dialogs(cx);
+                    }
+                    false
+                })
+        });
+    }
+
+    fn reset_app_settings(
+        &mut self,
+        original_settings: AppSettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(store) = self.persistence.store.clone() else {
+            window.notify_message(
+                crate::tr!(
+                    "状态库尚未就绪，设置未恢复",
+                    "State storage is not ready; settings weren’t restored"
+                ),
+                cx,
+            );
+            return false;
+        };
+        let previous_save = self.persistence.app_settings_save_task.take();
+        self.settings_dialog_subscription = None;
+        self.settings_saving = true;
+        self.persistence.app_settings_save_task =
+            Some(cx.spawn_in(window, async move |this, cx| {
+                if let Some(previous_save) = previous_save {
+                    previous_save.await;
+                }
+                let result = cx
+                    .background_spawn(async move { store.reset_app_settings() })
+                    .await;
+                _ = this.update_in(cx, |this, window, cx| {
+                    this.settings_saving = false;
+                    match result {
+                        Ok(()) => {
+                            this.apply_app_settings_inner(
+                                AppSettings::default(),
+                                true,
+                                false,
+                                window,
+                                cx,
+                            );
+                            window.notify_message(
+                                crate::tr!("已恢复默认设置", "Default settings restored"),
+                                cx,
+                            );
+                        }
+                        Err(error) => {
+                            this.preview_app_settings(original_settings.clone(), window, cx);
+                            window.notify_message(
+                                crate::tr_args!(
+                                    "设置未能恢复：{error}",
+                                    "Couldn’t restore settings: {error}"
+                                ),
+                                cx,
+                            );
+                        }
+                    }
+                    cx.notify();
+                });
+            }));
+        true
+    }
+
     pub(super) fn refresh_localized_input_copy(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.query.update(cx, |input, cx| {
             input.set_placeholder(crate::tr!("搜索", "Search"), window, cx);
@@ -1155,7 +1280,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.apply_app_settings_inner(settings, false, window, cx);
+        self.apply_app_settings_inner(settings, false, true, window, cx);
     }
 
     pub(super) fn apply_app_settings(
@@ -1164,21 +1289,24 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.apply_app_settings_inner(settings, true, window, cx);
+        self.apply_app_settings_inner(settings, true, true, window, cx);
     }
 
     pub(super) fn apply_app_settings_inner(
         &mut self,
         mut settings: AppSettings,
         commit_defaults: bool,
+        preserve_highlights: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // General settings drafts do not own the independently committed highlight styles.
-        settings.highlight_log_levels = self.app_settings.highlight_log_levels;
-        settings.log_coloring = self.app_settings.log_coloring.clone();
-        settings.selection_styles = self.app_settings.selection_styles.clone();
-        settings.keyword_match_styles = self.app_settings.keyword_match_styles.clone();
+        if preserve_highlights {
+            // General settings drafts do not own the independently committed highlight styles.
+            settings.highlight_log_levels = self.app_settings.highlight_log_levels;
+            settings.log_coloring = self.app_settings.log_coloring.clone();
+            settings.selection_styles = self.app_settings.selection_styles.clone();
+            settings.keyword_match_styles = self.app_settings.keyword_match_styles.clone();
+        }
         if self.app_settings.search_result_limit() != settings.search_result_limit() {
             self.cancel_search();
         }
@@ -1323,7 +1451,7 @@ impl Workspace {
         }
         let mut settings = self.app_settings.clone();
         update(&mut settings);
-        self.apply_app_settings_inner(settings.clone(), false, window, cx);
+        self.apply_app_settings_inner(settings.clone(), false, true, window, cx);
         self.queue_app_settings_save(settings, false, window, cx);
     }
 

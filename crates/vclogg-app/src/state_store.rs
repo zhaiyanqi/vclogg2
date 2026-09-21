@@ -509,6 +509,10 @@ impl StateStore {
             .save_app_settings(&app_settings_to_record(settings))
     }
 
+    pub fn reset_app_settings(&self) -> Result<()> {
+        self.repository.reset_app_settings()
+    }
+
     pub fn load_last_settings_category(&self) -> Result<Option<String>> {
         self.repository.load_ui_value("settings.active_category")
     }
@@ -1275,6 +1279,27 @@ mod session_load_tests {
                 .load_search_panel_height()
                 .expect("应能读取重启后的搜索面板高度"),
             Some(312.5)
+        );
+    }
+
+    #[test]
+    fn resetting_app_settings_loads_defaults_after_reopen() {
+        let database = TemporaryDatabase::new("app-settings-reset");
+        let store = StateStore::open(database.0.clone()).unwrap();
+        let settings = AppSettings {
+            log_font_size: 20,
+            default_use_regex: true,
+            ..AppSettings::default()
+        };
+        store.save_app_settings(settings).unwrap();
+        store.reset_app_settings().unwrap();
+        assert_eq!(store.load_app_settings().unwrap(), AppSettings::default());
+        drop(store);
+
+        let reopened = StateStore::open(database.0.clone()).unwrap();
+        assert_eq!(
+            reopened.load_app_settings().unwrap(),
+            AppSettings::default()
         );
     }
 
