@@ -1493,7 +1493,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !event.modifiers.secondary() {
+        if !Self::is_log_font_size_wheel(event) {
             return;
         }
         let delta_y = event.delta.pixel_delta(window.line_height()).y;
@@ -1555,6 +1555,10 @@ impl Workspace {
         cx.notify();
     }
 
+    fn is_log_font_size_wheel(event: &ScrollWheelEvent) -> bool {
+        event.modifiers.control || event.modifiers.secondary()
+    }
+
     pub(super) fn capture_log_wheel(
         workspace: Entity<Self>,
         document_id: u64,
@@ -1571,7 +1575,7 @@ impl Workspace {
                     }
                     workspace.update(cx, |workspace, cx| {
                         workspace.cancel_tag_drag(window, cx);
-                        if event.modifiers.secondary() {
+                        if Self::is_log_font_size_wheel(event) {
                             workspace.adjust_log_font_size_from_wheel(event, window, cx);
                         } else {
                             workspace.handle_log_region_scroll_wheel(
@@ -1582,6 +1586,28 @@ impl Workspace {
                                 cx,
                             );
                         }
+                    });
+                });
+            },
+        )
+        .absolute()
+        .size_full()
+    }
+
+    pub(super) fn capture_editor_font_wheel(workspace: Entity<Self>) -> impl IntoElement {
+        canvas(
+            |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+            move |_, hitbox, window, _| {
+                // Capture before the editor scrolls its own text and consumes the wheel event.
+                window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+                    if !phase.capture()
+                        || !Self::is_log_font_size_wheel(event)
+                        || !hitbox.should_handle_scroll(window)
+                    {
+                        return;
+                    }
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.adjust_log_font_size_from_wheel(event, window, cx);
                     });
                 });
             },

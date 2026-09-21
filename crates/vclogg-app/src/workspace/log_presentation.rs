@@ -2961,6 +2961,7 @@ impl Workspace {
         if let Some((id, draft)) = draft.filter(|(_, draft)| draft.active) {
             return div()
                 .id(("new-file-editor", id))
+                .relative()
                 .size_full()
                 .min_h_0()
                 .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
@@ -2974,9 +2975,11 @@ impl Workspace {
                         cx.stop_propagation();
                     }
                 }))
+                .child(Self::capture_editor_font_wheel(cx.entity()))
                 .child(
                     Editor::new(&draft.editor)
                         .h(relative(1.))
+                        .text_size(px(self.app_settings.log_font_size as f32))
                         .aria_label(crate::tr!("新文件编辑器", "New file editor")),
                 )
                 .into_any_element();
@@ -3154,6 +3157,7 @@ impl Workspace {
         }) {
             let editor = div()
                 .id(("document-editor", document_id))
+                .relative()
                 .size_full()
                 .min_h_0()
                 .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
@@ -3167,9 +3171,11 @@ impl Workspace {
                         cx.stop_propagation();
                     }
                 }))
+                .child(Self::capture_editor_font_wheel(cx.entity()))
                 .child(
                     Editor::new(&edit.editor)
                         .h(relative(1.))
+                        .text_size(px(self.app_settings.log_font_size as f32))
                         .aria_label(crate::tr!("日志文件编辑器", "Log file editor")),
                 );
             return if cx.reduce_motion() {
