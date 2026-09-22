@@ -66,6 +66,9 @@ struct DocumentSnapshot {
     open: bool,
 }
 impl DocumentSnapshot {
+    fn absolute_path(&self) -> Result<PathBuf> {
+        std::path::absolute(self.document.path()).context("Cannot resolve absolute file path")
+    }
     fn reference(&self, row: usize) -> LogReference {
         LogReference {
             document_id: self.id,
@@ -92,7 +95,7 @@ struct SearchSnapshot {
 #[derive(Clone)]
 struct AiScope {
     file_candidates: BTreeMap<String, PathBuf>,
-    workspace_directories: Vec<PathBuf>,
+    project_directories: Vec<PathBuf>,
     source_directory_request: String,
     read_document: Option<DocumentSnapshot>,
     explicit: BTreeSet<u64>,
@@ -239,7 +242,7 @@ impl Workspace {
             .collect::<BTreeMap<_, _>>();
         Arc::new(Mutex::new(AiScope {
             file_candidates: BTreeMap::new(),
-            workspace_directories: Vec::new(),
+            project_directories: Vec::new(),
             source_directory_request: String::new(),
             read_document: None,
             explicit: BTreeSet::new(),

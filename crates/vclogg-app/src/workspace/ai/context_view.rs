@@ -39,9 +39,9 @@ impl AiPanel {
             crate::tr!("本轮访问", "Run access"),
             count,
             crate::tr!("日志", "logs"),
-            self.selected_workspace_directories
+            self.selected_project_directories
                 .as_ref()
-                .map_or(self.settings.workspace_directories.len(), BTreeSet::len),
+                .map_or(self.settings.project_directories.len(), BTreeSet::len),
             crate::tr!("项目", "projects")
         );
         Popover::new("ai-context-sources-popover")
@@ -108,7 +108,7 @@ impl AiPanel {
                     .disabled(disabled)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.selected_log_ids = None;
-                        this.selected_workspace_directories = None;
+                        this.selected_project_directories = None;
                         this.include_search_directory = true;
                         cx.notify();
                     })),
@@ -198,13 +198,13 @@ impl AiPanel {
         );
         let all_projects = self
             .settings
-            .workspace_directories
+            .project_directories
             .iter()
             .cloned()
             .collect::<BTreeSet<_>>();
-        for path in &self.settings.workspace_directories {
+        for path in &self.settings.project_directories {
             let selected = self
-                .selected_workspace_directories
+                .selected_project_directories
                 .as_ref()
                 .is_none_or(|paths| paths.contains(path));
             let path = path.clone();
@@ -223,7 +223,7 @@ impl AiPanel {
                 .disabled(disabled)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let selected = this
-                        .selected_workspace_directories
+                        .selected_project_directories
                         .get_or_insert_with(|| all.clone());
                     if !selected.insert(path.clone()) {
                         selected.remove(&path);

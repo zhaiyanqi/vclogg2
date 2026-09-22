@@ -14,7 +14,7 @@ impl Workspace {
         let args = &call.arguments;
         let value = match call.name.as_str() {
             "list_logs" => {
-                json!({"files":state.documents.values().map(|d| json!({"document_id":d.id,"version":d.version,"name":d.document.file_name(),"path":d.document.path().display().to_string(),"lines":d.document.source_line_count(),"open":d.open})).collect::<Vec<_>>()})
+                json!({"files":state.documents.values().map(|d| Ok(json!({"document_id":d.id,"version":d.version,"name":d.document.file_name(),"path":d.absolute_path()?.display().to_string(),"lines":d.document.source_line_count(),"open":d.open}))).collect::<Result<Vec<_>>>()?})
             }
             "read_logs" => {
                 let doc = state.document(number(args, "document_id")?, args["version"].as_str())?;

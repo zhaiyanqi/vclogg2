@@ -105,7 +105,7 @@ impl Workspace {
             .or_else(|| tab.and_then(|t| context_documents.get(&t.id)));
         let active_document_id = active_document.map(|d| d.id);
         let active_file = active_document
-                    .map(|d| json!({"document_id":d.id,"version":d.version,"name":d.document.file_name(),"path":d.document.path().display().to_string(),"line_count":d.document.source_line_count()}));
+                    .map(|d| -> Result<Value> { Ok(json!({"document_id":d.id,"version":d.version,"name":d.document.file_name(),"path":d.absolute_path()?.display().to_string(),"line_count":d.document.source_line_count()})) }).transpose()?;
         let mut metadata = json!({"active_file":active_file,"active_region":region,"active_reference":active_reference,"selected_references":selected,"current_document_id":tab.map(|t|t.id),"send_document_id":state.current,"region":region,"selected":selected,"query":self.query.read(cx).value().to_string(),"case_sensitive":self.case_sensitive,"regex":self.regex,"results_visible":self.global_search.results_visible,"searching":self.search_tabs.running.is_some(),"directory":state.directory.directory.as_ref().map(|p|p.display().to_string()),"search_tab":self.active_search_tab_key().map(|(owner,id)|json!({"owner":format!("{owner:?}"),"id":id.0}))});
         metadata["directory_state"] = json!({
             "captured_for_run": true,

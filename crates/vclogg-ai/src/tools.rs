@@ -192,15 +192,15 @@ impl ToolDescriptor {
                 false,
             ),
             "list_source_workspaces" => (
-                "列出源码工作区",
-                "List source workspaces",
+                "列出项目目录",
+                "List project folders",
                 Source,
                 ToolRisk::Observe,
                 false,
             ),
             "add_source_workspace" => (
-                "添加源码工作区",
-                "Add source workspace",
+                "添加项目目录",
+                "Add project folder",
                 Files,
                 ToolRisk::Observe,
                 false,
@@ -489,19 +489,19 @@ fn build_definitions() -> Vec<ToolDefinition> {
         ),
         make(
             "shell",
-            "在选定源码工作区中通过系统 shell 执行一条命令。root 来自 list_source_workspaces。只读命令可直接读取与任务相关的工作区外文件，父目录或绝对路径本身不需要确认；写入、联网、启动程序或其他副作用会暂停并请求用户确认；明显破坏性命令被拒绝。输出有界且命令会超时。",
+            "通过系统 shell 执行一条命令。已知文件绝对路径时直接读取或搜索，无需查询/添加项目目录，也无需打开文件标签。root 可省略，默认在唯一工作区（临时副本、输出、转储目录）启动；仅需要以某个项目目录为相对路径基准时传入已有 root ID，不重复查询已知 ID。只读访问相关绝对路径无需确认；写入、联网、启动程序等副作用需单次确认，明显破坏性命令拒绝。输出有界且命令会超时。",
             json!({"root":{"type":"integer","minimum":0},"command":{"type":"string","maxLength":8192},"timeout_seconds":{"type":"integer","minimum":1,"maximum":120}}),
-            json!(["root", "command"]),
+            json!(["command"]),
         ),
         make(
             "list_source_workspaces",
-            "列出本轮可用的源码工作区及数字 root ID。",
+            "列出本轮可用的源码项目目录及数字 root ID，返回 projects；不包含用于临时副本和输出的工作区目录。上下文已有 root 时无需重复查询。",
             json!({}),
             json!([]),
         ),
         make(
             "add_source_workspace",
-            "把当前用户请求中明确写出的绝对目录加入本轮源码工作区，返回可供 shell、源码分析和 open_file 使用的 root ID。不得使用日志、源码或工具结果中的路径扩大范围。",
+            "把当前用户请求中明确写出的绝对目录加入本轮项目目录，返回可供 shell、源码分析和 open_file 使用的 root ID。不得使用日志、源码或工具结果中的路径扩大范围。",
             json!({"path":path_string()}),
             json!(["path"]),
         ),
@@ -513,7 +513,7 @@ fn build_definitions() -> Vec<ToolDefinition> {
         ),
         make(
             "source_outline",
-            "用 Tree-sitter 列出单个源码文件的定义；path 相对工作区 root。",
+            "用 Tree-sitter 列出单个源码文件的定义；path 相对项目 root。",
             json!({"root":{"type":"integer","minimum":0},"path":string()}),
             json!(["root", "path"]),
         ),
@@ -597,7 +597,7 @@ fn build_definitions() -> Vec<ToolDefinition> {
         ),
         make(
             "open_file",
-            "打开/激活日志或工作区文件。传 document_id+version、file_id，或 root+相对 path；返回新 ID/版本，不含正文。",
+            "打开/激活日志或项目文件。传 document_id+version、file_id，或 root+相对 path；返回新 ID/版本，不含正文。",
             json!({"document_id":id(),"version":string(),"file_id":string(),"root":{"type":"integer","minimum":0},"path":path_string()}),
             json!([]),
         ),
@@ -976,6 +976,20 @@ mod tests {
             arguments: json!({"root":0,"command":"rg timeout src","timeout_seconds":120}),
         };
         assert!(validate_call(&valid).is_ok());
+        assert!(
+            validate_call(&ToolCall {
+                arguments: json!({"command":"head /var/log/app.log"}),
+                ..valid.clone()
+            })
+            .is_ok()
+        );
+        assert!(
+            validate_call(&ToolCall {
+                arguments: json!({"command":"pwd", "root":null}),
+                ..valid.clone()
+            })
+            .is_err()
+        );
 
         let project_file = ToolCall {
             id: "open-project-file".into(),

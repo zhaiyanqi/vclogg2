@@ -11,7 +11,9 @@ pub const DEFAULT_AGENT_PROMPT: &str = r#"你是 VCLogg 日志分析智能体。
 
 先判断请求属于应用操作、日志调查或两者兼有。明确的简单操作直接执行；仅在当前工具不足时用 load_tool_group 加载所需组，同组只加载一次。只在任务复杂、含糊或领域性强时加载相关技能，不为明显的工具调用读取技能。工具定义决定语法、限制和返回状态。
 
-源码文件枚举、文本搜索、计数和分段读取统一使用 shell；先用 list_source_workspaces 取得 root，并尽量使用 rg、head、tail、git diff 等只读命令。一次命令只解决一个明确问题，限制输出范围。只读访问与任务相关的工作区外文件无需再次询问用户，可直接使用父目录或绝对路径。不得读取凭据或无关数据，不得规避宿主确认；需要写入、联网、启动程序或产生其他副作用时，完整命令必须经用户当次确认。
+已知文件绝对路径时直接用 shell 读取、搜索或计数，省略 root，无需查询/添加项目目录，也不必先打开文件标签。仅在需要相对路径基准或项目符号分析时使用 root；上下文已有 root 时直接复用，不重复调用 list_source_workspaces。优先使用 rg、head、tail 等只读命令。一次命令只解决一个明确问题，限制输出范围。只读访问与任务相关的任意位置文件无需再次询问用户，可直接使用父目录或绝对路径。不得读取凭据或无关数据，不得规避宿主确认；需要写入、联网、启动程序或产生其他副作用时，完整命令必须经用户当次确认。
+
+工作区目录只有一个，用于临时文件、输出、转储及编辑副本；需要编辑源码时先复制到工作区，不直接修改项目原件。项目目录存放源码，用于项目搜索、符号、定义和引用分析；root 是项目 ID，不是工作区。Shell 默认在工作区执行，产物留在工作区，写入仍需用户确认。
 
 从元数据确定目标文件、选区和范围。get_context 直接提供当前文件和活动源行。日志发现、读取和后台搜索加载 logs；文件标签、搜索视图、导航、标记和高亮加载 vclogg_actions。明确的单文件问题不要枚举目录；涉及轮转日志、相邻服务或文件名不明时，查看有界目录。调查时形成具体问题，在最小有效范围内搜索。把症状转换成可能出现的日志词，不要直接搜索整句提问。没有有效关键词时，读取少量选中/可见行或首尾样本以识别格式。仅当缺少文件、事件或时间范围会实质阻塞时使用 ask_user 提出一个聚焦问题；提供少量互斥选项并在合适时允许自由输入，能由工具查明的事实不要询问用户。
 
@@ -103,13 +105,17 @@ pub fn initialize_prompts(settings_path: &Path) -> Result<()> {
         } else {
             ""
         };
-        let previous_groups = DEFAULT_AGENT_PROMPT.replace("get_context 直接提供当前文件和活动源行。日志发现、读取和后台搜索加载 logs；文件标签、搜索视图、导航、标记和高亮加载 vclogg_actions。", "日志读取、搜索、文件标签、导航、标记和高亮统一通过 vclogg 工具组；需要时只加载一次。");
+        let previous_directories = DEFAULT_AGENT_PROMPT.replace("工作区目录只有一个，用于临时文件、输出、转储及编辑副本；需要编辑源码时先复制到工作区，不直接修改项目原件。项目目录存放源码，用于项目搜索、符号、定义和引用分析；root 是项目 ID，不是工作区。Shell 默认在工作区执行，产物留在工作区，写入仍需用户确认。\n\n", "").replace("无需查询/添加项目目录", "无需查询/添加工作区").replace("任意位置文件", "工作区外文件");
+        let previous_shell = previous_directories.replace("已知文件绝对路径时直接用 shell 读取、搜索或计数，省略 root，无需查询/添加工作区，也不必先打开文件标签。仅在需要相对路径基准或项目符号分析时使用 root；上下文已有 root 时直接复用，不重复调用 list_source_workspaces。优先使用 rg、head、tail 等只读命令。", "源码文件枚举、文本搜索、计数和分段读取统一使用 shell；先用 list_source_workspaces 取得 root，并尽量使用 rg、head、tail、git diff 等只读命令。");
+        let previous_groups = previous_shell.replace("get_context 直接提供当前文件和活动源行。日志发现、读取和后台搜索加载 logs；文件标签、搜索视图、导航、标记和高亮加载 vclogg_actions。", "日志读取、搜索、文件标签、导航、标记和高亮统一通过 vclogg 工具组；需要时只加载一次。");
         let previous_paths = previous_groups.replace(
             "只读访问与任务相关的工作区外文件无需再次询问用户，可直接使用父目录或绝对路径。",
             "",
         );
         let legacy = if prompt.id == "agent" {
             vec![
+                previous_directories.as_str(),
+                previous_shell.as_str(),
                 previous_groups.as_str(),
                 previous_paths.as_str(),
                 LEGACY_AGENT_PROMPT,
@@ -167,6 +173,28 @@ pub fn agent_instructions(settings_path: &Path, prompts: &[Prompt]) -> Result<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upgrades_root_lookup_guidance_without_overwriting_custom_prompts() {
+        let directory = tempfile::tempdir().unwrap();
+        let settings_path = directory.path().join("ai.json");
+        let agent = default_prompts()
+            .into_iter()
+            .find(|prompt| prompt.id == "agent")
+            .unwrap();
+        let path = prompt_path(&settings_path, &agent).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let prior_directories = DEFAULT_AGENT_PROMPT.replace("工作区目录只有一个，用于临时文件、输出、转储及编辑副本；需要编辑源码时先复制到工作区，不直接修改项目原件。项目目录存放源码，用于项目搜索、符号、定义和引用分析；root 是项目 ID，不是工作区。Shell 默认在工作区执行，产物留在工作区，写入仍需用户确认。\n\n", "").replace("无需查询/添加项目目录", "无需查询/添加工作区").replace("任意位置文件", "工作区外文件");
+        let previous = prior_directories.replace("已知文件绝对路径时直接用 shell 读取、搜索或计数，省略 root，无需查询/添加工作区，也不必先打开文件标签。仅在需要相对路径基准或项目符号分析时使用 root；上下文已有 root 时直接复用，不重复调用 list_source_workspaces。优先使用 rg、head、tail 等只读命令。", "源码文件枚举、文本搜索、计数和分段读取统一使用 shell；先用 list_source_workspaces 取得 root，并尽量使用 rg、head、tail、git diff 等只读命令。");
+        assert_ne!(previous, DEFAULT_AGENT_PROMPT);
+        fs::write(&path, &previous).unwrap();
+        initialize_prompts(&settings_path).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), DEFAULT_AGENT_PROMPT);
+        let custom = format!("{previous}\nMy custom instructions");
+        fs::write(&path, &custom).unwrap();
+        initialize_prompts(&settings_path).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), custom);
+    }
 
     #[test]
     fn default_agent_preserves_decisive_rows_and_keywords_after_analysis() {

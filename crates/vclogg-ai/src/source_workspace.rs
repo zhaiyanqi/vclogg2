@@ -1,4 +1,4 @@
-//! Workspace-root validation and structured source inspection that shell cannot replace.
+//! Source-project validation and structured inspection, separate from the output workspace.
 use crate::{ToolCall, ToolResult};
 use anyhow::{Context as _, Result, bail};
 use serde_json::json;
@@ -21,26 +21,28 @@ pub(crate) fn scoped_path(root: &Path, relative: &str) -> Result<PathBuf> {
             )
         })
     {
-        bail!("Use a relative path within the selected workspace directory");
+        bail!("Use a relative path within the selected project directory");
     }
     let canonical = root
         .join(path)
         .canonicalize()
         .context("Source path unavailable")?;
     if !canonical.starts_with(root) {
-        bail!("Source path leaves the selected workspace directory");
+        bail!("Source path leaves the selected project directory");
     }
     Ok(canonical)
 }
 
 pub(crate) async fn execute(roots: &[PathBuf], call: &ToolCall) -> ToolResult {
     if call.name == "list_source_workspaces" {
+        let projects = roots
+            .iter()
+            .enumerate()
+            .map(|(id, path)| json!({"root":id,"path":path,"kind":"project"}))
+            .collect::<Vec<_>>();
         return ToolResult::ok(json!({
-            "workspaces": roots
-                .iter()
-                .enumerate()
-                .map(|(id, path)| json!({"root": id, "path": path}))
-                .collect::<Vec<_>>()
+            "projects": projects,
+            "workspaces": projects,
         }));
     }
     match execute_inner(roots, call).await {
@@ -52,13 +54,13 @@ pub(crate) async fn execute(roots: &[PathBuf], call: &ToolCall) -> ToolResult {
 async fn execute_inner(roots: &[PathBuf], call: &ToolCall) -> Result<serde_json::Value> {
     let index = call.arguments["root"]
         .as_u64()
-        .context("Missing workspace root")? as usize;
+        .context("Missing project root")? as usize;
     let root = roots
         .get(index)
-        .context("Workspace root unavailable; check configuration")?;
+        .context("Project root unavailable; check configuration")?;
     // Recheck the directory at use time; a replaced symlink cannot silently widen scope.
     if root.canonicalize().ok().as_deref() != Some(root.as_path()) {
-        bail!("Workspace root changed; configure it again");
+        bail!("Project root changed; configure it again");
     }
     if !matches!(
         call.name.as_str(),
@@ -100,6 +102,8 @@ mod tests {
         .await;
 
         assert!(!result.is_error);
+        assert_eq!(result.value["projects"], result.value["workspaces"]);
+        assert_eq!(result.value["projects"][0]["kind"], "project");
         assert_eq!(result.value["workspaces"][0]["root"], 0);
         assert_eq!(result.value["workspaces"][0]["path"], json!(roots[0]));
     }

@@ -92,9 +92,12 @@ impl ProviderConfig {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AiSettings {
     #[serde(default)]
-    pub workspace_directories: Vec<std::path::PathBuf>,
+    pub workspace_directory: Option<std::path::PathBuf>,
+    #[serde(default, alias = "workspace_directories")]
+    pub project_directories: Vec<std::path::PathBuf>,
     #[serde(default)]
     pub mcp_servers: Vec<crate::McpServer>,
     #[serde(default = "memory_enabled_default")]
@@ -122,7 +125,8 @@ fn memory_enabled_default() -> bool {
 impl Default for AiSettings {
     fn default() -> Self {
         Self {
-            workspace_directories: Vec::new(),
+            workspace_directory: None,
+            project_directories: Vec::new(),
             mcp_servers: Vec::new(),
             memory_enabled: true,
             memory_auto_save: false,

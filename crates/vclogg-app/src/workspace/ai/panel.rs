@@ -58,7 +58,7 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) show_context_usage: bool,
     pub(super) show_context_sources: bool,
     pub(super) selected_log_ids: Option<BTreeSet<u64>>,
-    pub(super) selected_workspace_directories: Option<BTreeSet<PathBuf>>,
+    pub(super) selected_project_directories: Option<BTreeSet<PathBuf>>,
     pub(super) include_search_directory: bool,
     pub(super) settings_generation: u64,
     pub(super) settings_tab: super::configuration::SettingsTab,
@@ -288,7 +288,7 @@ impl AiPanel {
             show_context_usage: false,
             show_context_sources: false,
             selected_log_ids: None,
-            selected_workspace_directories: None,
+            selected_project_directories: None,
             include_search_directory: true,
             settings_generation: 0,
             settings_tab: super::configuration::SettingsTab::Models,
@@ -396,7 +396,7 @@ impl AiPanel {
                 self.draft_logs.clear();
                 self.editing_message = None;
                 self.selected_log_ids = None;
-                self.selected_workspace_directories = None;
+                self.selected_project_directories = None;
                 self.include_search_directory = true;
                 self.attachment_task = None;
                 self.attachments_loading = false;
@@ -680,18 +680,18 @@ impl AiPanel {
         let settings_path = self.settings_path.clone();
         let prompts = self.settings.prompts.clone();
         let mut run_settings = self.settings.clone();
-        if let Some(selected) = &self.selected_workspace_directories {
+        if let Some(selected) = &self.selected_project_directories {
             run_settings
-                .workspace_directories
+                .project_directories
                 .retain(|path| selected.contains(path));
         }
         let extensions = vclogg_ai::RunExtensions::from_settings(&run_settings)
             .with_conversation(&self.conversation)
             .with_user_request(&source_directory_request);
-        let workspace_directories = extensions.workspace_directories().to_vec();
+        let project_directories = extensions.project_directories().to_vec();
         let capture_failed = match scope.lock() {
             Ok(mut state) => {
-                state.workspace_directories = workspace_directories;
+                state.project_directories = project_directories;
                 state.source_directory_request = source_directory_request;
                 false
             }
@@ -1099,7 +1099,7 @@ impl AiPanel {
         self.resume_queue_after_stop = false;
         self.editing_message = None;
         self.selected_log_ids = None;
-        self.selected_workspace_directories = None;
+        self.selected_project_directories = None;
         self.include_search_directory = true;
         self.attachment_task = None;
         self.attachments_loading = false;

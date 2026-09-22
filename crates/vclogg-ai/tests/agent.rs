@@ -336,6 +336,73 @@ async fn tool_groups_are_loaded_only_after_discovery() {
     assert!(second.iter().any(|name| name == "open_file"));
     assert!(second.iter().any(|name| name == "set_marks"));
 }
+
+#[tokio::test]
+async fn shell_reads_absolute_file_without_workspace_or_root_discovery() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("日志 sample.log");
+    std::fs::write(&path, "absolute-file-evidence\n").unwrap();
+    let command = format!(
+        "{} \"{}\"",
+        if cfg!(windows) { "type" } else { "cat" },
+        path.display()
+    );
+    let arguments = json!({"command":command}).to_string();
+    let (config, requests, server) = mock(vec![
+        (
+            200,
+            openai_named_tool("load-shell", "load_tool_group", r#"{"group":"shell"}"#),
+        ),
+        (200, openai_named_tool("read-file", "shell", &arguments)),
+        (200, openai_text("已读取")),
+    ]);
+    let run = start_run(
+        config,
+        vec![AgentMessage::User {
+            text: "读取当前文件".into(),
+        }],
+        vec![],
+        format!("Current file: {}", path.display()),
+        false,
+    );
+    loop {
+        match tokio::time::timeout(Duration::from_secs(5), run.events.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            AgentEvent::QuestionRequested(_) | AgentEvent::ToolStarted(_) => {
+                panic!("Reading an absolute path must not ask for a workspace or host action")
+            }
+            AgentEvent::Finished(status, error) => {
+                assert_eq!(status, RunStatus::Complete, "{error}");
+                break;
+            }
+            _ => {}
+        }
+    }
+    server.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[0]["tools"].to_string().contains("shell"));
+    let result = requests[2]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["role"] == "tool" && message["tool_call_id"] == "read-file")
+        .unwrap();
+    assert!(
+        result["content"]
+            .as_str()
+            .unwrap()
+            .contains("absolute-file-evidence")
+    );
+    assert!(
+        !requests[0]["messages"]
+            .to_string()
+            .contains("先用 list_source_workspaces 取得 root")
+    );
+}
 #[tokio::test]
 async fn anthropic_native_protocol_returns_tool_result_blocks() {
     let response=[
@@ -516,10 +583,8 @@ fn settings_are_private_and_never_debug_print_credentials() {
         ..Default::default()
     };
     assert!(!format!("{config:?}").contains("secret-key"));
-    let settings = AiSettings {
-        providers: vec![config],
-        ..Default::default()
-    };
+    let mut settings = AiSettings::default();
+    settings.providers = vec![config];
     settings.save(&path).unwrap();
     assert_eq!(
         AiSettings::load(&path).unwrap().providers[0].api_key,

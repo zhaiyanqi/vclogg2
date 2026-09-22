@@ -139,7 +139,7 @@ impl AiPanel {
             (
                 "workspace",
                 SettingsTab::Workspace,
-                crate::tr!("工作区", "Workspace"),
+                crate::tr!("目录", "Folders"),
             ),
         ] {
             tabs = tabs.child(

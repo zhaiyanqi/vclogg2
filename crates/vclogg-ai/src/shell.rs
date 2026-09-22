@@ -150,7 +150,7 @@ async fn execute_inner(
     cancellation: &Cancellation,
 ) -> Result<serde_json::Value> {
     if root.canonicalize().ok().as_deref() != Some(root) {
-        bail!("Workspace root changed; configure it again");
+        bail!("Shell working directory changed; configure it again");
     }
     let command = call.arguments["command"]
         .as_str()

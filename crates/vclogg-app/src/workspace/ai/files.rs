@@ -31,7 +31,7 @@ impl AiScope {
                 ))
             }
             (None, None, Some(root), Some(relative)) if args.get("version").is_none() => {
-                let root = self.workspace_directories.get(root as usize).context(
+                let root = self.project_directories.get(root as usize).context(
                     "Workspace root unavailable; check the selected project directories",
                 )?;
                 let path = scoped_workspace_file(root, relative)?;
@@ -185,12 +185,12 @@ impl Workspace {
                 bail!("Requested project directory changed while it was being prepared");
             }
             let root = state
-                .workspace_directories
+                .project_directories
                 .iter()
                 .position(|existing| existing == &path)
                 .unwrap_or_else(|| {
-                    state.workspace_directories.push(path.clone());
-                    state.workspace_directories.len() - 1
+                    state.project_directories.push(path.clone());
+                    state.project_directories.len() - 1
                 });
             return Ok(json!({
                 "root": root,
@@ -596,7 +596,7 @@ mod tests {
     fn empty_scope(options: DirectorySearchOptions) -> SharedScope {
         Arc::new(Mutex::new(AiScope {
             file_candidates: BTreeMap::new(),
-            workspace_directories: Vec::new(),
+            project_directories: Vec::new(),
             source_directory_request: String::new(),
             read_document: None,
             explicit: BTreeSet::new(),
@@ -693,7 +693,7 @@ mod tests {
         std::fs::write(workspace.path().join("src/service.rs"), "fn service() {}\n").unwrap();
         let root = workspace.path().canonicalize().unwrap();
         let scope = empty_scope(DirectorySearchOptions::default());
-        scope.lock().unwrap().workspace_directories = vec![root.clone()];
+        scope.lock().unwrap().project_directories = vec![root.clone()];
 
         let (path, document, access_root) = scope
             .lock()

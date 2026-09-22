@@ -127,8 +127,8 @@ impl AiPanel {
                 .child(Button::new("ai-add-skill-directory").small().text_label(crate::tr!("添加目录…", "Add folder…")).disabled(disabled)
                     .on_click(cx.listener(|this, _, window, cx| this.scan_skills(false, window, cx))))
         ).child(div().text_sm().text_color(cx.theme().muted_foreground).child(crate::tr!(
-            "内置工作流涵盖日志调查、工作区操作、标注与源码关联。外部指导支持 Agent Skills 的 SKILL.md 目录，可扫描系统目录或添加自定义目录。新发现的 Skills 默认关闭；启用前请检查来源和内容。命令行语法与安全规则始终生效，不受 Skill 开关控制；Skills 不会扩大工具权限。",
-            "Built-in workflows cover investigation, workspace operations, annotations and source correlation. External guidance supports Agent Skills SKILL.md folders. Newly discovered skills are disabled; review their source before enabling them. Shell syntax and safety rules always apply regardless of skill switches. Skills never expand tool permissions."
+            "内置工作流涵盖日志调查、文件与视图操作、标注与源码关联。外部指导支持 Agent Skills 的 SKILL.md 目录，可扫描系统目录或添加自定义目录。新发现的 Skills 默认关闭；启用前请检查来源和内容。命令行语法与安全规则始终生效，不受 Skill 开关控制；Skills 不会扩大工具权限。",
+            "Built-in workflows cover investigation, file and view operations, annotations and source correlation. External guidance supports Agent Skills SKILL.md folders. Newly discovered skills are disabled; review their source before enabling them. Shell syntax and safety rules always apply regardless of skill switches. Skills never expand tool permissions."
         )));
         for root in self.settings.skill_directories.clone() {
             let id = root.id.clone();

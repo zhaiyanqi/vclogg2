@@ -89,7 +89,10 @@ pub(super) fn exercise(
             .unwrap();
         assert!(system.contains("只给触发故障、因果转折、影响边界或恢复等决定性行加书签"));
         assert!(system.contains("调用 list_colors 后"));
-        assert!(system.contains("源码文件枚举、文本搜索、计数和分段读取统一使用 shell"));
+        assert!(system.contains("已知文件绝对路径时直接用 shell 读取、搜索或计数"));
+        assert!(system.contains("省略 root，无需查询/添加项目目录"));
+        assert!(system.contains("工作区目录只有一个"));
+        assert!(!system.contains("先用 list_source_workspaces 取得 root"));
         let user = first_request["messages"]
             .as_array()
             .unwrap()

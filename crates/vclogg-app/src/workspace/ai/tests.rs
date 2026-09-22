@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn file_identity_exposes_absolute_path_even_for_relative_input() {
+    let directory = tempfile::tempdir_in(".").unwrap();
+    let path = directory.path().join("relative.log");
+    std::fs::write(&path, "test\n").unwrap();
+    let snapshot = DocumentSnapshot {
+        id: 1,
+        version: "test".into(),
+        open: true,
+        document: Arc::new(LogDocument::open(&path).unwrap()),
+    };
+    let absolute = snapshot.absolute_path().unwrap();
+    assert!(absolute.is_absolute());
+    assert_eq!(
+        absolute.canonicalize().unwrap(),
+        path.canonicalize().unwrap()
+    );
+}
+
+#[test]
 fn log_jump_labels_use_file_name_and_source_line() {
     let reference = LogReference {
         document_id: 7,
@@ -46,7 +65,7 @@ fn fixture() -> (tempfile::TempDir, DocumentSnapshot, SharedScope) {
     };
     let scope = Arc::new(Mutex::new(AiScope {
         file_candidates: BTreeMap::new(),
-        workspace_directories: Vec::new(),
+        project_directories: Vec::new(),
         source_directory_request: String::new(),
         read_document: None,
         explicit: BTreeSet::new(),
@@ -293,6 +312,11 @@ fn exercise_workspace(
     assert_eq!(context["current_document_id"], snapshot.id);
     assert_eq!(context["active_file"]["document_id"], snapshot.id);
     assert_eq!(context["active_file"]["version"], snapshot.version);
+    assert!(Path::new(context["active_file"]["path"].as_str().unwrap()).is_absolute());
+    assert_eq!(
+        Path::new(context["active_file"]["path"].as_str().unwrap()),
+        std::path::absolute(document.path()).unwrap()
+    );
     assert_eq!(
         context["active_file"]["line_count"],
         document.source_line_count()

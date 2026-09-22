@@ -17,8 +17,8 @@ impl AiPanel {
                     .skills
                     .iter()
                     .any(|s| self.settings.skill_enabled(s)),
-                ToolGroup::SourceSearch | ToolGroup::SourceSymbols | ToolGroup::Shell => {
-                    !self.settings.workspace_directories.is_empty()
+                ToolGroup::SourceSearch | ToolGroup::SourceSymbols => {
+                    !self.settings.project_directories.is_empty()
                 }
                 _ => true,
             };

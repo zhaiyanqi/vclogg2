@@ -119,7 +119,7 @@ const BUILTINS: &[BuiltinSkill] = &[
     },
     BuiltinSkill {
         id: "workspace-operations",
-        name: "工作区操作",
+        name: "文件与视图操作",
         description: "解析文件身份，操作文件标签、搜索视图并导航源行。",
         workflow: workflows::WORKSPACE,
     },
@@ -137,14 +137,17 @@ const BUILTINS: &[BuiltinSkill] = &[
     },
 ];
 
-pub(crate) fn shell_instructions() -> &'static str {
-    if cfg!(target_os = "windows") {
+pub(crate) fn shell_instructions() -> String {
+    let legacy = if cfg!(target_os = "windows") {
         workflows::SHELL_WINDOWS
     } else if cfg!(target_os = "macos") {
         workflows::SHELL_MACOS
     } else {
         workflows::SHELL_LINUX
-    }
+    };
+    // Keep shipped legacy text unchanged for conservative migration of old skills.
+    legacy.replace("工作目录固定为所选工作区", "root 可省略，默认在唯一工作区目录中执行，用于临时副本、输出和转储；显式 root 只选择项目目录作为相对路径基准")
+        .replace("先用 `list_source_workspaces` 取得数字 `root`，路径尽量相对于该根目录。", "已知绝对路径时直接读取或搜索，不需要查询 root、添加项目目录或打开文件标签。只有需要项目范围或相对路径且上下文未提供 root 时，才调用 list_source_workspaces；不要重复查询已有 root。")
 }
 
 const MIGRATIONS: &[(&str, &[&str])] = &[
@@ -432,7 +435,8 @@ mod tests {
         assert!(read("vclogg:source-correlation").contains("source_symbols"));
         let shell = shell_instructions();
         assert!(shell.contains("Skill 只说明语法，不授予额外权限"));
-        assert!(shell.contains("工作目录固定为所选工作区"));
+        assert!(shell.contains("root 可省略"));
+        assert!(!shell.contains("先用 `list_source_workspaces`"));
         assert!(workflows::SHELL_WINDOWS.contains("cmd.exe /D /S /C"));
         assert!(workflows::SHELL_LINUX.contains("/bin/sh -c"));
         assert!(workflows::SHELL_MACOS.contains("BSD 参数"));
