@@ -193,7 +193,7 @@ fn log_agent_commands_share_real_workspace_state(cx: &mut gpui_kit::TestAppConte
         global.load_visible_rows(0..4);
         assert!(matches!(global.wrapped_row(1), Some(crate::global_search_table::WrappedGlobalRow::Match { source_row: 1, marked: true, highlights, .. }) if !highlights.is_empty()));
     })).unwrap();
-    cx.update_window(window.into(), |_, _, cx| {
+    cx.update_window(window.into(), |_, window, cx| {
         workspace.update(cx, |workspace, cx| {
             workspace.global_table.update(cx, |table, cx| {
                 table.delegate().settle_table_selection(1);
@@ -203,6 +203,16 @@ fn log_agent_commands_share_real_workspace_state(cx: &mut gpui_kit::TestAppConte
             assert_eq!(attached.len(), 1);
             assert_eq!(attached[0].source_row, 1);
             assert_eq!(attached[0].document.id, workspace.documents[0].id);
+            workspace.active_log_region = LogRegion::GlobalResults;
+            let scope = workspace.ai_scope();
+            let context = invoke(workspace, &scope, "get_context", json!({}), window, cx);
+            assert_eq!(context["active_region"], "global_results");
+            assert_eq!(context["active_reference"]["line"], 2);
+            assert_eq!(
+                context["active_file"]["document_id"],
+                workspace.documents[0].id
+            );
+            assert_eq!(context["selected_references"][0]["line"], 2);
         })
     })
     .unwrap();
@@ -281,6 +291,16 @@ fn exercise_workspace(
     let reference = json!(snapshot.reference(1));
     let context = invoke(workspace, &scope, "get_context", json!({}), window, cx);
     assert_eq!(context["current_document_id"], snapshot.id);
+    assert_eq!(context["active_file"]["document_id"], snapshot.id);
+    assert_eq!(context["active_file"]["version"], snapshot.version);
+    assert_eq!(
+        context["active_file"]["line_count"],
+        document.source_line_count()
+    );
+    assert_eq!(context["active_region"], "body");
+    assert_eq!(context["content_included"], false);
+    assert_eq!(context["visible"], context["visible_references"]);
+    assert_eq!(context["selected"], context["selected_references"]);
     let result = invoke(
         workspace,
         &scope,
@@ -426,6 +446,10 @@ fn exercise_workspace(
         cx,
     );
     assert_eq!(workspace.selected_source_row, Some(3));
+    let context = invoke(workspace, &scope, "get_context", json!({}), window, cx);
+    assert_eq!(context["active_region"], "body");
+    assert_eq!(context["active_reference"]["line"], 4);
+    assert_eq!(context["active_file"]["document_id"], snapshot.id);
     invoke(
         workspace,
         &scope,
@@ -490,6 +514,9 @@ fn exercise_workspace(
         cx,
     );
     assert_eq!(workspace.active_log_region, LogRegion::CurrentResults);
+    let context = invoke(workspace, &scope, "get_context", json!({}), window, cx);
+    assert_eq!(context["active_region"], "current_results");
+    assert_eq!(context["active_reference"]["line"], 4);
     assert_eq!(workspace.selected_source_row, Some(3));
     assert_eq!(
         workspace.documents[0]

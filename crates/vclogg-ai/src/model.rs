@@ -110,6 +110,8 @@ pub struct AiSettings {
     #[serde(default)]
     pub initialized_builtin_skills: Vec<String>,
     #[serde(default)]
+    pub builtin_skill_catalog_version: u32,
+    #[serde(default)]
     pub skill_directories: Vec<crate::SkillDirectory>,
     #[serde(default = "crate::default_prompts")]
     pub prompts: Vec<crate::Prompt>,
@@ -128,6 +130,7 @@ impl Default for AiSettings {
             active_provider: None,
             skills: Vec::new(),
             initialized_builtin_skills: Vec::new(),
+            builtin_skill_catalog_version: 0,
             skill_directories: Vec::new(),
             prompts: crate::default_prompts(),
         }

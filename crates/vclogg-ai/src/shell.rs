@@ -6,11 +6,7 @@ use tokio::io::AsyncReadExt as _;
 
 const OUTPUT_BYTES: usize = 32 * 1024;
 
-pub(crate) enum CommandPolicy {
-    Automatic,
-    Confirm(String),
-    Deny(String),
-}
+pub(crate) use crate::ToolDecision as CommandPolicy;
 
 pub(crate) fn classify(command: &str) -> CommandPolicy {
     let normalized = command.trim().to_ascii_lowercase();
@@ -45,8 +41,10 @@ pub(crate) fn classify(command: &str) -> CommandPolicy {
     {
         return CommandPolicy::Deny("The command is explicitly destructive".into());
     }
+    // Location alone does not require consent for read-only commands.
+    // Shell expansion remains subject to confirmation independently of location.
     let sensitive_syntax = [
-        ">", "`", "$(", "${", "../", "~/", "&&", "||", ";", "&", "\n",
+        ">", "<", "`", "$", "&&", "||", ";", "&", "\n", "\r", "\\\n", "#", "~", "*", "?", "[",
     ];
     if sensitive_syntax
         .iter()
@@ -63,26 +61,44 @@ pub(crate) fn classify(command: &str) -> CommandPolicy {
     for segment in segments {
         let mut words = segment.split_whitespace();
         let program = words.next().unwrap_or_default();
-        let arguments = words.collect::<Vec<_>>();
+        // Normalize quoting for risk checks, never for execution. This deliberately
+        // over-classifies ambiguous shell arguments instead of trusting spelling.
+        let normalized_arguments = words
+            .map(|word| word.replace(['\'', '"', '\\'], ""))
+            .collect::<Vec<_>>();
+        let arguments = normalized_arguments
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
         let safe = match program {
-            "pwd" | "ls" | "head" | "tail" | "wc" | "cat" | "grep" | "tree" | "cd" => true,
+            "pwd" | "ls" | "head" | "tail" | "wc" | "cat" | "grep" | "cd" => true,
+            "tree" => !arguments
+                .iter()
+                .any(|arg| arg.starts_with('-') && !arg.starts_with("--") && arg.contains('o')),
             "dir" | "type" | "more" | "findstr" => cfg!(windows),
-            "rg" => !arguments
-                .iter()
-                .any(|arg| matches!(*arg, "--pre" | "--pre-glob")),
-            "fd" => !arguments
-                .iter()
-                .any(|arg| matches!(*arg, "-x" | "-X" | "--exec" | "--exec-batch")),
+            "rg" => !arguments.iter().any(|arg| arg.starts_with("--pre")),
+            "fd" => !arguments.iter().any(|arg| {
+                arg.starts_with("--exec")
+                    || (arg.starts_with('-') && !arg.starts_with("--") && arg.contains(['x', 'X']))
+            }),
             "git" => arguments.first().is_some_and(|arg| {
                 matches!(
                     *arg,
                     "status" | "diff" | "log" | "show" | "grep" | "ls-files" | "rev-parse"
-                )
+                ) && (!matches!(*arg, "diff" | "show" | "log")
+                    || (arguments.contains(&"--no-ext-diff")
+                        && arguments.contains(&"--no-textconv")))
             }),
             _ => false,
         };
         let risky_argument = arguments.iter().any(|arg| {
             arg.starts_with("--output")
+                || arg.starts_with("--open-files-in-pager")
+                || (program == "git"
+                    && arguments.first() == Some(&"grep")
+                    && arg.starts_with('-')
+                    && !arg.starts_with("--")
+                    && arg.contains('O'))
                 || matches!(*arg, "--ext-diff" | "--textconv")
                 || [
                     ".env",
@@ -106,18 +122,12 @@ pub(crate) fn classify(command: &str) -> CommandPolicy {
                     .into(),
             );
         }
-        if arguments.iter().any(|arg| {
-            arg.starts_with('/')
-                || arg.starts_with('~')
-                || arg.starts_with("\\\\")
-                || arg.contains(":\\")
-                || arg.contains("$HOME")
-                || arg.contains("%USERPROFILE%")
-                || (cfg!(windows) && arg.contains('%'))
-        }) {
-            return CommandPolicy::Confirm(
-                "The command may access a path outside the selected workspace".into(),
-            );
+        if cfg!(windows)
+            && arguments
+                .iter()
+                .any(|arg| arg.contains('%') || arg.contains('!'))
+        {
+            return CommandPolicy::Confirm("The command uses shell environment expansion".into());
         }
     }
     CommandPolicy::Automatic
@@ -181,6 +191,10 @@ async fn execute_inner(
         }
     }
     child
+        .env("GIT_PAGER", "cat")
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "core.fsmonitor")
+        .env("GIT_CONFIG_VALUE_0", "false")
         .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -240,13 +254,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn read_only_paths_outside_workspace_do_not_require_confirmation() {
+        for command in [
+            "cat ../app.log",
+            "head ../../logs/app.log",
+            "rg ERROR /var/log/app.log",
+            "cat \"/tmp/log files/app.log\"",
+            r#"rg ERROR "C:\logs\app.log""#,
+            r#"rg ERROR "\\server\logs\app.log""#,
+        ] {
+            assert!(
+                matches!(classify(command), CommandPolicy::Automatic),
+                "{command}"
+            );
+        }
+        for command in [
+            "cat ~/logs/app.log",
+            "cat /tmp/*",
+            "tree -o /tmp/output",
+            "rg '--pre=helper' ERROR /tmp/app.log",
+            "rg --p're'=helper ERROR /tmp/app.log",
+            "fd '--exec=rm'",
+            "git show HEAD",
+            "cat ../../.ssh/id_rsa",
+            "cat /tmp/app.log > /tmp/copy.log",
+            "cat $HOME/logs/app.log",
+            "rg --pre helper ERROR /var/log/app.log",
+        ] {
+            assert!(
+                matches!(classify(command), CommandPolicy::Confirm(_)),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
     fn policy_allows_bounded_reads_and_requires_confirmation_for_side_effects() {
         assert!(matches!(
             classify("rg TODO src | head"),
             CommandPolicy::Automatic
         ));
         assert!(matches!(
-            classify("git diff -- src/lib.rs"),
+            classify("git diff --no-ext-diff --no-textconv -- src/lib.rs"),
             CommandPolicy::Automatic
         ));
         assert!(matches!(classify("cargo test"), CommandPolicy::Confirm(_)));

@@ -1183,38 +1183,9 @@ pub(super) fn tool_result_summary(result: &ToolResult) -> String {
 }
 
 pub(super) fn tool_label(name: &str) -> &str {
-    match name {
-        "load_tool_group" => crate::tr!("加载工具组", "Load tool group"),
-        "ask_user" => crate::tr!("询问用户", "Ask user"),
-        "shell" => crate::tr!("执行命令", "Run command"),
-        "list_source_workspaces" => crate::tr!("列出源码工作区", "List source workspaces"),
-        "add_source_workspace" => crate::tr!("切换源码工作区", "Switch source workspace"),
-        "find_symbols" => crate::tr!("查找符号", "Find symbols"),
-        "source_outline" => crate::tr!("查看源码结构", "Inspect source outline"),
-        "locate_log_origin" => crate::tr!("定位日志来源", "Locate log origin"),
-        "find_definition" => crate::tr!("查找定义", "Find definition"),
-        "find_references" => crate::tr!("查找引用", "Find references"),
-        "get_context" => crate::tr!("获取当前日志", "Read current context"),
-        "list_logs" => crate::tr!("列出日志文件", "List log files"),
-        "read_logs" => crate::tr!("读取日志", "Read logs"),
-        "locate_files" => crate::tr!("查找日志文件", "Find log files"),
-        "list_log_directory" => crate::tr!("读取日志目录", "List log directory"),
-        "open_file" => crate::tr!("打开文件", "Open file"),
-        "close_file" => crate::tr!("关闭文件", "Close file"),
-        "switch_file" => crate::tr!("切换文件", "Switch file"),
-        "reveal_file" => crate::tr!("定位文件", "Reveal file"),
-        "read_log_segment" => crate::tr!("读取长行片段", "Read line segment"),
-        "read_log_context" => crate::tr!("读取引用上下文", "Read log context"),
-        "summarize_search" => crate::tr!("汇总搜索结果", "Summarize search results"),
-        "search_logs" | "show_search" => crate::tr!("搜索日志", "Search logs"),
-        "search_results" | "control_search" => crate::tr!("读取搜索结果", "Inspect search results"),
-        "append_search" => crate::tr!("追加搜索文字", "Append search text"),
-        "set_marks" => crate::tr!("标记日志", "Mark logs"),
-        "highlight_keyword" => crate::tr!("高亮关键词", "Highlight keywords"),
-        "text_mark" => crate::tr!("文字标记", "Annotate logs"),
-        "navigate" => crate::tr!("定位日志", "Navigate to logs"),
-        _ => name,
-    }
+    vclogg_ai::tool_descriptor(name)
+        .map(|tool| tool.title(crate::i18n::current_language() == crate::i18n::Language::Chinese))
+        .unwrap_or(name)
 }
 
 #[cfg(test)]

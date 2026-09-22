@@ -327,7 +327,8 @@ async fn tool_groups_are_loaded_only_after_discovery() {
             .collect::<Vec<_>>()
     };
     let first = names(&requests[0]);
-    assert_eq!(first.len(), 2);
+    assert_eq!(first.len(), 3);
+    assert!(first.iter().any(|name| name == "get_context"));
     assert!(first.iter().any(|name| name == "ask_user"));
     assert!(!first.iter().any(|name| name == "read_logs"));
     let second = names(&requests[1]);

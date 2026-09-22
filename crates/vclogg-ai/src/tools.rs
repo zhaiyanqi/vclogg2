@@ -10,10 +10,367 @@ pub struct ToolDefinition {
     pub parameters: Value,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ToolRoute {
+    Core,
+    Context,
+    Files,
+    Logs,
+    SearchView,
+    Annotations,
+    Navigation,
+    Source,
+    Shell,
+    Memory,
+    Mcp,
+    Skills,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ToolRisk {
+    Observe,
+    Navigate,
+    PersistLocal,
+    External,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ToolDecision {
+    Automatic,
+    Confirm(String),
+    Deny(String),
+}
+
+/// Provider-independent capability metadata shared by the runner and application UI.
+#[derive(Clone, Debug)]
+pub struct ToolDescriptor {
+    definition: ToolDefinition,
+    title: (&'static str, &'static str),
+    group: ToolGroup,
+    route: ToolRoute,
+    risk: ToolRisk,
+    evidence: bool,
+    semantic_validator: Option<fn(&ToolCall) -> Result<()>>,
+}
+
+impl ToolDescriptor {
+    fn new(definition: ToolDefinition) -> Self {
+        use ToolRoute::*;
+        let (zh, en, route, risk, evidence) = match definition.name {
+            "get_context" => (
+                "当前上下文",
+                "Current context",
+                Context,
+                ToolRisk::Observe,
+                false,
+            ),
+            "load_tool_group" => (
+                "加载工具组",
+                "Load tool group",
+                Core,
+                ToolRisk::Observe,
+                false,
+            ),
+            "ask_user" => ("询问用户", "Ask user", Core, ToolRisk::Observe, false),
+            "list_logs" => ("列出日志文件", "List logs", Logs, ToolRisk::Observe, false),
+            "locate_files" => ("查找文件", "Find files", Files, ToolRisk::Observe, false),
+            "list_log_directory" => (
+                "列出日志目录",
+                "List log directory",
+                Files,
+                ToolRisk::Observe,
+                false,
+            ),
+            "read_logs" => ("读取日志", "Read logs", Logs, ToolRisk::Observe, true),
+            "read_log_context" => (
+                "读取日志上下文",
+                "Read log context",
+                Logs,
+                ToolRisk::Observe,
+                true,
+            ),
+            "read_log_segment" => (
+                "读取长行片段",
+                "Read line segment",
+                Logs,
+                ToolRisk::Observe,
+                true,
+            ),
+            "search_logs" => (
+                "后台搜索日志",
+                "Search logs",
+                Logs,
+                ToolRisk::Observe,
+                false,
+            ),
+            "search_results" => (
+                "读取搜索结果",
+                "Read search results",
+                Logs,
+                ToolRisk::Observe,
+                false,
+            ),
+            "summarize_search" => (
+                "汇总搜索结果",
+                "Summarize search",
+                Logs,
+                ToolRisk::Observe,
+                false,
+            ),
+            "open_file" => ("打开文件", "Open file", Files, ToolRisk::Navigate, false),
+            "close_file" => ("关闭文件", "Close file", Files, ToolRisk::Navigate, false),
+            "switch_file" => ("切换文件", "Switch file", Files, ToolRisk::Navigate, false),
+            "reveal_file" => ("定位文件", "Reveal file", Files, ToolRisk::Navigate, false),
+            "show_search" => (
+                "显示搜索",
+                "Show search",
+                SearchView,
+                ToolRisk::Navigate,
+                false,
+            ),
+            "control_search" => (
+                "管理搜索",
+                "Control search",
+                SearchView,
+                ToolRisk::Navigate,
+                false,
+            ),
+            "append_search" => (
+                "追加搜索文字",
+                "Append search text",
+                SearchView,
+                ToolRisk::Navigate,
+                false,
+            ),
+            "list_filters" => (
+                "列出过滤器",
+                "List filters",
+                SearchView,
+                ToolRisk::Observe,
+                false,
+            ),
+            "list_colors" => (
+                "列出颜色标签",
+                "List color labels",
+                Annotations,
+                ToolRisk::Observe,
+                false,
+            ),
+            "list_marks" => (
+                "列出标记",
+                "List marks",
+                Annotations,
+                ToolRisk::Observe,
+                false,
+            ),
+            "set_marks" => (
+                "设置行书签",
+                "Set bookmarks",
+                Annotations,
+                ToolRisk::PersistLocal,
+                false,
+            ),
+            "highlight_keyword" => (
+                "高亮关键词",
+                "Highlight keyword",
+                Annotations,
+                ToolRisk::PersistLocal,
+                false,
+            ),
+            "text_mark" => (
+                "文字标记",
+                "Annotate line",
+                Annotations,
+                ToolRisk::PersistLocal,
+                false,
+            ),
+            "navigate" => (
+                "跳转日志行",
+                "Navigate logs",
+                Navigation,
+                ToolRisk::Navigate,
+                false,
+            ),
+            "list_source_workspaces" => (
+                "列出源码工作区",
+                "List source workspaces",
+                Source,
+                ToolRisk::Observe,
+                false,
+            ),
+            "add_source_workspace" => (
+                "添加源码工作区",
+                "Add source workspace",
+                Files,
+                ToolRisk::Observe,
+                false,
+            ),
+            "find_symbols" => ("查找符号", "Find symbols", Source, ToolRisk::Observe, false),
+            "source_outline" => (
+                "源码结构",
+                "Source outline",
+                Source,
+                ToolRisk::Observe,
+                false,
+            ),
+            "locate_log_origin" => (
+                "定位日志来源",
+                "Locate log origin",
+                Source,
+                ToolRisk::Observe,
+                false,
+            ),
+            "find_definition" => (
+                "查找定义",
+                "Find definition",
+                Source,
+                ToolRisk::Observe,
+                false,
+            ),
+            "find_references" => (
+                "查找引用",
+                "Find references",
+                Source,
+                ToolRisk::Observe,
+                false,
+            ),
+            "shell" => ("执行命令", "Run command", Shell, ToolRisk::External, false),
+            "search_memory" => (
+                "检索记忆",
+                "Search memory",
+                Memory,
+                ToolRisk::Observe,
+                false,
+            ),
+            "save_memory" => (
+                "保存记忆",
+                "Save memory",
+                Memory,
+                ToolRisk::PersistLocal,
+                false,
+            ),
+            "delete_memory" => (
+                "删除记忆",
+                "Delete memory",
+                Memory,
+                ToolRisk::PersistLocal,
+                false,
+            ),
+            "list_mcp_servers" => (
+                "列出 MCP 服务",
+                "List MCP servers",
+                Mcp,
+                ToolRisk::Observe,
+                false,
+            ),
+            "list_mcp_tools" => (
+                "发现 MCP 工具",
+                "Discover MCP tools",
+                Mcp,
+                ToolRisk::Observe,
+                false,
+            ),
+            "call_mcp_tool" => (
+                "调用 MCP 工具",
+                "Call MCP tool",
+                Mcp,
+                ToolRisk::External,
+                false,
+            ),
+            "list_skills" => ("列出技能", "List skills", Skills, ToolRisk::Observe, false),
+            "read_skill" => ("读取技能", "Read skill", Skills, ToolRisk::Observe, false),
+            _ => unreachable!("Every registered tool needs capability metadata"),
+        };
+        let group = match route {
+            Core | Context => ToolGroup::Core,
+            Logs => ToolGroup::Logs,
+            Files if definition.name == "add_source_workspace" => ToolGroup::SourceSearch,
+            Files if risk == ToolRisk::Observe => ToolGroup::Logs,
+            Files | SearchView | Annotations | Navigation => ToolGroup::VcloggActions,
+            Source if definition.name == "list_source_workspaces" => ToolGroup::SourceSearch,
+            Source => ToolGroup::SourceSymbols,
+            Shell => ToolGroup::Shell,
+            Memory => ToolGroup::Memory,
+            Mcp => ToolGroup::Mcp,
+            Skills => ToolGroup::Skills,
+        };
+        let semantic_validator = matches!(
+            definition.name,
+            "open_file"
+                | "reveal_file"
+                | "navigate"
+                | "highlight_keyword"
+                | "text_mark"
+                | "show_search"
+                | "read_log_segment"
+        )
+        .then_some(validate_semantics as fn(&ToolCall) -> Result<()>);
+        Self {
+            group,
+            definition,
+            title: (zh, en),
+            route,
+            risk,
+            evidence,
+            semantic_validator,
+        }
+    }
+    pub fn name(&self) -> &'static str {
+        self.definition.name
+    }
+    pub fn title(&self, chinese: bool) -> &'static str {
+        if chinese { self.title.0 } else { self.title.1 }
+    }
+    pub fn definition(&self) -> &ToolDefinition {
+        &self.definition
+    }
+    pub fn group(&self) -> ToolGroup {
+        self.group
+    }
+    pub fn route(&self) -> ToolRoute {
+        self.route
+    }
+    pub fn risk(&self) -> ToolRisk {
+        self.risk
+    }
+    pub fn contains_evidence(&self) -> bool {
+        self.evidence
+    }
+    pub fn decision(&self) -> ToolDecision {
+        match self.risk {
+            ToolRisk::External => {
+                ToolDecision::Confirm("External operation requires risk assessment".into())
+            }
+            _ => ToolDecision::Automatic,
+        }
+    }
+}
+
+pub fn tool_descriptors() -> &'static [ToolDescriptor] {
+    static CATALOG: std::sync::OnceLock<Vec<ToolDescriptor>> = std::sync::OnceLock::new();
+    CATALOG.get_or_init(|| {
+        build_definitions()
+            .into_iter()
+            .map(ToolDescriptor::new)
+            .collect()
+    })
+}
+pub fn tool_descriptor(name: &str) -> Option<&'static ToolDescriptor> {
+    tool_descriptors().iter().find(|tool| tool.name() == name)
+}
+pub fn tool_definitions() -> Vec<ToolDefinition> {
+    tool_descriptors()
+        .iter()
+        .map(|tool| tool.definition.clone())
+        .collect()
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) enum ToolGroup {
+pub enum ToolGroup {
     Core,
     Vclogg,
+    Logs,
+    VcloggActions,
     SourceSearch,
     SourceSymbols,
     Shell,
@@ -23,8 +380,9 @@ pub(crate) enum ToolGroup {
 }
 
 impl ToolGroup {
-    pub(crate) const OPTIONAL: [Self; 7] = [
-        Self::Vclogg,
+    pub const OPTIONAL: [Self; 8] = [
+        Self::Logs,
+        Self::VcloggActions,
         Self::SourceSearch,
         Self::SourceSymbols,
         Self::Shell,
@@ -33,10 +391,12 @@ impl ToolGroup {
         Self::Skills,
     ];
 
-    pub(crate) const fn id(self) -> &'static str {
+    pub const fn id(self) -> &'static str {
         match self {
             Self::Core => "core",
             Self::Vclogg => "vclogg",
+            Self::Logs => "logs",
+            Self::VcloggActions => "vclogg_actions",
             Self::SourceSearch => "source_search",
             Self::SourceSymbols => "source_symbols",
             Self::Shell => "shell",
@@ -47,29 +407,15 @@ impl ToolGroup {
     }
 
     pub(crate) fn from_id(id: &str) -> Option<Self> {
+        if id == "vclogg" {
+            return Some(Self::Vclogg);
+        }
         Self::OPTIONAL.into_iter().find(|group| group.id() == id)
     }
 }
 
 pub(crate) fn group_for_tool(name: &str) -> ToolGroup {
-    match name {
-        "load_tool_group" | "ask_user" => ToolGroup::Core,
-        "get_context" | "list_logs" | "read_logs" | "search_logs" | "search_results"
-        | "summarize_search" | "read_log_context" | "read_log_segment" | "locate_files"
-        | "list_log_directory" | "open_file" | "close_file" | "switch_file" | "reveal_file"
-        | "show_search" | "control_search" | "append_search" | "list_filters" | "list_colors"
-        | "set_marks" | "highlight_keyword" | "text_mark" | "list_marks" | "navigate" => {
-            ToolGroup::Vclogg
-        }
-        "list_source_workspaces" | "add_source_workspace" => ToolGroup::SourceSearch,
-        "find_symbols" | "source_outline" | "locate_log_origin" | "find_definition"
-        | "find_references" => ToolGroup::SourceSymbols,
-        "shell" => ToolGroup::Shell,
-        "search_memory" | "save_memory" | "delete_memory" => ToolGroup::Memory,
-        "list_mcp_servers" | "list_mcp_tools" | "call_mcp_tool" => ToolGroup::Mcp,
-        "list_skills" | "read_skill" => ToolGroup::Skills,
-        _ => ToolGroup::Core,
-    }
+    tool_descriptor(name).map_or(ToolGroup::Core, |tool| tool.group())
 }
 
 pub(crate) fn tool_definitions_for(
@@ -80,8 +426,11 @@ pub(crate) fn tool_definitions_for(
         .into_iter()
         .filter_map(|mut tool| {
             let group = group_for_tool(tool.name);
-            let visible =
-                group == ToolGroup::Core || (available.contains(&group) && loaded.contains(&group));
+            let visible = group == ToolGroup::Core
+                || (available.contains(&group)
+                    && (loaded.contains(&group)
+                        || (loaded.contains(&ToolGroup::Vclogg)
+                            && matches!(group, ToolGroup::Logs | ToolGroup::VcloggActions))));
             if !visible {
                 return None;
             }
@@ -109,7 +458,7 @@ pub(crate) fn groups_from_tool_history(
         .collect()
 }
 
-pub fn tool_definitions() -> Vec<ToolDefinition> {
+fn build_definitions() -> Vec<ToolDefinition> {
     let string = || json!({"type":"string","maxLength":8192});
     let path_string = || json!({"type":"string","maxLength":1024});
     let id = || json!({"type":"integer","minimum":1});
@@ -140,7 +489,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         ),
         make(
             "shell",
-            "在选定源码工作区中通过系统 shell 执行一条命令。root 来自 list_source_workspaces。只读命令可直接运行；写入、联网、启动程序或其他副作用会暂停并请求用户确认；明显破坏性命令被拒绝。输出有界且命令会超时。",
+            "在选定源码工作区中通过系统 shell 执行一条命令。root 来自 list_source_workspaces。只读命令可直接读取与任务相关的工作区外文件，父目录或绝对路径本身不需要确认；写入、联网、启动程序或其他副作用会暂停并请求用户确认；明显破坏性命令被拒绝。输出有界且命令会超时。",
             json!({"root":{"type":"integer","minimum":0},"command":{"type":"string","maxLength":8192},"timeout_seconds":{"type":"integer","minimum":1,"maximum":120}}),
             json!(["root", "command"]),
         ),
@@ -381,11 +730,100 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
     ]
 }
 pub fn validate_call(call: &ToolCall) -> Result<()> {
-    let definition = tool_definitions()
-        .into_iter()
-        .find(|d| d.name == call.name)
-        .ok_or_else(|| anyhow::anyhow!("Unknown tool"))?;
-    validate(&call.arguments, &definition.parameters)
+    if call.name == "load_tool_group" && call.arguments == json!({"group":"vclogg"}) {
+        return Ok(());
+    }
+    let descriptor = tool_descriptor(&call.name).ok_or_else(|| anyhow::anyhow!("Unknown tool"))?;
+    validate(&call.arguments, &descriptor.definition.parameters)?;
+    if let Some(validate) = descriptor.semantic_validator {
+        validate(call)?;
+    }
+    Ok(())
+}
+
+fn validate_semantics(call: &ToolCall) -> Result<()> {
+    let a = &call.arguments;
+    let has = |key: &str| a.get(key).is_some();
+    let require = |keys: &[&str]| -> Result<()> {
+        for key in keys {
+            if !has(key) {
+                bail!("Missing argument: {key}");
+            }
+        }
+        Ok(())
+    };
+    match call.name.as_str() {
+        "open_file" | "reveal_file" => {
+            let document = has("document_id")
+                && has("version")
+                && !has("file_id")
+                && !has("root")
+                && !has("path");
+            let file = has("file_id")
+                && !has("document_id")
+                && !has("version")
+                && !has("root")
+                && !has("path");
+            let source = call.name == "open_file"
+                && has("root")
+                && has("path")
+                && !has("document_id")
+                && !has("version")
+                && !has("file_id");
+            if !(document || file || source) {
+                bail!("Provide exactly one complete file identity");
+            }
+        }
+        "navigate" => {
+            let allowed: &[&str] = match a["action"].as_str().unwrap_or_default() {
+                "line" => {
+                    require(&["reference"])?;
+                    &["action", "reference"]
+                }
+                "start" | "end" => {
+                    require(&["document_id"])?;
+                    &["action", "document_id"]
+                }
+                "result" => {
+                    require(&["search_id", "result_index"])?;
+                    &["action", "search_id", "result_index", "reference"]
+                }
+                _ => {
+                    require(&["search_id"])?;
+                    &["action", "search_id"]
+                }
+            };
+            if a.as_object()
+                .unwrap()
+                .keys()
+                .any(|key| !allowed.contains(&key.as_str()))
+            {
+                bail!("Arguments do not match navigation action");
+            }
+        }
+        "highlight_keyword" if a["action"] == "set" => require(&["color_label_id"])?,
+        "text_mark" => {
+            if a["action"] != "remove" {
+                require(&["text"])?;
+            }
+            if a["action"] != "add" {
+                require(&["mark_id"])?;
+            }
+        }
+        "show_search" => {
+            if has("query") == has("filter_id") {
+                bail!("Provide query or filter_id exclusively");
+            }
+            if a["scope"] == "current" {
+                require(&["document_id"])?;
+            }
+        }
+        "read_log_segment" if has("search_id") && has("start_character") => {
+            bail!("Use search_id or start_character exclusively")
+        }
+        _ => {}
+    }
+    Ok(())
 }
 fn validate(value: &Value, schema: &Value) -> Result<()> {
     match schema["type"].as_str() {
@@ -460,6 +898,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn catalog_is_unique_complete_and_schemas_compile() {
+        let mut names = BTreeSet::new();
+        for tool in tool_descriptors() {
+            assert!(names.insert(tool.name()), "duplicate tool {}", tool.name());
+            assert!(!tool.title(true).is_empty() && !tool.title(false).is_empty());
+            assert!(!tool.definition().description.is_empty());
+            assert_ne!(tool.group(), ToolGroup::Vclogg);
+            jsonschema::validator_for(&tool.definition().parameters).unwrap();
+            assert_eq!(group_for_tool(tool.name()), tool.group());
+            assert_eq!(
+                tool.decision() == ToolDecision::Automatic,
+                tool.risk() != ToolRisk::External
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_ambiguous_identities_and_action_arguments() {
+        for (name, arguments) in [
+            ("open_file", json!({"document_id":1})),
+            ("open_file", json!({"file_id":"x","root":0,"path":"x"})),
+            ("navigate", json!({"action":"line","document_id":1})),
+            (
+                "navigate",
+                json!({"action":"start","document_id":1,"search_id":"x"}),
+            ),
+            (
+                "highlight_keyword",
+                json!({"document_id":1,"version":"v","action":"set","keyword":"ERROR"}),
+            ),
+            (
+                "show_search",
+                json!({"scope":"current","query":"x","filter_id":"y","document_id":1}),
+            ),
+        ] {
+            assert!(
+                validate_call(&ToolCall {
+                    id: "test".into(),
+                    name: name.into(),
+                    arguments
+                })
+                .is_err(),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
     fn exposes_shell_and_question_interfaces_without_legacy_source_reads() {
         let names = tool_definitions()
             .into_iter()
@@ -507,15 +993,15 @@ mod tests {
 
     #[test]
     fn defers_optional_groups_and_hides_unavailable_extensions() {
-        let available = BTreeSet::from([ToolGroup::Vclogg]);
+        let available = BTreeSet::from([ToolGroup::Logs, ToolGroup::VcloggActions]);
         let initial = tool_definitions_for(&BTreeSet::new(), &available);
         let names = initial.iter().map(|tool| tool.name).collect::<Vec<_>>();
-        assert_eq!(names, ["load_tool_group", "ask_user"]);
+        assert_eq!(names, ["load_tool_group", "ask_user", "get_context"]);
         assert!(names.contains(&"load_tool_group"));
         assert!(!names.contains(&"read_logs"));
         assert_eq!(
             initial[0].parameters["properties"]["group"]["enum"],
-            json!(["vclogg"])
+            json!(["logs", "vclogg_actions"])
         );
 
         let loaded = BTreeSet::from([ToolGroup::Vclogg]);
@@ -535,11 +1021,7 @@ mod tests {
                 .iter()
                 .filter(|tool| group_for_tool(tool.name) == group)
                 .count();
-            if group == ToolGroup::Vclogg {
-                assert_eq!(count, 24, "VCLogg tools must stay in one documented group");
-            } else {
-                assert!(count < 10, "{} contains {count} tools", group.id());
-            }
+            assert!(count <= 14, "{} contains {count} tools", group.id());
         }
     }
 }

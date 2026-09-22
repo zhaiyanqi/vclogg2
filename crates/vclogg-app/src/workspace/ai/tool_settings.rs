@@ -1,59 +1,56 @@
 use super::*;
-
-fn category(name: &str) -> (&'static str, &'static str) {
-    match name {
-        "list_source_workspaces"
-        | "add_source_workspace"
-        | "shell"
-        | "find_symbols"
-        | "source_outline"
-        | "locate_log_origin"
-        | "find_definition"
-        | "find_references" => ("source", crate::tr!("源码定位", "Source code")),
-        "search_memory" | "save_memory" | "delete_memory" => {
-            ("memory", crate::tr!("记忆", "Memory"))
-        }
-        "list_mcp_servers" | "list_mcp_tools" | "call_mcp_tool" => ("mcp", "MCP"),
-        "get_context" | "list_logs" | "locate_files" | "list_log_directory" | "open_file"
-        | "close_file" | "switch_file" | "reveal_file" | "read_logs" | "search_logs"
-        | "search_results" | "summarize_search" | "read_log_context" | "read_log_segment"
-        | "show_search" | "control_search" | "append_search" | "list_filters" | "list_colors"
-        | "set_marks" | "highlight_keyword" | "text_mark" | "list_marks" | "navigate" => {
-            ("vclogg", "VC log")
-        }
-        _ => ("actions", crate::tr!("视图与操作", "Views and actions")),
-    }
-}
+use vclogg_ai::{ToolGroup, ToolRisk};
 
 impl AiPanel {
     pub(super) fn render_tool_settings(&self, cx: &Context<Self>) -> AnyElement {
-        let tools = vclogg_ai::tool_definitions();
-        let mut content = v_flex().gap_3().p_3();
-        content = content.child(div().text_xs().text_color(cx.theme().muted_foreground).child(crate::tr!("内置工具只在分析需要时调用。外部 MCP 工具请在 MCP 页面查看和配置。", "Built-in tools are called when needed. View and configure external MCP tools in the MCP tab.")));
-        for (key, title) in [
-            ("vclogg", "VC log"),
-            ("source", crate::tr!("源码定位", "Source code")),
-            ("actions", crate::tr!("视图与操作", "Views and actions")),
-            ("memory", crate::tr!("记忆", "Memory")),
-            ("mcp", "MCP"),
-        ] {
-            let group = tools
-                .iter()
-                .filter(|tool| category(tool.name).0 == key)
-                .collect::<Vec<_>>();
-            content = content.child(
-                div()
-                    .font_semibold()
-                    .text_sm()
-                    .child(format!("{title} ({})", group.len())),
-            );
-            for tool in group {
+        let tools = vclogg_ai::tool_descriptors();
+        let mut content = v_flex().gap_3().p_3().child(div().text_xs().text_color(cx.theme().muted_foreground).child(crate::tr!(
+            "工具按能力组加载。应用内操作自动执行；外部操作根据实际风险自动执行、请求确认或拒绝。Skills 只提供工作指导。",
+            "Tools load by capability. In-app actions run automatically; external actions are assessed for automatic execution, confirmation or denial. Skills provide guidance."
+        )));
+        for group in std::iter::once(ToolGroup::Core).chain(ToolGroup::OPTIONAL) {
+            let available = match group {
+                ToolGroup::Memory => self.settings.memory_enabled,
+                ToolGroup::Mcp => self.settings.mcp_servers.iter().any(|s| s.enabled()),
+                ToolGroup::Skills => self
+                    .settings
+                    .skills
+                    .iter()
+                    .any(|s| self.settings.skill_enabled(s)),
+                ToolGroup::SourceSearch | ToolGroup::SourceSymbols | ToolGroup::Shell => {
+                    !self.settings.workspace_directories.is_empty()
+                }
+                _ => true,
+            };
+            content = content.child(div().font_semibold().text_sm().child(format!(
+                "{} · {}",
+                group.id(),
+                if available {
+                    crate::tr!("可用", "Available")
+                } else {
+                    crate::tr!(
+                        "需要配置或本轮提供范围",
+                        "Requires configuration or a run scope"
+                    )
+                }
+            )));
+            for tool in tools.iter().filter(|tool| tool.group() == group) {
+                let policy = match tool.risk() {
+                    ToolRisk::Observe => crate::tr!("只读 · 自动", "Read · Automatic"),
+                    ToolRisk::Navigate => crate::tr!("界面操作 · 自动", "Navigation · Automatic"),
+                    ToolRisk::PersistLocal => {
+                        crate::tr!("本地状态 · 自动", "Local state · Automatic")
+                    }
+                    ToolRisk::External => crate::tr!(
+                        "外部操作 · 按风险自动 / 确认 / 拒绝",
+                        "External · Automatic / Confirm / Deny by risk"
+                    ),
+                };
                 content = content.child(
                     v_flex()
                         .gap_1()
-                        .p_2()
-                        .rounded(cx.theme().radius_lg)
-                        .border_1()
+                        .py_2()
+                        .border_b_1()
                         .border_color(cx.theme().border)
                         .child(
                             h_flex()
@@ -62,20 +59,20 @@ impl AiPanel {
                                     div()
                                         .text_sm()
                                         .font_semibold()
-                                        .child(super::view::tool_label(tool.name)),
+                                        .child(super::view::tool_label(tool.name())),
                                 )
                                 .child(
                                     div()
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
-                                        .child(tool.name),
+                                        .child(policy),
                                 ),
                         )
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(tool.description),
+                                .child(tool.definition().description),
                         ),
                 );
             }

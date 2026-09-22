@@ -127,8 +127,8 @@ impl AiPanel {
                 .child(Button::new("ai-add-skill-directory").small().text_label(crate::tr!("添加目录…", "Add folder…")).disabled(disabled)
                     .on_click(cx.listener(|this, _, window, cx| this.scan_skills(false, window, cx))))
         ).child(div().text_sm().text_color(cx.theme().muted_foreground).child(crate::tr!(
-            "预置功能包含当前系统专用的命令行指南。支持 Agent Skills 的 SKILL.md 目录，可扫描 Codex、Claude、Cursor 和 .agents 的系统目录，也可添加开源或自定义目录。新发现的 Skills 默认关闭；启用前请检查来源和内容。开关只控制工作指导，不会扩大工具权限。",
-            "Built-ins include a command-line guide for the current operating system. Agent Skills SKILL.md folders are supported from Codex, Claude, Cursor and .agents system locations, or from an added open-source/custom folder. Newly discovered skills are disabled by default; review their source and contents before enabling them. Skills provide guidance and never expand tool permissions."
+            "内置工作流涵盖日志调查、工作区操作、标注与源码关联。外部指导支持 Agent Skills 的 SKILL.md 目录，可扫描系统目录或添加自定义目录。新发现的 Skills 默认关闭；启用前请检查来源和内容。命令行语法与安全规则始终生效，不受 Skill 开关控制；Skills 不会扩大工具权限。",
+            "Built-in workflows cover investigation, workspace operations, annotations and source correlation. External guidance supports Agent Skills SKILL.md folders. Newly discovered skills are disabled; review their source before enabling them. Shell syntax and safety rules always apply regardless of skill switches. Skills never expand tool permissions."
         )));
         for root in self.settings.skill_directories.clone() {
             let id = root.id.clone();
@@ -251,10 +251,21 @@ impl AiPanel {
             .filter(|root| root.contains(&skill))
             .all(|root| root.enabled);
         let path = skill.directory.join("SKILL.md");
+        let kind = if skill.id.starts_with("vclogg:") {
+            crate::tr!("内置工作流", "Built-in workflow")
+        } else {
+            crate::tr!("外部指导", "External guidance")
+        };
         v_flex()
             .gap_1()
             .pl_3()
             .min_w_0()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(kind),
+            )
             .child(
                 h_flex()
                     .gap_2()

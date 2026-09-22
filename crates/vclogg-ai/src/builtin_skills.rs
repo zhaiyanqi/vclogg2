@@ -1,4 +1,4 @@
-//! Discoverable product workflows, including one shell guide for the current platform.
+//! Discoverable workflows and mandatory, non-optional platform shell guidance.
 use crate::{AiSettings, SkillDirectory};
 use anyhow::{Context as _, Result};
 use std::{fs, path::Path};
@@ -11,7 +11,7 @@ struct BuiltinSkill {
     description: &'static str,
     workflow: &'static str,
 }
-const BUILTINS: &[BuiltinSkill] = &[
+const OLD_BUILTINS: &[BuiltinSkill] = &[
     BuiltinSkill {
         id: "vclogg-docs",
         name: "VC log DOCS",
@@ -110,6 +110,107 @@ const BUILTINS: &[BuiltinSkill] = &[
     },
 ];
 
+const BUILTINS: &[BuiltinSkill] = &[
+    BuiltinSkill {
+        id: "log-investigation",
+        name: "日志调查",
+        description: "以搜索、证据、因果和反例调查日志问题。",
+        workflow: workflows::ANALYSIS,
+    },
+    BuiltinSkill {
+        id: "workspace-operations",
+        name: "工作区操作",
+        description: "解析文件身份，操作文件标签、搜索视图并导航源行。",
+        workflow: workflows::WORKSPACE,
+    },
+    BuiltinSkill {
+        id: "annotations",
+        name: "标注与高亮",
+        description: "用书签、文字注释和已有颜色标签保存已验证发现。",
+        workflow: workflows::MARKS,
+    },
+    BuiltinSkill {
+        id: "source-correlation",
+        name: "源码关联",
+        description: "通过源码符号、定义、引用和命令行验证日志来源。",
+        workflow: workflows::SOURCE,
+    },
+];
+
+pub(crate) fn shell_instructions() -> &'static str {
+    if cfg!(target_os = "windows") {
+        workflows::SHELL_WINDOWS
+    } else if cfg!(target_os = "macos") {
+        workflows::SHELL_MACOS
+    } else {
+        workflows::SHELL_LINUX
+    }
+}
+
+const MIGRATIONS: &[(&str, &[&str])] = &[
+    ("log-investigation", &["search-logs", "execute-search"]),
+    (
+        "workspace-operations",
+        &[
+            "open-file",
+            "close-file",
+            "switch-file",
+            "locate-file",
+            "navigate-log",
+        ],
+    ),
+    ("annotations", &["text-marks", "color-labels", "line-marks"]),
+];
+
+fn migrate_catalog(settings: &mut AiSettings) -> bool {
+    if settings.builtin_skill_catalog_version >= 1 {
+        return false;
+    }
+    for (new, old) in MIGRATIONS {
+        let initialized = old.iter().any(|id| {
+            settings
+                .initialized_builtin_skills
+                .contains(&format!("vclogg:{id}"))
+        });
+        let present = settings
+            .skills
+            .iter()
+            .any(|s| old.iter().any(|id| s.id == format!("vclogg:{id}")));
+        // A removed workflow must not silently regain guidance after an upgrade.
+        if initialized && !present {
+            settings
+                .initialized_builtin_skills
+                .push(format!("vclogg:{new}"));
+        }
+    }
+    settings.skills.retain(|skill| {
+        let Some(builtin) = OLD_BUILTINS
+            .iter()
+            .find(|b| skill.id == format!("vclogg:{}", b.id))
+        else {
+            return true;
+        };
+        let mut readable = skill.clone();
+        readable.enabled = true;
+        let Ok(content) = crate::read_skill_file(&readable, "SKILL.md") else {
+            return true;
+        };
+        let expected = format!(
+            "---\nname: {}\ndescription: {}\n---\n\n{}\n",
+            builtin.name, builtin.description, builtin.workflow
+        );
+        let previous_shell = expected
+            .replace("只读命令可直接读取与任务相关的工作区外文件，父目录和绝对路径本身无需再次询问用户。", "只读命令可直接运行。")
+            .replace("环境变量展开、PowerShell/WSL", "环境变量展开、绝对路径、PowerShell/WSL")
+            .replace("变量或命令替换、联网", "变量或命令替换、父目录/绝对路径、联网");
+        content != expected
+            && !(builtin.id.starts_with("shell-") && content == previous_shell)
+            && legacy::markdown(builtin.id).as_deref() != Some(content.as_str())
+    });
+    settings.builtin_skill_catalog_version = 1;
+    true
+}
+
 pub(crate) fn initialize_builtin_skills(
     settings: &mut AiSettings,
     settings_path: &Path,
@@ -119,7 +220,21 @@ pub(crate) fn initialize_builtin_skills(
         .context("Missing AI configuration directory")?
         .join("skills")
         .join("builtin");
-    let mut changed = false;
+    let disabled = MIGRATIONS
+        .iter()
+        .filter_map(|(new, old)| {
+            let previous = settings
+                .skills
+                .iter()
+                .filter(|s| old.iter().any(|id| s.id == format!("vclogg:{id}")))
+                .collect::<Vec<_>>();
+            (settings.builtin_skill_catalog_version == 0
+                && !previous.is_empty()
+                && previous.iter().all(|s| !settings.skill_enabled(s)))
+            .then(|| format!("vclogg:{new}"))
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut changed = migrate_catalog(settings);
     for builtin in BUILTINS {
         let id = format!("vclogg:{}", builtin.id);
         let initialized = settings.initialized_builtin_skills.contains(&id);
@@ -136,7 +251,18 @@ pub(crate) fn initialize_builtin_skills(
         }
         let markdown = format!(
             "---\nname: {}\ndescription: {}\n---\n\n{}\n",
-            builtin.name, builtin.description, builtin.workflow
+            builtin.name,
+            builtin.description,
+            builtin
+                .workflow
+                .replace(
+                    "`search-logs` 与 `execute-search` 共用本指南，每轮只读一次。",
+                    "读取证据加载 logs，保存标注或显示搜索加载 vclogg_actions。"
+                )
+                .replace(
+                    "三个标记技能共用本指南，每轮只读一次。",
+                    "加载 vclogg_actions 使用标注工具。"
+                )
         );
         let old = legacy::markdown(builtin.id);
         let previous = old.as_deref().into_iter().collect::<Vec<_>>();
@@ -190,6 +316,9 @@ pub(crate) fn initialize_builtin_skills(
             }
             let mut skill = crate::import_skill(&leaf)?;
             skill.id = id.clone();
+            if disabled.contains(&id) {
+                skill.enabled = false;
+            }
             skill.source_directory = Some(root);
             if !settings
                 .skills
@@ -213,6 +342,67 @@ mod tests {
     use super::*;
 
     #[test]
+    fn migration_preserves_edits_disabled_and_removed_workflows() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut settings = AiSettings::default();
+        for builtin in OLD_BUILTINS {
+            let id = format!("vclogg:{}", builtin.id);
+            settings.initialized_builtin_skills.push(id.clone());
+            // All old file/navigation entries were explicitly removed.
+            if [
+                "open-file",
+                "close-file",
+                "switch-file",
+                "locate-file",
+                "navigate-log",
+            ]
+            .contains(&builtin.id)
+            {
+                continue;
+            }
+            let leaf = directory.path().join(builtin.id);
+            fs::create_dir_all(&leaf).unwrap();
+            let markdown = format!(
+                "---\nname: {}\ndescription: {}\n---\n\n{}\n",
+                builtin.name, builtin.description, builtin.workflow
+            );
+            fs::write(
+                leaf.join("SKILL.md"),
+                if builtin.id == "vclogg-docs" {
+                    format!("{markdown}\nUser instructions\n")
+                } else {
+                    markdown
+                },
+            )
+            .unwrap();
+            let mut skill = crate::import_skill(&leaf).unwrap();
+            skill.id = id;
+            skill.enabled = !["search-logs", "execute-search"].contains(&builtin.id);
+            settings.skills.push(skill);
+        }
+        let path = directory.path().join("ai.json");
+        assert!(initialize_builtin_skills(&mut settings, &path).unwrap());
+        assert_eq!(settings.builtin_skill_catalog_version, 1);
+        assert!(settings.skills.iter().any(|s| s.id == "vclogg:vclogg-docs"));
+        assert!(
+            !settings
+                .skills
+                .iter()
+                .find(|s| s.id == "vclogg:log-investigation")
+                .unwrap()
+                .enabled
+        );
+        assert!(
+            !settings
+                .skills
+                .iter()
+                .any(|s| s.id == "vclogg:workspace-operations")
+        );
+        assert!(!settings.skills.iter().any(|s| s.id == "vclogg:search-logs"));
+        assert!(!initialize_builtin_skills(&mut settings, &path).unwrap());
+    }
+
+    #[test]
     fn generated_analysis_skills_preserve_verified_evidence_visually() {
         let directory = tempfile::tempdir().unwrap();
         let config = directory.path().join("config");
@@ -225,7 +415,7 @@ mod tests {
             let skill = settings.skills.iter().find(|skill| skill.id == id).unwrap();
             fs::read_to_string(skill.directory.join("SKILL.md")).unwrap()
         };
-        let analysis = read("vclogg:search-logs");
+        let analysis = read("vclogg:log-investigation");
         for instruction in [
             "少量决定性行加书签",
             "调用一次 `list_colors`",
@@ -234,26 +424,13 @@ mod tests {
         ] {
             assert!(analysis.contains(instruction), "missing {instruction}");
         }
-        let marking = read("vclogg:color-labels");
+        let marking = read("vclogg:annotations");
         assert!(marking.contains("不应在书签足够时自动添加说明"));
         assert!(marking.contains("每文件选择 1–3 个实际观察到的高信号词"));
-        let docs = read("vclogg:vclogg-docs");
-        for instruction in [
-            "{\"group\":\"vclogg\"}",
-            "## 当前状态与文件发现",
-            "## 日志读取与后台搜索",
-            "## 应用搜索视图",
-            "## 书签、注释与高亮",
-            "`confirmation_pending`",
-        ] {
-            assert!(docs.contains(instruction), "missing {instruction}");
-        }
-        let shell = settings
-            .skills
-            .iter()
-            .find(|skill| skill.id.starts_with("vclogg:shell-"))
-            .expect("current platform shell skill");
-        let shell = fs::read_to_string(shell.directory.join("SKILL.md")).unwrap();
+        assert_eq!(settings.skills.len(), 4);
+        assert!(read("vclogg:workspace-operations").contains("confirmation_pending"));
+        assert!(read("vclogg:source-correlation").contains("source_symbols"));
+        let shell = shell_instructions();
         assert!(shell.contains("Skill 只说明语法，不授予额外权限"));
         assert!(shell.contains("工作目录固定为所选工作区"));
         assert!(workflows::SHELL_WINDOWS.contains("cmd.exe /D /S /C"));

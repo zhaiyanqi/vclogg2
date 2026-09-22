@@ -38,6 +38,9 @@ impl Workspace {
         }
         self.validate_ai_search(&state, call)?;
         let mut checked = mutation_documents(&state, call)?;
+        if let Evidence::Context(_, documents) = &evidence {
+            checked.extend(documents.iter().cloned());
+        }
         if matches!(call.name.as_str(), "search_logs" | "control_search")
             && let Some(id) = evidence.value()?["search_id"].as_str()
             && let Some(search) = state.searches.get(id)
@@ -55,10 +58,11 @@ impl Workspace {
             }
         }
         let args = &call.arguments;
-        if matches!(
-            call.name.as_str(),
-            "add_source_workspace" | "open_file" | "close_file" | "switch_file" | "reveal_file"
-        ) {
+        if vclogg_ai::tool_descriptor(&call.name).is_some_and(|tool| {
+            tool.route() == vclogg_ai::ToolRoute::Files
+                && tool.risk() != vclogg_ai::ToolRisk::Observe
+        }) || call.name == "add_source_workspace"
+        {
             return self.ai_commit_file(&mut state, call, evidence, window, cx);
         }
         match call.name.as_str() {

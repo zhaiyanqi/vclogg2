@@ -232,6 +232,47 @@ pub(crate) struct McpSessions {
     sessions: BTreeMap<String, Session>,
 }
 impl McpSessions {
+    /// Uses only the schema discovered in this session. Discovery cannot authorize a call.
+    pub(crate) fn decision(&self, call: &ToolCall) -> Result<crate::ToolDecision> {
+        if call.name != "call_mcp_tool" {
+            return Ok(crate::ToolDecision::Automatic);
+        }
+        let id = call.arguments["server_id"]
+            .as_str()
+            .context("Missing server_id")?;
+        let session = self
+            .sessions
+            .get(id)
+            .context("List MCP tools before calling")?;
+        let name = call.arguments["tool_name"]
+            .as_str()
+            .context("Missing tool_name")?;
+        let tool = session
+            .tools
+            .iter()
+            .find(|t| t["name"] == name)
+            .context("Unknown MCP tool")?;
+        let arguments: Value = serde_json::from_str(
+            call.arguments["arguments_json"]
+                .as_str()
+                .context("Missing arguments_json")?,
+        )?;
+        validate_arguments(&tool["inputSchema"], &arguments)?;
+        Ok(match tool_decision(tool) {
+            crate::ToolDecision::Confirm(reason) => {
+                let server = self
+                    .servers
+                    .iter()
+                    .find(|server| server.id() == id)
+                    .context("MCP server unavailable")?;
+                crate::ToolDecision::Confirm(format!(
+                    "{reason}\nServer / 服务：{} ({id})\nTool / 工具：{name}",
+                    server.name()
+                ))
+            }
+            decision => decision,
+        })
+    }
     pub(crate) fn new(servers: Vec<McpServer>) -> Self {
         Self {
             servers: servers.into_iter().filter(McpServer::enabled).collect(),
@@ -242,6 +283,16 @@ impl McpSessions {
         &mut self,
         call: &ToolCall,
         cancellation: &Cancellation,
+    ) -> ToolResult {
+        self.execute_with_timeout(call, cancellation, std::time::Duration::from_secs(60))
+            .await
+    }
+
+    async fn execute_with_timeout(
+        &mut self,
+        call: &ToolCall,
+        cancellation: &Cancellation,
+        timeout: std::time::Duration,
     ) -> ToolResult {
         if call.name == "list_mcp_servers" {
             return ToolResult::ok(
@@ -265,7 +316,17 @@ impl McpSessions {
                 let offset = call.arguments["offset"].as_u64().unwrap_or(0) as usize;
                 let mut page = Vec::new();
                 for tool in session.tools.iter().skip(offset).take(20) {
-                    page.push(tool.clone());
+                    let mut tool = tool.clone();
+                    tool["execution_policy"] = json!(match tool_decision(&tool) {
+                        crate::ToolDecision::Automatic => "automatic",
+                        _ => "confirmation_required",
+                    });
+                    tool["risk"] = json!({
+                        "read_only": tool["annotations"]["readOnlyHint"] == true && tool["annotations"]["destructiveHint"] != true,
+                        "destructive": tool["annotations"]["destructiveHint"] == true,
+                        "external": true,
+                    });
+                    page.push(tool);
                     if serde_json::to_vec(&page)?.len() > 48 * 1024 {
                         page.pop();
                         if page.is_empty() {
@@ -280,21 +341,24 @@ impl McpSessions {
                 );
             }
             let name = call.arguments["tool_name"].as_str().unwrap_or_default();
-            if !session.tools.iter().any(|tool| tool["name"] == name) {
-                bail!("Unknown MCP tool; list tools before calling");
-            }
+            let tool = session
+                .tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .context("Unknown MCP tool; list tools before calling")?;
             let arguments: Value =
                 serde_json::from_str(call.arguments["arguments_json"].as_str().unwrap_or("{}"))?;
             if !arguments.is_object() {
                 bail!("MCP arguments must be a JSON object");
             }
+            validate_arguments(&tool["inputSchema"], &arguments)?;
             session
                 .request("tools/call", json!({"name":name,"arguments":arguments}))
                 .await
         };
         let result = tokio::select! {
             _ = cancellation.cancelled() => Err(anyhow::anyhow!("MCP call stopped; its remote outcome may be unknown")),
-            result = tokio::time::timeout(std::time::Duration::from_secs(60), operation) => result.unwrap_or_else(|_| Err(anyhow::anyhow!("MCP request timed out; its remote outcome may be unknown"))),
+            result = tokio::time::timeout(timeout, operation) => result.unwrap_or_else(|_| Err(anyhow::anyhow!("MCP request timed out; its remote outcome may be unknown"))),
         };
         match result {
             Ok(value) => {
@@ -316,6 +380,44 @@ impl McpSessions {
         }
     }
 }
+
+fn tool_decision(tool: &Value) -> crate::ToolDecision {
+    if tool["annotations"]["readOnlyHint"] == true && tool["annotations"]["destructiveHint"] != true
+    {
+        crate::ToolDecision::Automatic
+    } else {
+        crate::ToolDecision::Confirm(
+            "MCP tool may change external state or has unknown effects".into(),
+        )
+    }
+}
+
+fn validate_arguments(schema: &Value, arguments: &Value) -> Result<()> {
+    if !schema.is_object() || !arguments.is_object() {
+        bail!("MCP schema and arguments must be objects");
+    }
+    // Schema resolution must never fetch files or URLs supplied by a server.
+    fn local_refs(value: &Value) -> bool {
+        match value {
+            Value::Object(map) => map.iter().all(|(key, value)| {
+                (!matches!(key.as_str(), "$ref" | "$dynamicRef" | "$recursiveRef")
+                    || value.as_str().is_some_and(|r| r.starts_with('#')))
+                    && local_refs(value)
+            }),
+            Value::Array(values) => values.iter().all(local_refs),
+            _ => true,
+        }
+    }
+    if !local_refs(schema) {
+        bail!("External MCP schema references are unsupported");
+    }
+    let validator = jsonschema::validator_for(schema)
+        .map_err(|_| anyhow::anyhow!("Invalid MCP inputSchema"))?;
+    validator
+        .validate(arguments)
+        .map_err(|_| anyhow::anyhow!("MCP arguments do not match inputSchema"))
+}
+
 fn redact_value(mut value: Value, server: &McpServer) -> Value {
     match &mut value {
         Value::String(text) => *text = server.redact(text),
@@ -342,4 +444,101 @@ pub async fn probe_mcp(server: McpServer, cancellation: Cancellation) -> Result<
         };
         result.map(|session| session.tools.iter().filter_map(|t| t["name"].as_str().map(|name| server.redact(name))).collect()).map_err(|error| anyhow::anyhow!(server.redact(&error.to_string())))
     }).await?
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timed_out_calls_invalidate_discovery_without_replay() {
+        let connection = McpConnection::Stdio {
+            command: "/bin/sh".into(),
+            args: vec!["-c".into(), "while IFS= read -r request; do :; done".into()],
+            env: BTreeMap::new(),
+        };
+        let mut server = McpServer::new("test".into(), "Test server".into(), connection).unwrap();
+        server.set_enabled(true);
+        let transport = Transport::open(server.connection()).await.unwrap();
+        let mut sessions = McpSessions::new(vec![server]);
+        sessions.sessions.insert("test".into(), Session {
+            transport,
+            next_id: 0,
+            tools: vec![json!({"name":"read","annotations":{"readOnlyHint":true},"inputSchema":{"type":"object","additionalProperties":false}})],
+        });
+        let call = ToolCall {
+            id: "call".into(),
+            name: "call_mcp_tool".into(),
+            arguments: json!({"server_id":"test","tool_name":"read","arguments_json":"{}"}),
+        };
+        assert_eq!(
+            sessions.decision(&call).unwrap(),
+            crate::ToolDecision::Automatic
+        );
+        let result = sessions
+            .execute_with_timeout(
+                &call,
+                &Cancellation::default(),
+                std::time::Duration::from_millis(20),
+            )
+            .await;
+        assert!(result.is_error && result.value.to_string().contains("outcome may be unknown"));
+        assert!(sessions.sessions.is_empty());
+        assert!(sessions.decision(&call).is_err());
+    }
+
+    #[test]
+    fn unknown_and_mutating_tools_need_confirmation() {
+        for tool in [
+            json!({}),
+            json!({"annotations":{"readOnlyHint":false}}),
+            json!({"annotations":{"readOnlyHint":true,"destructiveHint":true}}),
+        ] {
+            assert!(matches!(
+                tool_decision(&tool),
+                crate::ToolDecision::Confirm(_)
+            ));
+        }
+        assert_eq!(
+            tool_decision(&json!({"annotations":{"readOnlyHint":true}})),
+            crate::ToolDecision::Automatic
+        );
+    }
+
+    #[test]
+    fn schema_validation_rejects_invalid_inputs_and_external_references() {
+        let schema = json!({"type":"object","properties":{"path":{"type":"string","minLength":1}},"required":["path"],"additionalProperties":false});
+        assert!(validate_arguments(&schema, &json!({"path":"a"})).is_ok());
+        for value in [
+            json!({}),
+            json!({"path":1}),
+            json!({"path":""}),
+            json!({"path":"a","extra":true}),
+        ] {
+            assert!(validate_arguments(&schema, &value).is_err());
+        }
+        assert!(validate_arguments(&json!({"type":"unknown"}), &json!({})).is_err());
+        assert!(
+            validate_arguments(&json!({"$ref":"file:///tmp/schema.json"}), &json!({})).is_err()
+        );
+        assert!(
+            validate_arguments(
+                &json!({"$defs":{"value":{"type":"object"}},"$ref":"#/$defs/value"}),
+                &json!({})
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn calls_require_a_discovered_schema() {
+        let sessions = McpSessions::default();
+        let call = ToolCall {
+            id: "call".into(),
+            name: "call_mcp_tool".into(),
+            arguments: json!({"server_id":"server","tool_name":"write","arguments_json":"{}"}),
+        };
+        assert!(sessions.decision(&call).is_err());
+    }
 }

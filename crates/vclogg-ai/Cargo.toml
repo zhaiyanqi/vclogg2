@@ -11,6 +11,7 @@ futures-util = "0.3"
 reqwest = { workspace = true, features = ["stream"] }
 serde.workspace = true
 serde_json.workspace = true
+jsonschema = { version = "0.33", default-features = false }
 tree-sitter = "0.26"
 tree-sitter-c = "0.24"
 tree-sitter-cpp = "0.23"

@@ -789,7 +789,7 @@ impl AiPanel {
                         this.pending_tool = Some(call.clone());
                         cx.notify();
                     });
-                    if matches!(call.name.as_str(), "search_memory" | "save_memory" | "delete_memory") {
+                    if vclogg_ai::tool_descriptor(&call.name).is_some_and(|tool| tool.route() == vclogg_ai::ToolRoute::Memory) {
                         // Recheck the live switch as well as the run's captured policy.
                         let enabled = this.update(cx, |this, _| this.settings.memory_enabled).unwrap_or(false);
                         let result = if enabled {
