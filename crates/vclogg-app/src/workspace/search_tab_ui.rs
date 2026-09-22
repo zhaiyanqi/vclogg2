@@ -224,7 +224,7 @@ impl Workspace {
                     }
                     "f2" => this.rename_search_tab_dialog(owner, id, window, cx),
                     "delete" | "backspace" => this.close_search_tab(owner, id, window, cx),
-                    "enter" => this.query.focus_handle(cx).focus(window, cx),
+                    "enter" => this.search_input_focus_handle(cx).focus(window, cx),
                     _ => return,
                 }
                 cx.stop_propagation();
@@ -284,7 +284,7 @@ impl Workspace {
         state.context.word_wrap = state.saved.context.word_wrap;
         group.tabs.push(state);
         self.activate_search_tab(owner, id, window, cx);
-        self.query.focus_handle(cx).focus(window, cx);
+        self.search_input_focus_handle(cx).focus(window, cx);
     }
 
     pub(super) fn activate_search_tab(

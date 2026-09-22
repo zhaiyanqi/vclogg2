@@ -235,7 +235,7 @@ impl Workspace {
     /// 否则后台窗口每 500ms 都会因为光标翻转而重绘一次。
     fn release_input_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let inputs = [
-            self.query.focus_handle(cx),
+            self.search_input_focus_handle(cx),
             self.quick_find.query.focus_handle(cx),
         ];
         let Some(focused) = inputs.into_iter().find(|handle| handle.is_focused(window)) else {

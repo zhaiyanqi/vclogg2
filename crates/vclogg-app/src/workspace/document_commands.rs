@@ -615,10 +615,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let focus_handle = self.query.focus_handle(cx);
+        let focus_handle = self.search_input_focus_handle(cx);
         focus_handle.focus(window, cx);
-        self.query
-            .update(cx, |state, cx| state.select_all(window, cx));
+        self.select_search_input(window, cx);
     }
 
     pub(super) fn remember_user_log_region(&mut self, region: LogRegion) {

@@ -1686,7 +1686,7 @@ impl Workspace {
         let font_scale = f32::from(self.app_settings.search_toolbar_font_size) / 13.;
         // The field keeps an independent font size while sharing the toolbar control height.
         let input_font_size = px(f32::from(self.app_settings.search_input_font_size));
-        let search_history_empty = self.search_history.is_empty();
+        let input_line_height = px(f32::from(self.app_settings.search_input_line_height()));
         let has_search_context = self.search_tab_owner().is_some();
         let predefined_filters = self.render_predefined_filters_popover(has_search_context, cx);
         let active_document_ready = self
@@ -1694,10 +1694,9 @@ impl Workspace {
             .is_some_and(|tab| tab.load_state == DocumentLoadState::Ready);
         let query_value = self.query.read(cx).value().to_string();
         let query_empty = query_value.is_empty();
-        let query_focused = self.query.focus_handle(cx).is_focused(window);
+        let query_focused = self.search_input_focus_handle(cx).is_focused(window);
         let search_suggestions = self.search_autocomplete_suggestions(cx);
         let show_search_suggestions = !search_suggestions.is_empty() && query_focused;
-        let search_history_open = self.search_autocomplete_mode == SearchAutocompleteMode::History;
         let global_selected_count = self.global_search.selected_documents.len();
         let search_scope_tooltip = match self.global_search.scope {
             SearchScope::CurrentFile => crate::tr!(
@@ -1893,43 +1892,35 @@ impl Workspace {
                         div()
                             .flex_1()
                             .min_w(px(180.))
-                            .h(control_height)
+                            .min_h(control_height)
                             .relative()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, window, cx| {
-                                    // Input's frame has its own focus handle. Forward clicks
-                                    // on its padding/prefix to the editor after child handlers.
-                                    this.query.focus_handle(cx).focus(window, cx);
-                                    window.prevent_default();
-                                }),
-                            )
-                            .capture_key_down(cx.listener(
-                                |this, event: &KeyDownEvent, window, cx| {
-                                    if !this.query.focus_handle(cx).is_focused(window)
-                                        || event.keystroke.modifiers.control
-                                        || event.keystroke.modifiers.platform
-                                    {
-                                        return;
-                                    }
-                                    if this.navigate_search_autocomplete_by_key(
-                                        event.keystroke.key.as_str(),
-                                        cx,
-                                    ) {
-                                        cx.stop_propagation();
-                                    }
+                            .capture_action(cx.listener(Self::capture_search_input_enter))
+                            .capture_action(cx.listener(
+                                |this, _: &gpui_kit::component::input::MoveUp, _, cx| {
+                                    this.capture_search_input_navigation("up", cx);
+                                },
+                            ))
+                            .capture_action(cx.listener(
+                                |this, _: &gpui_kit::component::input::MoveDown, _, cx| {
+                                    this.capture_search_input_navigation("down", cx);
+                                },
+                            ))
+                            .capture_action(cx.listener(
+                                |this, _: &gpui_kit::component::input::Escape, _, cx| {
+                                    this.capture_search_input_navigation("escape", cx);
                                 },
                             ))
                             .on_scroll_wheel(cx.listener(
                                 |this, event: &ScrollWheelEvent, window, cx| {
                                     let delta_y = event.delta.pixel_delta(window.line_height()).y;
-                                    if delta_y == px(0.)
+                                    if this.search_input_multiline
+                                        || delta_y == px(0.)
                                         || event.modifiers.control
                                         || event.modifiers.platform
                                     {
                                         return;
                                     }
-                                    this.query.focus_handle(cx).focus(window, cx);
+                                    this.search_input_focus_handle(cx).focus(window, cx);
                                     if this.navigate_search_history_by_wheel(
                                         delta_y > px(0.),
                                         window,
@@ -1939,35 +1930,12 @@ impl Workspace {
                                     }
                                 },
                             ))
-                            .child(
-                                // Keep Input's rem-based line height: a fractional,
-                                // font-relative height can trigger vertical cursor
-                                // reveal and a one-frame jump on Windows.
-                                Input::new(&self.query)
-                                    .small()
-                                    .text_size(input_font_size)
-                                    .size_full()
-                                    .cleanable(true)
-                                    .prefix(div().child(Icon::new(IconName::Search).small()))
-                                    .suffix(
-                                        Button::new("search-history")
-                                            .text()
-                                            .icon(IconName::ChevronDown)
-                                            .xsmall()
-                                            .selected(search_history_open)
-                                            .disabled(search_history_empty)
-                                            .tooltip(if search_history_empty {
-                                                crate::tr!("暂无搜索历史", "No search history")
-                                            } else if search_history_open {
-                                                crate::tr!("收起搜索历史", "Hide search history")
-                                            } else {
-                                                crate::tr!("显示搜索历史", "Show search history")
-                                            })
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.toggle_search_history_popup(window, cx);
-                                            })),
-                                    ),
-                            )
+                            .child(self.render_search_input(
+                                control_height,
+                                input_font_size,
+                                input_line_height,
+                                cx,
+                            ))
                             .when(show_search_suggestions, |input| {
                                 input.child(self.render_search_suggestions(
                                     search_suggestions,

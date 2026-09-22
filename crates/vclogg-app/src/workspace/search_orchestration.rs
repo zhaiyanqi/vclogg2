@@ -145,7 +145,7 @@ impl Workspace {
         };
         self.apply_directory_search_options(options, window, cx);
         self.close_search_autocomplete();
-        self.query.focus_handle(cx).focus(window, cx);
+        self.search_input_focus_handle(cx).focus(window, cx);
         cx.notify();
     }
 
@@ -783,12 +783,12 @@ impl Workspace {
         self.reset_search_history_navigation();
         self.query.update(cx, |state, cx| {
             state.set_value(next, window, cx);
-            if select_all {
-                state.select_all(window, cx);
-            }
         });
+        if select_all {
+            self.select_search_input(window, cx);
+        }
         self.close_search_autocomplete();
-        self.query.focus_handle(cx).focus(window, cx);
+        self.search_input_focus_handle(cx).focus(window, cx);
         cx.notify();
     }
 
@@ -808,7 +808,7 @@ impl Workspace {
             self.search_suggestion_ix = None;
             self.reset_search_suggestion_scroll();
         }
-        self.query.focus_handle(cx).focus(window, cx);
+        self.search_input_focus_handle(cx).focus(window, cx);
         cx.notify();
     }
 
@@ -869,7 +869,7 @@ impl Workspace {
         self.query
             .update(cx, |state, cx| state.set_value(query, window, cx));
         self.close_search_autocomplete();
-        self.query.focus_handle(cx).focus(window, cx);
+        self.search_input_focus_handle(cx).focus(window, cx);
         cx.notify();
     }
 
@@ -1670,7 +1670,7 @@ impl Workspace {
         self.global_search.scope = next_scope;
         self.sync_search_tab(window, cx);
         self.schedule_workspace_search_state_save(window, cx);
-        self.query.focus_handle(cx).focus(window, cx);
+        self.search_input_focus_handle(cx).focus(window, cx);
         cx.notify();
     }
 

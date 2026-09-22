@@ -28,7 +28,7 @@ use gpui_kit::component::{
     checkbox::Checkbox,
     dialog::DialogFooter,
     h_flex,
-    input::{Editor, EditorState, Input, InputEvent, InputState, Position},
+    input::{Editor, EditorState, Input, InputEvent, InputState, Position, TextareaState},
     menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem},
     popover::Popover,
     progress::Progress,
@@ -1664,7 +1664,9 @@ pub struct Workspace {
     sidebar_surfaces: [Entity<sidebar::SidebarSurface>; 2],
     _sidebar_subscriptions: Vec<Subscription>,
     sidebar_split: Entity<ResizableState>,
-    query: Entity<InputState>,
+    query: Entity<TextareaState>,
+    single_line_query: Entity<InputState>,
+    search_input_multiline: bool,
     search_history: Vec<String>,
     predefined_filters: Vec<PredefinedFilter>,
     cloud: CloudController,
@@ -1790,6 +1792,7 @@ mod quick_find;
 mod render_shell;
 mod result_export_flow;
 mod row_tags;
+mod search_input;
 mod search_limits;
 mod search_orchestration;
 mod search_tab_activation;
@@ -1815,7 +1818,14 @@ impl Workspace {
     ) -> Self {
         window.set_window_title(crate::tr!("新标签页 — VCLogg2", "New tab — VCLogg2"));
         let (initial_app_settings, initial_search_options) = Self::initial_search_settings(cx);
-        let query =
+        let query = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .auto_grow(1, usize::MAX)
+                .soft_wrap(true)
+                .submit_on_enter(true)
+                .placeholder(crate::tr!("搜索", "Search"))
+        });
+        let single_line_query =
             cx.new(|cx| InputState::new(window, cx).placeholder(crate::tr!("搜索", "Search")));
         let quick_find_query = cx.new(|cx| {
             InputState::new(window, cx)
@@ -1905,7 +1915,7 @@ impl Workspace {
                         InputEvent::Change => {
                             this.reset_search_history_navigation();
                             this.search_autocomplete_mode =
-                                if this.query.focus_handle(cx).is_focused(window) {
+                                if this.search_input_focus_handle(cx).is_focused(window) {
                                     SearchAutocompleteMode::Matches
                                 } else {
                                     SearchAutocompleteMode::Closed
@@ -1915,6 +1925,7 @@ impl Workspace {
                                 this.persist_search_tabs(window, cx);
                             }
                         }
+                        InputEvent::PressEnter { shift: true, .. } => {}
                         InputEvent::PressEnter { .. }
                             if !this.accept_active_search_suggestion(window, cx) =>
                         {
@@ -1929,6 +1940,23 @@ impl Workspace {
                     }
                 }),
             ];
+        subscriptions.push(cx.observe_in(&query, window, |this, _, window, cx| {
+            this.sync_single_line_search(window, cx);
+        }));
+        subscriptions.push(cx.subscribe_in(
+            &single_line_query,
+            window,
+            |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::Change if !this.search_input_multiline => {
+                    this.sync_search_query_from_input(window, cx);
+                }
+                InputEvent::Blur if !this.search_input_focus_handle(cx).is_focused(window) => {
+                    this.close_search_autocomplete();
+                    cx.notify();
+                }
+                _ => {}
+            },
+        ));
         subscriptions.push(cx.subscribe_in(
             &quick_find_query,
             window,
@@ -2323,6 +2351,8 @@ impl Workspace {
             _sidebar_subscriptions: sidebar_subscriptions,
             sidebar_split,
             query,
+            single_line_query,
+            search_input_multiline: false,
             search_history: Vec::new(),
             predefined_filters: Vec::new(),
             cloud: CloudController::default(),

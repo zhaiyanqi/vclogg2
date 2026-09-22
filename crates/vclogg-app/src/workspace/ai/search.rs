@@ -46,7 +46,7 @@ impl Workspace {
         });
         self.capture_active_search_tab(cx);
         self.persist_search_tabs(window, cx);
-        self.query.focus_handle(cx).focus(window, cx);
+        self.search_input_focus_handle(cx).focus(window, cx);
         cx.notify();
         Ok(json!({"document_id":document_id,"query":appended,"executed":false}))
     }

@@ -327,7 +327,46 @@ impl Default for AppSettings {
     }
 }
 
+#[cfg(test)]
+mod search_input_geometry_tests {
+    use super::{AppSettings, SEARCH_TOOLBAR_FONT_SIZE_RANGE, SEARCH_TOOLBAR_HEIGHT_RANGE};
+
+    #[test]
+    fn all_search_font_sizes_fit_the_smallest_toolbar() {
+        for font_size in SEARCH_TOOLBAR_FONT_SIZE_RANGE {
+            let settings = AppSettings {
+                search_toolbar_height: *SEARCH_TOOLBAR_HEIGHT_RANGE.start(),
+                search_input_font_size: font_size,
+                ..AppSettings::default()
+            };
+            let line_height = settings.search_input_line_height();
+            assert!(line_height > font_size);
+            assert!(settings.search_toolbar_control_height() - 6 >= line_height);
+        }
+    }
+
+    #[test]
+    fn a_larger_requested_toolbar_is_preserved() {
+        let settings = AppSettings {
+            search_toolbar_height: 48,
+            search_input_font_size: 20,
+            ..AppSettings::default()
+        };
+        assert_eq!(settings.search_toolbar_control_height(), 48);
+    }
+}
+
 impl AppSettings {
+    pub(crate) fn search_input_line_height(&self) -> u16 {
+        let font_size = self.search_input_font_size.clamp(
+            *SEARCH_TOOLBAR_FONT_SIZE_RANGE.start(),
+            *SEARCH_TOOLBAR_FONT_SIZE_RANGE.end(),
+        );
+        // Keep larger glyphs inside the line box instead of retaining Input's
+        // fixed rem-based line height when the user increases the font size.
+        (font_size * 3).div_ceil(2)
+    }
+
     pub(crate) fn search_toolbar_control_height(&self) -> u16 {
         // Every search control shares one height, including when the field uses larger text.
         Self::search_control_height(
@@ -335,6 +374,8 @@ impl AppSettings {
             self.search_toolbar_font_size
                 .max(self.search_input_font_size),
         )
+        // Small Input has 2px padding and a 1px border on each vertical edge.
+        .max(self.search_input_line_height() + 6)
     }
 
     fn search_control_height(height: u16, font_size: u16) -> u16 {
