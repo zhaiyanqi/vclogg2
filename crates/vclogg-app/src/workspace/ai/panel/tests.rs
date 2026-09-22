@@ -256,9 +256,9 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
         } else if cancelling || failed {
             1
         } else if queued_run {
-            3
+            4
         } else {
-            2
+            3
         } {
             let deadline = Instant::now() + Duration::from_secs(10);
             let mut socket = loop {
@@ -298,7 +298,7 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
                 }
             };
             assert!(body["tools"].as_array().unwrap().len() > 1);
-            if round == 1 {
+            if round == 2 {
                 assert_eq!(body["messages"][2]["reasoning_content"], "开始分析");
                 if directory_unavailable {
                     let result: Value = serde_json::from_str(
@@ -315,7 +315,7 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
                     "tool"
                 );
             }
-            if queued_run && round == 2 {
+            if queued_run && round == 3 {
                 assert_eq!(
                     body["messages"].as_array().unwrap().last().unwrap()["content"],
                     "追加问题"
@@ -342,8 +342,15 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
                 let _ = write!(
                     socket,
                     "data: {}\n\n",
-                    json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"one","function":{"name":"list_logs","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})
+                    json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"load-vclogg","function":{"name":"load_tool_group","arguments":"{\"group\":\"vclogg\"}"}}]},"finish_reason":"tool_calls"}]})
                 );
+            } else if round == 1 {
+                write!(
+                    socket,
+                    "data: {}\n\n",
+                    json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"one","function":{"name":"list_logs","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})
+                )
+                .unwrap();
             } else {
                 write!(
                     socket,
@@ -460,8 +467,8 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
         panel.read_with(cx, |p, cx| {
             assert!(p.queued_prompts.is_empty(), "status={:?} error={} draft={} queued={}", p.conversation.status, p.error, p.input.read(cx).value(), p.queued_prompts.len());
             assert_eq!(p.conversation.status, RunStatus::Complete);
-            assert_eq!(p.conversation.messages.len(), 6);
-            assert!(matches!(&p.conversation.messages[4], AgentMessage::User { text } if text == "追加问题"));
+            assert_eq!(p.conversation.messages.len(), 8);
+            assert!(matches!(&p.conversation.messages[6], AgentMessage::User { text } if text == "追加问题"));
         });
         server.join().unwrap();
         return;
@@ -473,9 +480,9 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
         assert_eq!(p.scroller.read(cx).item_count(), 2);
         assert_eq!(p.messages[1].entity_id(), streamed_view);
         assert_eq!(p.conversation.status.clone(), RunStatus::Complete, "{}", p.error);
-        assert_eq!(p.conversation.messages.len(), 4);
-        assert!(matches!(&p.conversation.messages[3], AgentMessage::Assistant { text, .. } if text == "分析完成"));
-        assert_eq!(p.messages.len(), 4);
+        assert_eq!(p.conversation.messages.len(), 6);
+        assert!(matches!(&p.conversation.messages[5], AgentMessage::Assistant { text, .. } if text == "分析完成"));
+        assert_eq!(p.messages.len(), 6);
         let row = p.store.as_ref().unwrap().load_ai_conversation(&p.conversation.id).unwrap().unwrap();
         let restored: Conversation = serde_json::from_str(&row.payload).unwrap();
         assert!(matches!(&restored.messages[1], AgentMessage::Assistant { reasoning, .. } if reasoning == "开始分析"));

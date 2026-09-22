@@ -12,6 +12,66 @@ pub(super) const ANALYSIS: &str = r#"# 工作流：搜索与分析
 8. 证据已回答问题或缺少某个具体观察时停止。两次有效调整仍无结果，说明缺失线索或向用户询问。准确报告书签、高亮及部分失败或未决状态。
 "#;
 
+pub(super) const VCLOGG_DOCS: &str = r#"# VC log 工具手册
+
+处理 VCLogg 中的日志、文件标签、搜索视图、导航、书签、注释或关键词高亮时使用本手册。先调用 `load_tool_group`，参数为 `{"group":"vclogg"}`；本轮加载一次即可。该组只操作本次运行捕获的日志、目录和应用状态，不授予任意文件系统访问权限。
+
+## 身份与引用
+
+- `document_id` 标识本次运行中的日志文档，`version` 标识其内容快照。凡是读取、切换、关闭或修改展示状态，都使用最新的一对值；文件变化、重新打开或跨轮后重新获取。
+- 日志 `reference` 由 `document_id`、`version` 和从 1 开始的源 `line` 组成。搜索结果序号不是源行号。
+- `file_id` 是 `locate_files` 或目录发现返回的本次运行句柄，只用于后续文件操作，不要猜测或持久化。
+- 工具返回的 `url` 用于最终回答中的行链接；不要把未读取的引用当作内容证据。
+
+## 当前状态与文件发现
+
+- `get_context {}`：取得当前区域、活动文件、选区和当前搜索的元数据。用户说“这个文件”“选中部分”“当前结果”时先用它。它不返回日志正文。
+- `list_logs {offset?}`：分页列出本轮允许访问的日志、路径、打开状态以及文档身份，也包含附件或搜索结果关联但尚未打开的文件。用于按名称确认目标，不用于读取内容。
+- `locate_files {query, offset?}`：在用户已捕获的日志目录中按路径子串查找文件，返回 `file_id` 和元数据。已知部分文件名但文件尚未打开时使用；同名结果应按完整路径消歧。
+- `list_log_directory {path?, depth?, offset?, limit?}`：浏览捕获目录的有界树。轮转日志、相邻服务或目录结构未知时使用；`path` 选择子树，`depth` 为 1–8。结果受隐藏目录、子目录和文件类型设置约束，空结果不证明磁盘目录为空。
+
+## 文件标签操作
+
+- `open_file`：打开或激活文件。已知日志传 `document_id+version`，发现文件传 `file_id`，已授权源码工作区文件传 `root+path`。成功后使用返回的新 `document_id/version`；工具不读取正文。
+- `switch_file {document_id, version}`：切换到已打开标签并保留其视口和搜索状态。不要用 `navigate start` 代替普通切换。
+- `close_file {document_id, version}`：关闭标签但绝不删除源文件。返回 `confirmation_pending` 时操作仍在等待用户，禁止重复调用或声称已经关闭。
+- `reveal_file`：用 `document_id+version` 或 `file_id` 在文件侧栏定位目标，不打开、不切换、不读取。用户说“在侧栏显示”时使用。
+
+## 日志读取与后台搜索
+
+- `read_logs {document_id, version, start_line, limit?}`：读取从 1 开始的小范围源日志；默认 10 行，最多 100 行，并受总字节和单行预览限制。只读取回答问题所需范围，不连续翻完整文件。
+- `search_logs {scope, query, document_id?, case_sensitive?, regex?}`：执行不改变界面的后台搜索。`scope` 为 `current`、`open` 或 `directory`；`current` 的明确目标应传 `document_id`。普通字面量中的 `|` 表示 OR；需要搜索管道符本身时使用正则转义。返回 `search_id`、数量和少量引用，不返回正文。
+- `search_results {search_id, offset?, limit?}`：分页取得某次后台搜索的引用，默认 20、最多 40。用于选择候选行；取得引用后再读取上下文。
+- `summarize_search {search_id, offset?}`：按文件汇总数量、行范围和代表引用。结果很多时先用它；`truncated=true` 时数量只是下界。
+- `read_log_context {reference, before?, after?}`：读取一个已验证引用附近的小窗口，前后默认各 3 行、最多各 10 行。用于验证命中语境和因果关系，通常优先于扩大读取区间。
+- `read_log_segment {reference, search_id?, start_character?, max_characters?}`：读取被预览截断的长行片段。已从搜索命中进入时传 `search_id` 以定位原匹配；继续读取指定位置时使用从 0 开始的 Unicode `start_character`。单次最多 4096 字符。
+
+后台调查的常用顺序是：`get_context` 或 `list_logs` 确认范围，`search_logs` 搜索，结果较多时 `summarize_search`，再对少量引用调用 `read_log_context`。命中只证明文字匹配；因果结论必须结合已读取上下文、请求 ID、组件、时间和反例。
+
+## 应用搜索视图
+
+- `show_search {scope, document_id?, query?, filter_id?, case_sensitive?, regex?}`：创建或激活 AI 搜索标签，并在界面执行查询或已有预定义过滤器。用户要求“显示/执行搜索”时使用；后台分析仍用 `search_logs`。
+- `control_search {search_tab, action, offset?}`：管理本轮 `show_search` 返回的标签。`status` 查看进度，`results` 取得引用，`cancel` 取消，`clear` 清除。未完成时不要宣称结果已就绪。
+- `append_search {document_id, version, text}`：只向目标文件的搜索框追加文字，保留原草稿和选项，不执行搜索。用户明确说“追加”时才使用。
+- `list_filters {offset?}`：读取本地预定义过滤器的真实 `filter_id`、名称、表达式和正则选项；不访问云端。调用 `show_search` 使用过滤器前先获取 ID。
+
+## 书签、注释与高亮
+
+- `list_colors {offset?}`：列出现有关键词颜色标签。`highlight_keyword` 前必须调用；该工具不创建颜色标签。
+- `set_marks {references, marked}`：批量设置或移除源行书签，`marked` 必须明确为 `true` 或 `false`，不要盲目切换。一次最多 100 行；调查默认只保存少量决定性事件。
+- `highlight_keyword {document_id, version, keyword, action, color_label_id?, case_sensitive?}`：在一个打开文件及其投影中设置、更新或移除精确关键词规则。设置时使用 `list_colors` 返回的 ID；不要高亮未实际观察到的词或宽泛严重级别。
+- `text_mark {reference, action, mark_id?, text?}`：新增、更新或移除单行文字注释。新增传 `text`；更新或移除使用 `list_marks` 返回的真实 `mark_id`。文字最多 128 字符。
+- `list_marks {document_id, version, start_line?}`：按源行分页列出文件的行书签和文字注释。修改已有注释、避免重复或核实现状时使用。
+
+## 导航
+
+- `navigate`：`action=line` 配合 `reference` 跳到具体源行；`result` 配合 `search_id` 和从 1 开始的 `result_index` 跳到搜索命中；`start/end` 配合文档身份跳到首尾；`next/previous` 用于已解析搜索。纯侧栏定位使用 `reveal_file`，普通标签切换使用 `switch_file`。
+
+## 完成与失败处理
+
+读取类工具受分页、行数、字节、版本和证据预算限制。发现 `next_offset`、截断或版本失效时，只在确实影响结论时继续，并重新取得新身份。多文件操作逐项保留目标，准确区分成功、失败和待确认。用户要求只读或不改变界面时，不自动添加书签、高亮、注释或搜索标签。
+"#;
+
 pub(super) const FILES: &str = r#"# 工作流：文件操作
 
 用于目标含糊或组合文件操作；明确的打开、关闭、切换、侧栏定位可直接使用工具。四个文件操作技能共用本指南，每轮只读一次。
@@ -43,4 +103,31 @@ pub(super) const NAVIGATION: &str = r#"# 工作流：日志导航
 搜索结果优先用 `navigate action=result`，具体源行用 `action=line`。投影不可用时可能回退到源文件，应报告实际返回区域。侧栏显示路径用 `reveal_file`，不是行跳转。
 
 跨轮旧引用必须刷新。源文件变化后事件可能移动；用户指事件时重新做目标搜索，不盲用旧行号。纯导航无需读取内容；同时要求解释时，只读解析后的目标及附近上下文。
+"#;
+
+pub(super) const SHELL_WINDOWS: &str = r#"# 工作流：Windows 命令行
+
+当前 `shell` 使用隐藏窗口的 `cmd.exe /D /S /C`，工作目录固定为所选工作区；它不是 PowerShell、WSL 或 Git Bash。先用 `list_source_workspaces` 取得数字 `root`，路径尽量相对于该根目录。
+
+文件枚举和文本读取优先使用随应用提供的 `rg`，也可用 `dir`、`type`、`findstr` 和 `more`。命令只解决一个明确问题并限制输出；含空格的相对路径使用双引号。不要使用 Bash 的单引号、`$VAR`、`$(...)`、`/dev/null` 或正斜杠转义规则。只有任务确实需要 PowerShell cmdlet 时才调用系统自带的 `powershell.exe -NoLogo -NoProfile -NonInteractive -Command ...`；该嵌套解释器不在自动只读集合中，必须展示完整命令并取得本次确认。不要假定另行安装的 `pwsh.exe` 存在。
+
+只读命令可直接运行。重定向、命令连接、环境变量展开、绝对路径、PowerShell/WSL、联网、启动程序和任何写入都必须由宿主请求本次确认；明显破坏性命令会被拒绝。Skill 只说明语法，不授予额外权限。命令失败时先检查 shell 方言、引号和相对路径，不得用另一种解释器绕过确认。
+"#;
+
+pub(super) const SHELL_LINUX: &str = r#"# 工作流：Linux 命令行
+
+当前 `shell` 使用无终端窗口、非交互的 `/bin/sh -c`，工作目录固定为所选工作区；不要假定 Bash、Zsh 或 Fish 扩展可用。先用 `list_source_workspaces` 取得数字 `root`，路径尽量相对于该根目录。
+
+文件枚举、搜索和读取优先使用 `rg`、`head`、`tail`、`wc`、`cat`、`grep` 和 `git` 的只读子命令。命令只解决一个明确问题并限制输出；含空格的相对路径按 POSIX shell 规则引用。需要 Bash 专有语法时不要猜测，先说明依赖并请求确认。
+
+只读命令可直接运行。重定向、命令连接、变量或命令替换、父目录/绝对路径、联网、启动程序和任何写入都必须由宿主请求本次确认；明显破坏性命令会被拒绝。Skill 只说明语法，不授予额外权限，也不得通过 `sh -c` 嵌套或编码命令绕过确认。
+"#;
+
+pub(super) const SHELL_MACOS: &str = r#"# 工作流：macOS 命令行
+
+当前 `shell` 使用无 Terminal 窗口、非交互的 `/bin/sh -c`，工作目录固定为所选工作区；不要假定用户的 Zsh 配置、Homebrew 路径或 Bash 扩展可用。先用 `list_source_workspaces` 取得数字 `root`，路径尽量相对于该根目录。
+
+文件枚举、搜索和读取优先使用随应用提供的 `rg`，以及系统 `head`、`tail`、`wc`、`cat`、`grep` 和 `git` 的只读子命令。macOS 系统工具通常采用 BSD 参数，不要套用仅 GNU 可用的选项。命令只解决一个明确问题并限制输出；含空格的相对路径按 POSIX shell 规则引用。
+
+只读命令可直接运行。重定向、命令连接、变量或命令替换、父目录/绝对路径、联网、`open`/AppleScript/启动应用和任何写入都必须由宿主请求本次确认；明显破坏性命令会被拒绝。Skill 只说明语法，不授予额外权限，也不得通过另一解释器绕过确认。
 "#;

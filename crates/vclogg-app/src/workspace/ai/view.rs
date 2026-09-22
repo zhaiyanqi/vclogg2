@@ -870,6 +870,9 @@ impl Render for AiPanel {
                         ),
                 )
             })
+            .when(self.pending_question.is_some(), |this| {
+                this.child(self.render_pending_question(cx))
+            })
             .child(
                 v_flex()
                     .w_full()
@@ -897,6 +900,7 @@ impl Render for AiPanel {
                             .aria_label(crate::tr!("分析问题", "Analysis question"))
                             .disabled(
                                 self.ui_busy
+                                    || self.pending_question.is_some()
                                     || (self.busy
                                         && self.conversation.status != RunStatus::Running),
                             ),
@@ -1013,46 +1017,63 @@ impl Render for AiPanel {
                                     )
                                 },
                             )
-                            .child(
-                                if self.run.is_some()
-                                    || (self.busy && self.conversation.status == RunStatus::Running)
-                                {
-                                    Button::new("ai-queue")
-                                        .small()
-                                        .primary()
-                                        .icon(IconName::ArrowRight)
-                                        .rounded(cx.theme().radius_full())
-                                        .tooltip(crate::tr!(
-                                            "加入发送队列（Enter）",
-                                            "Queue message (Enter)"
-                                        ))
-                                        .disabled(
-                                            self.attachments_loading
-                                                || (self.input.read(cx).value().trim().is_empty()
-                                                    && self.draft_logs.is_empty()),
-                                        )
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.queue_current_prompt(false, window, cx)
-                                        }))
-                                } else {
-                                    Button::new("ai-send")
-                                        .small()
-                                        .primary()
-                                        .icon(IconName::ArrowRight)
-                                        .rounded(cx.theme().radius_full())
-                                        .tooltip(crate::tr!("发送（Enter）", "Send (Enter)"))
-                                        .disabled(
-                                            disabled
-                                                || self.ui_busy
-                                                || self.attachments_loading
-                                                || (self.input.read(cx).value().trim().is_empty()
-                                                    && self.draft_logs.is_empty()),
-                                        )
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.send(false, window, cx)
-                                        }))
-                                },
-                            )
+                            .child(if self.pending_question.is_some() {
+                                Button::new("ai-answer-question")
+                                    .small()
+                                    .primary()
+                                    .text_label(crate::tr!("回答", "Answer"))
+                                    .disabled(
+                                        self.pending_question
+                                            .as_ref()
+                                            .is_some_and(|question| !question.allow_free_text)
+                                            || self
+                                                .question_input
+                                                .read(cx)
+                                                .value()
+                                                .trim()
+                                                .is_empty(),
+                                    )
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.submit_question_answer(window, cx)
+                                    }))
+                            } else if self.run.is_some()
+                                || (self.busy && self.conversation.status == RunStatus::Running)
+                            {
+                                Button::new("ai-queue")
+                                    .small()
+                                    .primary()
+                                    .icon(IconName::ArrowRight)
+                                    .rounded(cx.theme().radius_full())
+                                    .tooltip(crate::tr!(
+                                        "加入发送队列（Enter）",
+                                        "Queue message (Enter)"
+                                    ))
+                                    .disabled(
+                                        self.attachments_loading
+                                            || (self.input.read(cx).value().trim().is_empty()
+                                                && self.draft_logs.is_empty()),
+                                    )
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.queue_current_prompt(false, window, cx)
+                                    }))
+                            } else {
+                                Button::new("ai-send")
+                                    .small()
+                                    .primary()
+                                    .icon(IconName::ArrowRight)
+                                    .rounded(cx.theme().radius_full())
+                                    .tooltip(crate::tr!("发送（Enter）", "Send (Enter)"))
+                                    .disabled(
+                                        disabled
+                                            || self.ui_busy
+                                            || self.attachments_loading
+                                            || (self.input.read(cx).value().trim().is_empty()
+                                                && self.draft_logs.is_empty()),
+                                    )
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.send(false, window, cx)
+                                    }))
+                            })
                             .when(
                                 self.run.is_some()
                                     || (self.busy
@@ -1164,13 +1185,10 @@ pub(super) fn tool_result_summary(result: &ToolResult) -> String {
 pub(super) fn tool_label(name: &str) -> &str {
     match name {
         "load_tool_group" => crate::tr!("加载工具组", "Load tool group"),
+        "ask_user" => crate::tr!("询问用户", "Ask user"),
+        "shell" => crate::tr!("执行命令", "Run command"),
         "list_source_workspaces" => crate::tr!("列出源码工作区", "List source workspaces"),
         "add_source_workspace" => crate::tr!("切换源码工作区", "Switch source workspace"),
-        "rg_list_files" => crate::tr!("枚举源码文件", "List source files"),
-        "rg_search" => crate::tr!("搜索源码", "Search source"),
-        "rg_count" => crate::tr!("统计源码匹配", "Count source matches"),
-        "read_source" => crate::tr!("读取源码", "Read source"),
-        "find_source_files" => crate::tr!("查找源码文件", "Find source files"),
         "find_symbols" => crate::tr!("查找符号", "Find symbols"),
         "source_outline" => crate::tr!("查看源码结构", "Inspect source outline"),
         "locate_log_origin" => crate::tr!("定位日志来源", "Locate log origin"),

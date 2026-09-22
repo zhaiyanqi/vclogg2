@@ -3,26 +3,24 @@ use super::*;
 fn category(name: &str) -> (&'static str, &'static str) {
     match name {
         "list_source_workspaces"
-        | "rg_list_files"
-        | "rg_search"
-        | "rg_count"
-        | "find_source_files"
+        | "add_source_workspace"
+        | "shell"
         | "find_symbols"
         | "source_outline"
         | "locate_log_origin"
         | "find_definition"
-        | "find_references"
-        | "read_source" => ("source", crate::tr!("源码定位", "Source code")),
+        | "find_references" => ("source", crate::tr!("源码定位", "Source code")),
         "search_memory" | "save_memory" | "delete_memory" => {
             ("memory", crate::tr!("记忆", "Memory"))
         }
         "list_mcp_servers" | "list_mcp_tools" | "call_mcp_tool" => ("mcp", "MCP"),
-        "get_context" | "list_logs" | "locate_files" | "list_log_directory" | "read_logs"
-        | "search_logs" | "search_results" | "summarize_search" | "read_log_context"
-        | "read_log_segment" => (
-            "logs",
-            crate::tr!("日志查找与读取", "Log search and reading"),
-        ),
+        "get_context" | "list_logs" | "locate_files" | "list_log_directory" | "open_file"
+        | "close_file" | "switch_file" | "reveal_file" | "read_logs" | "search_logs"
+        | "search_results" | "summarize_search" | "read_log_context" | "read_log_segment"
+        | "show_search" | "control_search" | "append_search" | "list_filters" | "list_colors"
+        | "set_marks" | "highlight_keyword" | "text_mark" | "list_marks" | "navigate" => {
+            ("vclogg", "VC log")
+        }
         _ => ("actions", crate::tr!("视图与操作", "Views and actions")),
     }
 }
@@ -33,12 +31,8 @@ impl AiPanel {
         let mut content = v_flex().gap_3().p_3();
         content = content.child(div().text_xs().text_color(cx.theme().muted_foreground).child(crate::tr!("内置工具只在分析需要时调用。外部 MCP 工具请在 MCP 页面查看和配置。", "Built-in tools are called when needed. View and configure external MCP tools in the MCP tab.")));
         for (key, title) in [
-            (
-                "logs",
-                crate::tr!("日志查找与读取", "Log search and reading"),
-            ),
+            ("vclogg", "VC log"),
             ("source", crate::tr!("源码定位", "Source code")),
-            ("context", crate::tr!("上下文", "Context")),
             ("actions", crate::tr!("视图与操作", "Views and actions")),
             ("memory", crate::tr!("记忆", "Memory")),
             ("mcp", "MCP"),

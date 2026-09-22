@@ -127,8 +127,8 @@ impl AiPanel {
                 .child(Button::new("ai-add-skill-directory").small().text_label(crate::tr!("添加目录…", "Add folder…")).disabled(disabled)
                     .on_click(cx.listener(|this, _, window, cx| this.scan_skills(false, window, cx))))
         ).child(div().text_sm().text_color(cx.theme().muted_foreground).child(crate::tr!(
-            "预置功能按文件操作、搜索与分析、标记与高亮、导航定位共享工作流。支持扫描或添加自定义目录。开关只控制是否提供工作指导，不会禁用对应工具；选择用于所有会话的后续分析。",
-            "Built-in entries share file, analysis, marking and navigation workflows. Scan or add skill folders. Switches select guidance; they do not disable tools. Selections apply to future runs in all conversations."
+            "预置功能包含当前系统专用的命令行指南。支持 Agent Skills 的 SKILL.md 目录，可扫描 Codex、Claude、Cursor 和 .agents 的系统目录，也可添加开源或自定义目录。新发现的 Skills 默认关闭；启用前请检查来源和内容。开关只控制工作指导，不会扩大工具权限。",
+            "Built-ins include a command-line guide for the current operating system. Agent Skills SKILL.md folders are supported from Codex, Claude, Cursor and .agents system locations, or from an added open-source/custom folder. Newly discovered skills are disabled by default; review their source and contents before enabling them. Skills provide guidance and never expand tool permissions."
         )));
         for root in self.settings.skill_directories.clone() {
             let id = root.id.clone();

@@ -80,6 +80,7 @@ impl AiPanel {
         self.reasoning.clear();
         self.progress.clear();
         self.pending_tool = None;
+        self.pending_question = None;
         self.input
             .update(cx, |input, cx| input.set_value(tab.draft, window, cx));
         self.scroller = tab.scroller;

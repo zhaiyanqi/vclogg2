@@ -22,6 +22,7 @@ mod mcp_settings;
 mod memory;
 mod panel;
 mod prompt_settings;
+mod question;
 mod settings;
 mod skill_settings;
 #[cfg(test)]

@@ -80,6 +80,31 @@ pub(crate) fn temporary_dir() -> Option<PathBuf> {
     }
 }
 
+/// Returns a private, writable directory used when AI has no configured workspace.
+/// Prefer the application cache tree and fall back to the application's temporary tree.
+pub(crate) fn default_ai_workspace_dir() -> Option<PathBuf> {
+    let preferred = {
+        #[cfg(windows)]
+        {
+            application_data_dir().map(|root| root.join("cache").join("ai-workspace"))
+        }
+        #[cfg(not(windows))]
+        {
+            cache_dir().map(|root| application_data_dir_from_root(root).join("ai-workspace"))
+        }
+    };
+    preferred.and_then(prepare_directory).or_else(|| {
+        temporary_dir()
+            .map(|root| root.join(APPLICATION_DIRECTORY).join("ai-workspace"))
+            .and_then(prepare_directory)
+    })
+}
+
+fn prepare_directory(path: PathBuf) -> Option<PathBuf> {
+    std::fs::create_dir_all(&path).ok()?;
+    path.canonicalize().ok().filter(|path| path.is_dir())
+}
+
 #[cfg(all(debug_assertions, not(windows)))]
 fn development_root() -> Option<PathBuf> {
     std::env::var_os(DEVELOPMENT_DATA_DIRECTORY_ENV)
@@ -186,11 +211,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn prepared_ai_workspace_is_created_and_canonicalized() {
+        let temporary = tempfile::tempdir().unwrap();
+        let requested = temporary.path().join("cache").join("ai-workspace");
+
+        let prepared = super::prepare_directory(requested.clone()).unwrap();
+
+        assert!(prepared.is_dir());
+        assert_eq!(prepared, requested.canonicalize().unwrap());
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_internal_paths_stay_below_the_running_executable() {
         use super::{
-            application_data_dir, cache_dir, data_local_dir, index_cache_dir, temporary_dir,
+            application_data_dir, cache_dir, data_local_dir, default_ai_workspace_dir,
+            index_cache_dir, temporary_dir,
         };
 
         let executable = std::env::current_exe().expect("应能读取测试可执行文件路径");
@@ -202,5 +239,9 @@ mod tests {
         assert_eq!(application_data_dir(), Some(application_dir.clone()));
         assert_eq!(index_cache_dir(), Some(application_dir.join("index")));
         assert_eq!(temporary_dir(), Some(application_dir.join("temp")));
+        assert_eq!(
+            default_ai_workspace_dir(),
+            Some(application_dir.join("cache").join("ai-workspace"))
+        );
     }
 }

@@ -5,7 +5,7 @@ use gpui_kit::component::{
     text::TextViewState,
 };
 use std::collections::VecDeque;
-use vclogg_ai::{AgentEvent, AiSettings, Conversation, RunHandle, RunStatus};
+use vclogg_ai::{AgentEvent, AiSettings, Conversation, RunHandle, RunStatus, UserQuestion};
 use vclogg_data::AiConversationRecord;
 
 pub(in crate::workspace) struct AiPanel {
@@ -23,6 +23,7 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) conversation_tab_scroll: ScrollHandle,
     pub(super) conversation_tab_focus: FocusHandle,
     pub(super) input: Entity<TextareaState>,
+    pub(super) question_input: Entity<TextareaState>,
     pub(super) draft_logs: Vec<super::attachments::DraftLog>,
     pub(super) queued_prompts: VecDeque<QueuedPrompt>,
     pub(super) resume_queue_after_stop: bool,
@@ -48,6 +49,7 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) message_menu: Option<(Entity<PopupMenu>, gpui_kit::Point<gpui_kit::Pixels>)>,
     pub(super) message_menu_subscription: Option<Subscription>,
     pub(super) pending_tool: Option<ToolCall>,
+    pub(super) pending_question: Option<UserQuestion>,
     pub(super) scope: Option<SharedScope>,
     pub(super) reference_scopes: Vec<SharedScope>,
     pub(super) run: Option<RunHandle>,
@@ -210,11 +212,29 @@ impl AiPanel {
         });
         let subscription = cx.subscribe_in(&input, window, |this, _, event, window, cx| {
             if matches!(event, InputEvent::PressEnter { shift: false, .. }) {
-                this.send(false, window, cx);
+                if this.pending_question.is_some() {
+                    this.submit_question_answer(window, cx);
+                } else {
+                    this.send(false, window, cx);
+                }
             } else if matches!(event, InputEvent::Change) {
                 cx.notify();
             }
         });
+        let question_input = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .auto_grow(2, 5)
+                .submit_on_enter(true)
+                .placeholder(crate::tr!("输入回答…", "Enter an answer…"))
+        });
+        let question_subscription =
+            cx.subscribe_in(&question_input, window, |this, _, event, window, cx| {
+                if matches!(event, InputEvent::PressEnter { shift: false, .. }) {
+                    this.submit_question_answer(window, cx);
+                } else if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            });
         let scroller = cx.new(|cx| TranscriptScroll::new(0, cx));
         let scroll_subscription = cx.observe(&scroller, |_, _, cx| cx.notify());
         let mut this = Self {
@@ -233,6 +253,7 @@ impl AiPanel {
             conversation_tab_scroll: ScrollHandle::new(),
             conversation_tab_focus: cx.focus_handle(),
             input,
+            question_input,
             draft_logs: Vec::new(),
             queued_prompts: VecDeque::new(),
             resume_queue_after_stop: false,
@@ -258,6 +279,7 @@ impl AiPanel {
             message_menu: None,
             message_menu_subscription: None,
             pending_tool: None,
+            pending_question: None,
             scope: None,
             reference_scopes: Vec::new(),
             run: None,
@@ -287,7 +309,12 @@ impl AiPanel {
             generation: 0,
             task: None,
             live_task: None,
-            _subscriptions: vec![subscription, settings_subscription, memory_subscription],
+            _subscriptions: vec![
+                subscription,
+                question_subscription,
+                settings_subscription,
+                memory_subscription,
+            ],
         };
         this.open_conversations.push(this.conversation.id.clone());
         let path = this.settings_path.clone();
@@ -295,10 +322,21 @@ impl AiPanel {
             let result = cx
                 .background_spawn(async move {
                     let store = Arc::new(StateStore::open_default()?);
-                    let settings = store.load_ai_settings(
-                        path.as_deref()
-                            .context("Application data directory unavailable")?,
-                    );
+                    let settings = store
+                        .load_ai_settings(
+                            path.as_deref()
+                                .context("Application data directory unavailable")?,
+                        )
+                        .and_then(|mut settings| {
+                            if super::workspace_settings::ensure_default_workspace(&mut settings) {
+                                store.save_ai_settings(
+                                    path.as_deref()
+                                        .context("Application data directory unavailable")?,
+                                    &settings,
+                                )?;
+                            }
+                            Ok(settings)
+                        });
                     let history = store.ai_conversations(0)?;
                     let current = history
                         .first()
@@ -369,6 +407,7 @@ impl AiPanel {
                 self.reasoning.clear();
                 self.progress.clear();
                 self.pending_tool = None;
+                self.pending_question = None;
                 self.rebuild_messages(cx);
             }
             Err(_) => {
@@ -603,6 +642,7 @@ impl AiPanel {
         self.reasoning.clear();
         self.progress = crate::tr!("正在准备会话", "Preparing conversation").into();
         self.pending_tool = None;
+        self.pending_question = None;
         if let Some(ix) = self.editing_message.take() {
             self.conversation.messages.truncate(ix);
             self.conversation.summarized_messages = self.conversation.summarized_messages.min(ix);
@@ -787,8 +827,17 @@ impl AiPanel {
                 }
                 let finished = matches!(event, AgentEvent::Finished(..));
                 let persist = matches!(event, AgentEvent::Assistant(_) | AgentEvent::ToolFinished(_) | AgentEvent::ContextCompacted { .. } | AgentEvent::Finished(..));
-                if this.update(cx, |this, cx| {
-                    if this.generation == generation { this.receive_event(event, cx); }
+                if this.update_in(cx, |this, window, cx| {
+                    if this.generation == generation {
+                        let focus_question = matches!(
+                            &event,
+                            AgentEvent::QuestionRequested(question) if question.allow_free_text
+                        );
+                        this.receive_event(event, cx);
+                        if focus_question {
+                            this.question_input.focus_handle(cx).focus(window, cx);
+                        }
+                    }
                 }).is_err() { break; }
                 if persist {
                     let record = match this.update(cx, |this, _| this.record()) {
@@ -837,6 +886,7 @@ impl AiPanel {
                 this.busy = true;
                 this.run = None;
                 this.pending_tool = None;
+                this.pending_question = None;
                 this.flush_partial(cx);
                 this.recover_messages(cx);
                 this.collapse_current_thinking(cx);
@@ -980,6 +1030,7 @@ impl AiPanel {
                 }
                 self.error = error;
                 self.pending_tool = None;
+                self.pending_question = None;
                 self.flush_partial(cx);
                 self.collapse_current_thinking(cx);
                 self.busy = true; // Do not switch conversations until the final record is durable.
@@ -989,6 +1040,11 @@ impl AiPanel {
                 self.progress =
                     format!("{}: {}", crate::tr!("执行工具", "Running tool"), call.name);
                 self.pending_tool = Some(call);
+            }
+            AgentEvent::QuestionRequested(question) => {
+                self.progress = crate::tr!("等待你的回答", "Waiting for your answer").into();
+                self.pending_tool = None;
+                self.pending_question = Some(question);
             }
             AgentEvent::ToolStarted(_) => {}
         }

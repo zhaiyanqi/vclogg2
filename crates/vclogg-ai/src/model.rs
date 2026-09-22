@@ -179,6 +179,25 @@ pub struct ToolCall {
     pub name: String,
     pub arguments: Value,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct QuestionOption {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UserQuestion {
+    pub call_id: String,
+    pub question: String,
+    #[serde(default)]
+    pub options: Vec<QuestionOption>,
+    pub allow_free_text: bool,
+    #[serde(default)]
+    pub detail: String,
+}
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ToolResult {
     pub value: Value,
@@ -422,6 +441,8 @@ pub enum AgentEvent {
     ToolStarted(ToolCall),
     /// Runner-owned tools report progress without requesting a host reply.
     ExtensionToolStarted(ToolCall),
+    /// The run is paused until the host returns a tool result for this question.
+    QuestionRequested(UserQuestion),
     ToolFinished(AgentMessage),
     ContextTrimmed,
     Finished(RunStatus, String),

@@ -171,8 +171,71 @@ fn openai_text(text: &str) -> String {
 }
 
 #[tokio::test]
+async fn ask_user_pauses_and_resumes_the_same_run() {
+    let (config, requests, server) = mock(vec![
+        (
+            200,
+            openai_named_tool(
+                "question-1",
+                "ask_user",
+                r#"{"question":"Which service?","options":[{"id":"api","label":"API"},{"id":"worker","label":"Worker"}],"allow_free_text":true}"#,
+            ),
+        ),
+        (200, openai_text("Continuing with the worker service.")),
+    ]);
+    let run = start_run(
+        config,
+        vec![AgentMessage::User {
+            text: "Investigate the failure".into(),
+        }],
+        vec![],
+        String::new(),
+        false,
+    );
+    let question = loop {
+        match tokio::time::timeout(Duration::from_secs(5), run.events.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            AgentEvent::QuestionRequested(question) => break question,
+            AgentEvent::Finished(status, error) => panic!("finished early: {status:?} {error}"),
+            _ => {}
+        }
+    };
+    assert_eq!(question.call_id, "question-1");
+    assert_eq!(question.options.len(), 2);
+    run.replies
+        .send((
+            question.call_id,
+            ToolResult::ok(json!({"option_id":"worker","answer":"Worker"})),
+        ))
+        .await
+        .unwrap();
+    loop {
+        if let AgentEvent::Finished(status, error) =
+            tokio::time::timeout(Duration::from_secs(5), run.events.recv())
+                .await
+                .unwrap()
+                .unwrap()
+        {
+            assert_eq!(status, RunStatus::Complete, "{error}");
+            break;
+        }
+    }
+    server.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].to_string().contains("worker"));
+}
+
+#[tokio::test]
 async fn openai_runs_tools_returns_results_and_does_not_repeat_call_ids() {
     let (config, requests, server) = mock(vec![
+        (
+            200,
+            openai_named_tool("load-vclogg", "load_tool_group", r#"{"group":"vclogg"}"#),
+        ),
         (200, openai_tool("one", "{}")),
         (200, openai_tool("one", "{}")),
         (200, openai_text("日志分析完成")),
@@ -213,14 +276,15 @@ async fn openai_runs_tools_returns_results_and_does_not_repeat_call_ids() {
     assert_eq!(calls, 1);
     assert!(final_text.contains("日志分析完成"));
     let requests = requests.lock().unwrap();
-    assert_eq!(requests.len(), 3);
-    assert_eq!(requests[1]["messages"][3]["role"], "tool");
-    assert!(
-        requests[1]["messages"][3]["content"]
-            .as_str()
-            .unwrap()
-            .contains("app.log")
-    );
+    assert_eq!(requests.len(), 4);
+    let tool_result = requests[2]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|message| message["role"] == "tool")
+        .unwrap();
+    assert!(tool_result["content"].as_str().unwrap().contains("app.log"));
 }
 
 #[tokio::test]
@@ -228,11 +292,7 @@ async fn tool_groups_are_loaded_only_after_discovery() {
     let (config, requests, server) = mock(vec![
         (
             200,
-            openai_named_tool(
-                "load-evidence",
-                "load_tool_group",
-                r#"{"group":"evidence"}"#,
-            ),
+            openai_named_tool("load-vclogg", "load_tool_group", r#"{"group":"vclogg"}"#),
         ),
         (200, openai_text("工具已就绪")),
     ]);
@@ -267,11 +327,13 @@ async fn tool_groups_are_loaded_only_after_discovery() {
             .collect::<Vec<_>>()
     };
     let first = names(&requests[0]);
-    assert_eq!(first.len(), 5);
+    assert_eq!(first.len(), 2);
+    assert!(first.iter().any(|name| name == "ask_user"));
     assert!(!first.iter().any(|name| name == "read_logs"));
     let second = names(&requests[1]);
     assert!(second.iter().any(|name| name == "read_logs"));
-    assert!(!second.iter().any(|name| name == "open_file"));
+    assert!(second.iter().any(|name| name == "open_file"));
+    assert!(second.iter().any(|name| name == "set_marks"));
 }
 #[tokio::test]
 async fn anthropic_native_protocol_returns_tool_result_blocks() {
@@ -393,7 +455,13 @@ async fn auth_rate_limit_and_disconnect_are_visible_failures() {
 }
 #[tokio::test]
 async fn cancellation_aborts_waiting_for_tool_without_another_request() {
-    let (config, requests, server) = mock(vec![(200, openai_tool("cancel", "{}"))]);
+    let (config, requests, server) = mock(vec![
+        (
+            200,
+            openai_named_tool("load-vclogg", "load_tool_group", r#"{"group":"vclogg"}"#),
+        ),
+        (200, openai_tool("cancel", "{}")),
+    ]);
     let run = start_run(
         config,
         vec![AgentMessage::User {
@@ -414,7 +482,7 @@ async fn cancellation_aborts_waiting_for_tool_without_another_request() {
         }
     }
     server.join().unwrap();
-    assert_eq!(requests.lock().unwrap().len(), 1);
+    assert_eq!(requests.lock().unwrap().len(), 2);
 }
 #[test]
 fn skill_references_cannot_escape_and_refresh_preserves_identity() {
@@ -500,7 +568,7 @@ fn recovering_a_pending_mutation_never_replays_it() {
 async fn both_protocols_assemble_interleaved_chinese_and_multiple_tool_arguments() {
     for protocol in [Protocol::OpenAi, Protocol::Anthropic] {
         let fragments = ["{\"scope\":\"current\",\"query\":\"", "网络", "异常\"}"];
-        let (response, done) = if protocol == Protocol::OpenAi {
+        let (load, response, done) = if protocol == Protocol::OpenAi {
             let mut response = event(
                 json!({"choices":[{"delta":{"content":"开始排查。","tool_calls":[
                     {"index":0,"id":"first","function":{"name":"list_logs","arguments":"{"}},
@@ -515,8 +583,19 @@ async fn both_protocols_assemble_interleaved_chinese_and_multiple_tool_arguments
             response += &event(
                 json!({"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":fragments[2]}}]},"finish_reason":"tool_calls"}]}),
             );
-            (response, openai_text("总结完成。"))
+            (
+                openai_named_tool("load-vclogg", "load_tool_group", r#"{"group":"vclogg"}"#),
+                response,
+                openai_text("总结完成。"),
+            )
         } else {
+            let load = event(
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"load-vclogg","name":"load_tool_group","input":{}}}),
+            ) + &event(
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"group\":\"vclogg\"}"}}),
+            ) + &event(json!({"type":"content_block_stop","index":0}))
+                + &event(json!({"type":"message_delta","delta":{"stop_reason":"tool_use"}}))
+                + &event(json!({"type":"message_stop"}));
             let mut response = event(
                 json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":"开始排查。"}}),
             );
@@ -542,9 +621,9 @@ async fn both_protocols_assemble_interleaved_chinese_and_multiple_tool_arguments
             ) + &event(
                 json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}),
             ) + &event(json!({"type":"message_stop"}));
-            (response, done)
+            (load, response, done)
         };
-        let (mut config, requests, server) = mock(vec![(200, response), (200, done)]);
+        let (mut config, requests, server) = mock(vec![(200, load), (200, response), (200, done)]);
         config.protocol = protocol;
         let run = start_run(
             config,
@@ -586,13 +665,16 @@ async fn both_protocols_assemble_interleaved_chinese_and_multiple_tool_arguments
         assert!(text.contains("开始排查。") && text.contains("总结完成。"));
         server.join().unwrap();
         if protocol == Protocol::Anthropic {
-            assert_eq!(
-                requests.lock().unwrap()[1]["messages"][2]["content"]
-                    .as_array()
-                    .unwrap()
-                    .len(),
-                2
-            );
+            let messages = requests.lock().unwrap()[2]["messages"]
+                .as_array()
+                .unwrap()
+                .clone();
+            let result = messages
+                .iter()
+                .rev()
+                .find(|message| message["role"] == "user" && message["content"].is_array())
+                .unwrap();
+            assert_eq!(result["content"].as_array().unwrap().len(), 2);
         }
     }
 }

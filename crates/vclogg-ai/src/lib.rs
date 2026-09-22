@@ -11,6 +11,7 @@ mod prompts;
 mod provider;
 mod ripgrep;
 mod runner;
+mod shell;
 mod skills;
 mod source_index;
 mod source_lsp;

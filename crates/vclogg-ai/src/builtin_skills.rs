@@ -1,4 +1,4 @@
-//! Ten discoverable entries backed by four shared workflow guides.
+//! Discoverable product workflows, including one shell guide for the current platform.
 use crate::{AiSettings, SkillDirectory};
 use anyhow::{Context as _, Result};
 use std::{fs, path::Path};
@@ -12,6 +12,12 @@ struct BuiltinSkill {
     workflow: &'static str,
 }
 const BUILTINS: &[BuiltinSkill] = &[
+    BuiltinSkill {
+        id: "vclogg-docs",
+        name: "VC log DOCS",
+        description: "VCLogg 日志、文件、搜索、导航、标记与高亮工具的完整使用手册。",
+        workflow: workflows::VCLOGG_DOCS,
+    },
     BuiltinSkill {
         id: "search-logs",
         name: "搜索日志",
@@ -72,6 +78,36 @@ const BUILTINS: &[BuiltinSkill] = &[
         description: "区分源行与结果序号，处理历史引用。",
         workflow: workflows::NAVIGATION,
     },
+    BuiltinSkill {
+        id: if cfg!(target_os = "windows") {
+            "shell-windows"
+        } else if cfg!(target_os = "macos") {
+            "shell-macos"
+        } else {
+            "shell-linux"
+        },
+        name: if cfg!(target_os = "windows") {
+            "Windows 命令行"
+        } else if cfg!(target_os = "macos") {
+            "macOS 命令行"
+        } else {
+            "Linux 命令行"
+        },
+        description: if cfg!(target_os = "windows") {
+            "在隐藏窗口的 cmd.exe 中安全使用工作区命令。"
+        } else if cfg!(target_os = "macos") {
+            "在无 Terminal 窗口的 POSIX shell 中安全使用工作区命令。"
+        } else {
+            "在非交互 POSIX shell 中安全使用工作区命令。"
+        },
+        workflow: if cfg!(target_os = "windows") {
+            workflows::SHELL_WINDOWS
+        } else if cfg!(target_os = "macos") {
+            workflows::SHELL_MACOS
+        } else {
+            workflows::SHELL_LINUX
+        },
+    },
 ];
 
 pub(crate) fn initialize_builtin_skills(
@@ -102,7 +138,8 @@ pub(crate) fn initialize_builtin_skills(
             "---\nname: {}\ndescription: {}\n---\n\n{}\n",
             builtin.name, builtin.description, builtin.workflow
         );
-        let old = legacy::markdown(builtin.id).context("Missing legacy skill default")?;
+        let old = legacy::markdown(builtin.id);
+        let previous = old.as_deref().into_iter().collect::<Vec<_>>();
         if let Some(ix) = existing {
             // Invalid or temporarily unreadable user edits must not prevent the
             // remaining AI configuration from loading. Refresh reports their errors.
@@ -115,7 +152,7 @@ pub(crate) fn initialize_builtin_skills(
         let updated = crate::defaults::update_default(
             &leaf.join("SKILL.md"),
             &markdown,
-            &[&old],
+            &previous,
             !initialized,
         )?;
         if let Some(ix) = existing {
@@ -200,5 +237,27 @@ mod tests {
         let marking = read("vclogg:color-labels");
         assert!(marking.contains("不应在书签足够时自动添加说明"));
         assert!(marking.contains("每文件选择 1–3 个实际观察到的高信号词"));
+        let docs = read("vclogg:vclogg-docs");
+        for instruction in [
+            "{\"group\":\"vclogg\"}",
+            "## 当前状态与文件发现",
+            "## 日志读取与后台搜索",
+            "## 应用搜索视图",
+            "## 书签、注释与高亮",
+            "`confirmation_pending`",
+        ] {
+            assert!(docs.contains(instruction), "missing {instruction}");
+        }
+        let shell = settings
+            .skills
+            .iter()
+            .find(|skill| skill.id.starts_with("vclogg:shell-"))
+            .expect("current platform shell skill");
+        let shell = fs::read_to_string(shell.directory.join("SKILL.md")).unwrap();
+        assert!(shell.contains("Skill 只说明语法，不授予额外权限"));
+        assert!(shell.contains("工作目录固定为所选工作区"));
+        assert!(workflows::SHELL_WINDOWS.contains("cmd.exe /D /S /C"));
+        assert!(workflows::SHELL_LINUX.contains("/bin/sh -c"));
+        assert!(workflows::SHELL_MACOS.contains("BSD 参数"));
     }
 }

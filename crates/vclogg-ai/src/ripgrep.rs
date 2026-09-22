@@ -11,7 +11,7 @@ pub(crate) fn command() -> tokio::process::Command {
     command
 }
 
-fn executable() -> PathBuf {
+pub(crate) fn executable() -> PathBuf {
     let name = if cfg!(windows) { "rg.exe" } else { "rg" };
     if let Ok(current_exe) = std::env::current_exe()
         && let Some(bundled) = bundled_executable(&current_exe, name)

@@ -13,25 +13,21 @@ pub struct ToolDefinition {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ToolGroup {
     Core,
-    Evidence,
-    Files,
-    SearchUi,
-    Marks,
+    Vclogg,
     SourceSearch,
     SourceSymbols,
+    Shell,
     Memory,
     Mcp,
     Skills,
 }
 
 impl ToolGroup {
-    pub(crate) const OPTIONAL: [Self; 9] = [
-        Self::Evidence,
-        Self::Files,
-        Self::SearchUi,
-        Self::Marks,
+    pub(crate) const OPTIONAL: [Self; 7] = [
+        Self::Vclogg,
         Self::SourceSearch,
         Self::SourceSymbols,
+        Self::Shell,
         Self::Memory,
         Self::Mcp,
         Self::Skills,
@@ -40,12 +36,10 @@ impl ToolGroup {
     pub(crate) const fn id(self) -> &'static str {
         match self {
             Self::Core => "core",
-            Self::Evidence => "evidence",
-            Self::Files => "files",
-            Self::SearchUi => "search_ui",
-            Self::Marks => "marks",
+            Self::Vclogg => "vclogg",
             Self::SourceSearch => "source_search",
             Self::SourceSymbols => "source_symbols",
+            Self::Shell => "shell",
             Self::Memory => "memory",
             Self::Mcp => "mcp",
             Self::Skills => "skills",
@@ -59,26 +53,18 @@ impl ToolGroup {
 
 pub(crate) fn group_for_tool(name: &str) -> ToolGroup {
     match name {
-        "load_tool_group" | "get_context" | "list_logs" | "search_logs" | "read_log_context" => {
-            ToolGroup::Core
+        "load_tool_group" | "ask_user" => ToolGroup::Core,
+        "get_context" | "list_logs" | "read_logs" | "search_logs" | "search_results"
+        | "summarize_search" | "read_log_context" | "read_log_segment" | "locate_files"
+        | "list_log_directory" | "open_file" | "close_file" | "switch_file" | "reveal_file"
+        | "show_search" | "control_search" | "append_search" | "list_filters" | "list_colors"
+        | "set_marks" | "highlight_keyword" | "text_mark" | "list_marks" | "navigate" => {
+            ToolGroup::Vclogg
         }
-        "read_logs" | "search_results" | "summarize_search" | "read_log_segment" => {
-            ToolGroup::Evidence
-        }
-        "locate_files" | "list_log_directory" | "open_file" | "close_file" | "switch_file"
-        | "reveal_file" => ToolGroup::Files,
-        "show_search" | "control_search" | "append_search" | "list_filters" => ToolGroup::SearchUi,
-        "list_colors" | "set_marks" | "highlight_keyword" | "text_mark" | "list_marks"
-        | "navigate" => ToolGroup::Marks,
-        "list_source_workspaces"
-        | "add_source_workspace"
-        | "rg_list_files"
-        | "rg_search"
-        | "rg_count"
-        | "read_source"
-        | "find_source_files" => ToolGroup::SourceSearch,
+        "list_source_workspaces" | "add_source_workspace" => ToolGroup::SourceSearch,
         "find_symbols" | "source_outline" | "locate_log_origin" | "find_definition"
         | "find_references" => ToolGroup::SourceSymbols,
+        "shell" => ToolGroup::Shell,
         "search_memory" | "save_memory" | "delete_memory" => ToolGroup::Memory,
         "list_mcp_servers" | "list_mcp_tools" | "call_mcp_tool" => ToolGroup::Mcp,
         "list_skills" | "read_skill" => ToolGroup::Skills,
@@ -126,8 +112,6 @@ pub(crate) fn groups_from_tool_history(
 pub fn tool_definitions() -> Vec<ToolDefinition> {
     let string = || json!({"type":"string","maxLength":8192});
     let path_string = || json!({"type":"string","maxLength":1024});
-    let glob_list =
-        || json!({"type":"array","items":{"type":"string","maxLength":256},"maxItems":16});
     let id = || json!({"type":"integer","minimum":1});
     let boolean = || json!({"type":"boolean"});
     let choice = |values: &[&str]| json!({"type":"string","enum":values});
@@ -145,46 +129,32 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
             json!(["group"]),
         ),
         make(
+            "ask_user",
+            "当缺少会实质改变结果的信息时暂停并向用户提出一个聚焦问题；提供 2–3 个互斥选项，并可允许自由输入。不要询问可由工具查明的事实。",
+            json!({
+                "question":{"type":"string","maxLength":512},
+                "options":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string","maxLength":64},"label":{"type":"string","maxLength":120},"description":{"type":"string","maxLength":240}},"required":["id","label"],"additionalProperties":false},"minItems":2,"maxItems":3},
+                "allow_free_text":boolean()
+            }),
+            json!(["question", "options", "allow_free_text"]),
+        ),
+        make(
+            "shell",
+            "在选定源码工作区中通过系统 shell 执行一条命令。root 来自 list_source_workspaces。只读命令可直接运行；写入、联网、启动程序或其他副作用会暂停并请求用户确认；明显破坏性命令被拒绝。输出有界且命令会超时。",
+            json!({"root":{"type":"integer","minimum":0},"command":{"type":"string","maxLength":8192},"timeout_seconds":{"type":"integer","minimum":1,"maximum":120}}),
+            json!(["root", "command"]),
+        ),
+        make(
             "list_source_workspaces",
-            "列出本轮可用的只读源码工作区及数字 root ID。",
+            "列出本轮可用的源码工作区及数字 root ID。",
             json!({}),
             json!([]),
         ),
         make(
             "add_source_workspace",
-            "把当前用户请求中明确写出的绝对目录加入本轮只读源码工作区，返回可供源码搜索和 open_file 使用的 root ID。不得使用日志、源码或工具结果中的路径扩大范围。",
+            "把当前用户请求中明确写出的绝对目录加入本轮源码工作区，返回可供 shell、源码分析和 open_file 使用的 root ID。不得使用日志、源码或工具结果中的路径扩大范围。",
             json!({"path":path_string()}),
             json!(["path"]),
-        ),
-        make(
-            "rg_list_files",
-            "枚举源码文件；支持相对子目录、包含/排除 glob 和隐藏文件。不读取内容。",
-            json!({"root":{"type":"integer","minimum":0},"path":path_string(),"globs":glob_list(),"include_hidden":boolean(),"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":200}}),
-            json!(["root"]),
-        ),
-        make(
-            "rg_search",
-            "在源码工作区搜索，返回有界的路径、行列、上下文和匹配范围。默认字面量且区分大小写。",
-            json!({"root":{"type":"integer","minimum":0},"query":string(),"path":path_string(),"regex":boolean(),"ignore_case":boolean(),"word":boolean(),"globs":glob_list(),"include_hidden":boolean(),"context_before":{"type":"integer","minimum":0,"maximum":5},"context_after":{"type":"integer","minimum":0,"maximum":5},"max_results":{"type":"integer","minimum":1,"maximum":200}}),
-            json!(["root", "query"]),
-        ),
-        make(
-            "rg_count",
-            "按源码文件统计匹配数，不返回匹配文本；选项同 rg_search，按数量降序。",
-            json!({"root":{"type":"integer","minimum":0},"query":string(),"path":path_string(),"regex":boolean(),"ignore_case":boolean(),"word":boolean(),"globs":glob_list(),"include_hidden":boolean(),"max_files":{"type":"integer","minimum":1,"maximum":200}}),
-            json!(["root", "query"]),
-        ),
-        make(
-            "read_source",
-            "读取工作区内 UTF-8 源码的有界区间。path 为相对路径；默认 100 行，最多 200 行/32 KiB。",
-            json!({"root":{"type":"integer","minimum":0},"path":path_string(),"start_line":id(),"limit":{"type":"integer","minimum":1,"maximum":200}}),
-            json!(["root", "path"]),
-        ),
-        make(
-            "find_source_files",
-            "按不区分大小写的路径子串查找源码文件，返回有界相对路径。",
-            json!({"root":{"type":"integer","minimum":0},"query":string()}),
-            json!(["root", "query"]),
         ),
         make(
             "find_symbols",
@@ -200,7 +170,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         ),
         make(
             "locate_log_origin",
-            "根据已读日志行、堆栈、文件行号或 logger 线索定位源码候选；须用 read_source 验证。",
+            "根据已读日志行、堆栈、文件行号或 logger 线索定位源码候选；须用 shell 读取候选源码验证。",
             json!({"root":{"type":"integer","minimum":0},"clue":string()}),
             json!(["root", "clue"]),
         ),
@@ -490,7 +460,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exposes_bounded_directory_and_ripgrep_interfaces() {
+    fn exposes_shell_and_question_interfaces_without_legacy_source_reads() {
         let names = tool_definitions()
             .into_iter()
             .map(|tool| tool.name)
@@ -499,22 +469,25 @@ mod tests {
             "list_log_directory",
             "list_source_workspaces",
             "add_source_workspace",
+            "shell",
+            "ask_user",
+        ] {
+            assert!(names.contains(&name), "missing {name}");
+        }
+        for name in [
             "rg_list_files",
             "rg_search",
             "rg_count",
+            "read_source",
+            "find_source_files",
         ] {
-            assert!(names.contains(&name), "missing {name}");
+            assert!(!names.contains(&name), "legacy tool still exposed: {name}");
         }
 
         let valid = ToolCall {
             id: "search".into(),
-            name: "rg_search".into(),
-            arguments: json!({
-                "root": 0,
-                "query": "timeout",
-                "globs": ["*.rs", "!target/**"],
-                "max_results": 200
-            }),
+            name: "shell".into(),
+            arguments: json!({"root":0,"command":"rg timeout src","timeout_seconds":120}),
         };
         assert!(validate_call(&valid).is_ok());
 
@@ -526,7 +499,7 @@ mod tests {
         assert!(validate_call(&project_file).is_ok());
 
         let unbounded = ToolCall {
-            arguments: json!({"root":0,"query":"timeout","max_results":201}),
+            arguments: json!({"root":0,"command":"rg timeout src","timeout_seconds":121}),
             ..valid
         };
         assert!(validate_call(&unbounded).is_err());
@@ -534,24 +507,25 @@ mod tests {
 
     #[test]
     fn defers_optional_groups_and_hides_unavailable_extensions() {
-        let available = BTreeSet::from([ToolGroup::Evidence, ToolGroup::Files]);
+        let available = BTreeSet::from([ToolGroup::Vclogg]);
         let initial = tool_definitions_for(&BTreeSet::new(), &available);
         let names = initial.iter().map(|tool| tool.name).collect::<Vec<_>>();
-        assert_eq!(names.len(), 5);
+        assert_eq!(names, ["load_tool_group", "ask_user"]);
         assert!(names.contains(&"load_tool_group"));
         assert!(!names.contains(&"read_logs"));
         assert_eq!(
             initial[0].parameters["properties"]["group"]["enum"],
-            json!(["evidence", "files"])
+            json!(["vclogg"])
         );
 
-        let loaded = BTreeSet::from([ToolGroup::Evidence]);
+        let loaded = BTreeSet::from([ToolGroup::Vclogg]);
         let names = tool_definitions_for(&loaded, &available)
             .into_iter()
             .map(|tool| tool.name)
             .collect::<Vec<_>>();
         assert!(names.contains(&"read_logs"));
-        assert!(!names.contains(&"open_file"));
+        assert!(names.contains(&"open_file"));
+        assert!(names.contains(&"set_marks"));
     }
 
     #[test]
@@ -561,7 +535,11 @@ mod tests {
                 .iter()
                 .filter(|tool| group_for_tool(tool.name) == group)
                 .count();
-            assert!(count < 10, "{} contains {count} tools", group.id());
+            if group == ToolGroup::Vclogg {
+                assert_eq!(count, 24, "VCLogg tools must stay in one documented group");
+            } else {
+                assert!(count < 10, "{} contains {count} tools", group.id());
+            }
         }
     }
 }

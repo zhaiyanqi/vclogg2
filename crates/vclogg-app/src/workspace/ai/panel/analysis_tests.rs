@@ -87,12 +87,9 @@ pub(super) fn exercise(
             .unwrap()["content"]
             .as_str()
             .unwrap();
-        assert!(
-            system.contains("Use set_marks with marked=true on only the few decisive source rows")
-        );
-        assert!(
-            system.contains("call list_colors and use highlight_keyword on each relevant file")
-        );
+        assert!(system.contains("只给触发故障、因果转折、影响边界或恢复等决定性行加书签"));
+        assert!(system.contains("调用 list_colors 后"));
+        assert!(system.contains("源码文件枚举、文本搜索、计数和分段读取统一使用 shell"));
         let user = first_request["messages"]
             .as_array()
             .unwrap()
@@ -115,6 +112,35 @@ pub(super) fn exercise(
         let reference = &attached["reference"];
         assert_eq!(reference["document_id"], id);
         assert_eq!(reference["line"], 2);
+        let loads = ["vclogg"]
+            .into_iter()
+            .enumerate()
+            .map(|(ix, group)| {
+                json!({"index":ix,"id":format!("load-{ix}"),"type":"function","function":{"name":"load_tool_group","arguments":json!({"group":group}).to_string()}})
+            })
+            .collect::<Vec<_>>();
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+            )
+            .unwrap();
+        write!(
+            socket,
+            "data: {}\n\ndata: [DONE]\n\n",
+            json!({"choices":[{"delta":{"tool_calls":loads},"finish_reason":"tool_calls"}]})
+        )
+        .unwrap();
+        drop(socket);
+        let (mut socket, loaded) = request(&listener);
+        assert_eq!(
+            loaded["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|message| message["role"] == "tool")
+                .count(),
+            1
+        );
         let calls = [
             ("read_logs", json!({"document_id":id,"version":reference["version"],"start_line":1,"limit":4})),
             ("search_logs", json!({"scope":"open","query":"ERROR"})),
@@ -143,7 +169,12 @@ pub(super) fn exercise(
             .as_array()
             .unwrap()
             .iter()
-            .filter(|m| m["role"] == "tool")
+            .filter(|m| {
+                m["role"] == "tool"
+                    && m["tool_call_id"]
+                        .as_str()
+                        .is_some_and(|id| id.starts_with("call-"))
+            })
             .collect::<Vec<_>>();
         assert_eq!(tools.len(), 8);
         for tool in tools {

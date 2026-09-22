@@ -223,21 +223,6 @@ fn ident(byte: u8) -> bool {
 
 pub(crate) async fn execute(root: &Path, index: usize, call: &ToolCall) -> Result<Value> {
     match call.name.as_str() {
-        "find_source_files" => {
-            let query = call.arguments["query"]
-                .as_str()
-                .context("Missing query")?
-                .to_lowercase();
-            let (paths, truncated) = files(root).await?;
-            let matches = paths
-                .iter()
-                .filter(|p| {
-                    grammar(p).is_some() && p.to_string_lossy().to_lowercase().contains(&query)
-                })
-                .take(100)
-                .collect::<Vec<_>>();
-            Ok(json!({"root":index,"paths":matches,"truncated":truncated || matches.len()==100}))
-        }
         "source_outline" => {
             let relative = call.arguments["path"].as_str().context("Missing path")?;
             if grammar(Path::new(relative)).is_none() {
@@ -440,14 +425,6 @@ mod tests {
             name: name.into(),
             arguments,
         };
-        let found = execute(
-            &root,
-            0,
-            &call("find_source_files", json!({"query":"worker"})),
-        )
-        .await
-        .unwrap();
-        assert_eq!(found["paths"][0], "Worker.java");
         let symbols = execute(
             &root,
             0,
