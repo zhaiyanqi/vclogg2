@@ -1940,10 +1940,12 @@ impl Workspace {
                                 },
                             ))
                             .child(
+                                // Keep Input's rem-based line height: a fractional,
+                                // font-relative height can trigger vertical cursor
+                                // reveal and a one-frame jump on Windows.
                                 Input::new(&self.query)
                                     .small()
                                     .text_size(input_font_size)
-                                    .line_height(relative(1.25))
                                     .size_full()
                                     .cleanable(true)
                                     .prefix(div().child(Icon::new(IconName::Search).small()))
