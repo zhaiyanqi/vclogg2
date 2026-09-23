@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "compat/xim-ctext",
     "crates/vclogg-ai",
     "crates/vclogg-app",
     "crates/vclogg-core",
@@ -61,6 +62,8 @@ todo = "deny"
 # but replace the uninhabited opaque Class type that rustc is phasing out.
 [patch.crates-io]
 block = { path = "vendor/block" }
+# Bridge the legacy XIM dependency to the official decoder with GB2312 fixes.
+xim-ctext = { path = "compat/xim-ctext" }
 
 [profile.dev]
 codegen-units = 16

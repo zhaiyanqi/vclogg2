@@ -1,0 +1,17 @@
+[package]
+name = "xim-ctext"
+version = "0.3.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+description = "VCLogg2 compatibility bridge to the upstream Compound Text decoder"
+
+[dependencies]
+upstream = { package = "xim-ctext", version = "=0.4.1", default-features = false }
+
+[features]
+default = ["std"]
+std = ["upstream/std"]
+
+[dev-dependencies]
+zed-xim = { version = "=0.4.0-zed", features = ["client"] }

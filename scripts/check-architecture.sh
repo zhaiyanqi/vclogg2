@@ -43,12 +43,25 @@ require_file crates/vclogg-data/src/lib.rs
 require_file crates/vclogg-app/Cargo.toml
 require_file crates/vclogg-app/src/main.rs
 require_file crates/vclogg-ai/src/lib.rs
-if search_quiet '^\[patch\.' Cargo.toml; then
-  fail "workspace must use upstream dependencies without Cargo source patches"
+# Allow only the existing macOS block patch and the X11 decoder bridge.
+# GPUI framework and input-method source must stay in upstream packages.
+if ! awk '
+  /^\[/ { in_patch = ($0 ~ /^\[patch\./) }
+  in_patch && /^\[/ && $0 != "[patch.crates-io]" { exit 1 }
+  in_patch && /^[[:alnum:]_-]+[[:space:]]*=/ {
+    if ($0 != "block = { path = \"vendor/block\" }" &&
+        $0 != "xim-ctext = { path = \"compat/xim-ctext\" }") exit 1
+  }
+' Cargo.toml; then
+  fail "only the documented block patch and X11 decoder bridge are allowed"
 fi
-if [[ -d vendor ]] && [[ -n "$(find vendor -type f ! -name .DS_Store -print -quit)" ]]; then
-  fail "external dependency source must not be copied into vendor/"
-fi
+for dependency_directory in vendor/*; do
+  [[ -d "$dependency_directory" ]] || continue
+  case "$dependency_directory" in
+    vendor/block) ;;
+    *) fail "unexpected vendored dependency: $dependency_directory" ;;
+  esac
+done
 for dependency in gpui gpui-base gpui-component vclogg2 vclogg-core vclogg-data; do
   forbid_manifest_dependency crates/vclogg-ai/Cargo.toml "$dependency"
 done
