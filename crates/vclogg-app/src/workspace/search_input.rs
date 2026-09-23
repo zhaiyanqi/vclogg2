@@ -1,8 +1,36 @@
+use gpui_kit::base::input::{InputBaseState, InputModeKind, SelectToPreviousWordStart};
 use gpui_kit::component::input::{
     Enter, InputGroup, InputGroupAddon, InputGroupAddonAlignment, InputGroupControl, Textarea,
 };
 
 use super::*;
+
+fn select_last_search_word<M: InputModeKind>(
+    input: &Entity<InputBaseState<M>>,
+    position: Point<Pixels>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let focus = input.update(cx, |input, cx| {
+        let end = input.text().len();
+        let caret = input.range_to_bounds(&(end..end))?;
+        if end == 0
+            || !input.input_bounds().contains(&position)
+            || position.x < caret.right()
+            || position.y < caret.top()
+            || position.y >= caret.bottom()
+        {
+            return None;
+        }
+        input.set_selected_range(end..end, cx);
+        Some(input.focus_handle(cx))
+    });
+    if let Some(focus) = focus {
+        // Use the editor's public word-selection action so keyboard and this
+        // search-specific shortcut share Unicode word boundaries.
+        focus.dispatch_action(&SelectToPreviousWordStart, window, cx);
+    }
+}
 
 impl Workspace {
     pub(super) fn search_input_focus_handle(&self, cx: &App) -> FocusHandle {
@@ -122,7 +150,7 @@ impl Workspace {
                 .py(px(2.))
                 .into()
         };
-        InputGroup::new("search-input-group")
+        let group = InputGroup::new("search-input-group")
             .small()
             .w_full()
             .h_auto()
@@ -184,14 +212,35 @@ impl Workspace {
                                 this.toggle_search_history_popup(window, cx);
                             })),
                     ),
+            );
+        div()
+            .w_full()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    if event.click_count != 2 {
+                        return;
+                    }
+                    if this.search_input_multiline {
+                        select_last_search_word(&this.query, event.position, window, cx);
+                    } else {
+                        select_last_search_word(
+                            &this.single_line_query,
+                            event.position,
+                            window,
+                            cx,
+                        );
+                    }
+                }),
             )
+            .child(group)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::TestAppContext;
     use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{InputEvent as _, TestAppContext};
 
     use super::*;
 
@@ -206,6 +255,127 @@ mod tests {
                 workspace.render_search_bar(window, cx).into_any_element()
             })
         }
+    }
+
+    #[gpui_kit::test]
+    fn double_click_after_search_text_selects_last_word(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::actions::init(cx);
+            Workspace::init_window_registry(cx);
+            crate::notifications::init(cx);
+            crate::app_icon::init(cx);
+        });
+        let mut workspace = None;
+        let handle = cx.open_window(size(px(1400.), px(400.)), |window, cx| {
+            let view = cx.new(|cx| Workspace::new(false, Vec::new(), window, cx));
+            workspace = Some(view.clone());
+            let toolbar = cx.new(|cx| SearchToolbar {
+                _subscription: cx.observe(&view, |_, _, cx| cx.notify()),
+                workspace: view,
+            });
+            Root::new(toolbar, window, cx)
+        });
+        let workspace = workspace.unwrap();
+        cx.update_window(handle.into(), |_, window, cx| {
+            for multiline in [false, true] {
+                for (value, expected) in [
+                    ("log|abc|test|sss", "sss"),
+                    ("log|error_code", "error_code"),
+                    ("error café", "café"),
+                    ("error 文", "文"),
+                    ("error 🎉", "🎉"),
+                    ("", ""),
+                ] {
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.search_input_multiline = multiline;
+                        workspace.query.update(cx, |query, cx| {
+                            query.set_value(value, window, cx);
+                        });
+                        workspace.sync_single_line_search(window, cx);
+                        cx.notify();
+                    });
+                    window.render_frame(cx);
+                    let id = if multiline {
+                        workspace.read(cx).query.entity_id()
+                    } else {
+                        workspace.read(cx).single_line_query.entity_id()
+                    };
+                    // These short values leave the center of the input blank.
+                    window.click(("input", id), cx);
+                    let selected = if multiline {
+                        workspace.read(cx).query.read(cx).selected_range()
+                    } else {
+                        workspace
+                            .read(cx)
+                            .single_line_query
+                            .read(cx)
+                            .selected_range()
+                    };
+                    assert_eq!(selected, value.len()..value.len());
+                    window.double_click(("input", id), cx);
+                    let selected = if multiline {
+                        workspace.read(cx).query.read(cx).selected_value()
+                    } else {
+                        workspace
+                            .read(cx)
+                            .single_line_query
+                            .read(cx)
+                            .selected_value()
+                    };
+                    assert_eq!(
+                        selected.as_ref(),
+                        expected,
+                        "multiline={multiline}, value={value}"
+                    );
+                    if value == "log|abc|test|sss" {
+                        let first_word = if multiline {
+                            workspace.read(cx).query.read(cx).range_to_bounds(&(0..3))
+                        } else {
+                            workspace
+                                .read(cx)
+                                .single_line_query
+                                .read(cx)
+                                .range_to_bounds(&(0..3))
+                        }
+                        .unwrap();
+                        // A double-click on text must keep native hit testing;
+                        // the trailing-space shortcut must not select the tail.
+                        window.dispatch_event(
+                            MouseDownEvent {
+                                position: first_word.center(),
+                                button: MouseButton::Left,
+                                click_count: 2,
+                                ..Default::default()
+                            }
+                            .to_platform_input(),
+                            cx,
+                        );
+                        window.dispatch_event(
+                            MouseUpEvent {
+                                position: first_word.center(),
+                                button: MouseButton::Left,
+                                click_count: 2,
+                                ..Default::default()
+                            }
+                            .to_platform_input(),
+                            cx,
+                        );
+                        let selected = if multiline {
+                            workspace.read(cx).query.read(cx).selected_value()
+                        } else {
+                            workspace
+                                .read(cx)
+                                .single_line_query
+                                .read(cx)
+                                .selected_value()
+                        };
+                        assert_eq!(selected.as_ref(), "log");
+                    }
+                }
+            }
+        })
+        .unwrap();
     }
 
     #[gpui_kit::test]
