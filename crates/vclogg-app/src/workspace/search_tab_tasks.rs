@@ -17,6 +17,7 @@ pub(super) struct SearchTabJob {
     pub(super) owner: SearchTabOwner,
     pub(super) id: SearchTabId,
     revision: u64,
+    restore: bool,
     query: SearchQuery,
     ranges: search_limits::FileSearchRanges,
     input: SearchTabInput,
@@ -285,6 +286,7 @@ impl Workspace {
             owner,
             id,
             revision,
+            restore,
             query,
             ranges: state.ranges,
             input,
@@ -381,6 +383,7 @@ impl Workspace {
                     _ => None,
                 };
                 if current.is_some_and(|tab| Arc::ptr_eq(&tab.document, &document)) {
+                    state.prepare_result_viewport(job.restore);
                     state
                         .ranges
                         .completed(document.path(), job.ranges.get(document.path()), false);
@@ -393,6 +396,7 @@ impl Workspace {
                 }
             }
             Ok(SearchTabOutput::Global(results, matcher, notice)) => {
+                state.prepare_result_viewport(job.restore);
                 let results = results
                     .into_iter()
                     .map(|result| {

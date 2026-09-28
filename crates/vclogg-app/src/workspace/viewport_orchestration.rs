@@ -36,7 +36,11 @@ impl Workspace {
             WrappedRegion::Results,
             row_height,
             cx,
-        );
+        )
+        .map(|mut anchor| {
+            anchor.at_end = false;
+            anchor
+        });
         let measured_heights = if word_wrap {
             let table = self.documents[tab_ix].result_table.read(cx);
             self.documents[tab_ix]

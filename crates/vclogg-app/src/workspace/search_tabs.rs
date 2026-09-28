@@ -36,6 +36,20 @@ pub(super) struct SearchTabState {
 }
 
 impl SearchTabState {
+    pub(super) fn prepare_result_viewport(&mut self, restore: bool) {
+        if restore {
+            return;
+        }
+        // A new query replaces the projection. A short previous result also counts as
+        // being at the bottom, but must retain its row anchor when more matches arrive.
+        if let Some(viewport) = self.saved.local.viewport.as_mut() {
+            viewport.at_end = false;
+        }
+        if let Some(viewport) = self.saved.context.viewport.as_mut() {
+            viewport.at_end = false;
+        }
+    }
+
     pub(super) fn restored(saved: PersistedSearchTab) -> Self {
         Self {
             needs_restore: saved.completed.is_some() || saved.submitted.is_some(),

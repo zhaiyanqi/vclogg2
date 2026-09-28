@@ -2064,14 +2064,21 @@ impl Workspace {
         if count == 0 {
             return None;
         }
-        let position = viewport.capture_viewport_position(count, None, row_height)?;
+        let preferred_row = (region == WrappedRegion::Results)
+            .then(|| table_state.active_log_row())
+            .flatten();
+        let position = viewport.capture_viewport_position(count, preferred_row, row_height)?;
         let source_row = table_state.delegate().source_row(position.row_ix)?;
         Some(
             ViewportBookmark::new(
                 source_row,
                 position.viewport_y.as_f32(),
                 viewport.horizontal_offset().as_f32(),
-                viewport.is_at_end(),
+                Self::viewport_anchor_retains_end(
+                    viewport.is_at_end(),
+                    preferred_row,
+                    position.row_ix,
+                ),
             )
             .with_anchor_row_height(
                 viewport

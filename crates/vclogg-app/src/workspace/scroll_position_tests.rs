@@ -7,6 +7,65 @@ fn test_viewport(word_wrap: bool, count: usize) -> LogViewportState<usize> {
     LogViewportState::new(word_wrap, viewport, Rc::default())
 }
 
+#[test]
+fn new_search_preserves_row_bookmarks_instead_of_short_result_bottom() {
+    use super::search_tabs::SearchTabState;
+    use crate::search_context::{PersistedSearchRowKey, PersistedSearchTab};
+
+    let mut saved = PersistedSearchTab::default();
+    saved.local.selected_source_row = Some(7_000);
+    saved.local.viewport = Some(ViewportBookmark::new(7_000, 40., 12., true));
+    saved.context.viewport = Some(PersistedSearchViewport::new(
+        PersistedSearchRowKey {
+            path: "test.log".into(),
+            source_row: Some(7_000),
+        },
+        40.,
+        12.,
+        true,
+        2,
+    ));
+    let mut state = SearchTabState::restored(saved.clone());
+
+    state.prepare_result_viewport(true);
+    assert_eq!(state.saved, saved, "session restoration retains its bottom");
+
+    state.prepare_result_viewport(false);
+    saved.local.viewport.as_mut().unwrap().at_end = false;
+    saved.context.viewport.as_mut().unwrap().at_end = false;
+    assert_eq!(
+        state.saved, saved,
+        "new search retains row, Y and selection"
+    );
+
+    for word_wrap in [false, true] {
+        let viewport = test_viewport(word_wrap, 3);
+        viewport.scroll_to_end();
+        let bookmark = state.saved.local.viewport.unwrap();
+        // The selected source row was result #3; the broadened query now includes
+        // every source row, moving it to result #7001 without changing its identity.
+        viewport.restore_viewport(
+            bookmark.anchor_source_row,
+            px(bookmark.anchor_viewport_y()),
+            bookmark.at_end,
+            px(20.),
+        );
+        let range = viewport.requested_row_range(10_000, px(200.), px(20.));
+        assert!(range.contains(&7_000));
+        assert!(
+            !range.contains(&9_999),
+            "new results must not jump to the bottom"
+        );
+    }
+}
+
+#[test]
+fn visible_selected_anchor_does_not_inherit_bottom_following() {
+    assert!(!Workspace::viewport_anchor_retains_end(true, Some(2), 2));
+    assert!(Workspace::viewport_anchor_retains_end(true, Some(50), 2));
+    assert!(Workspace::viewport_anchor_retains_end(true, None, 0));
+}
+
 fn wrapped_layout_key_for_test() -> WrappedLayoutKey {
     WrappedLayoutKey {
         content_revision: 1,
