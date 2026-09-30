@@ -185,7 +185,11 @@ impl Workspace {
                 .unwrap_or(&state.saved.draft)
                 .query()
         } else {
-            state.saved.draft.query()
+            SearchQuery {
+                case_sensitive: self.case_sensitive,
+                regex: self.regex,
+                ..state.saved.draft.query()
+            }
         };
         let input =
             match owner {

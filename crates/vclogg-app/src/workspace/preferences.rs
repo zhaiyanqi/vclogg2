@@ -1083,11 +1083,36 @@ impl Workspace {
     pub(super) fn apply_global_search_options(&mut self, case_sensitive: bool, regex: bool) {
         self.app_settings.default_case_sensitive = case_sensitive;
         self.app_settings.default_use_regex = regex;
-        if self.search_tabs.installed.is_none() {
-            self.case_sensitive = case_sensitive;
-            self.regex = regex;
-        }
+        self.case_sensitive = case_sensitive;
+        self.regex = regex;
         self.search_options_modified = true;
+    }
+
+    pub(super) fn publish_global_search_options(
+        &mut self,
+        case_sensitive: bool,
+        regex: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let source_window = window.window_handle();
+        let other_workspaces = cx.update_global::<WorkspaceWindowRegistry, _>(|registry, _| {
+            registry.search_options = Some((case_sensitive, regex));
+            registry
+                .windows
+                .iter()
+                .filter(|entry| entry.window != source_window)
+                .map(|entry| entry.workspace.clone())
+                .collect::<Vec<_>>()
+        });
+        self.apply_global_search_options(case_sensitive, regex);
+        for workspace in other_workspaces {
+            workspace.update(cx, |workspace, cx| {
+                workspace.apply_global_search_options(case_sensitive, regex);
+                cx.notify();
+            });
+        }
+        cx.notify();
     }
 
     pub(super) fn queue_app_settings_save(

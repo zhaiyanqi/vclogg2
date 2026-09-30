@@ -511,8 +511,12 @@ impl Workspace {
         self.search_tabs.installed = Some((owner, id));
         self.view_state.active_search = Some(SearchSessionKey::SearchTab(owner, id));
         self.search_ranges = state.ranges.clone();
-        self.case_sensitive = state.saved.draft.case_sensitive;
-        self.regex = state.saved.draft.regex;
+        // Drafts follow the shared switches; completed/submitted queries retain their semantics.
+        state.saved.draft.case_sensitive = self.case_sensitive;
+        state.saved.draft.regex = self.regex;
+        if let Some(slot) = self.search_tabs.state_mut(owner, id) {
+            slot.saved.draft = state.saved.draft.clone();
+        }
         self.query.update(cx, |input, cx| {
             input.set_value(state.saved.draft.text.clone(), window, cx)
         });

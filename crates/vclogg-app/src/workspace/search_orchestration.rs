@@ -1674,7 +1674,7 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Search options belong to the active search tab; application settings seed new groups.
+    /// All windows and search scopes share application-wide matching options.
     pub(super) fn set_active_search_options(
         &mut self,
         case_sensitive: bool,
@@ -1683,10 +1683,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.sync_search_tab(window, cx);
-        self.case_sensitive = case_sensitive;
-        self.regex = regex;
+        self.publish_global_search_options(case_sensitive, regex, window, cx);
         self.persist_search_tabs(window, cx);
-        cx.notify();
+        self.queue_app_settings_save(self.app_settings.clone(), false, window, cx);
     }
 
     pub(super) fn jump_to_global_result(

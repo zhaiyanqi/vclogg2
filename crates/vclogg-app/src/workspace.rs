@@ -2188,19 +2188,12 @@ impl Workspace {
                         app_settings.app_icon = crate::app_icon::restored_icon(app_settings.app_icon, cx);
                         crate::app_icon::apply(app_settings.app_icon, window, cx);
                         let preserve_search_options = this.search_options_modified;
-                        let local_search_options = preserve_search_options
-                            .then_some((this.case_sensitive, this.regex));
                         let search_options = cx.update_global::<WorkspaceWindowRegistry, _>(
                             |registry, _| {
-                                if let Some(search_options) = local_search_options {
-                                    registry.search_options = Some(search_options);
-                                    search_options
-                                } else {
-                                    *registry.search_options.get_or_insert((
-                                        app_settings.default_case_sensitive,
-                                        app_settings.default_use_regex,
-                                    ))
-                                }
+                                *registry.search_options.get_or_insert((
+                                    app_settings.default_case_sensitive,
+                                    app_settings.default_use_regex,
+                                ))
                             },
                         );
                         app_settings.default_case_sensitive = search_options.0;
@@ -2236,9 +2229,11 @@ impl Workspace {
                         this.app_settings = app_settings.clone();
                         this.restore_search_panel_height(search_panel_height, window, cx);
                         this.restore_filter_popover_size(filter_popover_size, window, cx);
-                        this.apply_global_search_options(
+                        this.publish_global_search_options(
                             app_settings.default_case_sensitive,
                             app_settings.default_use_regex,
+                            window,
+                            cx,
                         );
                         this.search_options_modified = preserve_search_options;
                         if preserve_search_options {
