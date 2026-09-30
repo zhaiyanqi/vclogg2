@@ -105,6 +105,7 @@ use crate::{
     search_autocomplete::{
         SearchSuggestion, SearchSuggestionSource, apply_search_suggestion,
         search_autocomplete_needle, search_autocomplete_suggestions,
+        search_suggestion_match_ranges,
     },
     search_context::{
         PersistedDirectorySearchOptions, PersistedDirectorySearchSession,

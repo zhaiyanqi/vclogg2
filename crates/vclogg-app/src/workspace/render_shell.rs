@@ -1004,25 +1004,51 @@ impl Workspace {
     }
 
     pub(super) fn highlighted_search_suggestion(value: &str, needle: &str, cx: &App) -> StyledText {
-        let normalized_value = value.to_lowercase();
-        let normalized_needle = needle.to_lowercase();
-        if normalized_needle.is_empty() {
-            return StyledText::new(value.to_string());
-        }
-        let highlights = normalized_value
-            .match_indices(&normalized_needle)
-            .filter_map(|(start, matched)| {
-                let end = start + matched.len();
-                (value.is_char_boundary(start) && value.is_char_boundary(end)).then_some((
-                    start..end,
+        let highlights = search_suggestion_match_ranges(value, needle)
+            .into_iter()
+            .map(|range| {
+                (
+                    range,
                     HighlightStyle {
                         background_color: Some(ui_theme::suggestion_match_highlight(cx)),
                         ..HighlightStyle::default()
                     },
-                ))
+                )
             })
             .collect::<Vec<_>>();
         StyledText::new(value.to_string()).with_highlights(highlights)
+    }
+
+    fn highlighted_search_suggestion_source(
+        source: &SearchSuggestionSource,
+        needle: &str,
+        cx: &App,
+    ) -> StyledText {
+        match source {
+            SearchSuggestionSource::History => {
+                StyledText::new(crate::tr!("历史记录", "History").to_string())
+            }
+            SearchSuggestionSource::PredefinedFilter { name } => {
+                let source = crate::tr_args!("预定义过滤器 · {name}", "Predefined filter · {name}");
+                // Highlight only the name, never the localized source label.
+                let Some(name_start) = source.rfind(name) else {
+                    return StyledText::new(source);
+                };
+                let highlights = search_suggestion_match_ranges(name, needle)
+                    .into_iter()
+                    .map(|range| {
+                        (
+                            range.start + name_start..range.end + name_start,
+                            HighlightStyle {
+                                background_color: Some(ui_theme::suggestion_match_highlight(cx)),
+                                ..HighlightStyle::default()
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                StyledText::new(source).with_highlights(highlights)
+            }
+        }
     }
 
     pub(super) fn render_search_suggestions(
@@ -1053,17 +1079,11 @@ impl Workspace {
                             let selected = selected_ix == Some(ix);
                             let value = suggestion.value.clone();
                             let choose = suggestion.clone();
-                            let source = match &suggestion.source {
-                                SearchSuggestionSource::History => {
-                                    crate::tr!("历史记录", "History").to_string()
-                                }
-                                SearchSuggestionSource::PredefinedFilter { name } => {
-                                    crate::tr_args!(
-                                        "预定义过滤器 · {name}",
-                                        "Predefined filter · {name}"
-                                    )
-                                }
-                            };
+                            let source = Self::highlighted_search_suggestion_source(
+                                &suggestion.source,
+                                &needle,
+                                cx,
+                            );
                             let workspace = workspace.clone();
                             v_flex()
                                 .id(format!("search-autocomplete-suggestion:{value}"))
@@ -2265,6 +2285,81 @@ mod tests {
     const OVERLAY_COLOR: u32 = 0x65_43_21;
 
     struct DeferredOverlayHarness;
+
+    struct SuggestionSourceHarness {
+        source: SearchSuggestionSource,
+        needle: &'static str,
+    }
+
+    impl Render for SuggestionSourceHarness {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(Workspace::highlighted_search_suggestion_source(
+                    &self.source,
+                    self.needle,
+                    cx,
+                ))
+        }
+    }
+
+    #[gpui_kit::test]
+    fn search_suggestion_source_paints_name_matches(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        for (source, needle, expected) in [
+            (
+                SearchSuggestionSource::PredefinedFilter {
+                    name: "快速截图工具".into(),
+                },
+                "截",
+                1,
+            ),
+            (
+                SearchSuggestionSource::PredefinedFilter {
+                    name: "快速截图工具".into(),
+                },
+                "jt",
+                1,
+            ),
+            (
+                SearchSuggestionSource::PredefinedFilter {
+                    name: "快速截图工具".into(),
+                },
+                "jietu",
+                1,
+            ),
+            (
+                SearchSuggestionSource::PredefinedFilter {
+                    name: "快速截图工具".into(),
+                },
+                "nomatch",
+                0,
+            ),
+            (
+                SearchSuggestionSource::PredefinedFilter {
+                    name: "快速截图工具".into(),
+                },
+                "过滤器",
+                0,
+            ),
+            (SearchSuggestionSource::History, "历史", 0),
+        ] {
+            let (_, cx) = cx.add_window_view(|_, _| SuggestionSourceHarness { source, needle });
+            cx.update(|window, cx| {
+                window.draw(cx).clear(cx);
+                let color = ui_theme::suggestion_match_highlight(cx);
+                assert_eq!(
+                    window
+                        .painted_quads()
+                        .iter()
+                        .filter(|quad| quad.background == color.into())
+                        .count(),
+                    expected,
+                    "needle={needle}"
+                );
+            });
+        }
+    }
 
     impl Render for DeferredOverlayHarness {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {

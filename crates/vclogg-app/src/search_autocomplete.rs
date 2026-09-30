@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, ops::Range};
 
 use pinyin::ToPinyinMulti;
 
@@ -112,10 +112,49 @@ impl SuggestionMatcher {
     }
 
     fn matches(&self, value: &str) -> bool {
-        let value = value.to_lowercase();
-        if value.contains(&self.needle) {
-            return true;
+        self.needle.is_empty() || !self.match_ranges(value).is_empty()
+    }
+
+    fn match_ranges(&self, original_value: &str) -> Vec<Range<usize>> {
+        if self.needle.is_empty() {
+            return Vec::new();
         }
+        let value = original_value.to_lowercase();
+        let mut ranges = value
+            .match_indices(&self.needle)
+            .map(|(start, matched)| start..start + matched.len())
+            .collect::<Vec<_>>();
+        if ranges.is_empty() {
+            ranges = self.pinyin_match_ranges(&value);
+        }
+        if ranges.is_empty() {
+            return ranges;
+        }
+
+        // Lowercasing can expand a character (for example İ). Map normalized
+        // byte offsets back to whole characters in the displayed string.
+        let original_bytes = original_value
+            .char_indices()
+            .flat_map(|(start, character)| {
+                let length = character.to_lowercase().map(char::len_utf8).sum();
+                std::iter::repeat_n(start..start + character.len_utf8(), length)
+            })
+            .collect::<Vec<_>>();
+        let mut merged: Vec<Range<usize>> = Vec::new();
+        for range in ranges {
+            let range = original_bytes[range.start].start..original_bytes[range.end - 1].end;
+            if let Some(previous) = merged.last_mut()
+                && range.start <= previous.end
+            {
+                previous.end = previous.end.max(range.end);
+            } else {
+                merged.push(range);
+            }
+        }
+        merged
+    }
+
+    fn pinyin_match_ranges(&self, value: &str) -> Vec<Range<usize>> {
         let needle = &self.pinyin_needle;
         if needle.is_empty()
             || !needle.bytes().all(|byte| byte.is_ascii_alphabetic())
@@ -123,30 +162,34 @@ impl SuggestionMatcher {
                 .chars()
                 .any(|character| character.to_pinyin_multi().is_some())
         {
-            return false;
+            return Vec::new();
         }
 
         // Track query offsets instead of enumerating all combinations of
         // pronunciations and syllable prefixes. Each Chinese character may
         // consume a full syllable, an initial, or any intermediate prefix.
         // Offset zero starts a substring at each character boundary.
-        let mut offsets = vec![false; needle.len() + 1];
+        let mut offsets = vec![None; needle.len() + 1];
         let mut next = offsets.clone();
-        for character in value.chars() {
-            offsets[0] = true;
-            next.fill(false);
+        let mut ranges = Vec::new();
+        for (start, character) in value.char_indices() {
+            offsets[0] = Some(start);
+            next.fill(None);
             let mut consume = |syllable: &str, allow_prefix: bool| {
-                for (offset, matched) in offsets.iter().enumerate().take(needle.len()) {
-                    if !matched {
+                for (offset, match_start) in offsets.iter().enumerate().take(needle.len()) {
+                    let Some(match_start) = *match_start else {
                         continue;
-                    }
+                    };
                     let remaining = &needle.as_bytes()[offset..];
                     let max_len = syllable.len().min(remaining.len());
                     for length in 1..=max_len {
                         if (allow_prefix || length == syllable.len())
                             && remaining[..length] == syllable.as_bytes()[..length]
                         {
-                            next[offset + length] = true;
+                            let match_end = &mut next[offset + length];
+                            *match_end = Some(
+                                match_end.map_or(match_start, |previous| previous.min(match_start)),
+                            );
                         }
                     }
                 }
@@ -159,13 +202,18 @@ impl SuggestionMatcher {
                 let mut buffer = [0; 4];
                 consume(character.encode_utf8(&mut buffer), false);
             }
-            if next[needle.len()] {
-                return true;
+            if let Some(match_start) = next[needle.len()] {
+                ranges.push(match_start..start + character.len_utf8());
             }
             std::mem::swap(&mut offsets, &mut next);
         }
-        false
+        ranges.sort_unstable_by_key(|range| range.start);
+        ranges
     }
+}
+
+pub(crate) fn search_suggestion_match_ranges(value: &str, needle: &str) -> Vec<Range<usize>> {
+    SuggestionMatcher::new(needle).match_ranges(value)
 }
 
 pub(crate) fn search_autocomplete_suggestions(
@@ -277,6 +325,53 @@ mod tests {
         filter.value = value.into();
         filter.use_regex = use_regex;
         filter
+    }
+
+    #[test]
+    fn highlights_literal_name_matches_without_surrounding_text() {
+        let value = "快速截图工具";
+        assert_eq!(search_suggestion_match_ranges(value, "截图"), vec![6..12]);
+        assert_eq!(search_suggestion_match_ranges(value, "截"), vec![6..9]);
+        assert!(search_suggestion_match_ranges(value, "Screenshot").is_empty());
+        assert!(search_suggestion_match_ranges(value, "").is_empty());
+    }
+
+    #[test]
+    fn highlights_the_chinese_characters_matched_by_pinyin() {
+        let value = "快速截图工具";
+        for needle in ["jt", "jietu", "jtu", "jie tu", "jie'tu", "JIETU"] {
+            assert_eq!(
+                search_suggestion_match_ranges(value, needle),
+                vec![6..12],
+                "needle={needle}"
+            );
+        }
+        assert_eq!(search_suggestion_match_ranges(value, "jie"), vec![6..9]);
+        assert_eq!(search_suggestion_match_ranges(value, "tu"), vec![9..12]);
+        assert_eq!(
+            search_suggestion_match_ranges("重庆截图API", "cqjt"),
+            vec![0..12]
+        );
+        assert_eq!(
+            search_suggestion_match_ranges("重庆截图API", "jtapi"),
+            vec![6..15]
+        );
+    }
+
+    #[test]
+    fn highlights_repeated_and_overlapping_matches_in_character_boundaries() {
+        assert_eq!(
+            search_suggestion_match_ranges("截图/截图", "jt"),
+            vec![0..6, 7..13]
+        );
+        assert_eq!(search_suggestion_match_ranges("截图图", "tt"), vec![3..9]);
+        assert_eq!(
+            search_suggestion_match_ranges("ERROR error", "error"),
+            vec![0..5, 6..11]
+        );
+        assert_eq!(search_suggestion_match_ranges("İ截图", "jt"), vec![2..8]);
+        assert_eq!(search_suggestion_match_ranges("İ截图", "i"), vec![0..2]);
+        assert_eq!(search_suggestion_match_ranges("İ截图", "截图"), vec![2..8]);
     }
 
     #[test]
