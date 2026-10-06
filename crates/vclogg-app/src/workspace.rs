@@ -20,9 +20,11 @@ use gpui_kit::base::{
     GlobalState, POPUP_PRIORITY, Scrollbar, ScrollbarHandle, TextSelection, TextSelectionScopeId,
     actions::{SelectDown, SelectFirst, SelectLast, SelectPageDown, SelectPageUp, SelectUp},
 };
+#[cfg(test)]
+use gpui_kit::component::Root;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, ElementExt as _, FocusableExt as _, Icon, IconName,
-    IndexPath, Root, Selectable as _, Side, Sizable as _, StyledExt as _, TitleBar, WindowExt as _,
+    IndexPath, Selectable as _, Side, Sizable as _, StyledExt as _, TitleBar, WindowExt as _,
     animation::ease_out_cubic,
     button::{Button, ButtonCustomVariant, ButtonRounded, ButtonVariants as _},
     checkbox::Checkbox,
@@ -2810,12 +2812,9 @@ impl Render for Workspace {
                         ),
                 ))
             })
-            .child(crate::modal_event_layer::render_foreground_pointer_barrier())
-            .children(Root::render_dialog_layer(window, cx))
-            .children(Root::render_sheet_layer(window, cx))
-            .when(crate::notifications::is_enabled(cx), |shell| {
-                shell.children(Root::render_notification_layer(window, cx))
-            });
+            // Kit's Root paints the overlays after this content. Keep the barrier
+            // here so their pointer events cannot bubble into the log views.
+            .child(crate::modal_event_layer::render_foreground_pointer_barrier());
         crate::ui_performance::element(
             "Workspace::request_layout",
             "Workspace::prepaint",

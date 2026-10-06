@@ -60,9 +60,9 @@ pub(crate) fn restore_color_picker_trigger(
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
+    use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{
-        Context, FocusHandle, Modifiers, Render, Styled as _, TestAppContext, point,
-        prelude::FluentBuilder as _, px,
+        Context, FocusHandle, Render, Styled as _, TestAppContext, prelude::FluentBuilder as _, px,
     };
 
     use super::*;
@@ -129,7 +129,7 @@ mod tests {
             assert!(stale_focus.is_focused(window));
         });
 
-        cx.simulate_click(point(px(20.), px(16.)), Modifiers::default());
+        cx.update(|window, cx| window.click("dialog-action-test-confirm", cx));
         assert!(
             confirmed.get(),
             "pointer confirm must reach the dialog even when the old focus node was removed"
