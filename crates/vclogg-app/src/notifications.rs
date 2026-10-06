@@ -287,3 +287,81 @@ impl Render for NotificationCenter {
         list
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{TestAppContext, WindowOptions};
+
+    use super::*;
+
+    struct NotificationControls;
+
+    impl Render for NotificationControls {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().child(
+                Button::new("toggle-notifications")
+                    .label("Toggle notifications")
+                    .on_click(|_, window, cx| toggle(window, cx)),
+            )
+        }
+    }
+
+    #[gpui_kit::test]
+    fn disabling_notifications_clears_all_windows_and_preserves_history(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            init(cx);
+        });
+        let handles = [0, 1].map(|_| {
+            cx.update(|cx| {
+                gpui_kit::open_window(WindowOptions::default(), cx, |_, cx| {
+                    cx.new(|_| NotificationControls)
+                })
+                .unwrap()
+                .0
+            })
+        });
+        for handle in handles {
+            cx.update_window(handle, |_, window, cx| {
+                window.notify_message("Before disabling", cx);
+                window.render_frame(cx);
+                assert_eq!(window.notifications(cx).len(), 1);
+            })
+            .unwrap();
+        }
+        cx.update_window(handles[0], |_, window, cx| {
+            window.click("toggle-notifications", cx);
+            assert!(!is_enabled(cx));
+        })
+        .unwrap();
+        // Root keeps dismissed toasts mounted until their exit transition ends.
+        cx.run_until_parked();
+        cx.background_executor
+            .advance_clock(std::time::Duration::from_millis(250));
+        cx.run_until_parked();
+        for handle in handles {
+            cx.update_window(handle, |_, window, cx| {
+                assert!(window.notifications(cx).is_empty());
+                window.notify_message("While disabled", cx);
+                window.render_frame(cx);
+                assert!(window.notifications(cx).is_empty());
+            })
+            .unwrap();
+        }
+        cx.update(|cx| assert_eq!(center(cx).read(cx).records.len(), 4));
+        cx.update_window(handles[1], |_, window, cx| {
+            window.click("toggle-notifications", cx);
+            assert!(is_enabled(cx));
+            assert!(
+                window.notifications(cx).is_empty(),
+                "old notifications must not replay"
+            );
+            window.notify_message("After enabling", cx);
+            window.render_frame(cx);
+            assert_eq!(window.notifications(cx).len(), 1);
+            assert_eq!(center(cx).read(cx).records.len(), 5);
+        })
+        .unwrap();
+    }
+}
