@@ -60,7 +60,7 @@ mod workspace_state;
 
 use std::path::PathBuf;
 
-use gpui_kit::component::{Root, TitleBar, theme::ThemeMode};
+use gpui_kit::component::{TitleBar, theme::ThemeMode};
 use gpui_kit::*;
 
 use crate::workspace::{InitialDocument, Workspace};
@@ -115,7 +115,7 @@ fn open_workspace_window_with_options(
     };
     #[cfg(target_os = "macos")]
     let (window_options, traffic_light_position) = macos_window_controls::configure(window_options);
-    let handle = cx.open_window(window_options, |window, cx| {
+    let (handle, _) = gpui_kit::open_window(window_options, cx, |window, cx| {
         window.set_window_title("VCLogg2");
         app_icon::attach_window(window, cx);
         #[cfg(target_os = "macos")]
@@ -126,7 +126,7 @@ fn open_workspace_window_with_options(
         }
         let workspace = cx.new(|cx| Workspace::new(primary, initial_documents, window, cx));
         Workspace::register_window(&workspace, window, cx);
-        cx.new(|cx| Root::new(workspace, window, cx))
+        workspace
     })?;
     cx.activate(true);
     _ = handle.update(cx, |_, window, _| window.activate_window());
