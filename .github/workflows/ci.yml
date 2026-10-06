@@ -65,6 +65,9 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --locked
 
+      - name: Check UI performance profiler
+        run: cargo check -p vclogg2 --all-targets --features ui-performance-profiler --locked
+
   platform-check:
     name: ${{ matrix.name }}
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
@@ -95,3 +98,6 @@ jobs:
 
       - name: Check workspace
         run: cargo check --workspace --all-targets --locked
+
+      - name: Check UI performance profiler
+        run: cargo check -p vclogg2 --all-targets --features ui-performance-profiler --locked
