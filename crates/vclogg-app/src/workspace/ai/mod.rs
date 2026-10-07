@@ -22,6 +22,7 @@ use logs::*;
 mod configuration;
 mod context_view;
 mod conversation_actions;
+mod conversation_history;
 mod conversation_tab_view;
 mod conversation_tabs;
 mod mcp_settings;
