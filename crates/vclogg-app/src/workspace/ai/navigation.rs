@@ -1,6 +1,47 @@
 use super::*;
 
 impl ConversationSession {
+    pub(super) fn background_tool_result(
+        &mut self,
+        scope: &SharedScope,
+        call: &ToolCall,
+        cx: &mut Context<Self>,
+    ) -> Option<ToolResult> {
+        if self.active
+            || !matches!(
+                call.name.as_str(),
+                "navigate" | "show_search" | "append_search"
+            )
+        {
+            return None;
+        }
+        // Check visibility at commit time, after asynchronous evidence gathering.
+        Some(if call.name == "navigate" {
+            let reference = scope
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Analysis unavailable"))
+                .and_then(|state| {
+                    state
+                        .navigation_target(&call.arguments)
+                        .map(|(doc, row, _)| doc.reference(row))
+                });
+            match reference {
+                Ok(reference) => {
+                    self.deferred_reference = Some(reference.clone());
+                    cx.notify();
+                    ToolResult::ok(
+                        json!({"reference": reference, "status": "deferred", "message": "Navigation is available for the user to open; the active view was not changed."}),
+                    )
+                }
+                Err(error) => ToolResult::error(error.to_string()),
+            }
+        } else {
+            ToolResult::error(
+                "This conversation is in the background. Use search_logs to inspect evidence without changing the active search view.",
+            )
+        })
+    }
+
     pub(super) fn conversation_with_log_sources(&self) -> vclogg_ai::Conversation {
         let mut conversation = self.conversation.clone();
         for scope in self.reference_scopes.iter().chain(self.scope.iter()) {

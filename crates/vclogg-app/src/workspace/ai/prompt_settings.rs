@@ -42,7 +42,7 @@ impl ConversationSession {
         let Some(path) = self.settings_path.clone() else {
             return;
         };
-        self.busy = true;
+        self.settings_work = true;
         let generation = self.settings_generation;
         cx.spawn_in(window, async move |this, cx| {
             let selected = if import {
@@ -70,7 +70,7 @@ impl ConversationSession {
                 )
             };
             _ = this.update_in(cx, |this, window, cx| {
-                this.busy = false;
+                this.settings_work = false;
                 if this.show_settings
                     && this.settings_generation == generation
                     && let Some(result) = result

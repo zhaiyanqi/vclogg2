@@ -346,6 +346,8 @@ impl AiPanel {
         };
         let status = if session.pending_question.is_some() {
             crate::tr!("待回答", "Needs input")
+        } else if session.waiting_for_slot {
+            crate::tr!("排队中", "Queued")
         } else if session.is_running() {
             crate::tr!("运行中", "Running")
         } else if session.conversation.status == RunStatus::Failed {

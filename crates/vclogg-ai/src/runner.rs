@@ -119,6 +119,22 @@ pub fn start_run_with_extensions(
     let cancellation = Cancellation::default();
     let token = cancellation.clone();
     runtime().spawn(async move {
+        // Bound simultaneous agent executions across windows. Queued runs keep
+        // their own cancellation token and never block the UI thread.
+        static SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
+        let _permit = match SLOTS.try_acquire() {
+            Ok(permit) => permit,
+            Err(_) => {
+                if events.send(AgentEvent::Queued).await.is_err() { return; }
+                tokio::select! {
+                    permit = SLOTS.acquire() => match permit { Ok(permit) => permit, Err(_) => return },
+                    _ = token.cancelled() => {
+                        let _ = events.send(AgentEvent::Finished(RunStatus::Interrupted, "Analysis stopped".into())).await;
+                        return;
+                    }
+                }
+            }
+        };
         let result = run(
             &config,
             messages,

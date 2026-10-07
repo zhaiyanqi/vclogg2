@@ -28,6 +28,8 @@ mod memory;
 pub(super) mod panel;
 mod prompt_settings;
 mod question;
+mod queue;
+mod session_preferences;
 mod settings;
 mod skill_settings;
 #[cfg(test)]
