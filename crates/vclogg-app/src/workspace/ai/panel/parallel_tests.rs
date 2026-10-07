@@ -158,6 +158,8 @@ pub(super) fn exercise(
             assert_eq!(saved.id, s.conversation.id);
             assert_eq!(saved.messages.len(), s.conversation.messages.len());
             assert_eq!(saved.status, s.conversation.status);
+            assert_eq!(saved.provider_id, s.conversation.provider_id);
+            assert_eq!(saved.run_models, s.conversation.run_models);
         });
     }
     let original_count = first.read_with(cx, |s, _| s.conversation.messages.len());
