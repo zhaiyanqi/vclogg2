@@ -6,6 +6,7 @@ use vclogg_data::AiConversationRecord;
 struct RetainedSession {
     session: Entity<ConversationSession>,
     _subscription: Subscription,
+    _events: Subscription,
 }
 
 pub(in crate::workspace) struct AiPanel {
@@ -44,12 +45,22 @@ impl AiPanel {
             }
             cx.notify();
         });
+        let events = cx.subscribe_in(
+            &session,
+            window,
+            |this, session, event: &panel::SessionEvent, window, cx| {
+                let panel::SessionEvent::Fork(through) = event;
+                let id = session.read(cx).conversation.id.clone();
+                this.fork_conversation(&id, Some(*through), window, cx);
+            },
+        );
         Self {
             workspace,
             active: session.clone(),
             sessions: vec![RetainedSession {
                 session,
                 _subscription: subscription,
+                _events: events,
             }],
             open_conversations: Vec::new(),
             conversation_tab_scroll: ScrollHandle::new(),
@@ -69,7 +80,7 @@ impl AiPanel {
         self.active.read(cx).conversation.id.clone()
     }
 
-    fn session(&self, id: &str, cx: &App) -> Option<Entity<ConversationSession>> {
+    pub(super) fn session(&self, id: &str, cx: &App) -> Option<Entity<ConversationSession>> {
         self.sessions
             .iter()
             .find(|entry| entry.session.read(cx).conversation.id == id)
@@ -80,11 +91,26 @@ impl AiPanel {
         self.open_conversations.is_empty()
     }
 
-    fn retain(&mut self, session: Entity<ConversationSession>, cx: &mut Context<Self>) {
+    fn retain(
+        &mut self,
+        session: Entity<ConversationSession>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let subscription = cx.observe(&session, |_, _, cx| cx.notify());
+        let events = cx.subscribe_in(
+            &session,
+            window,
+            |this, session, event: &panel::SessionEvent, window, cx| {
+                let panel::SessionEvent::Fork(through) = event;
+                let id = session.read(cx).conversation.id.clone();
+                this.fork_conversation(&id, Some(*through), window, cx);
+            },
+        );
         self.sessions.push(RetainedSession {
             session,
             _subscription: subscription,
+            _events: events,
         });
     }
 
@@ -127,7 +153,7 @@ impl AiPanel {
             session.busy = false;
             session
         });
-        self.retain(session.clone(), cx);
+        self.retain(session.clone(), window, cx);
         self.activate(session, cx);
         self.focus(window, cx);
     }
@@ -174,7 +200,7 @@ impl AiPanel {
                             session.install_record(record, cx);
                             session
                         });
-                        this.retain(session.clone(), cx);
+                        this.retain(session.clone(), window, cx);
                         if generation == this.navigation_generation {
                             this.activate(session, cx);
                         }
@@ -266,6 +292,12 @@ impl AiPanel {
             .map(|s| s.read(cx).revision)
             .or_else(|| self.history.iter().find(|r| r.id == id).map(|r| r.revision))
             .unwrap_or(0);
+        if let Some(session) = self.session(&id, cx) {
+            session.update(cx, |s, cx| {
+                s.busy = true;
+                cx.notify();
+            });
+        }
         cx.spawn_in(window, async move |this, cx| {
             let deleted_id = id.clone();
             let result = cx
@@ -279,6 +311,12 @@ impl AiPanel {
                 .await;
             _ = this.update_in(cx, |this, window, cx| {
                 this.deleting.remove(&id);
+                if let Some(session) = this.session(&id, cx) {
+                    session.update(cx, |s, cx| {
+                        s.busy = false;
+                        cx.notify();
+                    });
+                }
                 match result {
                     Ok(()) => {
                         this.close_conversation_tab(&id, window, cx);

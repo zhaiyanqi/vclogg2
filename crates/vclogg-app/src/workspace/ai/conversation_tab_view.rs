@@ -49,6 +49,11 @@ impl AiPanel {
                                 let close_id = menu_id.clone();
                                 let others_id = menu_id.clone();
                                 let delete_id = menu_id.clone();
+                                let rename_id = menu_id.clone();
+                                let fork_id = menu_id.clone();
+                                let export_id = menu_id.clone();
+                                let stop_id = menu_id.clone();
+                                let running = owner.read(cx).is_running(&menu_id, cx);
                                 menu.item(
                                     PopupMenuItem::new(crate::tr!("新建会话", "New conversation"))
                                         .disabled(disabled)
@@ -56,6 +61,45 @@ impl AiPanel {
                                             &owner,
                                             |this, _, window, cx| {
                                                 this.new_conversation_tab(window, cx);
+                                            },
+                                        )),
+                                )
+                                .item(
+                                    PopupMenuItem::new(crate::tr!("重命名…", "Rename…")).on_click(
+                                        window.listener_for(&owner, move |this, _, window, cx| {
+                                            this.rename_conversation(&rename_id, window, cx)
+                                        }),
+                                    ),
+                                )
+                                .item(
+                                    PopupMenuItem::new(crate::tr!(
+                                        "创建分支",
+                                        "Branch conversation"
+                                    ))
+                                    .on_click(
+                                        window.listener_for(&owner, move |this, _, window, cx| {
+                                            this.fork_conversation(&fork_id, None, window, cx)
+                                        }),
+                                    ),
+                                )
+                                .item(
+                                    PopupMenuItem::new(crate::tr!(
+                                        "导出 Markdown…",
+                                        "Export Markdown…"
+                                    ))
+                                    .on_click(
+                                        window.listener_for(&owner, move |this, _, window, cx| {
+                                            this.export_conversation(&export_id, window, cx)
+                                        }),
+                                    ),
+                                )
+                                .item(
+                                    PopupMenuItem::new(crate::tr!("停止会话", "Stop conversation"))
+                                        .disabled(!running)
+                                        .on_click(window.listener_for(
+                                            &owner,
+                                            move |this, _, _, cx| {
+                                                this.stop_conversation(&stop_id, cx)
                                             },
                                         )),
                                 )
@@ -89,10 +133,10 @@ impl AiPanel {
                                 .separator()
                                 .item(
                                     PopupMenuItem::new(crate::tr!(
-                                        "删除会话",
-                                        "Delete conversation"
+                                        "删除会话（需先停止）",
+                                        "Delete conversation (stop first)"
                                     ))
-                                    .disabled(disabled)
+                                    .disabled(disabled || running)
                                     .on_click(
                                         window.listener_for(&owner, move |this, _, window, cx| {
                                             this.delete_conversation_tab(

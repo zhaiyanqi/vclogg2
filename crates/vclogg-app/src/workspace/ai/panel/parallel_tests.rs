@@ -73,12 +73,19 @@ pub(super) fn exercise(
     .unwrap();
     let second = second.unwrap();
     pump_until(cx, &second, |s| s.live == "stream-1");
+    cx.update_window(window.into(), |_, window, cx| {
+        let focus = host.read(cx).conversation_tab_focus.clone();
+        focus.focus(window, cx);
+    })
+    .unwrap();
+    cx.simulate_keystrokes(window.into(), "left");
+    assert_eq!(host.read_with(cx, |host, _| host.active.clone()), *first);
     let first_id = first.read_with(cx, |s, _| s.conversation.id.clone());
     let second_id = second.read_with(cx, |s, _| s.conversation.id.clone());
     cx.update_window(window.into(), |_, window, cx| {
         first.update(cx, |s, cx| {
             assert!(!s.settings_busy(cx));
-            s.conversation.provider_id = Some(configs[1].id.clone());
+            s.select_model(configs[1].id.clone(), cx);
             assert_eq!(s.running_model.as_deref(), Some("model-0"));
             s.save_settings(window, cx);
         });
@@ -86,7 +93,7 @@ pub(super) fn exercise(
             s.input
                 .update(cx, |input, cx| input.set_value("follow-up-B", window, cx));
             s.queue_current_prompt(false, window, cx);
-            s.conversation.provider_id = Some(configs[0].id.clone());
+            s.select_model(configs[0].id.clone(), cx);
             assert_eq!(s.queued_prompts[0].preferences.model(), "model-1");
         });
         host.update(cx, |host, cx| {
@@ -153,7 +160,169 @@ pub(super) fn exercise(
             assert_eq!(saved.status, s.conversation.status);
         });
     }
+    let original_count = first.read_with(cx, |s, _| s.conversation.messages.len());
+    cx.update_window(window.into(), |_, _, cx| {
+        first.update(cx, |_, cx| cx.emit(SessionEvent::Fork(1)));
+    })
+    .unwrap();
+    let branch = host.read_with(cx, |host, _| host.active.clone());
+    pump_until(cx, &branch, |s| !s.is_running());
+    branch.read_with(cx, |s, _| {
+        assert_ne!(s.conversation.id, first_id);
+        assert_eq!(s.conversation.messages.len(), 1);
+        assert!(s.revision > 0);
+    });
+    assert_eq!(
+        first.read_with(cx, |s, _| s.conversation.messages.len()),
+        original_count
+    );
     for server in servers {
         server.join().unwrap();
     }
+}
+
+pub(super) fn questions(
+    cx: &mut gpui_kit::TestAppContext,
+    first: &Entity<ConversationSession>,
+    workspace: &Entity<Workspace>,
+    window: gpui_kit::WindowHandle<Root>,
+) {
+    let host = workspace.read_with(cx, |w, cx| w.sidebar.read(cx).ai_test_host());
+    let mut sessions = vec![first.clone()];
+    let mut servers = Vec::new();
+    for ix in 0..2 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let config = vclogg_ai::ProviderConfig {
+            base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
+            model: format!("question-{ix}"),
+            ..Default::default()
+        };
+        servers.push(std::thread::spawn(move || {
+            let (mut socket, _) = request(&listener);
+            let arguments = json!({"question":format!("Question {ix}"),"options":[{"id":"yes","label":"Yes"},{"id":"no","label":"No"}],"allow_free_text":true}).to_string();
+            write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {}\n\n", json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"same-call-id","function":{"name":"ask_user","arguments":arguments}}]},"finish_reason":"tool_calls"}]})).unwrap();
+            drop(socket);
+            let (mut socket, body) = request(&listener);
+            let reply: Value = serde_json::from_str(body["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap()).unwrap();
+            assert_eq!(reply["answer"], format!("answer-{ix}"));
+            write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {}\n\n", json!({"choices":[{"delta":{"content":"answered"},"finish_reason":"stop"}]})).unwrap();
+        }));
+        cx.update_window(window.into(), |_, window, cx| {
+            if ix == 1 {
+                host.update(cx, |host, cx| {
+                    host.new_conversation_tab(window, cx);
+                    sessions.push(host.active.clone());
+                });
+            }
+            sessions[ix].update(cx, |s, cx| {
+                s.settings.providers = vec![config.clone()];
+                s.conversation.provider_id = Some(config.id.clone());
+                s.input.update(cx, |input, cx| {
+                    input.set_value("ask a question", window, cx)
+                });
+                s.send(false, window, cx);
+            });
+        })
+        .unwrap();
+        pump_until(cx, &sessions[ix], |s| s.pending_question.is_some());
+    }
+    assert_eq!(
+        host.read_with(cx, |host, _| host.active.clone()),
+        sessions[1]
+    );
+    for ix in [1, 0] {
+        cx.update_window(window.into(), |_, window, cx| {
+            sessions[ix].update(cx, |s, cx| {
+                s.answer_question(None, format!("answer-{ix}"), window, cx)
+            });
+        })
+        .unwrap();
+        pump_until(cx, &sessions[ix], |s| !s.is_running());
+        if ix == 1 {
+            assert!(first.read_with(cx, |s, _| s.pending_question.is_some()));
+        }
+    }
+    for server in servers {
+        server.join().unwrap();
+    }
+}
+
+pub(super) fn slots(
+    cx: &mut gpui_kit::TestAppContext,
+    first: &Entity<ConversationSession>,
+    workspace: &Entity<Workspace>,
+    window: gpui_kit::WindowHandle<Root>,
+) {
+    let host = workspace.read_with(cx, |w, cx| w.sidebar.read(cx).ai_test_host());
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let config = vclogg_ai::ProviderConfig {
+        base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
+        model: "slots".into(),
+        ..Default::default()
+    };
+    let (release, wait) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let mut sockets = Vec::new();
+        for _ in 0..3 {
+            let (mut socket, _) = request(&listener);
+            write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {}\n\n", json!({"choices":[{"delta":{"content":"started"}}]})).unwrap();
+            sockets.push(socket);
+        }
+        wait.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+            "a fourth model request escaped the concurrency limit"
+        );
+        for mut socket in sockets {
+            write!(
+                socket,
+                "data: {}\n\n",
+                json!({"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]})
+            )
+            .unwrap();
+        }
+    });
+    let mut sessions = vec![first.clone()];
+    for ix in 0..4 {
+        cx.update_window(window.into(), |_, window, cx| {
+            if ix > 0 {
+                host.update(cx, |host, cx| {
+                    host.new_conversation_tab(window, cx);
+                    sessions.push(host.active.clone());
+                });
+            }
+            sessions[ix].update(cx, |s, cx| {
+                s.settings.providers = vec![config.clone()];
+                s.conversation.provider_id = Some(config.id.clone());
+                s.input.update(cx, |input, cx| {
+                    input.set_value(format!("question-{ix}"), window, cx)
+                });
+                s.send(false, window, cx);
+            });
+        })
+        .unwrap();
+        pump_until(cx, &sessions[ix], |s| {
+            if ix < 3 {
+                s.live == "started"
+            } else {
+                s.waiting_for_slot
+            }
+        });
+    }
+    cx.update_window(window.into(), |_, _, cx| {
+        sessions[3].update(cx, |s, cx| s.stop(cx))
+    })
+    .unwrap();
+    pump_until(cx, &sessions[3], |s| !s.is_running());
+    assert_eq!(
+        sessions[3].read_with(cx, |s, _| s.conversation.status.clone()),
+        RunStatus::Interrupted
+    );
+    release.send(()).unwrap();
+    for session in &sessions[..3] {
+        pump_until(cx, session, |s| !s.is_running());
+    }
+    server.join().unwrap();
 }
