@@ -8,6 +8,8 @@ use std::{
 #[test]
 fn isolated_panel_send_workflow() {
     for mode in [
+        "questions",
+        "slots",
         "parallel",
         "parallel_cancel",
         "complete",
@@ -102,6 +104,14 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
     let panel = panel.unwrap();
     pump_until(cx, &panel, |p| !p.busy);
     let mode = std::env::var("VCLOGG2_AI_TEST_MODE").unwrap();
+    if mode == "questions" {
+        super::parallel_tests::questions(cx, &panel, owner.as_ref().unwrap(), window);
+        return;
+    }
+    if mode == "slots" {
+        super::parallel_tests::slots(cx, &panel, owner.as_ref().unwrap(), window);
+        return;
+    }
     if mode.starts_with("parallel") {
         super::parallel_tests::exercise(
             cx,

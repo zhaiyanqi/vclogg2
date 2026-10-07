@@ -82,6 +82,19 @@ impl ConversationSession {
                     h_flex()
                         .gap_1()
                         .child(
+                            Button::new(("ai-copy-user-branch", start + 1))
+                                .small()
+                                .ghost()
+                                .text_label(crate::tr!("分支", "Branch"))
+                                .tooltip(crate::tr!(
+                                    "从这条消息创建独立会话",
+                                    "Start an independent conversation from this message"
+                                ))
+                                .on_click(cx.listener(move |_, _, _, cx| {
+                                    cx.emit(panel::SessionEvent::Fork(start + 1))
+                                })),
+                        )
+                        .child(
                             Button::new(("ai-copy-user", start))
                                 .small()
                                 .ghost()
@@ -148,6 +161,19 @@ impl ConversationSession {
                 .child(
                     h_flex()
                         .gap_1()
+                        .child(
+                            Button::new(("ai-copy-answer-branch", ix + 1))
+                                .small()
+                                .ghost()
+                                .text_label(crate::tr!("分支", "Branch"))
+                                .tooltip(crate::tr!(
+                                    "从这条消息创建独立会话",
+                                    "Start an independent conversation from this message"
+                                ))
+                                .on_click(cx.listener(move |_, _, _, cx| {
+                                    cx.emit(panel::SessionEvent::Fork(ix + 1))
+                                })),
+                        )
                         .child(
                             Button::new(("ai-copy-answer", ix))
                                 .small()

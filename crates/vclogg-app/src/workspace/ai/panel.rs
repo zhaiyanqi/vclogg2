@@ -8,6 +8,12 @@ use std::collections::VecDeque;
 use vclogg_ai::{AgentEvent, AiSettings, Conversation, RunHandle, RunStatus, UserQuestion};
 use vclogg_data::AiConversationRecord;
 
+pub(super) enum SessionEvent {
+    Fork(usize),
+}
+
+impl gpui_kit::EventEmitter<SessionEvent> for ConversationSession {}
+
 pub(in crate::workspace) struct ConversationSession {
     pub(super) workspace: WeakEntity<Workspace>,
     pub(super) active: bool,
@@ -663,6 +669,7 @@ impl ConversationSession {
         self.error.clear();
         self.live.clear();
         self.reasoning.clear();
+        self.deferred_reference = None;
         self.running_model = Some(config.model.clone());
         self.progress = crate::tr!("正在准备会话", "Preparing conversation").into();
         self.pending_tool = None;
