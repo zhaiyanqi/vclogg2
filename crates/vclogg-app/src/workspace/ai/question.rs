@@ -1,7 +1,7 @@
 use super::*;
 use gpui_kit::component::input::Textarea;
 
-impl AiPanel {
+impl ConversationSession {
     pub(super) fn answer_question(
         &mut self,
         option_id: Option<String>,

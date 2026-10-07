@@ -19,7 +19,7 @@ pub(super) enum SettingsTab {
     Memory,
 }
 struct SettingsSurface {
-    panel: Entity<AiPanel>,
+    panel: Entity<ConversationSession>,
     _subscription: Subscription,
 }
 impl Render for SettingsSurface {
@@ -28,7 +28,7 @@ impl Render for SettingsSurface {
             .update(cx, |panel, cx| panel.render_settings(window, cx))
     }
 }
-impl AiPanel {
+impl ConversationSession {
     pub(super) fn settings_busy(&self, cx: &App) -> bool {
         self.busy || self.run.is_some() || cx.global::<SharedAiSettings>().saving
     }

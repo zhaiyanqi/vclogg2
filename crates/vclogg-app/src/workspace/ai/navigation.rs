@@ -1,6 +1,6 @@
 use super::*;
 
-impl AiPanel {
+impl ConversationSession {
     pub(super) fn conversation_with_log_sources(&self) -> vclogg_ai::Conversation {
         let mut conversation = self.conversation.clone();
         for scope in self.reference_scopes.iter().chain(self.scope.iter()) {

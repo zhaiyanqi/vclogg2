@@ -1,4 +1,4 @@
-//! Scroll state owned by the AI transcript. Message content stays in `AiPanel`.
+//! Scroll state owned by the AI transcript. Message content stays in `ConversationSession`.
 use std::ops::Range;
 
 #[cfg(test)]

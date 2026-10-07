@@ -72,7 +72,7 @@ pub(super) fn execute_memory_tool(
         _ => bail!("Unknown memory operation"),
     }
 }
-impl AiPanel {
+impl ConversationSession {
     pub(super) fn load_memories(&mut self, cx: &mut Context<Self>) {
         let Some(store) = self.store.clone() else {
             return;

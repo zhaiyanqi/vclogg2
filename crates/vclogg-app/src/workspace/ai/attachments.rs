@@ -101,7 +101,7 @@ impl Workspace {
     }
 }
 
-impl AiPanel {
+impl ConversationSession {
     pub(super) fn attach_logs(
         &mut self,
         targets: Vec<DraftLog>,

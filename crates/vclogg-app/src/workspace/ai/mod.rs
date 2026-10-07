@@ -25,7 +25,7 @@ mod conversation_tab_view;
 mod conversation_tabs;
 mod mcp_settings;
 mod memory;
-mod panel;
+pub(super) mod panel;
 mod prompt_settings;
 mod question;
 mod settings;
@@ -35,7 +35,8 @@ mod tests;
 mod tool_settings;
 mod view;
 mod workspace_settings;
-pub(super) use panel::AiPanel;
+pub(super) use conversation_tabs::AiPanel;
+use panel::ConversationSession;
 
 const AI_LABEL_LINE_HEIGHT: f32 = 1.25;
 

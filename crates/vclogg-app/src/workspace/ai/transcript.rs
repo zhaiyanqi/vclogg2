@@ -82,7 +82,7 @@ pub(super) fn row_starts(messages: &[AgentMessage], live: bool) -> Vec<usize> {
     rows
 }
 
-impl AiPanel {
+impl ConversationSession {
     pub(super) fn copy_message(&self, ix: usize, cx: &mut Context<Self>) {
         let text = match self.conversation.messages.get(ix) {
             Some(AgentMessage::User { text }) => user_content(text).0,

@@ -46,8 +46,8 @@ fn isolated_panel_send_workflow() {
 
 pub(super) fn pump_until(
     cx: &mut gpui_kit::TestAppContext,
-    panel: &Entity<AiPanel>,
-    ready: impl Fn(&AiPanel) -> bool,
+    panel: &Entity<ConversationSession>,
+    ready: impl Fn(&ConversationSession) -> bool,
 ) {
     let deadline = Instant::now() + Duration::from_secs(8);
     loop {
@@ -164,6 +164,10 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
         return;
     }
     if mode == "tabs" {
+        let panel = owner
+            .as_ref()
+            .unwrap()
+            .read_with(cx, |w, cx| w.sidebar.read(cx).ai_test_host());
         cx.update_window(window.into(), |_, window, cx| {
             panel.update(cx, |panel, cx| {
                 panel.new_conversation_tab(window, cx);
@@ -183,11 +187,11 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
                 );
                 panel.close_conversation_tab(&ids[3], window, cx);
                 assert_eq!(panel.open_conversations, vec![ids[2].clone()]);
-                assert_eq!(panel.conversation.id, ids[2]);
+                assert_eq!(panel.current_id(cx), ids[2]);
                 panel.close_conversation_tab(&ids[2], window, cx);
                 assert_eq!(panel.open_conversations.len(), 1);
-                assert_eq!(panel.conversation.id, panel.open_conversations[0]);
-                assert_ne!(panel.conversation.id, ids[2]);
+                assert_eq!(panel.current_id(cx), panel.open_conversations[0]);
+                assert_ne!(panel.current_id(cx), ids[2]);
             });
         })
         .unwrap();
@@ -532,7 +536,7 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
 
 fn exercise_transcript(
     cx: &mut gpui_kit::TestAppContext,
-    panel: &Entity<AiPanel>,
+    panel: &Entity<ConversationSession>,
     window: gpui_kit::WindowHandle<Root>,
 ) {
     cx.update_window(window.into(), |_, window, cx| {
@@ -631,7 +635,8 @@ fn exercise_transcript(
             assert_eq!(p.scroller.read(cx).item_count(), 25);
             assert!(!p.live_row);
             p.busy = false;
-            p.new_conversation(cx);
+            p.conversation = Conversation::default();
+            p.rebuild_messages(cx);
             assert_eq!(p.scroller.read(cx).item_count(), 0);
             assert!(p.scroller.read(cx).is_following_tail());
             assert!(p.messages.is_empty());
@@ -641,7 +646,7 @@ fn exercise_transcript(
 
 fn verify_chat_geometry(
     cx: &mut gpui_kit::TestAppContext,
-    panel: &Entity<AiPanel>,
+    panel: &Entity<ConversationSession>,
     window: gpui_kit::WindowHandle<Root>,
     embedded: bool,
 ) {

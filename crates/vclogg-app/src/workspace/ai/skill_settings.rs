@@ -1,7 +1,7 @@
 use super::*;
 use gpui_kit::component::switch::Switch;
 
-impl AiPanel {
+impl ConversationSession {
     fn scan_skills(&mut self, system: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings_busy(cx) {
             return;

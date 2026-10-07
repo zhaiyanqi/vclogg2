@@ -1,7 +1,7 @@
 use super::*;
 use vclogg_ai::{ToolGroup, ToolRisk};
 
-impl AiPanel {
+impl ConversationSession {
     pub(super) fn render_tool_settings(&self, cx: &Context<Self>) -> AnyElement {
         let tools = vclogg_ai::tool_descriptors();
         let mut content = v_flex().gap_3().p_3().child(div().text_xs().text_color(cx.theme().muted_foreground).child(crate::tr!(

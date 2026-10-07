@@ -296,7 +296,7 @@ impl SidebarState {
             .fit(window.viewport_size().width / window.rem_size());
         self.layout.sides.iter().enumerate().any(|(ix, side)| {
             widths[ix].is_some() && side.visible && side.active == Some(SidebarPanelId::Ai)
-        }) && self.ai.read(cx).contains_transcript(position)
+        }) && self.ai.read(cx).contains_transcript(position, cx)
     }
 
     fn is_showing(&self, panel: SidebarPanelId) -> bool {
@@ -1044,12 +1044,16 @@ impl Workspace {
 
 #[cfg(test)]
 impl SidebarState {
+    pub(super) fn ai_test_host(&self) -> Entity<super::ai::AiPanel> {
+        self.ai.clone()
+    }
+
     pub(super) fn ai_test_panel(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Entity<super::ai::AiPanel> {
+    ) -> Entity<super::ai::panel::ConversationSession> {
         self.activate(SidebarPanelId::Ai, SidebarSide::Right, window, cx);
-        self.ai.clone()
+        self.ai.read(cx).active.clone()
     }
 }

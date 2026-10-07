@@ -10,7 +10,7 @@ pub(super) struct PromptEditor {
     name: Entity<InputState>,
     text: Entity<TextareaState>,
 }
-impl AiPanel {
+impl ConversationSession {
     fn install_prompt_editor(
         &mut self,
         prompt: Prompt,
