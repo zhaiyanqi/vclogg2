@@ -13,7 +13,6 @@ impl AiPanel {
             .iter()
             .position(|id| id == &self.current_id(cx))
             .unwrap_or(0);
-        let owner = cx.entity();
         let tabs = TabBar::new("ai-conversation-tabs")
             .w_full()
             .min_w_0()
@@ -54,6 +53,16 @@ impl AiPanel {
                                 let export_id = menu_id.clone();
                                 let stop_id = menu_id.clone();
                                 let running = owner.read(cx).is_running(&menu_id, cx);
+                                let flags = owner
+                                    .read(cx)
+                                    .flags
+                                    .get(&menu_id)
+                                    .copied()
+                                    .unwrap_or_default();
+                                let flags_busy = owner.read(cx).flags_loading
+                                    || owner.read(cx).flag_saving.contains(&menu_id);
+                                let pin_id = menu_id.clone();
+                                let archive_id = menu_id.clone();
                                 menu.item(
                                     PopupMenuItem::new(crate::tr!("新建会话", "New conversation"))
                                         .disabled(disabled)
@@ -102,6 +111,44 @@ impl AiPanel {
                                                 this.stop_conversation(&stop_id, cx)
                                             },
                                         )),
+                                )
+                                .item(
+                                    PopupMenuItem::new(if flags.0 {
+                                        crate::tr!("取消置顶", "Unpin")
+                                    } else {
+                                        crate::tr!("置顶", "Pin")
+                                    })
+                                    .disabled(flags_busy)
+                                    .on_click(
+                                        window.listener_for(&owner, move |this, _, window, cx| {
+                                            this.set_flags(
+                                                pin_id.clone(),
+                                                !flags.0,
+                                                flags.1,
+                                                window,
+                                                cx,
+                                            )
+                                        }),
+                                    ),
+                                )
+                                .item(
+                                    PopupMenuItem::new(if flags.1 {
+                                        crate::tr!("取消归档", "Unarchive")
+                                    } else {
+                                        crate::tr!("归档", "Archive")
+                                    })
+                                    .disabled(flags_busy)
+                                    .on_click(
+                                        window.listener_for(&owner, move |this, _, window, cx| {
+                                            this.set_flags(
+                                                archive_id.clone(),
+                                                flags.0,
+                                                !flags.1,
+                                                window,
+                                                cx,
+                                            )
+                                        }),
+                                    ),
                                 )
                                 .separator()
                                 .item(
@@ -214,65 +261,9 @@ impl AiPanel {
                                 "Open conversations from history"
                             ))
                             .disabled(disabled)
-                            .dropdown_menu(move |mut menu, window, cx| {
-                                menu = menu.scrollable(true);
-                                let panel = owner.read(cx);
-                                let rows = panel.conversation_history_items(cx);
-                                let current = panel.current_id(cx);
-                                let more = panel.more_history;
-                                if rows.is_empty() {
-                                    menu = menu.item(
-                                        PopupMenuItem::new(crate::tr!(
-                                            "暂无历史会话",
-                                            "No conversation history"
-                                        ))
-                                        .disabled(true),
-                                    );
-                                }
-                                for row in rows {
-                                    let id = row.id;
-                                    let title = if row.title.is_empty() {
-                                        crate::tr!("新会话", "New conversation").to_owned()
-                                    } else {
-                                        row.title
-                                    };
-                                    menu = menu.item(
-                                        PopupMenuItem::new(title).checked(current == id).on_click(
-                                            window.listener_for(
-                                                &owner,
-                                                move |this, _, window, cx| {
-                                                    this.load_conversation(id.clone(), window, cx)
-                                                },
-                                            ),
-                                        ),
-                                    );
-                                }
-                                menu = menu.separator().item(
-                                    PopupMenuItem::new(crate::tr!(
-                                        "刷新历史记录",
-                                        "Refresh history"
-                                    ))
-                                    .on_click(
-                                        window.listener_for(&owner, |this, _, window, cx| {
-                                            this.refresh_conversation_history(false, window, cx)
-                                        }),
-                                    ),
-                                );
-                                if more {
-                                    menu = menu.item(
-                                        PopupMenuItem::new(crate::tr!(
-                                            "加载更多会话",
-                                            "Load more conversations"
-                                        ))
-                                        .on_click(
-                                            window.listener_for(&owner, |this, _, window, cx| {
-                                                this.refresh_conversation_history(true, window, cx)
-                                            }),
-                                        ),
-                                    );
-                                }
-                                menu
-                            }),
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.open_history(window, cx)),
+                            ),
                     ),
             );
         div()

@@ -16,10 +16,18 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) open_conversations: Vec<String>,
     pub(super) conversation_tab_scroll: ScrollHandle,
     pub(super) conversation_tab_focus: FocusHandle,
-    history: Vec<AiConversationRecord>,
+    pub(super) history: Vec<AiConversationRecord>,
+    pub(super) history_input: Entity<gpui_kit::component::input::InputState>,
+    pub(super) show_archived: bool,
+    pub(super) flags: BTreeMap<String, (bool, bool)>,
+    pub(super) flags_loading: bool,
+    pub(super) flag_saving: BTreeSet<String>,
+    pub(super) show_history: bool,
+    history_generation: u64,
+    _history_subscription: Subscription,
     pub(super) more_history: bool,
     history_offset: usize,
-    history_loading: bool,
+    pub(super) history_loading: bool,
     loading: BTreeSet<String>,
     deleting: BTreeSet<String>,
     navigation_generation: u64,
@@ -32,6 +40,16 @@ impl AiPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let history_input = cx.new(|cx| {
+            gpui_kit::component::input::InputState::new(window, cx)
+                .placeholder(crate::tr!("搜索会话名称", "Search conversation titles"))
+        });
+        let history_subscription =
+            cx.subscribe_in(&history_input, window, |this, _, event, window, cx| {
+                if matches!(event, gpui_kit::component::input::InputEvent::Change) {
+                    this.refresh_conversation_history(false, window, cx);
+                }
+            });
         let session = cx.new(|cx| ConversationSession::new(workspace.clone(), window, cx));
         let subscription = cx.observe(&session, |this, session, cx| {
             // Initialization may restore a different ID from storage. No navigation is
@@ -42,6 +60,7 @@ impl AiPanel {
                 this.history = session.read(cx).history.clone();
                 this.history_offset = session.read(cx).history_offset;
                 this.more_history = session.read(cx).more_history;
+                this.load_history_flags(cx);
             }
             cx.notify();
         });
@@ -66,6 +85,14 @@ impl AiPanel {
             conversation_tab_scroll: ScrollHandle::new(),
             conversation_tab_focus: cx.focus_handle(),
             history: Vec::new(),
+            history_input,
+            show_archived: false,
+            flags: BTreeMap::new(),
+            flags_loading: true,
+            flag_saving: BTreeSet::new(),
+            show_history: false,
+            history_generation: 0,
+            _history_subscription: history_subscription,
             more_history: false,
             history_offset: 0,
             history_loading: false,
@@ -303,7 +330,7 @@ impl AiPanel {
             let result = cx
                 .background_spawn(async move {
                     if revision == 0 {
-                        Ok(())
+                        store.set_ai_conversation_flags(&deleted_id, false, false)
                     } else {
                         store.delete_ai_conversation(&deleted_id, revision)
                     }
@@ -323,6 +350,7 @@ impl AiPanel {
                         this.sessions
                             .retain(|s| s.session.read(cx).conversation.id != id);
                         this.history.retain(|r| r.id != id);
+                        this.flags.remove(&id);
                     }
                     Err(error) => this.error = error.to_string(),
                 }
@@ -338,7 +366,7 @@ impl AiPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.history_loading {
+        if more && self.history_loading {
             return;
         }
         let Some(store) = self.active.read(cx).store.clone() else {
@@ -346,14 +374,28 @@ impl AiPanel {
         };
         self.history_loading = true;
         let offset = if more { self.history_offset } else { 0 };
+        self.history_generation += 1;
+        let generation = self.history_generation;
+        let query = self.history_input.read(cx).value().to_string();
+        let archived = self.show_archived;
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
-                .background_spawn(async move { store.ai_conversations(offset) })
+                .background_spawn(async move {
+                    Ok::<_, anyhow::Error>((
+                        store.search_ai_conversations(&query, archived, offset)?,
+                        store.ai_conversation_flags()?,
+                    ))
+                })
                 .await;
             _ = this.update(cx, |this, cx| {
+                if generation != this.history_generation {
+                    return;
+                }
                 this.history_loading = false;
                 match result {
-                    Ok(rows) => {
+                    Ok((rows, flags)) => {
+                        this.flags = flags;
+                        this.flags_loading = false;
                         this.history_offset = offset + rows.len();
                         this.more_history = rows.len() == 100;
                         if !more {
@@ -417,6 +459,12 @@ impl AiPanel {
                 },
             );
         }
+        let query = self.history_input.read(cx).value().to_lowercase();
+        rows.retain(|row| {
+            self.flags.get(&row.id).is_some_and(|f| f.1) == self.show_archived
+                && row.title.to_lowercase().contains(&query)
+        });
+        rows.sort_by_key(|row| !self.flags.get(&row.id).is_some_and(|f| f.0));
         rows
     }
 
