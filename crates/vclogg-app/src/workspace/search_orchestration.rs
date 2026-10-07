@@ -101,23 +101,10 @@ impl Workspace {
         let picker = cx.new(|_| GlobalSearchFilesDialog::new(files));
         let workspace = cx.entity();
         let dialog_width = large_dialog_size(window).width;
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let picker = picker.clone();
             let workspace = workspace.clone();
-            dialog
-                .w(dialog_width)
-                .title(crate::tr!(
-                    "参与多标签搜索的文件",
-                    "Files in multi-tab search"
-                ))
-                .close_button(false)
-                .child(picker.clone())
-                .button_props(
-                    gpui_kit::component::dialog::DialogButtonProps::default()
-                        .show_cancel(true)
-                        .cancel_text(crate::tr!("取消", "Cancel"))
-                        .ok_text(crate::tr!("保存", "Save")),
-                )
+            GlobalSearchFilesDialog::configure_dialog(dialog.w(dialog_width), picker.clone(), cx)
                 .on_ok(move |_, window, cx| {
                     let selected = picker.read(cx).selected_document_ids();
                     workspace.update(cx, |this, cx| {
