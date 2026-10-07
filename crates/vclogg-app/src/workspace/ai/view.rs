@@ -56,7 +56,7 @@ impl ConversationSession {
                                     .ghost()
                                     .icon(IconName::File)
                                     .text_label(attachment.content.label.clone())
-                                    .disabled(self.busy || self.ui_busy)
+                                    .disabled(self.is_running() || self.ui_busy)
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.jump_reference(reference.clone(), window, cx)
                                     })),
@@ -99,7 +99,7 @@ impl ConversationSession {
                                 .icon(crate::app_assets::AppIcon::Edit)
                                 .tooltip(crate::tr!("编辑并重试", "Edit and retry"))
                                 .accessibility_label(crate::tr!("编辑并重试", "Edit and retry"))
-                                .disabled(self.busy || self.ui_busy)
+                                .disabled(self.is_running() || self.ui_busy)
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.edit_message(start, window, cx)
                                 })),
@@ -126,6 +126,14 @@ impl ConversationSession {
             .w_full()
             .min_w_0()
             .gap_3();
+        if let Some((_, model)) = self.conversation.run_models.range(..=start).next_back() {
+            row = row.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(model.clone()),
+            );
+        }
         if has_process {
             row = row.child(self.render_process(start, end, answer, live, cx));
         }
@@ -158,7 +166,7 @@ impl ConversationSession {
                                 .icon(IconName::RotateCw)
                                 .tooltip(crate::tr!("重新生成", "Regenerate"))
                                 .accessibility_label(crate::tr!("重新生成", "Regenerate"))
-                                .disabled(self.busy || self.ui_busy)
+                                .disabled(self.is_running() || self.ui_busy)
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.regenerate_message(ix, window, cx)
                                 })),
@@ -307,7 +315,7 @@ impl ConversationSession {
                                         .small()
                                         .ghost()
                                         .text_label(label)
-                                        .disabled(self.busy || self.ui_busy)
+                                        .disabled(self.is_running() || self.ui_busy)
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             this.jump_reference(reference.clone(), window, cx)
                                         })),
@@ -719,7 +727,7 @@ pub(super) fn reference_label(
 }
 impl Render for ConversationSession {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let disabled = self.settings_busy(cx) || self.ui_busy;
+        let disabled = self.busy || self.ui_busy;
         let body = v_flex()
             .size_full()
             .min_h_0()
@@ -779,6 +787,16 @@ impl Render for ConversationSession {
                 )
             });
         let footer = v_flex()
+            .when_some(self.deferred_reference.clone(), |view, reference| {
+                view.child(
+                    Button::new("ai-deferred-navigation")
+                        .small()
+                        .text_label(crate::tr!("查看定位结果", "View located log"))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.jump_reference(reference.clone(), window, cx)
+                        })),
+                )
+            })
             .flex_shrink_0()
             .gap_2()
             .p_3()
@@ -801,7 +819,11 @@ impl Render for ConversationSession {
                             .id("ai-progress")
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child(self.progress.clone()),
+                            .child(format!(
+                                "{} · {}",
+                                self.running_model.as_deref().unwrap_or(""),
+                                self.progress
+                            )),
                     )
                 },
             )
@@ -823,14 +845,13 @@ impl Render for ConversationSession {
                             h_flex()
                                 .gap_1()
                                 .min_w_0()
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .text_xs()
-                                        .truncate()
-                                        .child(prompt.text.chars().take(80).collect::<String>()),
-                                )
+                                .child(div().flex_1().min_w_0().text_xs().truncate().child(
+                                    format!(
+                                        "{} · {}",
+                                        prompt.preferences.model(),
+                                        prompt.text.chars().take(80).collect::<String>()
+                                    ),
+                                ))
                                 .child(
                                     Button::new(("ai-remove-queued", ix))
                                         .small()
@@ -973,7 +994,11 @@ impl Render for ConversationSession {
                                                 crate::tr!("选择模型", "Select model").into()
                                             }),
                                     )
-                                    .disabled(disabled)
+                                    .disabled(self.settings_busy(cx))
+                                    .tooltip(crate::tr!(
+                                        "修改模型对下一轮生效",
+                                        "Model changes apply to the next run"
+                                    ))
                                     .dropdown_menu(move |mut menu, window, cx| {
                                         for provider in models.read(cx).settings.providers.clone() {
                                             let id = provider.id;
@@ -981,12 +1006,8 @@ impl Render for ConversationSession {
                                                 PopupMenuItem::new(provider.name).on_click(
                                                     window.listener_for(
                                                         &models,
-                                                        move |this, _, window, cx| {
-                                                            this.conversation.provider_id =
-                                                                Some(id.clone());
-                                                            this.settings.active_provider =
-                                                                Some(id.clone());
-                                                            this.save_settings(window, cx);
+                                                        move |this, _, _, cx| {
+                                                            this.select_model(id.clone(), cx);
                                                         },
                                                     ),
                                                 ),

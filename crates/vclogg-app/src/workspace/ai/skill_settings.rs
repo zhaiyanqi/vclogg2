@@ -6,7 +6,7 @@ impl ConversationSession {
         if self.settings_busy(cx) {
             return;
         }
-        self.busy = true;
+        self.settings_work = true;
         let existing = self
             .settings
             .skill_directories
@@ -36,7 +36,7 @@ impl ConversationSession {
                 None
             };
             _ = this.update_in(cx, |this, window, cx| {
-                this.busy = false;
+                this.settings_work = false;
                 if let Some(found) = result {
                     for root in found.directories {
                         if !this
@@ -91,7 +91,7 @@ impl ConversationSession {
         let Some(mut skill) = self.settings.skills.iter().find(|s| s.id == id).cloned() else {
             return;
         };
-        self.busy = true;
+        self.settings_work = true;
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
@@ -101,7 +101,7 @@ impl ConversationSession {
                 })
                 .await;
             _ = this.update_in(cx, |this, window, cx| {
-                this.busy = false;
+                this.settings_work = false;
                 match result {
                     Ok(skill) => {
                         if let Some(old) = this.settings.skills.iter_mut().find(|s| s.id == id) {

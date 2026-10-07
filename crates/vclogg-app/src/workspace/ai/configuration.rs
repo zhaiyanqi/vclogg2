@@ -30,7 +30,7 @@ impl Render for SettingsSurface {
 }
 impl ConversationSession {
     pub(super) fn settings_busy(&self, cx: &App) -> bool {
-        self.busy || self.run.is_some() || cx.global::<SharedAiSettings>().saving
+        self.store.is_none() || self.settings_work || cx.global::<SharedAiSettings>().saving
     }
     pub(in crate::workspace) fn open_settings(
         &mut self,

@@ -311,6 +311,8 @@ pub struct Conversation {
     pub skill_ids: Vec<String>,
     pub messages: Vec<AgentMessage>,
     #[serde(default)]
+    pub run_models: std::collections::BTreeMap<usize, String>,
+    #[serde(default)]
     pub context_summary: String,
     #[serde(default)]
     pub summarized_messages: usize,
@@ -330,6 +332,7 @@ impl Default for Conversation {
             provider_id: None,
             skill_ids: Vec::new(),
             messages: Vec::new(),
+            run_models: Default::default(),
             context_summary: String::new(),
             summarized_messages: 0,
             context_usage: None,
@@ -433,6 +436,7 @@ impl Cancellation {
 
 #[derive(Clone, Debug)]
 pub enum AgentEvent {
+    Queued,
     ContextUsage(ContextUsage),
     CompactionStarted,
     ContextCompacted {

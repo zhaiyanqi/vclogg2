@@ -31,7 +31,7 @@ impl ConversationSession {
         if self.settings_busy(cx) {
             return;
         }
-        self.busy = true;
+        self.settings_work = true;
         cx.spawn_in(window, async move |this, cx| {
             let selected = rfd::AsyncFileDialog::new().pick_folder().await;
             let canonical = cx
@@ -42,7 +42,7 @@ impl ConversationSession {
                 })
                 .await;
             _ = this.update_in(cx, |this, window, cx| {
-                this.busy = false;
+                this.settings_work = false;
                 match canonical {
                     Ok(Some(path)) => {
                         let overlaps = if project {

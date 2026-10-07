@@ -542,7 +542,7 @@ fn remove_saved_paths(value: &mut Value) {
     }
 }
 
-fn request(listener: &TcpListener) -> (TcpStream, Value) {
+pub(super) fn request(listener: &TcpListener) -> (TcpStream, Value) {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut socket = loop {
         match listener.accept() {

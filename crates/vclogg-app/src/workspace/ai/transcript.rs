@@ -93,7 +93,7 @@ impl ConversationSession {
     }
 
     pub(super) fn edit_message(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings_busy(cx) || self.ui_busy {
+        if self.is_running() || self.ui_busy {
             return;
         }
         let Some(AgentMessage::User { text }) = self.conversation.messages.get(ix) else {
@@ -149,7 +149,7 @@ impl ConversationSession {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings_busy(cx) || self.ui_busy {
+        if self.is_running() || self.ui_busy {
             return;
         }
         let Some(user_ix) =

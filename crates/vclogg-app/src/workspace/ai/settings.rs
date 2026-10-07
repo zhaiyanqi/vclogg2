@@ -76,12 +76,7 @@ impl ConversationSession {
         cx.update_global::<super::configuration::SharedAiSettings, _>(|shared, _| {
             shared.saving = true
         });
-        let record = if self.revision > 0 {
-            self.record().ok()
-        } else {
-            None
-        };
-        self.busy = true;
+        self.settings_work = true;
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
@@ -89,12 +84,7 @@ impl ConversationSession {
                         vclogg_ai::save_prompt(&path, &prompt, &text)?;
                     }
                     store.save_ai_settings(&path, &settings)?;
-                    Ok::<_, anyhow::Error>(
-                        record
-                            .as_ref()
-                            .map(|record| store.save_ai_conversation(record))
-                            .transpose(),
-                    )
+                    Ok::<_, anyhow::Error>(())
                 })
                 .await;
             // Finish publication even if the originating window has closed.
@@ -108,7 +98,7 @@ impl ConversationSession {
                 },
             );
             _ = this.update(cx, |this, cx| {
-                this.busy = false;
+                this.settings_work = false;
                 if result.is_ok() {
                     this.error.clear();
                     if saved_mcp && this.settings_generation == settings_generation {
@@ -125,13 +115,8 @@ impl ConversationSession {
                     this.prompt_editor = None;
                     this.error.clear();
                 }
-                match result {
-                    Ok(Ok(Some(revision))) => {
-                        this.revision = revision;
-                        this.update_history_entry();
-                    }
-                    Ok(Ok(None)) => {}
-                    Ok(Err(error)) | Err(error) => this.error = error.to_string(),
+                if let Err(error) = result {
+                    this.error = error.to_string();
                 }
                 cx.notify();
             });
@@ -174,7 +159,7 @@ impl ConversationSession {
             cx.notify();
             return;
         }
-        self.busy = true;
+        self.settings_work = true;
         self.error.clear();
         cx.spawn_in(window, async move |this, cx| {
             let discovered = cx
@@ -194,7 +179,7 @@ impl ConversationSession {
                         config.max_output_tokens = limit;
                     }
                 }
-                this.busy = false;
+                this.settings_work = false;
                 this.settings
                     .providers
                     .retain(|provider| provider.id != config.id);
@@ -208,7 +193,7 @@ impl ConversationSession {
         .detach();
     }
     fn test_provider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings_busy(cx) {
+        if self.settings_busy(cx) || self.provider_test.is_some() {
             return;
         }
         let Some(config) = self
@@ -230,13 +215,13 @@ impl ConversationSession {
             true,
         );
         let events = run.events.clone();
-        self.run = Some(run);
+        self.provider_test = Some(run);
         self.error.clear();
         cx.spawn_in(window, async move |this, cx| {
             while let Ok(event) = events.recv().await {
                 if let vclogg_ai::AgentEvent::Finished(status, error) = event {
                     _ = this.update(cx, |this, cx| {
-                        this.run = None;
+                        this.provider_test = None;
                         this.error = if status == vclogg_ai::RunStatus::Complete {
                             crate::tr!(
                                 "连接测试通过，尚未测试日志工具",
@@ -262,12 +247,17 @@ impl ConversationSession {
     ) -> AnyElement {
         let disabled = self.settings_busy(cx);
         let mut content = v_flex().gap_3().p_3();
-        if self.run.is_some() {
+        if self.provider_test.is_some() {
             content = content.child(
                 Button::new("ai-settings-stop")
                     .small()
                     .text_label(crate::tr!("停止连接测试", "Stop connection test"))
-                    .on_click(cx.listener(|this, _, _, cx| this.stop(cx))),
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(run) = &this.provider_test {
+                            run.cancellation.cancel();
+                        }
+                        cx.notify();
+                    })),
             );
         }
         if let Some(editor) = &self.editor {

@@ -36,7 +36,7 @@ impl ConversationSession {
             .count();
         let label = format!(
             "{} · {} {} · {} {}",
-            crate::tr!("本轮访问", "Run access"),
+            crate::tr!("下轮访问", "Next run access"),
             count,
             crate::tr!("日志", "logs"),
             self.selected_project_directories

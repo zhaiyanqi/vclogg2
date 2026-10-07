@@ -8,6 +8,8 @@ use std::{
 #[test]
 fn isolated_panel_send_workflow() {
     for mode in [
+        "parallel",
+        "parallel_cancel",
         "complete",
         "transcript",
         "workspace_transcript",
@@ -100,6 +102,16 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
     let panel = panel.unwrap();
     pump_until(cx, &panel, |p| !p.busy);
     let mode = std::env::var("VCLOGG2_AI_TEST_MODE").unwrap();
+    if mode.starts_with("parallel") {
+        super::parallel_tests::exercise(
+            cx,
+            &panel,
+            owner.as_ref().unwrap(),
+            window,
+            mode == "parallel_cancel",
+        );
+        return;
+    }
     if mode == "context" {
         let fixture = tempfile::tempdir().unwrap();
         let paths = [

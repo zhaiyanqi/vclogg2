@@ -71,6 +71,12 @@ pub(in crate::workspace) struct ConversationSession {
     pub(super) memory_loading: bool,
     pub(super) memory_task: Option<Task<()>>,
     pub(super) busy: bool,
+    pub(super) settings_work: bool,
+    pub(super) preferences_dirty: bool,
+    pub(super) provider_test: Option<RunHandle>,
+    pub(super) running_model: Option<String>,
+    pub(super) waiting_for_slot: bool,
+    pub(super) deferred_reference: Option<LogReference>,
     pub(super) ui_busy: bool,
     pub(super) ui_task: Option<Task<()>>,
     pub(super) error: String,
@@ -83,6 +89,7 @@ pub(in crate::workspace) struct ConversationSession {
 pub(super) struct QueuedPrompt {
     pub(super) text: String,
     pub(super) logs: Vec<super::attachments::DraftLog>,
+    pub(super) preferences: super::queue::RunPreferences,
 }
 
 impl ConversationSession {
@@ -128,6 +135,7 @@ impl ConversationSession {
             return;
         }
         let prompt = QueuedPrompt {
+            preferences: super::queue::RunPreferences::capture(self),
             text,
             logs: std::mem::take(&mut self.draft_logs),
         };
@@ -153,10 +161,14 @@ impl ConversationSession {
         self.input.update(cx, |input, cx| {
             input.set_value(prompt.text.clone(), window, cx)
         });
+        let mut preferences = prompt.preferences.clone();
+        preferences.swap(self);
         let generation = self.generation;
         self.send(false, window, cx);
+        preferences.swap(self);
         if self.generation == generation {
             self.queued_prompts.push_front(QueuedPrompt {
+                preferences: prompt.preferences,
                 text: self.input.read(cx).value().to_string(),
                 logs: std::mem::take(&mut self.draft_logs),
             });
@@ -302,6 +314,12 @@ impl ConversationSession {
             memory_loading: false,
             memory_task: None,
             busy: true,
+            settings_work: false,
+            preferences_dirty: false,
+            provider_test: None,
+            running_model: None,
+            waiting_for_slot: false,
+            deferred_reference: None,
             ui_busy: false,
             ui_task: None,
             error: String::new(),
@@ -558,7 +576,7 @@ impl ConversationSession {
             self.queue_current_prompt(false, window, cx);
             return;
         }
-        if self.settings_busy(cx) || self.ui_busy || self.attachments_loading {
+        if self.is_running() || self.settings_busy(cx) || self.ui_busy || self.attachments_loading {
             return;
         }
         let Some(config) = self
@@ -645,16 +663,21 @@ impl ConversationSession {
         self.error.clear();
         self.live.clear();
         self.reasoning.clear();
+        self.running_model = Some(config.model.clone());
         self.progress = crate::tr!("正在准备会话", "Preparing conversation").into();
         self.pending_tool = None;
         self.pending_question = None;
         if let Some(ix) = self.editing_message.take() {
             self.conversation.messages.truncate(ix);
+            self.conversation.run_models.retain(|start, _| *start < ix);
             self.conversation.summarized_messages = self.conversation.summarized_messages.min(ix);
             self.conversation.context_summary.clear();
             self.rebuild_messages(cx);
         }
         self.recover_messages(cx);
+        self.conversation
+            .run_models
+            .insert(self.conversation.messages.len(), config.model.clone());
         self.push_message(
             AgentMessage::User {
                 text: config.redact(&user_text),
@@ -760,6 +783,7 @@ impl ConversationSession {
                             this.start_next_queued(window, cx);
                         }
                         this.resume_queue_after_stop = false;
+                        this.persist_preferences(cx);
                         cx.notify();
                     });
                 }
@@ -815,6 +839,10 @@ impl ConversationSession {
                         Ok(Ok(work)) => {
                             let evidence = cx.background_spawn(async move { work() }).await;
                             if cancellation.is_cancelled() { break; }
+                            if let Ok(Some(result)) = this.update(cx, |this, cx| this.background_tool_result(&scope, &call, cx)) {
+                                if replies.send((call.id, result)).await.is_err() { break; }
+                                continue;
+                            }
                             match evidence {
                                 Ok(value) => match workspace.update_in(cx, |workspace, window, cx| workspace.ai_commit(&scope, &call, value, window, cx)) {
                                     Ok(Ok(value)) => ToolResult::ok(value),
@@ -880,6 +908,7 @@ impl ConversationSession {
                             this.start_next_queued(window, cx);
                         }
                         this.resume_queue_after_stop = false;
+                        this.persist_preferences(cx);
                         cx.notify();
                     });
                     return;
@@ -910,6 +939,7 @@ impl ConversationSession {
                         this.start_next_queued(window, cx);
                     }
                     this.resume_queue_after_stop = false;
+                    this.persist_preferences(cx);
                     cx.notify();
                 });
             }
@@ -950,6 +980,14 @@ impl ConversationSession {
             self.conversation.log_sources = self.conversation_with_log_sources().log_sources;
         }
         match event {
+            AgentEvent::Queued => {
+                self.waiting_for_slot = true;
+                self.progress = crate::tr!(
+                    "等待执行名额（最多同时运行 3 个）",
+                    "Queued (up to 3 concurrent runs)"
+                )
+                .into();
+            }
             AgentEvent::ContextUsage(usage) => {
                 self.conversation.context_usage = Some(usage);
             }
@@ -972,6 +1010,7 @@ impl ConversationSession {
                 .into();
             }
             AgentEvent::RequestStarted(_) => {
+                self.waiting_for_slot = false;
                 self.progress = crate::tr!("等待模型响应", "Waiting for model").into();
             }
             AgentEvent::ResponseStarted => {
@@ -1031,6 +1070,7 @@ impl ConversationSession {
                 .into()
             }
             AgentEvent::Finished(status, error) => {
+                self.waiting_for_slot = false;
                 self.conversation.status = status;
                 self.progress.clear();
                 if !error.is_empty() {
@@ -1174,3 +1214,6 @@ mod tests;
 
 #[cfg(test)]
 mod analysis_tests;
+
+#[cfg(test)]
+mod parallel_tests;

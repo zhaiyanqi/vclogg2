@@ -134,7 +134,7 @@ impl ConversationSession {
         let Some(store) = self.store.clone() else {
             return;
         };
-        self.busy = true;
+        self.settings_work = true;
         let generation = self.settings_generation;
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
@@ -150,7 +150,7 @@ impl ConversationSession {
                 gpui_kit::AsyncApp::update_global::<SharedAiMemory, _>(cx, |_, _| {});
             }
             _ = this.update(cx, |this, cx| {
-                this.busy = false;
+                this.settings_work = false;
                 match result {
                     Ok(()) => {
                         if this.settings_generation == generation {
