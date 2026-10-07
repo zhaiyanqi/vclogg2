@@ -846,7 +846,7 @@ impl ConversationSession {
                         Ok(Ok(work)) => {
                             let evidence = cx.background_spawn(async move { work() }).await;
                             if cancellation.is_cancelled() { break; }
-                            if let Ok(Some(result)) = this.update(cx, |this, cx| this.background_tool_result(&scope, &call, cx)) {
+                            if evidence.is_ok() && let Ok(Some(result)) = this.update(cx, |this, cx| this.background_tool_result(&scope, &call, cx)) {
                                 if replies.send((call.id, result)).await.is_err() { break; }
                                 continue;
                             }
@@ -874,7 +874,7 @@ impl ConversationSession {
                             AgentEvent::QuestionRequested(question) if question.allow_free_text
                         );
                         this.receive_event(event, cx);
-                        if focus_question && this.active {
+                        if focus_question && this.active && this.input.focus_handle(cx).is_focused(window) {
                             this.question_input.focus_handle(cx).focus(window, cx);
                         }
                     }

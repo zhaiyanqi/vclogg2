@@ -100,6 +100,7 @@ impl ConversationSession {
             _ = this.update(cx, |this, cx| {
                 this.settings_work = false;
                 if result.is_ok() {
+                    this.persist_preferences(cx);
                     this.error.clear();
                     if saved_mcp && this.settings_generation == settings_generation {
                         this.mcp_editor = None;
@@ -184,6 +185,7 @@ impl ConversationSession {
                     .providers
                     .retain(|provider| provider.id != config.id);
                 this.conversation.provider_id = Some(config.id.clone());
+                this.preferences_dirty = true;
                 this.settings.active_provider = Some(config.id.clone());
                 this.settings.providers.push(config);
                 this.editor = None;
@@ -401,7 +403,11 @@ impl ConversationSession {
                         Button::new("ai-test-connection")
                             .small()
                             .text_label(crate::tr!("测试连接", "Test connection"))
-                            .disabled(disabled || self.conversation.provider_id.is_none())
+                            .disabled(
+                                disabled
+                                    || self.provider_test.is_some()
+                                    || self.conversation.provider_id.is_none(),
+                            )
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.test_provider(window, cx)),
                             ),
@@ -421,6 +427,7 @@ impl ConversationSession {
                                     this.settings.providers.first().map(|p| p.id.clone());
                                 this.conversation.provider_id =
                                     this.settings.active_provider.clone();
+                                this.preferences_dirty = true;
                                 this.save_settings(window, cx);
                             })),
                     ),
