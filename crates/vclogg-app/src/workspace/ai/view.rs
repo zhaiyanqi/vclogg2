@@ -813,6 +813,7 @@ impl Render for ConversationSession {
                 )
             });
         let footer = v_flex()
+            .child(self.render_plan(cx))
             .when_some(self.deferred_reference.clone(), |view, reference| {
                 view.child(
                     Button::new("ai-deferred-navigation")
@@ -868,6 +869,9 @@ impl Render for ConversationSession {
                                 )),
                         )
                         .children(self.queued_prompts.iter().enumerate().map(|(ix, prompt)| {
+                            let remove = prompt.id.clone();
+                            let edit = prompt.id.clone();
+                            let up = prompt.id.clone();
                             h_flex()
                                 .gap_1()
                                 .min_w_0()
@@ -879,7 +883,26 @@ impl Render for ConversationSession {
                                     ),
                                 ))
                                 .child(
-                                    Button::new(("ai-remove-queued", ix))
+                                    Button::new(format!("ai-edit-queued-{}", prompt.id))
+                                        .small()
+                                        .ghost()
+                                        .text_label(crate::tr!("编辑", "Edit"))
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.edit_queued(edit.clone(), window, cx)
+                                        })),
+                                )
+                                .child(
+                                    Button::new(format!("ai-up-queued-{}", prompt.id))
+                                        .small()
+                                        .ghost()
+                                        .text_label(crate::tr!("上移", "Move up"))
+                                        .disabled(ix == 0)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.move_queued_up(&up, cx)
+                                        })),
+                                )
+                                .child(
+                                    Button::new(format!("ai-remove-queued-{}", prompt.id))
                                         .small()
                                         .ghost()
                                         .icon(IconName::Close)
@@ -888,7 +911,7 @@ impl Render for ConversationSession {
                                             "Remove queued message"
                                         ))
                                         .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.queued_prompts.remove(ix);
+                                            this.queued_prompts.retain(|p| p.id != remove);
                                             cx.notify();
                                         })),
                                 )
@@ -1003,6 +1026,7 @@ impl Render for ConversationSession {
                             .child(div().flex_1().min_w_0())
                             .child(self.render_context_sources_popover(cx))
                             .child(self.render_context_usage_popover(cx))
+                            .child(self.render_mode(cx))
                             .child(
                                 Button::new("ai-model-menu")
                                     .small()

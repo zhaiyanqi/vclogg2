@@ -327,7 +327,7 @@ async fn tool_groups_are_loaded_only_after_discovery() {
             .collect::<Vec<_>>()
     };
     let first = names(&requests[0]);
-    assert_eq!(first.len(), 3);
+    assert_eq!(first.len(), 5);
     assert!(first.iter().any(|name| name == "get_context"));
     assert!(first.iter().any(|name| name == "ask_user"));
     assert!(!first.iter().any(|name| name == "read_logs"));
@@ -1002,4 +1002,152 @@ fn log_citations_round_trip_without_becoming_external_access() {
     ] {
         assert!(vclogg_ai::LogReference::from_url(invalid).is_none());
     }
+}
+
+#[tokio::test]
+async fn readonly_mode_blocks_mutation_even_when_provider_requests_it() {
+    let (config, requests, server) = mock(vec![
+        (
+            200,
+            openai_named_tool("change", "set_marks", r#"{"marks":[]}"#),
+        ),
+        (200, openai_text("No changes made.")),
+    ]);
+    let conversation = Conversation {
+        mode: AgentMode::Plan,
+        ..Default::default()
+    };
+    let run = start_run_with_extensions(
+        config,
+        vec![],
+        vec![],
+        String::new(),
+        false,
+        RunExtensions::default().with_conversation(&conversation),
+    );
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), run.events.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            AgentEvent::ToolStarted(_) => panic!("Mutation reached the host"),
+            AgentEvent::Finished(status, error) => {
+                assert_eq!(status, RunStatus::Complete, "{error}");
+                break;
+            }
+            _ => {}
+        }
+    }
+    server.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert!(requests[1].to_string().contains("read-only mode"));
+    assert!(!requests[0]["tools"].to_string().contains("set_marks"));
+}
+
+#[tokio::test]
+async fn plan_and_delegate_keep_child_context_and_tools_isolated() {
+    let (config, requests, server) = mock(vec![
+        (
+            200,
+            openai_named_tool(
+                "plan",
+                "update_plan",
+                r#"{"steps":[{"text":"Verify evidence","status":"in_progress"}]}"#,
+            ),
+        ),
+        (
+            200,
+            openai_named_tool(
+                "child",
+                "delegate_analysis",
+                r#"{"task":"Find cause","evidence":"timeout at line 42"}"#,
+            ),
+        ),
+        (200, openai_text("The supplied line indicates a timeout.")),
+        (200, openai_text("Verified the independent finding.")),
+    ]);
+    let run = start_run(
+        config,
+        vec![AgentMessage::User {
+            text: "private parent context".into(),
+        }],
+        vec![],
+        String::new(),
+        false,
+    );
+    let mut planned = false;
+    let mut delegated = false;
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), run.events.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            AgentEvent::PlanUpdated(steps) => {
+                assert_eq!(steps[0].status, StepStatus::InProgress);
+                planned = true;
+            }
+            AgentEvent::DelegateStarted(task) => {
+                assert_eq!(task, "Find cause");
+                delegated = true;
+            }
+            AgentEvent::Finished(status, error) => {
+                assert_eq!(status, RunStatus::Complete, "{error}");
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(planned && delegated);
+    server.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 4);
+    assert!(requests[2].get("tools").is_none());
+    assert!(!requests[2].to_string().contains("private parent context"));
+    assert!(requests[2].to_string().contains("timeout at line 42"));
+    assert!(
+        requests[3]
+            .to_string()
+            .contains("supplied line indicates a timeout")
+    );
+}
+
+#[tokio::test]
+async fn delegated_tool_calls_never_reach_the_host() {
+    let (config, requests, server) = mock(vec![
+        (
+            200,
+            openai_named_tool(
+                "child",
+                "delegate_analysis",
+                r#"{"task":"Check","evidence":"line 42"}"#,
+            ),
+        ),
+        (200, openai_named_tool("nested", "get_context", "{}")),
+        (200, openai_text("Child result was rejected.")),
+    ]);
+    let run = start_run(config, vec![], vec![], String::new(), false);
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), run.events.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            AgentEvent::ToolStarted(_) | AgentEvent::ExtensionToolStarted(_) => {
+                panic!("Child tool escaped isolation")
+            }
+            AgentEvent::Finished(status, error) => {
+                assert_eq!(status, RunStatus::Complete, "{error}");
+                break;
+            }
+            _ => {}
+        }
+    }
+    server.join().unwrap();
+    assert!(
+        requests.lock().unwrap()[2]
+            .to_string()
+            .contains("unsupported tool call")
+    );
 }

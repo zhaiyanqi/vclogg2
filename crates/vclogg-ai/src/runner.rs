@@ -35,6 +35,7 @@ pub struct RunExtensions {
     memory_auto_save: bool,
     summarized_messages: usize,
     context_summary: String,
+    mode: AgentMode,
 }
 impl RunExtensions {
     pub fn from_settings(settings: &AiSettings) -> Self {
@@ -49,6 +50,7 @@ impl RunExtensions {
             memory_auto_save: settings.memory_auto_save,
             summarized_messages: 0,
             context_summary: String::new(),
+            mode: AgentMode::default(),
         }
     }
 
@@ -57,6 +59,7 @@ impl RunExtensions {
             .summarized_messages
             .min(conversation.messages.len());
         self.context_summary = conversation.context_summary.clone();
+        self.mode = conversation.mode;
         self
     }
 
@@ -497,6 +500,7 @@ async fn run(
     }
     system.push_str(&format!("\n工作区目录（唯一，用于临时副本、输出、转储）：{}\nShell 省略 root 时在此目录启动；root 始终指项目目录而非此工作区。临时文件、生成内容及编辑副本写入工作区；不得把项目源码目录当作临时输出目录，不直接修改源日志。目录选择不替代写入确认。工作区不会自动清空，产物仍可能需要用户保留。\n", workspace_directory.display()));
     system.push_str(context);
+    system.push_str(extensions.mode.instructions());
     let mut skill_summaries = String::new();
     if !skills.is_empty() {
         system
@@ -522,6 +526,7 @@ async fn run(
     let mut evidence_bytes = 0usize;
     const EVIDENCE_BUDGET: usize = 128 * 1024;
     let mut request = 0usize;
+    let mut delegations = 0usize;
     loop {
         request = request.saturating_add(1);
         if serde_json::to_vec(&messages)?.len() > 2 * 1024 * 1024 {
@@ -531,11 +536,12 @@ async fn run(
         let tool_history = messages.iter().any(
             |message| matches!(message, AgentMessage::Assistant { calls, .. } if !calls.is_empty()),
         );
-        let definitions = if with_tools || tool_history {
+        let mut definitions = if with_tools || tool_history {
             crate::tools::tool_definitions_for(&loaded_groups, &available_groups)
         } else {
             Vec::new()
         };
+        definitions.retain(|tool| extensions.mode.permits(tool.name));
         let mut usage = crate::context_usage::usage(
             config,
             &system,
@@ -630,6 +636,10 @@ async fn run(
                 ToolResult::error(
                     "An earlier external operation failed with a potentially unknown outcome. It must not be retried automatically in this run.",
                 )
+            } else if !extensions.mode.permits(&call.name) {
+                ToolResult::error(
+                    "This operation is unavailable in read-only mode. The user must select Execute for a later run.",
+                )
             } else if let Err(e) = validate_call(&call) {
                 ToolResult::error(e.to_string())
             } else if !definitions.iter().any(|tool| tool.name == call.name) {
@@ -653,7 +663,10 @@ async fn run(
                             &available_groups,
                         )
                         .into_iter()
-                        .filter(|tool| crate::tools::group_for_tool(tool.name) == group)
+                        .filter(|tool| {
+                            crate::tools::group_for_tool(tool.name) == group
+                                && extensions.mode.permits(tool.name)
+                        })
                         .map(|tool| tool.name)
                         .collect::<Vec<_>>();
                         ToolResult::ok(json!({"group":id,"loaded":newly_loaded,"tools":tools}))
@@ -661,6 +674,29 @@ async fn run(
                     Some(_) => ToolResult::error("该工具组未为本次运行启用"),
                     None => ToolResult::error("未知工具组"),
                 }
+            } else if call.name == "update_plan" {
+                match crate::workflow::parse_plan(&call.arguments) {
+                    Ok(steps) => {
+                        events.send(AgentEvent::PlanUpdated(steps)).await?;
+                        ToolResult::ok(json!({"updated":true}))
+                    }
+                    Err(error) => ToolResult::error(error.to_string()),
+                }
+            } else if call.name == "delegate_analysis" && delegations >= 4 {
+                ToolResult::error(
+                    "Independent analysis limit reached (4 per run). Summarize the existing results.",
+                )
+            } else if call.name == "delegate_analysis" {
+                delegations += 1;
+                events
+                    .send(AgentEvent::DelegateStarted(
+                        call.arguments["task"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned(),
+                    ))
+                    .await?;
+                crate::delegation::analyze(config, &call, cancellation).await
             } else if call.name == "ask_user" {
                 let options = call.arguments["options"]
                     .as_array()

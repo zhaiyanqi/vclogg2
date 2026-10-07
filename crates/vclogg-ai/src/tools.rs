@@ -71,6 +71,14 @@ impl ToolDescriptor {
                 ToolRisk::Observe,
                 false,
             ),
+            "update_plan" => ("任务计划", "Task plan", Core, ToolRisk::Observe, false),
+            "delegate_analysis" => (
+                "独立分析",
+                "Independent analysis",
+                Core,
+                ToolRisk::Observe,
+                false,
+            ),
             "ask_user" => ("询问用户", "Ask user", Core, ToolRisk::Observe, false),
             "list_logs" => ("列出日志文件", "List logs", Logs, ToolRisk::Observe, false),
             "locate_files" => ("查找文件", "Find files", Files, ToolRisk::Observe, false),
@@ -471,6 +479,18 @@ fn build_definitions() -> Vec<ToolDefinition> {
         parameters: json!({"type":"object","properties":properties,"required":required,"additionalProperties":false}),
     };
     vec![
+        make(
+            "update_plan",
+            "维护调查步骤；已完成步骤必须有证据，最多一个进行中步骤。",
+            json!({"steps":{"type":"array","minItems":1,"maxItems":12,"items":{"type":"object","properties":{"text":{"type":"string","minLength":1,"maxLength":256},"status":{"type":"string","enum":["pending","in_progress","complete"]}},"required":["text","status"],"additionalProperties":false}}}),
+            json!(["steps"]),
+        ),
+        make(
+            "delegate_analysis",
+            "让独立分析助手检查所提供的证据或假设。助手不能使用工具、访问新文件或继续委派；必须提供充分证据。结果只是待核验的分析意见。",
+            json!({"task":{"type":"string","minLength":1,"maxLength":2048},"evidence":{"type":"string","maxLength":24000}}),
+            json!(["task", "evidence"]),
+        ),
         make(
             "load_tool_group",
             "按需加载一组工具。仅在当前工具不足时调用；同组只需加载一次。",
@@ -1010,11 +1030,24 @@ mod tests {
         let available = BTreeSet::from([ToolGroup::Logs, ToolGroup::VcloggActions]);
         let initial = tool_definitions_for(&BTreeSet::new(), &available);
         let names = initial.iter().map(|tool| tool.name).collect::<Vec<_>>();
-        assert_eq!(names, ["load_tool_group", "ask_user", "get_context"]);
+        assert_eq!(
+            names,
+            [
+                "update_plan",
+                "delegate_analysis",
+                "load_tool_group",
+                "ask_user",
+                "get_context"
+            ]
+        );
         assert!(names.contains(&"load_tool_group"));
         assert!(!names.contains(&"read_logs"));
         assert_eq!(
-            initial[0].parameters["properties"]["group"]["enum"],
+            initial
+                .iter()
+                .find(|tool| tool.name == "load_tool_group")
+                .unwrap()
+                .parameters["properties"]["group"]["enum"],
             json!(["logs", "vclogg_actions"])
         );
 

@@ -3,6 +3,7 @@ mod builtin_skills;
 mod compaction;
 mod context_usage;
 mod defaults;
+mod delegation;
 mod discovery;
 mod mcp;
 mod model;
@@ -17,6 +18,8 @@ mod source_index;
 mod source_lsp;
 mod source_workspace;
 mod tools;
+mod workflow;
+pub use workflow::{AgentMode, PlanStep, StepStatus};
 
 pub use compaction::{compact_conversation, conversation_tokens};
 pub use discovery::*;
