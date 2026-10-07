@@ -264,8 +264,6 @@ impl Workspace {
         };
         ui_theme::apply_product_theme(mode, cx);
         ui_theme::apply_log_background(settings.log_background_color(mode.is_dark()), mode, cx);
-
-        cx.refresh_windows();
     }
 
     pub(crate) fn unregister_window(window_id: WindowId, cx: &mut App) {
