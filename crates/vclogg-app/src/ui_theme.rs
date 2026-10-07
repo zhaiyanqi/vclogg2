@@ -349,12 +349,10 @@ pub(crate) fn apply_log_background(custom: Option<&str>, mode: ThemeMode, cx: &m
     let background = custom
         .and_then(|value| try_parse_color(value).ok())
         .unwrap_or_else(|| palette_for_mode(mode).log_background);
-    let theme = Theme::global_mut(cx);
-    theme.table = background;
-    theme.table_even = background;
-    theme.tokens.table = background.into();
-    theme.tokens.table_even = background.into();
-    Theme::sync_base(cx);
+    Theme::update(cx, |theme| {
+        theme.table = background;
+        theme.table_even = background;
+    });
 }
 
 fn apply_product_colors(mode: ThemeMode, cx: &mut App) {
@@ -611,6 +609,31 @@ mod tests {
         Window, point, size,
     };
     use std::{cell::Cell, rc::Rc};
+
+    #[gpui_kit::test]
+    fn log_background_updates_tokens_without_changing_product_surfaces(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            cx.update(|cx| {
+                apply_product_theme(mode, cx);
+                let surface = Theme::global(cx).background;
+                let control = Theme::global(cx).tokens.background;
+                for custom in [Some("#123456"), None, Some("invalid")] {
+                    apply_log_background(custom, mode, cx);
+                    let expected = custom
+                        .and_then(|value| try_parse_color(value).ok())
+                        .unwrap_or_else(|| palette_for_mode(mode).log_background);
+                    let theme = Theme::global(cx);
+                    assert_eq!(theme.table, expected);
+                    assert_eq!(theme.table_even, expected);
+                    assert_eq!(theme.tokens.table, expected.into());
+                    assert_eq!(theme.tokens.table_even, expected.into());
+                    assert_eq!(theme.background, surface);
+                    assert_eq!(theme.tokens.background, control);
+                }
+            });
+        }
+    }
 
     #[derive(Clone)]
     struct TestScrollHandle {
