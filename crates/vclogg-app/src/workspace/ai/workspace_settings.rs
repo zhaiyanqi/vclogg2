@@ -26,7 +26,7 @@ fn install_default_workspace(
     true
 }
 
-impl AiPanel {
+impl ConversationSession {
     fn choose_ai_directory(&mut self, project: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings_busy(cx) {
             return;

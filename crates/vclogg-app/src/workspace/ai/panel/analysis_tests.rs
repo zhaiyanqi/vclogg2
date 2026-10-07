@@ -8,7 +8,7 @@ use std::{
 
 pub(super) fn exercise(
     cx: &mut gpui_kit::TestAppContext,
-    panel: &Entity<AiPanel>,
+    panel: &Entity<ConversationSession>,
     workspace: &Entity<Workspace>,
     window: gpui_kit::WindowHandle<Root>,
 ) {

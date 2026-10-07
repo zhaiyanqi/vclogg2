@@ -14,7 +14,7 @@ fn markdown_style() -> gpui_kit::component::text::TextViewStyle {
         .code_block(code)
 }
 
-impl AiPanel {
+impl ConversationSession {
     fn render_message(&mut self, row_ix: usize, cx: &mut Context<Self>) -> AnyElement {
         let start = self.transcript_rows[row_ix];
         let end = self
@@ -717,7 +717,7 @@ pub(super) fn reference_label(
         reference.line
     )
 }
-impl Render for AiPanel {
+impl Render for ConversationSession {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let disabled = self.settings_busy(cx) || self.ui_busy;
         let body = v_flex()
@@ -727,7 +727,6 @@ impl Render for AiPanel {
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground);
         let models = cx.entity();
-        let header = self.render_conversation_tabs(window, cx);
         let owner = cx.entity();
         let scroll = self.scroller.read(cx).list.clone();
         let show_jump = self.scroller.read(cx).is_scrolled_up();
@@ -1121,7 +1120,7 @@ impl Render for AiPanel {
                     ),
             );
         let transcript_bounds = self.transcript_bounds.clone();
-        body.child(header)
+        body
             .when(!self.error.is_empty(), |this| {
                 this.child(div().px_3().py_2().text_xs().child(self.error.clone()))
             })

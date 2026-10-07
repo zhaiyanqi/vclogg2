@@ -11,7 +11,7 @@ fn tokens(value: u32) -> String {
     }
 }
 
-impl AiPanel {
+impl ConversationSession {
     pub(super) fn render_context_sources_popover(&self, cx: &mut Context<Self>) -> AnyElement {
         let panel = cx.entity();
         let weak_panel = cx.weak_entity();

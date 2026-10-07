@@ -11,7 +11,7 @@ impl AiPanel {
         let selected = self
             .open_conversations
             .iter()
-            .position(|id| id == &self.conversation.id)
+            .position(|id| id == &self.current_id(cx))
             .unwrap_or(0);
         let owner = cx.entity();
         let tabs = TabBar::new("ai-conversation-tabs")
@@ -22,7 +22,7 @@ impl AiPanel {
             .selected_index(selected)
             .max_width(window.rem_size() * 12.)
             .children(self.open_conversations.iter().map(|id| {
-                let title = self.conversation_tab_title(id);
+                let title = self.conversation_tab_title(id, cx);
                 let close_id = id.clone();
                 let middle_id = id.clone();
                 let menu_id = id.clone();
@@ -173,8 +173,8 @@ impl AiPanel {
                             .dropdown_menu(move |mut menu, window, cx| {
                                 menu = menu.scrollable(true);
                                 let panel = owner.read(cx);
-                                let rows = panel.conversation_history_items();
-                                let current = panel.conversation.id.clone();
+                                let rows = panel.conversation_history_items(cx);
+                                let current = panel.current_id(cx);
                                 let more = panel.more_history;
                                 if rows.is_empty() {
                                     menu = menu.item(
@@ -273,7 +273,7 @@ impl AiPanel {
                 let current = this
                     .open_conversations
                     .iter()
-                    .position(|id| id == &this.conversation.id)
+                    .position(|id| id == &this.current_id(cx))
                     .unwrap_or(0);
                 let index = match event.keystroke.key.as_str() {
                     "left" => (current + count - 1) % count,

@@ -8,8 +8,10 @@ use std::collections::VecDeque;
 use vclogg_ai::{AgentEvent, AiSettings, Conversation, RunHandle, RunStatus, UserQuestion};
 use vclogg_data::AiConversationRecord;
 
-pub(in crate::workspace) struct AiPanel {
+pub(in crate::workspace) struct ConversationSession {
     pub(super) workspace: WeakEntity<Workspace>,
+    pub(super) active: bool,
+    pub(super) unread: bool,
     pub(super) store: Option<Arc<StateStore>>,
     pub(super) settings: AiSettings,
     pub(super) settings_path: Option<PathBuf>,
@@ -18,10 +20,6 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) history: Vec<AiConversationRecord>,
     pub(super) more_history: bool,
     pub(super) history_offset: usize,
-    pub(super) open_conversations: Vec<String>,
-    pub(super) inactive_conversations: BTreeMap<String, super::conversation_tabs::ConversationTab>,
-    pub(super) conversation_tab_scroll: ScrollHandle,
-    pub(super) conversation_tab_focus: FocusHandle,
     pub(super) input: Entity<TextareaState>,
     pub(super) question_input: Entity<TextareaState>,
     pub(super) draft_logs: Vec<super::attachments::DraftLog>,
@@ -31,7 +29,7 @@ pub(in crate::workspace) struct AiPanel {
     pub(super) attachments_loading: bool,
     pub(super) attachment_task: Option<Task<()>>,
     pub(super) scroller: Entity<TranscriptScroll>,
-    pub(super) scroll_subscription: Subscription,
+    _scroll_subscription: Subscription,
     pub(super) live_row: bool,
     pub(super) transcript_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     message_subscriptions: Vec<Subscription>,
@@ -87,7 +85,10 @@ pub(super) struct QueuedPrompt {
     pub(super) logs: Vec<super::attachments::DraftLog>,
 }
 
-impl AiPanel {
+impl ConversationSession {
+    pub(super) fn is_running(&self) -> bool {
+        self.run.is_some() || self.busy || self.conversation.status == RunStatus::Running
+    }
     fn restrict_scope(&self, scope: &SharedScope) {
         if let Ok(mut state) = scope.lock() {
             if let Some(selected) = &self.selected_log_ids {
@@ -177,7 +178,7 @@ impl AiPanel {
     pub(in crate::workspace) fn focus(&self, window: &mut Window, cx: &mut App) {
         self.input.focus_handle(cx).focus(window, cx);
     }
-    pub(in crate::workspace) fn new(
+    pub(super) fn empty(
         workspace: WeakEntity<Workspace>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -237,8 +238,10 @@ impl AiPanel {
             });
         let scroller = cx.new(|cx| TranscriptScroll::new(0, cx));
         let scroll_subscription = cx.observe(&scroller, |_, _, cx| cx.notify());
-        let mut this = Self {
+        Self {
             workspace,
+            active: true,
+            unread: false,
             store: None,
             settings: AiSettings::default(),
             settings_path: crate::app_paths::application_data_dir()
@@ -248,10 +251,6 @@ impl AiPanel {
             history: Vec::new(),
             more_history: false,
             history_offset: 0,
-            open_conversations: Vec::new(),
-            inactive_conversations: BTreeMap::new(),
-            conversation_tab_scroll: ScrollHandle::new(),
-            conversation_tab_focus: cx.focus_handle(),
             input,
             question_input,
             draft_logs: Vec::new(),
@@ -261,7 +260,7 @@ impl AiPanel {
             attachments_loading: false,
             attachment_task: None,
             scroller,
-            scroll_subscription,
+            _scroll_subscription: scroll_subscription,
             live_row: false,
             transcript_bounds: Rc::new(Cell::new(None)),
             message_subscriptions: Vec::new(),
@@ -315,8 +314,15 @@ impl AiPanel {
                 settings_subscription,
                 memory_subscription,
             ],
-        };
-        this.open_conversations.push(this.conversation.id.clone());
+        }
+    }
+
+    pub(super) fn new(
+        workspace: WeakEntity<Workspace>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut this = Self::empty(workspace, window, cx);
         let path = this.settings_path.clone();
         this.task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = cx
@@ -376,7 +382,6 @@ impl AiPanel {
                         this.history = history;
                         if let Some(record) = current {
                             this.install_record(record, cx);
-                            this.open_conversations = vec![this.conversation.id.clone()];
                         } else {
                             this.conversation.provider_id = this.settings.active_provider.clone();
                         }
@@ -834,7 +839,7 @@ impl AiPanel {
                             AgentEvent::QuestionRequested(question) if question.allow_free_text
                         );
                         this.receive_event(event, cx);
-                        if focus_question {
+                        if focus_question && this.active {
                             this.question_input.focus_handle(cx).focus(window, cx);
                         }
                     }
@@ -935,6 +940,9 @@ impl AiPanel {
         }
     }
     fn receive_event(&mut self, event: AgentEvent, cx: &mut Context<Self>) {
+        if !self.active {
+            self.unread = true;
+        }
         if matches!(
             event,
             AgentEvent::ToolFinished(_) | AgentEvent::Finished(..)
@@ -1033,7 +1041,7 @@ impl AiPanel {
                 self.pending_question = None;
                 self.flush_partial(cx);
                 self.collapse_current_thinking(cx);
-                self.busy = true; // Do not switch conversations until the final record is durable.
+                self.busy = true; // Keep this session serial until the final record is durable.
                 self.run = None;
             }
             AgentEvent::ExtensionToolStarted(call) => {
@@ -1080,40 +1088,8 @@ impl AiPanel {
         }
         cx.notify();
     }
-    pub(super) fn new_conversation(&mut self, cx: &mut Context<Self>) {
-        if self.run.is_some() || self.busy || self.ui_busy {
-            return;
-        }
-        self.conversation = Conversation {
-            provider_id: self
-                .conversation
-                .provider_id
-                .clone()
-                .or(self.settings.active_provider.clone()),
-            skill_ids: self.conversation.skill_ids.clone(),
-            ..Default::default()
-        };
-        self.revision = 0;
-        self.draft_logs.clear();
-        self.queued_prompts.clear();
-        self.resume_queue_after_stop = false;
-        self.editing_message = None;
-        self.selected_log_ids = None;
-        self.selected_project_directories = None;
-        self.include_search_directory = true;
-        self.attachment_task = None;
-        self.attachments_loading = false;
-        self.scope = None;
-        self.reference_scopes.clear();
-        self.error.clear();
-        self.live.clear();
-        self.reasoning.clear();
-        self.progress.clear();
-        self.rebuild_messages(cx);
-        cx.notify();
-    }
 }
-impl Drop for AiPanel {
+impl Drop for ConversationSession {
     fn drop(&mut self) {
         if let Some(token) = &self.mcp_test_cancel {
             token.cancel();

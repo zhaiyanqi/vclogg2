@@ -10,7 +10,7 @@ pub(super) struct ConfigEditor {
     model: Entity<InputState>,
     context_window: Entity<InputState>,
 }
-impl AiPanel {
+impl ConversationSession {
     pub(super) fn edit_provider(
         &mut self,
         config: ProviderConfig,

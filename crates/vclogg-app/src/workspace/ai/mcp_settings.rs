@@ -12,7 +12,7 @@ pub(super) struct McpEditor {
     name: Entity<InputState>,
     connection: Entity<TextareaState>,
 }
-impl AiPanel {
+impl ConversationSession {
     fn edit_mcp(&mut self, server: Option<McpServer>, window: &mut Window, cx: &mut Context<Self>) {
         let connection = server
             .as_ref()
