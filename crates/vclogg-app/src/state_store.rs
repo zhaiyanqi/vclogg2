@@ -471,6 +471,29 @@ impl StateStore {
     ) -> Result<Vec<vclogg_data::AiConversationRecord>> {
         self.repository.ai_conversations(offset, 100)
     }
+    pub(crate) fn search_ai_conversations(
+        &self,
+        query: &str,
+        archived: bool,
+        offset: usize,
+    ) -> Result<Vec<vclogg_data::AiConversationRecord>> {
+        self.repository
+            .search_ai_conversations(query, archived, offset, 100)
+    }
+    pub(crate) fn ai_conversation_flags(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, (bool, bool)>> {
+        self.repository.ai_conversation_flags()
+    }
+    pub(crate) fn set_ai_conversation_flags(
+        &self,
+        id: &str,
+        pinned: bool,
+        archived: bool,
+    ) -> Result<()> {
+        self.repository
+            .set_ai_conversation_flags(id, pinned, archived)
+    }
     pub(crate) fn load_ai_conversation(
         &self,
         id: &str,
