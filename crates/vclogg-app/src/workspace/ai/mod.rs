@@ -37,6 +37,7 @@ mod skill_settings;
 mod tests;
 mod tool_settings;
 mod view;
+mod workflow_view;
 mod workspace_settings;
 pub(super) use conversation_tabs::AiPanel;
 use panel::ConversationSession;

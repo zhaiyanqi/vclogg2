@@ -313,6 +313,10 @@ pub struct Conversation {
     #[serde(default)]
     pub run_models: std::collections::BTreeMap<usize, String>,
     #[serde(default)]
+    pub mode: crate::AgentMode,
+    #[serde(default)]
+    pub plan: Vec<crate::PlanStep>,
+    #[serde(default)]
     pub context_summary: String,
     #[serde(default)]
     pub summarized_messages: usize,
@@ -333,6 +337,8 @@ impl Default for Conversation {
             skill_ids: Vec::new(),
             messages: Vec::new(),
             run_models: Default::default(),
+            mode: Default::default(),
+            plan: Vec::new(),
             context_summary: String::new(),
             summarized_messages: 0,
             context_usage: None,
@@ -436,6 +442,8 @@ impl Cancellation {
 
 #[derive(Clone, Debug)]
 pub enum AgentEvent {
+    PlanUpdated(Vec<crate::PlanStep>),
+    DelegateStarted(String),
     Queued,
     ContextUsage(ContextUsage),
     CompactionStarted,

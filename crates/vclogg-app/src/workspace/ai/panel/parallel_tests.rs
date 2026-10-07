@@ -37,6 +37,7 @@ pub(super) fn exercise(
                 let (mut socket, body) = request(&listener);
                 assert_eq!(body["model"], format!("model-{ix}"), "queued model changed");
                 let messages = body["messages"].to_string();
+                if round == 1 { assert!(messages.contains("工作模式：计划"), "Queued mode changed"); }
                 assert!(!messages.contains(if ix == 0 { "question-B" } else { "question-A" }), "cross-session transcript");
                 socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").unwrap();
                 write!(socket, "data: {}\n\n", json!({"choices":[{"delta":{"content":format!("stream-{ix}")}}]})).unwrap();
@@ -92,7 +93,18 @@ pub(super) fn exercise(
         second.update(cx, |s, cx| {
             s.input
                 .update(cx, |input, cx| input.set_value("follow-up-B", window, cx));
+            s.conversation.mode = vclogg_ai::AgentMode::Plan;
             s.queue_current_prompt(false, window, cx);
+            let first_id = s.queued_prompts[0].id.clone();
+            s.input
+                .update(cx, |input, cx| input.set_value("discarded", window, cx));
+            s.queue_current_prompt(false, window, cx);
+            let second_id = s.queued_prompts[1].id.clone();
+            s.move_queued_up(&second_id, cx);
+            assert_eq!(s.queued_prompts[0].text, "discarded");
+            assert_eq!(s.queued_prompts[1].id, first_id);
+            s.queued_prompts.remove(0);
+            s.conversation.mode = vclogg_ai::AgentMode::Execute;
             s.select_model(configs[0].id.clone(), cx);
             assert_eq!(s.queued_prompts[0].preferences.model(), "model-1");
         });

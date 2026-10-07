@@ -30,6 +30,7 @@ pub(in crate::workspace) struct ConversationSession {
     pub(super) question_input: Entity<TextareaState>,
     pub(super) draft_logs: Vec<super::attachments::DraftLog>,
     pub(super) queued_prompts: VecDeque<QueuedPrompt>,
+    pub(super) queue_editing: Option<String>,
     pub(super) resume_queue_after_stop: bool,
     pub(super) editing_message: Option<usize>,
     pub(super) attachments_loading: bool,
@@ -60,6 +61,7 @@ pub(in crate::workspace) struct ConversationSession {
     pub(super) editor: Option<super::settings::ConfigEditor>,
     pub(super) show_settings: bool,
     pub(super) show_context_usage: bool,
+    pub(super) show_plan: bool,
     pub(super) show_context_sources: bool,
     pub(super) selected_log_ids: Option<BTreeSet<u64>>,
     pub(super) selected_project_directories: Option<BTreeSet<PathBuf>>,
@@ -93,6 +95,7 @@ pub(in crate::workspace) struct ConversationSession {
 }
 
 pub(super) struct QueuedPrompt {
+    pub(super) id: String,
     pub(super) text: String,
     pub(super) logs: Vec<super::attachments::DraftLog>,
     pub(super) preferences: super::queue::RunPreferences,
@@ -141,6 +144,7 @@ impl ConversationSession {
             return;
         }
         let prompt = QueuedPrompt {
+            id: uuid::Uuid::new_v4().to_string(),
             preferences: super::queue::RunPreferences::capture(self),
             text,
             logs: std::mem::take(&mut self.draft_logs),
@@ -159,6 +163,9 @@ impl ConversationSession {
     }
 
     pub(super) fn start_next_queued(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.queue_editing.is_some() {
+            return;
+        }
         let Some(prompt) = self.queued_prompts.pop_front() else {
             return;
         };
@@ -174,6 +181,7 @@ impl ConversationSession {
         preferences.swap(self);
         if self.generation == generation {
             self.queued_prompts.push_front(QueuedPrompt {
+                id: prompt.id,
                 preferences: prompt.preferences,
                 text: self.input.read(cx).value().to_string(),
                 logs: std::mem::take(&mut self.draft_logs),
@@ -273,6 +281,7 @@ impl ConversationSession {
             question_input,
             draft_logs: Vec::new(),
             queued_prompts: VecDeque::new(),
+            queue_editing: None,
             resume_queue_after_stop: false,
             editing_message: None,
             attachments_loading: false,
@@ -303,6 +312,7 @@ impl ConversationSession {
             editor: None,
             show_settings: false,
             show_context_usage: false,
+            show_plan: false,
             show_context_sources: false,
             selected_log_ids: None,
             selected_project_directories: None,
@@ -866,7 +876,7 @@ impl ConversationSession {
                     continue;
                 }
                 let finished = matches!(event, AgentEvent::Finished(..));
-                let persist = matches!(event, AgentEvent::Assistant(_) | AgentEvent::ToolFinished(_) | AgentEvent::ContextCompacted { .. } | AgentEvent::Finished(..));
+                let persist = matches!(event, AgentEvent::PlanUpdated(_) | AgentEvent::Assistant(_) | AgentEvent::ToolFinished(_) | AgentEvent::ContextCompacted { .. } | AgentEvent::Finished(..));
                 if this.update_in(cx, |this, window, cx| {
                     if this.generation == generation {
                         let focus_question = matches!(
@@ -987,6 +997,13 @@ impl ConversationSession {
             self.conversation.log_sources = self.conversation_with_log_sources().log_sources;
         }
         match event {
+            AgentEvent::PlanUpdated(steps) => {
+                self.conversation.plan = steps;
+            }
+            AgentEvent::DelegateStarted(task) => {
+                self.progress =
+                    format!("{}: {task}", crate::tr!("独立分析", "Independent analysis"));
+            }
             AgentEvent::Queued => {
                 self.waiting_for_slot = true;
                 self.progress = crate::tr!(
