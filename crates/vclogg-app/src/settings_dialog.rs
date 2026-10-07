@@ -9,7 +9,7 @@ use gpui_kit::base::Link;
 use gpui_kit::component::{
     ActiveTheme as _, Colorize as _, Disableable as _, IconName, IndexPath, Sizable as _,
     button::{Button, ButtonVariants as _},
-    color_picker::{ColorPickerEvent, ColorPickerState},
+    color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     description_list::DescriptionList,
     h_flex,
     input::{Input, InputContentType, InputEvent, InputState, NumberInput},
@@ -2463,7 +2463,7 @@ impl Render for SettingsDialog {
                                             }),
                                     )
                                     .child(
-                                        crate::app_color_picker::new(&log_text_picker)
+                                        ColorPicker::new(&log_text_picker)
                                             .small()
                                             .label(crate::tr!(
                                                 "日志文字颜色",
@@ -2524,7 +2524,7 @@ impl Render for SettingsDialog {
                                             }),
                                     )
                                     .child(
-                                        crate::app_color_picker::new(&log_background_picker)
+                                        ColorPicker::new(&log_background_picker)
                                             .small()
                                             .label(crate::tr!(
                                                 "日志背景色",
@@ -2665,7 +2665,7 @@ impl Render for SettingsDialog {
                                     }),
                             )
                             .child(
-                                crate::app_color_picker::new(&self.line_number_text_color)
+                                ColorPicker::new(&self.line_number_text_color)
                                     .small()
                                     .label(crate::tr!("行号文字颜色", "Line-number text color")),
                             )
@@ -2716,7 +2716,7 @@ impl Render for SettingsDialog {
                                     }),
                             )
                             .child(
-                                crate::app_color_picker::new(&self.line_number_background_color)
+                                ColorPicker::new(&self.line_number_background_color)
                                     .small()
                                     .label(crate::tr!("行号背景色", "Line-number background")),
                             )

@@ -2,7 +2,7 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
-    color_picker::{ColorPickerEvent, ColorPickerState},
+    color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     h_flex,
     scroll::{Scrollbar, ScrollbarMode},
     theme::ThemeMode,
@@ -117,9 +117,7 @@ impl KeywordMatchStyleSection {
                 .rounded(cx.theme().radius)
                 .into_any_element()
         } else {
-            crate::app_color_picker::new(picker)
-                .small()
-                .into_any_element()
+            ColorPicker::new(picker).small().into_any_element()
         };
         let value = format!(
             "#{:06X} · {}%",

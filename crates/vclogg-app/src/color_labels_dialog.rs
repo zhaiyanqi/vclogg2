@@ -2,7 +2,7 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
-    color_picker::{ColorPickerEvent, ColorPickerState},
+    color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     h_flex,
     input::{Input, InputEvent, InputState},
     menu::{DropdownMenu, PopupMenuItem},
@@ -511,9 +511,7 @@ impl ColorLabelsDialog {
             .rounded(cx.theme().radius)
             .into_any_element()
         } else {
-            crate::app_color_picker::new(picker)
-                .small()
-                .into_any_element()
+            ColorPicker::new(picker).small().into_any_element()
         }
     }
 
@@ -1094,6 +1092,9 @@ mod tests {
     #[gpui_kit::test]
     fn committed_color_restores_focus_to_the_picker_trigger(cx: &mut TestAppContext) {
         cx.update(gpui_kit::component::init);
+        cx.update(|cx| {
+            gpui_kit::component::Theme::update(cx, |theme| theme.red_light = theme.red);
+        });
         let (dialog, cx) = cx.add_window_view(|window, cx| {
             ColorLabelsDialog::new(
                 false,
@@ -1109,6 +1110,9 @@ mod tests {
 
         cx.update(|window, cx| {
             picker.update(cx, |picker, cx| picker.set_open(true, cx));
+            // Render the restored featured palette, including duplicate theme
+            // colors: each slot must have a distinct accessibility identity.
+            window.draw(cx).clear(cx);
             popup_input.focus_handle(cx).focus(window, cx);
             assert!(popup_input.focus_handle(cx).is_focused(window));
 
