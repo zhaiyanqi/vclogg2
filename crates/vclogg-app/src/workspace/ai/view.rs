@@ -2,6 +2,18 @@ use super::*;
 use gpui_kit::component::{input::Textarea, scroll::ScrollableElement as _, text::TextView};
 use vclogg_ai::RunStatus;
 
+fn markdown_style() -> gpui_kit::component::text::TextViewStyle {
+    // Keep wide tables usable in the sidebar and long code blocks from taking
+    // over the transcript. Kit owns the nested wheel handling and scrollbars.
+    let mut table = gpui_kit::StyleRefinement::default();
+    table.overflow.x = Some(gpui_kit::Overflow::Scroll);
+    let mut code = gpui_kit::StyleRefinement::default().max_h(gpui_kit::rems(20.));
+    code.overflow.y = Some(gpui_kit::Overflow::Scroll);
+    gpui_kit::component::text::TextViewStyle::default()
+        .table(table)
+        .code_block(code)
+}
+
 impl AiPanel {
     fn render_message(&mut self, row_ix: usize, cx: &mut Context<Self>) -> AnyElement {
         let start = self.transcript_rows[row_ix];
@@ -377,14 +389,9 @@ impl AiPanel {
     ) -> AnyElement {
         let owner = cx.weak_entity();
         let selected_view = view.clone();
-        // Let TextView use the active theme for Markdown typography and colors.
-        // Keep tables usable in the narrow chat panel.
-        let mut table = gpui_kit::StyleRefinement::default();
-        table.overflow.x = Some(gpui_kit::Overflow::Scroll);
-        let style = gpui_kit::component::text::TextViewStyle::default().table(table);
         div().id(SharedString::from(format!("ai-text-{:?}", view.entity_id())))
             .min_w_0().w_full()
-            .child(TextView::new(view).style(style).selectable(true).on_link_click(move |url, event, window, cx| {
+            .child(TextView::new(view).style(markdown_style()).selectable(true).on_link_click(move |url, event, window, cx| {
                 if !matches!(event, gpui_kit::ClickEvent::Mouse(event) if event.up.button != MouseButton::Left) {
                     _ = owner.update(cx, |this, cx| this.open_link(url, window, cx));
                 }
@@ -1232,5 +1239,74 @@ mod tool_summary_tests {
             final_answer_index(&messages, 1, false, false, &RunStatus::Running),
             Some(0)
         );
+    }
+}
+
+#[cfg(test)]
+mod markdown_tests {
+    use gpui_kit::component::{Root, text::TextViewState};
+    use gpui_kit::{
+        AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+        Render, Styled as _, TestAppContext, Window, div, px,
+    };
+
+    use super::{TextView, markdown_style};
+
+    struct MarkdownMessage {
+        state: Entity<TextViewState>,
+    }
+
+    impl Render for MarkdownMessage {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().w_full().child(
+                div().debug_selector(|| "chat-markdown".into()).child(
+                    TextView::new(&self.state)
+                        .style(markdown_style())
+                        .selectable(true),
+                ),
+            )
+        }
+    }
+
+    #[gpui_kit::test]
+    fn long_code_is_bounded_without_truncating_the_message(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        for font_size in [15., 20.] {
+            cx.update(|cx| {
+                gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(font_size))
+            });
+            let mut heights = Vec::new();
+            for line_count in [2, 200] {
+                let code = (0..line_count)
+                    .map(|i| format!("中文 log line {i}\n"))
+                    .collect::<String>();
+                let markdown = format!("```text\n{code}```\n\nEnd of message.");
+                let mut state = None;
+                let (_, visual) = cx.add_window_view(|window, cx| {
+                    let text = cx.new(|cx| TextViewState::markdown(&markdown, cx));
+                    state = Some(text.clone());
+                    let content = cx.new(|_| MarkdownMessage { state: text });
+                    Root::new(content, window, cx)
+                });
+                visual.run_until_parked();
+                visual.update(|window, cx| window.draw(cx).clear(cx));
+                let bounds = visual
+                    .debug_bounds("chat-markdown")
+                    .expect("rendered Markdown");
+                assert!(
+                    bounds.size.height < px(font_size * 26.),
+                    "long code must leave room for the rest of the reply: {bounds:?}"
+                );
+                let state = state.unwrap();
+                state.read_with(visual, |state, _| {
+                    assert_eq!(state.rendered_text().source(), markdown);
+                });
+                heights.push(bounds.size.height);
+            }
+            assert!(
+                heights[0] < heights[1],
+                "short blocks should keep their natural height"
+            );
+        }
     }
 }
