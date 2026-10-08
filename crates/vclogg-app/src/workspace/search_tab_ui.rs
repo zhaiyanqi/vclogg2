@@ -61,7 +61,7 @@ fn search_tab_contents(
             div()
                 .id(label_id)
                 .test_support()
-                .max_w_40()
+                .max_w_80()
                 .line_height(relative(1.5))
                 .truncate()
                 .child(title),

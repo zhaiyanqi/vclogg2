@@ -58,7 +58,10 @@ impl SearchTabState {
         }
     }
 
-    pub(super) fn restored(saved: PersistedSearchTab) -> Self {
+    pub(super) fn restored(mut saved: PersistedSearchTab) -> Self {
+        saved
+            .created_at
+            .get_or_insert_with(|| Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
         Self {
             needs_restore: saved.completed.is_some() || saved.submitted.is_some(),
             ranges: search_limits::FileSearchRanges::restored(&saved.ranges),
@@ -335,12 +338,18 @@ impl Workspace {
                     .unwrap_or_else(|| crate::tr!("当前文件", "Current file").into());
                 format!("{}_{}", filename, state.saved.id).into()
             }
-            SearchTabOwner::AllOpen => {
-                crate::tr_args!("全局搜索 {}", "Global search {}", state.saved.id).into()
-            }
-            SearchTabOwner::Directory => {
-                crate::tr_args!("目录搜索 {}", "Directory search {}", state.saved.id).into()
-            }
+            SearchTabOwner::AllOpen => crate::tr_args!(
+                "全局搜索{}",
+                "Global search {}",
+                state.saved.created_at.as_deref().unwrap_or_default()
+            )
+            .into(),
+            SearchTabOwner::Directory => crate::tr_args!(
+                "目录搜索{}",
+                "Directory search {}",
+                state.saved.created_at.as_deref().unwrap_or_default()
+            )
+            .into(),
         }
     }
 
