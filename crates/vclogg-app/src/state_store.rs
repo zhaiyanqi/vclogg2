@@ -572,6 +572,22 @@ impl StateStore {
         )
     }
 
+    pub(crate) fn load_settings_dialog_size(&self) -> Result<Option<[f32; 2]>> {
+        let value = self.repository.load_ui_value("settings.dialog_size")?;
+        Ok(value
+            .as_deref()
+            .and_then(|value| serde_json::from_str::<[f32; 2]>(value).ok())
+            .filter(|size| size.iter().all(|value| value.is_finite() && *value > 0.)))
+    }
+
+    pub(crate) fn save_settings_dialog_size(&self, size: [f32; 2]) -> Result<()> {
+        if !size.iter().all(|value| value.is_finite() && *value > 0.) {
+            anyhow::bail!("设置窗口尺寸无效");
+        }
+        self.repository
+            .save_ui_value("settings.dialog_size", &serde_json::to_string(&size)?)
+    }
+
     pub fn load_workspace_search_state(&self) -> Result<WorkspaceSearchState> {
         let value = self.repository.load_ui_value("workspace.search_contexts")?;
         Ok(value

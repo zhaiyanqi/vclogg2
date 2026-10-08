@@ -1724,6 +1724,7 @@ pub struct Workspace {
     cross_window_drop_ix: Option<usize>,
     tab_drop_layout: Rc<RefCell<TabDropLayout>>,
     filter_popover: filter_popover::FilterPopoverState,
+    settings_dialog_geometry: settings_dialog_geometry::SettingsDialogGeometry,
     search_panel_state: Entity<ResizableState>,
     empty_result_mode_select: Entity<SelectState<Vec<ResultMode>>>,
     search_panel_height: Option<Pixels>,
@@ -1787,6 +1788,7 @@ mod search_tab_activation;
 mod search_tab_tasks;
 mod search_tab_ui;
 mod search_tabs;
+mod settings_dialog_geometry;
 mod tab_lifecycle;
 mod tab_view;
 mod view_state;
@@ -2117,6 +2119,7 @@ impl Workspace {
                     let last_settings_category = store.load_last_settings_category()?;
                     let search_panel_height = store.load_search_panel_height()?;
                     let filter_popover_size = store.load_filter_popover_size()?;
+                    let settings_dialog_size = store.load_settings_dialog_size()?;
                     let workspace_search_state = store.load_workspace_search_state()?;
                     let color_labels = store.load_color_labels()?;
                     let global_search_preferences = store.global_search_preferences()?;
@@ -2135,6 +2138,7 @@ impl Workspace {
                         last_settings_category,
                         search_panel_height,
                         filter_popover_size,
+                        settings_dialog_size,
                         workspace_search_state,
                         color_labels,
                         global_search_preferences,
@@ -2159,6 +2163,7 @@ impl Workspace {
                         last_settings_category,
                         search_panel_height,
                         filter_popover_size,
+                        settings_dialog_size,
                         workspace_search_state,
                         color_labels,
                         global_search_preferences,
@@ -2214,6 +2219,7 @@ impl Workspace {
                         this.app_settings = app_settings.clone();
                         this.restore_search_panel_height(search_panel_height, window, cx);
                         this.restore_filter_popover_size(filter_popover_size, window, cx);
+                        this.restore_settings_dialog_size(settings_dialog_size, window, cx);
                         this.publish_global_search_options(
                             app_settings.default_case_sensitive,
                             app_settings.default_use_regex,
@@ -2398,6 +2404,7 @@ impl Workspace {
             search_panel_state,
             empty_result_mode_select,
             filter_popover: filter_popover::FilterPopoverState::default(),
+            settings_dialog_geometry: settings_dialog_geometry::SettingsDialogGeometry::default(),
             search_panel_height: None,
             search_panel_height_modified: false,
             search_panel_resize_gesture: None,
