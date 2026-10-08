@@ -248,6 +248,9 @@ impl Workspace {
                                 });
                             }
                             if editor.is_some() {
+                                // Programmatic dismissal bypasses Dialog::on_close.
+                                // Release the settings-open guard before another menu command.
+                                this.settings_dialog_subscription = None;
                                 window.close_dialog(cx);
                             }
                         }
@@ -309,5 +312,55 @@ impl Workspace {
             self.apply_color_labels(draft.labels.clone(), cx);
         }
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui_kit::TestAppContext;
+
+    #[gpui_kit::test]
+    fn async_highlight_save_releases_settings_open_guard(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::actions::init(cx);
+            Workspace::init_window_registry(cx);
+            crate::notifications::init(cx);
+            crate::app_icon::init(cx);
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(StateStore::open(directory.path().join("state.db")).unwrap());
+        let mut workspace = None;
+        let window = cx.add_window(|window, cx| {
+            let entity = cx.new(|cx| Workspace::new(false, Vec::new(), window, cx));
+            entity.update(cx, |this, _| {
+                this.persistence._bootstrap_task = Task::ready(());
+                this.persistence.store = Some(store.clone());
+            });
+            workspace = Some(entity.clone());
+            Root::new(entity, window, cx)
+        });
+        let workspace = workspace.unwrap();
+        cx.update_window(window.into(), |_, window, cx| {
+            workspace.update(cx, |this, cx| {
+                let editor = this.highlight_editor(window, cx);
+                this.settings_dialog_subscription = Some(cx.observe(&editor, |_, _, _| {}));
+                let content = editor.clone();
+                window.open_dialog(cx, move |dialog, _, _| dialog.child(content.clone()));
+                let baseline = editor.read(cx).config(cx).unwrap();
+                this.save_highlight_settings_dialog(editor, baseline, window, cx);
+                assert!(this.color_labels_saving);
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, _, cx| {
+            workspace.update(cx, |this, _| {
+                assert!(!this.color_labels_saving);
+                assert!(this.settings_dialog_subscription.is_none());
+            });
+        })
+        .unwrap();
     }
 }
