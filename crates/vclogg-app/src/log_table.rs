@@ -560,7 +560,7 @@ pub(crate) fn combined_match_ranges(
     ));
     let search_priority = candidates.len().saturating_add(1);
     let search_ranges = search_matcher
-        .map(|matcher| matcher.matching_ranges(text))
+        .map(|matcher| matcher.highlight_ranges(text))
         .unwrap_or_default();
     candidates.extend(search_ranges.into_iter().map(|range| Candidate {
         start: range.start,
@@ -1611,21 +1611,24 @@ mod tests {
 
     #[test]
     fn search_highlights_cover_the_union_of_overlapping_keywords() {
-        let search = SearchMatcher::new(&vclogg_core::SearchQuery {
-            text: "abc|bcd".to_string(),
-            ..Default::default()
-        })
-        .unwrap()
-        .unwrap();
-        let highlights = combined_match_ranges(
-            "abcdefg",
-            &ResolvedColorRules::default(),
-            Some(&search),
-            None,
-            None,
-        );
+        for regex in [false, true] {
+            let search = SearchMatcher::new(&vclogg_core::SearchQuery {
+                text: "abc|bcd".to_string(),
+                regex,
+                ..Default::default()
+            })
+            .unwrap()
+            .unwrap();
+            let highlights = combined_match_ranges(
+                "abcdefg",
+                &ResolvedColorRules::default(),
+                Some(&search),
+                None,
+                None,
+            );
 
-        assert_eq!(highlights, vec![(0..4, TextHighlight::Search)]);
+            assert_eq!(highlights, vec![(0..4, TextHighlight::Search)]);
+        }
     }
 
     #[test]

@@ -865,6 +865,35 @@ impl SearchMatcher {
         }
     }
 
+    /// Collect display-only search highlights, including overlapping matches.
+    /// This does not change search results or match navigation. Regex priority
+    /// and greediness still select the match at each starting position.
+    pub fn highlight_ranges(&self, text: &str) -> Vec<Range<usize>> {
+        let Matcher::Regex(matcher) = &self.inner else {
+            return self.matching_ranges(text);
+        };
+        let mut ranges = Vec::new();
+        let mut start = 0;
+        while let Some(matched) = matcher.find_at(text.as_bytes(), start) {
+            let range = matched.start()..matched.end();
+            if !range.is_empty()
+                && text.is_char_boundary(range.start)
+                && text.is_char_boundary(range.end)
+                && (!self.whole_word || is_whole_word_match(text, &range))
+            {
+                ranges.push(range);
+            }
+            if matched.start() == text.len() {
+                break;
+            }
+            // Keep the original text for anchors and word boundaries. Advancing
+            // from the start preserves overlapping highlights and also ensures
+            // empty matches and byte-mode regexes always make progress.
+            start = matched.start() + 1;
+        }
+        ranges
+    }
+
     /// Return UTF-8 byte ranges for every non-empty match in rendered text.
     /// Literal keywords include overlapping occurrences; regexes retain their
     /// usual non-overlapping match semantics.
