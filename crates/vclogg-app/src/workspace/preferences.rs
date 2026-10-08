@@ -621,8 +621,12 @@ impl Workspace {
             },
         ));
         let workspace = cx.entity();
-        let (settings_dialog_size, settings_dialog_margin_top) = management_dialog_geometry(window);
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_dialog(cx, move |dialog, window, cx| {
+            let settings_dialog_size = workspace.read(cx).settings_dialog_geometry.size(window);
+            let settings_dialog_margin_top = centered_dialog_margin_top(
+                window.viewport_size().height,
+                settings_dialog_size.height,
+            );
             let settings = settings.clone();
             let highlight_editor = highlight_editor.clone();
             let highlight_baseline = highlight_baseline.clone();
@@ -681,6 +685,10 @@ impl Workspace {
                                         .loading(saving)
                                         .primary()
                                         .label(crate::tr!("保存", "Save")),
+                                    cx,
+                                ))
+                                .child(Self::render_settings_resize_grip(
+                                    workspace.downgrade(),
                                     cx,
                                 )),
                         ),
@@ -743,8 +751,9 @@ impl Workspace {
                     });
                     true
                 })
-                .on_close(move |_, _, cx| {
-                    workspace_for_close.update(cx, |this, _| {
+                .on_close(move |_, window, cx| {
+                    workspace_for_close.update(cx, |this, cx| {
+                        this.finish_settings_dialog_resize(window, cx);
                         this.settings_dialog_subscription = None;
                     });
                 })
