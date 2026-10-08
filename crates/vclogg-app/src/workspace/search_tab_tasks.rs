@@ -281,6 +281,9 @@ impl Workspace {
                     )
                 }
             };
+        if !restore && self.active_search_tab_key() == Some((owner, id)) {
+            self.set_search_panel_expanded(true, cx);
+        }
         self.search_tabs.cancel(owner, id);
         let slot = self.search_tabs.state_mut(owner, id).unwrap();
         slot.needs_restore = false;

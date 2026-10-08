@@ -1799,6 +1799,13 @@ impl Workspace {
         let searching_current_scope = self.search_tab_is_searching();
         let search_scope_control = self.render_search_scope_control(search_scope_tooltip, cx);
 
+        let panel_expanded = self.search_panel_expanded();
+        let panel_toggle_label = if panel_expanded {
+            crate::tr!("收起搜索视图", "Collapse search view")
+        } else {
+            crate::tr!("展开搜索视图", "Expand search view")
+        };
+
         v_flex()
             .relative()
             .w_full()
@@ -1981,7 +1988,28 @@ impl Workspace {
                                         .child(result_count_label),
                                 ),
                         )
-                    }),
+                    })
+                    .child(
+                        crate::button_accessibility::with_label(
+                            Button::new("toggle-search-panel")
+                                .small()
+                                .ghost()
+                                .icon(if panel_expanded {
+                                    IconName::ChevronDown
+                                } else {
+                                    IconName::ChevronUp
+                                })
+                                .w(control_height)
+                                .h(control_height)
+                                .selected(panel_expanded),
+                            panel_toggle_label,
+                        )
+                        .tooltip(panel_toggle_label)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.set_search_panel_expanded(!this.search_panel_expanded(), cx);
+                            this.search_input_focus_handle(cx).focus(window, cx);
+                        })),
+                    ),
             )
             .child(deferred_workspace_overlay(
                 ui_theme::workspace_bar_bottom_shadow(cx),
