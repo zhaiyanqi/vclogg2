@@ -163,8 +163,12 @@ impl Workspace {
         directory: PathBuf,
         workspace: &Entity<Self>,
         window: &mut Window,
-        cx: &App,
+        cx: &mut App,
     ) -> PopupMenu {
+        // ContextMenu otherwise focuses its popup during prepaint, after the
+        // trigger may already have registered accessibility focus this frame.
+        // Transfer focus in the deferred menu builder, before drawing starts.
+        window.focus(&menu.focus_handle(cx), cx);
         let open_directory = directory.clone();
         let choose_directory = directory.clone();
         let find_directory = directory;
@@ -200,3 +204,7 @@ impl Workspace {
             )
     }
 }
+
+#[cfg(test)]
+#[path = "path_breadcrumb_tests.rs"]
+mod tests;
