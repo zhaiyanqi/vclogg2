@@ -184,7 +184,7 @@ impl SearchTabs {
     pub(super) fn new(cx: &mut App) -> Self {
         Self {
             panel_expansion: BTreeMap::new(),
-            shared_panel_expanded: true,
+            shared_panel_expanded: false,
             groups: BTreeMap::new(),
             installed: None,
             focus: cx.focus_handle(),
