@@ -125,6 +125,7 @@ impl SearchTabGroup {
 }
 
 pub(super) struct SearchTabs {
+    pub(super) panel_expansion: BTreeMap<WorkspaceTabId, bool>,
     pub(super) groups: BTreeMap<SearchTabOwner, SearchTabGroup>,
     pub(super) installed: Option<(SearchTabOwner, SearchTabId)>,
     pub(super) focus: FocusHandle,
@@ -142,6 +143,7 @@ pub(super) struct SearchTabs {
 impl SearchTabs {
     pub(super) fn new(cx: &mut Context<Workspace>) -> Self {
         Self {
+            panel_expansion: BTreeMap::new(),
             groups: BTreeMap::new(),
             installed: None,
             focus: cx.focus_handle(),

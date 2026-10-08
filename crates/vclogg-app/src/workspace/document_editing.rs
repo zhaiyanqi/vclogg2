@@ -1137,6 +1137,50 @@ mod tests {
     use gpui_kit::TestAppContext;
 
     #[gpui_kit::test]
+    fn new_tab_search_collapses_and_disappears_while_editing(cx: &mut TestAppContext) {
+        use gpui_kit::test::TestWindowExt as _;
+
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::actions::init(cx);
+            Workspace::init_window_registry(cx);
+            crate::notifications::init(cx);
+            crate::app_icon::init(cx);
+        });
+        let mut workspace = None;
+        let handle = cx.open_window(size(px(1400.), px(900.)), |window, cx| {
+            let entity = cx.new(|cx| Workspace::new(false, Vec::new(), window, cx));
+            workspace = Some(entity.clone());
+            Root::new(entity, window, cx)
+        });
+        let workspace = workspace.unwrap();
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            assert!(!workspace.read(cx).search_panel_expanded());
+            assert!(window.try_find("add-search-tab").is_none());
+            let collapsed_y = window.find("toggle-search-panel").bounds().top();
+            window.click("toggle-search-panel", cx);
+            window.render_frame(cx);
+            assert!(workspace.read(cx).search_panel_expanded());
+            assert!(window.try_find("add-search-tab").is_some());
+            assert!(window.find("toggle-search-panel").bounds().top() < collapsed_y);
+            window.click("toggle-search-panel", cx);
+            window.render_frame(cx);
+            assert_eq!(
+                window.find("toggle-search-panel").bounds().top(),
+                collapsed_y
+            );
+            workspace.update(cx, |workspace, cx| {
+                workspace.create_editable_file(window, cx);
+            });
+            window.render_frame(cx);
+            assert!(window.try_find("toggle-search-panel").is_none());
+            assert!(window.try_find("start-search").is_none());
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
     fn new_file_editor_saves_with_platform_shortcut(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_kit::init(cx);

@@ -23,6 +23,38 @@ impl Render for DraggedSearchTab {
 }
 
 impl Workspace {
+    pub(super) fn search_panel_visible(&self) -> bool {
+        match self.active_tab_id {
+            WorkspaceTabId::New(id) => self
+                .new_file_drafts
+                .get(&id)
+                .is_none_or(|draft| !draft.active),
+            WorkspaceTabId::Document(_) => self.active_document().is_none_or(|tab| {
+                tab.edit.as_ref().is_none_or(|edit| !edit.active) && tab.edit_load_task.is_none()
+            }),
+        }
+    }
+
+    pub(super) fn search_panel_expanded(&self) -> bool {
+        self.search_tabs
+            .panel_expansion
+            .get(&self.active_tab_id)
+            .copied()
+            .unwrap_or(matches!(self.active_tab_id, WorkspaceTabId::Document(_)))
+    }
+
+    pub(super) fn set_search_panel_expanded(&mut self, expanded: bool, cx: &mut Context<Self>) {
+        self.search_tabs
+            .panel_expansion
+            .retain(|id, _| self.tabs.contains(id));
+        self.search_tabs
+            .panel_expansion
+            .insert(self.active_tab_id, expanded);
+        self.search_panel_resize_gesture = None;
+        self.search_panel_resize_bounds.set(None);
+        cx.notify();
+    }
+
     pub(super) fn render_search_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(owner) = self.search_tab_owner() else {
             return div().into_any_element();

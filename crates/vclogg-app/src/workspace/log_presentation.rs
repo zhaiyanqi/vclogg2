@@ -3101,6 +3101,14 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let _performance_scope = crate::ui_performance::scope("Workspace::render_tab_workspace");
+        if let WorkspaceTabId::New(id) = self.active_tab_id
+            && self
+                .new_file_drafts
+                .get(&id)
+                .is_some_and(|draft| draft.active)
+        {
+            return self.render_new_tab_workspace(cx);
+        }
         let tab = self.active_document();
         if let Some(document_id) = tab
             .filter(|tab| tab.edit.is_none() && tab.edit_load_task.is_some())
@@ -3379,6 +3387,97 @@ impl Workspace {
                 )
                 .into_any_element(),
         };
+        let body = div()
+            .size_full()
+            .min_h_0()
+            .when(tab.is_none(), |panel| {
+                panel.child(self.render_new_tab_workspace(cx))
+            })
+            .when_some(tab, |panel, _| {
+                panel.child(
+                    div()
+                        .relative()
+                        .size_full()
+                        .min_h_0()
+                        .key_context(LOG_TABLE_CONTEXT)
+                        .track_focus(&self.log_viewer.focus_handle)
+                        .tab_index(0)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                                this.log_viewer.focus_handle.focus(window, cx);
+                                this.remember_user_log_region(LogRegion::Body);
+                            }),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                                this.log_viewer.focus_handle.focus(window, cx);
+                                this.remember_user_log_region(LogRegion::Body);
+                            }),
+                        )
+                        .on_prepaint(move |bounds, window, cx| {
+                            log_drag_workspace.update(cx, |workspace, cx| {
+                                workspace
+                                    .row_drag_bounds
+                                    .insert((document_id, WrappedRegion::Log), bounds);
+                                workspace.update_wrapped_layout(
+                                    document_id,
+                                    WrappedRegion::Log,
+                                    (bounds.size.width - marker_width - local_line_number_width)
+                                        .max(px(0.)),
+                                    bounds.size.height,
+                                    window,
+                                    cx,
+                                );
+                            });
+                        })
+                        .on_mouse_move(cx.listener(move |this, event, window, cx| {
+                            this.handle_row_drag_move(
+                                document_id,
+                                WrappedRegion::Log,
+                                event,
+                                window,
+                                cx,
+                            );
+                        }))
+                        .child(Self::capture_log_wheel(
+                            log_wheel_workspace,
+                            document_id,
+                            WrappedRegion::Log,
+                        ))
+                        .child(self.log_viewer.surface.clone())
+                        .when(
+                            self.quick_find.open
+                                && self.quick_find.target
+                                    == Some(QuickFindTarget::Log(document_id)),
+                            |region| region.child(self.render_quick_find_bar(cx)),
+                        )
+                        .context_menu(move |menu, window, cx| {
+                            Self::build_log_context_menu(
+                                menu,
+                                log_context_workspace.clone(),
+                                LogContextMenuContext {
+                                    selected_text: TextSelection::selected_text(window, cx),
+                                    include_results: false,
+                                    include_global_merge: false,
+                                    export_disabled: false,
+                                },
+                                window,
+                                cx,
+                            )
+                        })
+                        .text_selection_scope(self.log_viewer.text_selection_scope),
+                )
+            });
+        if !self.search_panel_expanded() {
+            return v_flex()
+                .size_full()
+                .min_h_0()
+                .child(div().flex_1().min_h_0().child(body))
+                .child(self.render_search_bar(window, cx))
+                .into_any_element();
+        }
         let search_panel = v_flex()
             .id("search-panel")
             .size_full()
@@ -3443,100 +3542,10 @@ impl Workspace {
                             workspace.remember_search_panel_height(height, window, cx);
                         });
                     })
-                    .child(
-                        resizable_panel()
-                            .when(tab.is_none(), |panel| {
-                                panel.child(self.render_new_tab_workspace(cx))
-                            })
-                            .when_some(tab, |panel, _| {
-                                panel.child(
-                                    div()
-                                        .relative()
-                                        .size_full()
-                                        .min_h_0()
-                                        .key_context(LOG_TABLE_CONTEXT)
-                                        .track_focus(&self.log_viewer.focus_handle)
-                                        .tab_index(0)
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                                                this.log_viewer.focus_handle.focus(window, cx);
-                                                this.remember_user_log_region(LogRegion::Body);
-                                            }),
-                                        )
-                                        .on_mouse_down(
-                                            MouseButton::Right,
-                                            cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                                                this.log_viewer.focus_handle.focus(window, cx);
-                                                this.remember_user_log_region(LogRegion::Body);
-                                            }),
-                                        )
-                                        .on_prepaint(move |bounds, window, cx| {
-                                            log_drag_workspace.update(cx, |workspace, cx| {
-                                                workspace.row_drag_bounds.insert(
-                                                    (document_id, WrappedRegion::Log),
-                                                    bounds,
-                                                );
-                                                workspace.update_wrapped_layout(
-                                                    document_id,
-                                                    WrappedRegion::Log,
-                                                    (bounds.size.width
-                                                        - marker_width
-                                                        - local_line_number_width)
-                                                        .max(px(0.)),
-                                                    bounds.size.height,
-                                                    window,
-                                                    cx,
-                                                );
-                                            });
-                                        })
-                                        .on_mouse_move(cx.listener(
-                                            move |this, event, window, cx| {
-                                                this.handle_row_drag_move(
-                                                    document_id,
-                                                    WrappedRegion::Log,
-                                                    event,
-                                                    window,
-                                                    cx,
-                                                );
-                                            },
-                                        ))
-                                        .child(Self::capture_log_wheel(
-                                            log_wheel_workspace,
-                                            document_id,
-                                            WrappedRegion::Log,
-                                        ))
-                                        .child(self.log_viewer.surface.clone())
-                                        .when(
-                                            self.quick_find.open
-                                                && self.quick_find.target
-                                                    == Some(QuickFindTarget::Log(document_id)),
-                                            |region| region.child(self.render_quick_find_bar(cx)),
-                                        )
-                                        .context_menu(move |menu, window, cx| {
-                                            Self::build_log_context_menu(
-                                                menu,
-                                                log_context_workspace.clone(),
-                                                LogContextMenuContext {
-                                                    selected_text: TextSelection::selected_text(
-                                                        window, cx,
-                                                    ),
-                                                    include_results: false,
-                                                    include_global_merge: false,
-                                                    export_disabled: false,
-                                                },
-                                                window,
-                                                cx,
-                                            )
-                                        })
-                                        .text_selection_scope(self.log_viewer.text_selection_scope),
-                                )
-                            }),
-                    )
+                    .child(resizable_panel().child(body))
                     .child(
                         resizable_panel()
                             .size(search_panel_height)
-                            // 搜索面板折叠高 50px，展开下限为 197px（50px 工具栏 + 147px 结果区）。
                             .size_range(px(197.)..Pixels::MAX)
                             .child(search_panel)
                             .child(search_panel_resize_hit_area),
@@ -3622,8 +3631,13 @@ impl Workspace {
             .gap(px(8.))
             .text_size(px(11.))
             .bg(ui_theme::footer_material(&colors))
-            .left(self.render_add_search_tab(cx))
-            .child(self.render_search_tabs(cx))
+            .when(
+                self.search_panel_visible() && self.search_panel_expanded(),
+                |bar| {
+                    bar.left(self.render_add_search_tab(cx))
+                        .child(self.render_search_tabs(cx))
+                },
+            )
             .right(
                 h_flex()
                     .gap_2()
