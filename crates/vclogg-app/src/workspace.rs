@@ -401,6 +401,7 @@ struct WorkspaceWindowRegistry {
     cross_window_tab_drag: Option<CrossWindowTabDrag>,
     search_options: Option<(bool, bool)>,
     highlight_settings_save_completion: Option<async_channel::Receiver<()>>,
+    settings_window: Option<(AnyWindowHandle, WeakEntity<settings_window::SettingsWindow>)>,
     last_settings_category: SettingsCategory,
     last_settings_category_loaded: bool,
 }
@@ -1756,11 +1757,11 @@ pub struct Workspace {
     predefined_filters_saving: bool,
     pending_predefined_filters_save: Option<(u64, Vec<PredefinedFilter>)>,
     settings_saving: bool,
+    settings_save_failed: bool,
     search_options_modified: bool,
     _subscriptions: Vec<Subscription>,
     history_dialog_subscription: Option<Subscription>,
     predefined_filters_dialog_subscription: Option<Subscription>,
-    settings_dialog_subscription: Option<Subscription>,
 }
 
 impl Workspace {}
@@ -1789,6 +1790,7 @@ mod search_tab_tasks;
 mod search_tab_ui;
 mod search_tabs;
 mod settings_dialog_geometry;
+mod settings_window;
 mod tab_lifecycle;
 mod tab_view;
 mod view_state;
@@ -2434,11 +2436,11 @@ impl Workspace {
             predefined_filters_saving: false,
             pending_predefined_filters_save: None,
             settings_saving: false,
+            settings_save_failed: false,
             search_options_modified: false,
             _subscriptions: subscriptions,
             history_dialog_subscription: None,
             predefined_filters_dialog_subscription: None,
-            settings_dialog_subscription: None,
         }
     }
 

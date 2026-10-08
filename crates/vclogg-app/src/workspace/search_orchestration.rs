@@ -932,12 +932,12 @@ impl Workspace {
         }
 
         self.apply_search_history(history.clone(), cx);
-        let source_window = window.window_handle();
+        let source_entity = cx.entity_id();
         let other_workspaces = cx
             .global::<WorkspaceWindowRegistry>()
             .windows
             .iter()
-            .filter(|entry| entry.window != source_window)
+            .filter(|entry| entry.workspace.entity_id() != source_entity)
             .map(|entry| entry.workspace.clone())
             .collect::<Vec<_>>();
         for workspace in other_workspaces {
@@ -960,7 +960,8 @@ impl Workspace {
                     .background_spawn(async move { store.save_search_history(&history) })
                     .await;
                 if let Err(error) = result {
-                    _ = this.update_in(cx, |_, window, cx| {
+                    _ = this.update_in(cx, |this, window, cx| {
+                        this.settings_save_failed = true;
                         window.notify_message(
                             crate::tr_args!(
                                 "搜索历史未能保存：{error}",

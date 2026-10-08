@@ -3,6 +3,7 @@ use super::*;
 impl Workspace {
     pub(crate) fn init_window_registry(cx: &mut App) {
         cx.set_global(WorkspaceWindowRegistry::default());
+        settings_window::init(cx);
     }
 
     pub(crate) fn open_external_paths_in_last_active_window(
@@ -563,7 +564,13 @@ impl Workspace {
     }
 
     pub(crate) fn flush_all_on_quit(cx: &mut App) -> impl Future<Output = ()> + use<> {
-        let (registered, closed_flush_tasks) =
+        let settings_save = cx
+            .global::<WorkspaceWindowRegistry>()
+            .settings_window
+            .as_ref()
+            .and_then(|(_, view)| view.upgrade())
+            .and_then(|view| view.update(cx, |view, _| view.save_task.take()));
+        let (registered, mut closed_flush_tasks) =
             cx.update_global::<WorkspaceWindowRegistry, _>(|registry, _| {
                 registry.cross_window_tab_drag = None;
                 (
@@ -575,6 +582,7 @@ impl Workspace {
                     std::mem::take(&mut registry.closed_flush_tasks),
                 )
             });
+        closed_flush_tasks.extend(settings_save);
         let snapshots = registered
             .into_iter()
             .map(|workspace| workspace.update(cx, |workspace, cx| workspace.take_quit_snapshot(cx)))
