@@ -1,6 +1,9 @@
 use super::*;
 use gpui_kit::{KeyBinding, WindowBounds, WindowOptions};
 
+#[cfg(target_os = "macos")]
+mod macos;
+
 const SETTINGS_CONTEXT: &str = "VCLogg2Settings";
 gpui_kit::actions!(settings_window, [CloseSettings, SaveSettings]);
 
@@ -24,6 +27,8 @@ pub(super) struct SettingsWindow {
     highlight_baseline: crate::color_labels_dialog::LogColoringConfig,
     focus: FocusHandle,
     saving: bool,
+    enter_opacity: f32,
+    enter_task: Option<Task<()>>,
     pub(super) save_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -106,7 +111,9 @@ impl Workspace {
                     // GPUI's open_window builds and draws the root before returning.
                     // Reveal only after that work, without waiting for display-link
                     // callbacks: macOS suspends those while a native window is hidden.
-                    _ = handle.update(cx, |_, window, _| window.activate_window());
+                    _ = handle.update(cx, |_, window, cx| {
+                        view.update(cx, |view, cx| view.reveal(window, cx));
+                    });
                 }
                 Err(error) => log::error!("Could not open settings window: {error:#}"),
             }
@@ -200,9 +207,46 @@ impl SettingsWindow {
             highlight_baseline,
             focus,
             saving: false,
+            enter_opacity: 1.,
+            enter_task: None,
             save_task: None,
             _subscriptions: vec![subscription, observer],
         }
+    }
+
+    fn reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Own this transition rather than relying on the OS window animation
+        // preference. The explicit in-app reduced-motion setting still applies.
+        let animate = !self.original.reduce_motion;
+        self.enter_opacity = if animate { 0. } else { 1. };
+        #[cfg(target_os = "macos")]
+        macos::prepare(window, self.enter_opacity);
+        window.activate_window();
+        if !animate {
+            return;
+        }
+        self.enter_task = Some(cx.spawn_in(window, async move |this, cx| {
+            const FRAMES: u32 = 10;
+            for frame in 1..=FRAMES {
+                cx.background_executor()
+                    .timer(TRANSIENT_SURFACE_ENTER_DURATION / FRAMES)
+                    .await;
+                if this
+                    .update_in(cx, |this, window, cx| {
+                        this.enter_opacity = ease_out_cubic(frame as f32 / FRAMES as f32);
+                        #[cfg(target_os = "macos")]
+                        macos::set_opacity(window, this.enter_opacity);
+                        #[cfg(not(target_os = "macos"))]
+                        let _ = window;
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }));
+        cx.notify();
     }
 
     /// Persist a log-window command without accidentally committing the settings preview.
@@ -449,6 +493,9 @@ impl Render for SettingsWindow {
         let busy = self.busy(cx);
         v_flex()
             .size_full()
+            .when(!cfg!(target_os = "macos"), |surface| {
+                surface.opacity(self.enter_opacity)
+            })
             .min_h_0()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
@@ -466,6 +513,11 @@ impl Render for SettingsWindow {
                     })
             })
             .on_action(cx.listener(|this, _: &CloseSettings, window, cx| {
+                if this.cancel(window, cx) {
+                    window.remove_window();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
                 if this.cancel(window, cx) {
                     window.remove_window();
                 }
@@ -655,6 +707,33 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn settings_window_fades_independently_of_global_motion_policy(cx: &mut TestAppContext) {
+        init(cx);
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(StateStore::open(directory.path().join("state.db")).unwrap());
+        let (main, owner) = workspace(cx, store);
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (settings, view) = open(cx, main, &owner);
+        cx.update(|cx| {
+            assert_eq!(cx.active_window(), Some(settings));
+            assert_eq!(view.read(cx).enter_opacity, 0.);
+        });
+        for _ in 0..5 {
+            cx.background_executor
+                .advance_clock(Duration::from_millis(16));
+            cx.run_until_parked();
+        }
+        cx.update(|cx| assert!((0.0..1.0).contains(&view.read(cx).enter_opacity)));
+        assert_eq!(open(cx, main, &owner).0, settings);
+        for _ in 0..5 {
+            cx.background_executor
+                .advance_clock(Duration::from_millis(16));
+            cx.run_until_parked();
+        }
+        cx.update(|cx| assert_eq!(view.read(cx).enter_opacity, 1.));
+    }
+
+    #[gpui_kit::test]
     fn settings_window_activates_without_hidden_window_frame_callbacks(cx: &mut TestAppContext) {
         init(cx);
         let directory = tempfile::tempdir().unwrap();
@@ -838,6 +917,66 @@ mod tests {
                     .is_none()
             );
         });
+    }
+
+    #[gpui_kit::test]
+    fn settings_shortcut_toggles_window_and_rolls_back_preview(cx: &mut TestAppContext) {
+        init(cx);
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(StateStore::open(directory.path().join("state.db")).unwrap());
+        let (main, owner) = workspace(cx, store);
+        let defaults = ShortcutSettings::default();
+        let mut shortcuts = defaults.clone();
+        for binding in [defaults.open_settings.as_str(), "Ctrl+Alt+,"] {
+            let previous = shortcuts.clone();
+            shortcuts.open_settings = binding.to_owned();
+            cx.update(|cx| crate::actions::apply_shortcuts(&previous, &shortcuts, cx));
+            let key = crate::actions::shortcut_to_key_binding(binding).unwrap();
+            cx.update_window(main, |_, window, cx| {
+                window.activate_window();
+                window.render_frame(cx);
+                window.press(&key, cx);
+            })
+            .unwrap();
+            cx.run_until_parked();
+            let (settings, view) = cx.update(|cx| {
+                let (handle, view) = cx
+                    .global::<WorkspaceWindowRegistry>()
+                    .settings_window
+                    .clone()
+                    .expect("shortcut opens settings");
+                (handle, view.upgrade().unwrap())
+            });
+            cx.update_window(settings, |_, window, cx| {
+                window.render_frame(cx);
+                window.click("settings-show-full-path", cx);
+            })
+            .unwrap();
+            cx.run_until_parked();
+            cx.update_window(settings, |_, window, cx| {
+                view.update(cx, |view, _| view.saving = true);
+                window.render_frame(cx);
+                window.press(&key, cx);
+                assert!(
+                    cx.global::<WorkspaceWindowRegistry>()
+                        .settings_window
+                        .is_some()
+                );
+                view.update(cx, |view, _| view.saving = false);
+                window.render_frame(cx);
+                window.press(&key, cx);
+            })
+            .unwrap();
+            cx.run_until_parked();
+            cx.update(|cx| {
+                assert!(
+                    cx.global::<WorkspaceWindowRegistry>()
+                        .settings_window
+                        .is_none()
+                );
+                assert!(owner.read(cx).app_settings.show_full_path);
+            });
+        }
     }
 
     #[test]
