@@ -60,6 +60,8 @@ pub(in crate::workspace) struct ConversationSession {
     pub(super) run: Option<RunHandle>,
     pub(super) editor: Option<super::settings::ConfigEditor>,
     pub(super) show_settings: bool,
+    pub(super) command_approvals: Vec<(PathBuf, String)>,
+    pub(super) approvals_loading: bool,
     pub(super) show_context_usage: bool,
     pub(super) show_plan: bool,
     pub(super) show_context_sources: bool,
@@ -311,6 +313,8 @@ impl ConversationSession {
             run: None,
             editor: None,
             show_settings: false,
+            command_approvals: Vec::new(),
+            approvals_loading: false,
             show_context_usage: false,
             show_plan: false,
             show_context_sources: false,
@@ -730,9 +734,12 @@ impl ConversationSession {
                 .project_directories
                 .retain(|path| selected.contains(path));
         }
-        let extensions = vclogg_ai::RunExtensions::from_settings(&run_settings)
+        let mut extensions = vclogg_ai::RunExtensions::from_settings(&run_settings)
             .with_conversation(&self.conversation)
             .with_user_request(&source_directory_request);
+        if let Some(store) = &self.store {
+            extensions = extensions.with_command_approvals(store.clone());
+        }
         let project_directories = extensions.project_directories().to_vec();
         let capture_failed = match scope.lock() {
             Ok(mut state) => {
