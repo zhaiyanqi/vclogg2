@@ -484,7 +484,7 @@ impl Workspace {
                             .on_click(cycle_color),
                     )
                     .item(
-                        PopupMenuItem::new(crate::tr!("高亮配置…", "Highlight settings…"))
+                        PopupMenuItem::new(crate::tr!("高亮…", "Highlight…"))
                             .icon(IconName::Settings2)
                             .disabled(highlight_workspace.read_with(cx, |this, _| {
                                 this.history_loading || this.color_labels_saving

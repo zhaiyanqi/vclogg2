@@ -557,7 +557,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         // The subscription stays alive until this dialog's on_close callback.
-        if self.settings_saving || self.settings_dialog_subscription.is_some() {
+        if self.settings_saving
+            || self.color_labels_saving
+            || self.settings_dialog_subscription.is_some()
+        {
             return;
         }
         let active_category = requested_category
@@ -569,6 +572,11 @@ impl Workspace {
         self.remember_settings_category(active_category, window, cx);
         let original_settings = self.app_settings.clone();
         let original_search_history = self.search_history.clone();
+        let highlight_editor = self.highlight_editor(window, cx);
+        let highlight_baseline = highlight_editor
+            .read(cx)
+            .config(cx)
+            .unwrap_or_else(|_| self.highlight_config());
         let settings = cx.new(|cx| {
             SettingsDialog::new(
                 self.app_settings.clone(),
@@ -583,6 +591,7 @@ impl Workspace {
                 window,
                 cx,
             )
+            .with_highlight_editor(highlight_editor.clone())
         });
         self.load_settings_history(&settings, window, cx);
         self.settings_dialog_subscription = Some(cx.subscribe_in(
@@ -615,6 +624,9 @@ impl Workspace {
         let (settings_dialog_size, settings_dialog_margin_top) = management_dialog_geometry(window);
         window.open_dialog(cx, move |dialog, _, cx| {
             let settings = settings.clone();
+            let highlight_editor = highlight_editor.clone();
+            let highlight_baseline = highlight_baseline.clone();
+            let saving = highlight_editor.read(cx).is_saving();
             let workspace_for_save = workspace.clone();
             let workspace_for_cancel = workspace.clone();
             let workspace_for_close = workspace.clone();
@@ -628,6 +640,8 @@ impl Workspace {
                 .h(settings_dialog_size.height)
                 .margin_top(settings_dialog_margin_top)
                 .title(crate::tr!("设置", "Settings"))
+                .keyboard(!saving)
+                .overlay_closable(!saving)
                 .close_button(false)
                 .child(settings.clone())
                 .footer(
@@ -637,6 +651,7 @@ impl Workspace {
                         .gap_2()
                         .child(
                             Button::new("settings-dialog-reset")
+                                .disabled(saving)
                                 .outline()
                                 .label(crate::tr!("恢复默认设置", "Restore default settings"))
                                 .on_click(move |_, window, cx| {
@@ -655,12 +670,15 @@ impl Workspace {
                                 .child(crate::dialog_focus::dialog_cancel_action(
                                     "settings-dialog-cancel-action",
                                     Button::new("settings-dialog-cancel")
+                                        .disabled(saving)
                                         .label(crate::tr!("取消", "Cancel")),
                                     cx,
                                 ))
                                 .child(crate::dialog_focus::dialog_confirm_action(
                                     "settings-dialog-save-action",
                                     Button::new("settings-dialog-save")
+                                        .disabled(saving)
+                                        .loading(saving)
                                         .primary()
                                         .label(crate::tr!("保存", "Save")),
                                     cx,
@@ -668,6 +686,13 @@ impl Workspace {
                         ),
                 )
                 .on_ok(move |_, window, cx| {
+                    if highlight_editor.read(cx).is_saving() {
+                        return false;
+                    }
+                    if let Err(error) = highlight_editor.read(cx).config(cx) {
+                        window.notify_message(error, cx);
+                        return false;
+                    }
                     let (draft, search_history, network_settings) = {
                         let settings = settings.read(cx);
                         let draft = match settings.settings(cx) {
@@ -700,10 +725,19 @@ impl Workspace {
                         this.save_app_settings(draft, window, cx);
                         this.save_cloud_settings(network_settings, window, cx);
                         this.remove_search_history_entries(&removed, window, cx);
+                        this.save_highlight_settings_dialog(
+                            highlight_editor.clone(),
+                            highlight_baseline.clone(),
+                            window,
+                            cx,
+                        );
                     });
-                    true
+                    false
                 })
                 .on_cancel(move |_, window, cx| {
+                    if workspace_for_cancel.read(cx).color_labels_saving {
+                        return false;
+                    }
                     workspace_for_cancel.update(cx, |this, cx| {
                         this.preview_app_settings(original_settings.clone(), window, cx);
                     });

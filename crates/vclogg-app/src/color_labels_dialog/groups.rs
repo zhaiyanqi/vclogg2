@@ -1,4 +1,5 @@
 use super::*;
+use gpui_kit::component::{WindowExt as _, dialog::DialogFooter};
 
 pub(super) struct LogGroupDraft {
     pub id: String,
@@ -80,17 +81,67 @@ impl ColorLabelsDialog {
         cx.notify();
     }
 
-    fn delete_group(&mut self, cx: &mut Context<Self>) {
-        if self.groups.len() <= 1 {
+    fn delete_group(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.saving || self.groups.len() <= 1 {
             return;
         }
-        let removed = self.groups.remove(self.selected_group);
+        let Some(index) = self.groups.iter().position(|group| group.id == id) else {
+            return;
+        };
+        let removed = self.groups.remove(index);
+        if index < self.selected_group {
+            self.selected_group -= 1;
+        }
         self.selected_group = self.selected_group.min(self.groups.len() - 1);
         if self.active_group_id == removed.id {
             self.active_group_id = self.groups[0].id.clone();
             self.highlight_log_levels = false;
         }
         cx.notify();
+    }
+
+    fn confirm_delete_group(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.saving || self.groups.len() <= 1 {
+            return;
+        }
+        let Some(group) = self.groups.iter().find(|group| group.id == id) else {
+            return;
+        };
+        let name = group.name.read(cx).value();
+        let editor = cx.entity();
+        window.open_alert_dialog(cx, move |alert, _, cx| {
+            let editor = editor.clone();
+            let id = id.clone();
+            alert
+                .title(crate::tr_args!(
+                    "删除分组“{name}”？",
+                    "Delete group “{name}”?"
+                ))
+                .description(crate::tr!(
+                    "该分组及其规则将在保存设置后删除。",
+                    "The group and its rules will be deleted when you save settings."
+                ))
+                .footer(
+                    DialogFooter::new()
+                        .child(crate::dialog_focus::dialog_cancel_action(
+                            "coloring-delete-group-cancel-action",
+                            Button::new("coloring-delete-group-cancel")
+                                .label(crate::tr!("取消", "Cancel")),
+                            cx,
+                        ))
+                        .child(crate::dialog_focus::dialog_confirm_action(
+                            "coloring-delete-group-confirm-action",
+                            Button::new("coloring-delete-group-confirm")
+                                .danger()
+                                .label(crate::tr!("删除", "Delete")),
+                            cx,
+                        )),
+                )
+                .on_ok(move |_, _, cx| {
+                    editor.update(cx, |this, cx| this.delete_group(&id, cx));
+                    true
+                })
+        });
     }
 
     fn restore_group(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -313,7 +364,8 @@ impl ColorLabelsDialog {
                             .gap_1()
                             .children(self.groups.iter().map(|group| {
                                 let id = group.id.clone();
-                                crate::log_coloring_row::group_button(
+                                let delete_id = id.clone();
+                                let select = crate::log_coloring_row::group_button(
                                     format!("coloring-group-{id}"),
                                     group.name.read(cx).value(),
                                     group.rows.len(),
@@ -323,19 +375,45 @@ impl ColorLabelsDialog {
                                 )
                                 .tooltip(group.name.read(cx).value())
                                 .disabled(self.saving)
-                                .on_click(cx.listener(
-                                    move |this, event, _, cx| {
-                                        if !crate::log_coloring_row::is_activation(event) {
-                                            return;
-                                        }
-                                        if let Some(ix) =
-                                            this.groups.iter().position(|group| group.id == id)
-                                        {
-                                            this.selected_group = ix;
-                                            cx.notify();
-                                        }
-                                    },
-                                ))
+                                .on_click(cx.listener(move |this, event, _, cx| {
+                                    if !crate::log_coloring_row::is_activation(event) {
+                                        return;
+                                    }
+                                    if let Some(ix) =
+                                        this.groups.iter().position(|group| group.id == id)
+                                    {
+                                        this.selected_group = ix;
+                                        cx.notify();
+                                    }
+                                }));
+                                h_flex()
+                                    .w_full()
+                                    .gap_1()
+                                    .child(div().flex_1().min_w_0().child(select))
+                                    .child(crate::button_accessibility::with_label(
+                                        Button::new(format!("coloring-delete-group-{}", group.id))
+                                            .small()
+                                            .ghost()
+                                            .icon(IconName::Close)
+                                            .disabled(self.saving || self.groups.len() <= 1)
+                                            .tooltip(crate::tr_args!(
+                                                "删除分组“{}”…",
+                                                "Delete group “{}”…",
+                                                group.name.read(cx).value()
+                                            ))
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.confirm_delete_group(
+                                                    delete_id.clone(),
+                                                    window,
+                                                    cx,
+                                                );
+                                            })),
+                                        crate::tr_args!(
+                                            "删除分组“{}”",
+                                            "Delete group “{}”",
+                                            group.name.read(cx).value()
+                                        ),
+                                    ))
                             }))
                             .map(|list| {
                                 color_rule_list(
@@ -402,17 +480,56 @@ impl ColorLabelsDialog {
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.restore_group(window, cx)
                                     })),
-                            )
-                            .child(
-                                Button::new("coloring-delete-group")
-                                    .small()
-                                    .disabled(self.saving || self.groups.len() <= 1)
-                                    .label(crate::tr!("删除分组", "Delete group"))
-                                    .on_click(cx.listener(|this, _, _, cx| this.delete_group(cx))),
                             ),
                     )
                     .child(self.render_log_rules(cx))
                     .child(self.render_group_preview(cx)),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui_kit::TestAppContext;
+
+    #[gpui_kit::test]
+    fn deleting_another_group_preserves_selection_and_keeps_the_last_group(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_kit::component::init);
+        let (editor, cx) = cx.add_window_view(|window, cx| {
+            ColorLabelsDialog::new(
+                true,
+                LogColoringSettings::default(),
+                default_color_labels(),
+                window,
+                cx,
+            )
+        });
+        editor.update(cx, |this, cx| {
+            assert!(this.groups.len() > 1);
+            this.selected_group = this.groups.len() - 1;
+            let selected_id = this.groups[this.selected_group].id.clone();
+            let removed_id = this.groups[0].id.clone();
+            this.active_group_id = removed_id.clone();
+            this.delete_group(&removed_id, cx);
+            assert_eq!(this.groups[this.selected_group].id, selected_id);
+            assert!(!this.groups.iter().any(|group| group.id == removed_id));
+            assert!(!this.highlight_log_levels);
+            assert!(
+                this.groups
+                    .iter()
+                    .any(|group| group.id == this.active_group_id)
+            );
+            while this.groups.len() > 1 {
+                let id = this.groups[0].id.clone();
+                this.delete_group(&id, cx);
+            }
+            let last_id = this.groups[0].id.clone();
+            this.delete_group(&last_id, cx);
+            assert_eq!(this.groups.len(), 1);
+            assert_eq!(this.groups[0].id, last_id);
+        });
     }
 }

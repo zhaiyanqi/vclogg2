@@ -18,10 +18,15 @@ impl Workspace {
     }
 
     pub(super) fn open_color_labels_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.color_labels_saving {
-            return;
-        }
-        let editor = cx.new(|cx| {
+        self.open_settings_dialog(Some(SettingsCategory::Highlight), window, cx);
+    }
+
+    pub(super) fn highlight_editor(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<ColorLabelsDialog> {
+        cx.new(|cx| {
             ColorLabelsDialog::new(
                 self.app_settings.highlight_log_levels,
                 self.app_settings.log_coloring.clone(),
@@ -35,64 +40,10 @@ impl Workspace {
                 window,
                 cx,
             )
-        });
-        let baseline = self.highlight_config();
-        let baseline = editor.read(cx).config(cx).unwrap_or(baseline);
-        let workspace = cx.entity();
-        let (dialog_size, margin_top) = management_dialog_geometry(window);
-        window.open_dialog(cx, move |dialog, _, cx| {
-            let saving = editor.read(cx).is_saving();
-            let content = editor.clone();
-            let cancel = editor.clone();
-            let editor = editor.clone();
-            let workspace = workspace.clone();
-            let baseline = baseline.clone();
-            dialog
-                .w(dialog_size.width)
-                .h(dialog_size.height)
-                .margin_top(margin_top)
-                .title(crate::tr!("高亮配置", "Highlight settings"))
-                .close_button(false)
-                .keyboard(!saving)
-                .overlay_closable(!saving)
-                .content(move |area, _, _| area.min_h_0().overflow_hidden().child(content.clone()))
-                .footer(
-                    DialogFooter::new()
-                        .child(crate::dialog_focus::dialog_cancel_action(
-                            "highlight-settings-cancel-action",
-                            Button::new("highlight-settings-cancel")
-                                .label(crate::tr!("取消", "Cancel"))
-                                .disabled(saving),
-                            cx,
-                        ))
-                        .child(crate::dialog_focus::dialog_confirm_action_when(
-                            "highlight-settings-save-action",
-                            Button::new("highlight-settings-save")
-                                .primary()
-                                .label(crate::tr!("保存", "Save"))
-                                .loading(saving)
-                                .disabled(saving),
-                            !saving,
-                            cx,
-                        )),
-                )
-                .on_cancel(move |_, _, cx| !cancel.read(cx).is_saving())
-                .on_ok(move |_, window, cx| {
-                    workspace.update(cx, |this, cx| {
-                        this.save_highlight_settings_dialog(
-                            editor.clone(),
-                            baseline.clone(),
-                            window,
-                            cx,
-                        )
-                    });
-                    // The editor closes only after the database acknowledges this draft.
-                    false
-                })
-        });
+        })
     }
 
-    fn highlight_config(&self) -> crate::color_labels_dialog::LogColoringConfig {
+    pub(super) fn highlight_config(&self) -> crate::color_labels_dialog::LogColoringConfig {
         crate::color_labels_dialog::LogColoringConfig {
             log_coloring: self.app_settings.log_coloring.clone(),
             highlight_log_levels: self.app_settings.highlight_log_levels,
@@ -102,7 +53,7 @@ impl Workspace {
         }
     }
 
-    fn save_highlight_settings_dialog(
+    pub(super) fn save_highlight_settings_dialog(
         &mut self,
         editor: Entity<ColorLabelsDialog>,
         baseline: crate::color_labels_dialog::LogColoringConfig,
