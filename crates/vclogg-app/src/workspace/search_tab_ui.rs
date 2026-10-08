@@ -102,9 +102,6 @@ impl Workspace {
     }
 
     pub(super) fn search_panel_expanded(&self) -> bool {
-        if self.global_search.scope != SearchScope::CurrentFile {
-            return self.search_tabs.shared_panel_expanded;
-        }
         self.search_tabs
             .panel_expansion
             .get(&self.active_tab_id)
@@ -116,13 +113,9 @@ impl Workspace {
         self.search_tabs
             .panel_expansion
             .retain(|id, _| self.tabs.contains(id));
-        if self.global_search.scope == SearchScope::CurrentFile {
-            self.search_tabs
-                .panel_expansion
-                .insert(self.active_tab_id, expanded);
-        } else {
-            self.search_tabs.shared_panel_expanded = expanded;
-        }
+        self.search_tabs
+            .panel_expansion
+            .insert(self.active_tab_id, expanded);
         self.search_panel_resize_gesture = None;
         self.search_panel_resize_bounds.set(None);
         cx.notify();

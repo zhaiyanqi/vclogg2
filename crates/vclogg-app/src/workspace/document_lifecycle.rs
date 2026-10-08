@@ -814,6 +814,7 @@ impl Workspace {
             .active_document()
             .is_some_and(|tab| installed_document_ids.contains(&tab.id));
         if active_document_was_installed {
+            self.set_search_panel_expanded(true, cx);
             self.refresh_active_document_surfaces_atomically(window, cx);
         }
         cx.notify();
