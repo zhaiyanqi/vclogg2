@@ -120,6 +120,7 @@ pub(crate) enum SettingsCategory {
     General,
     Network,
     Appearance,
+    Highlight,
     Search,
     History,
     Scrolling,
@@ -130,10 +131,11 @@ pub(crate) enum SettingsCategory {
 }
 
 impl SettingsCategory {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::General,
         Self::Network,
         Self::Appearance,
+        Self::Highlight,
         Self::Search,
         Self::History,
         Self::Scrolling,
@@ -147,6 +149,7 @@ impl SettingsCategory {
         match value {
             "general" => Some(Self::General),
             "network" => Some(Self::Network),
+            "highlight" => Some(Self::Highlight),
             "appearance" => Some(Self::Appearance),
             "search" => Some(Self::Search),
             "history" => Some(Self::History),
@@ -163,6 +166,7 @@ impl SettingsCategory {
         match self {
             Self::General => "general",
             Self::Network => "network",
+            Self::Highlight => "highlight",
             Self::Appearance => "appearance",
             Self::Search => "search",
             Self::History => "history",
@@ -182,6 +186,7 @@ impl SettingsCategory {
         match self {
             Self::General => crate::tr!("常规", "General"),
             Self::Network => crate::tr!("网络", "Network"),
+            Self::Highlight => crate::tr!("高亮", "Highlight"),
             Self::Appearance => crate::tr!("外观", "Appearance"),
             Self::Search => crate::tr!("搜索", "Search"),
             Self::History => crate::tr!("历史", "History"),
@@ -202,6 +207,10 @@ impl SettingsCategory {
             Self::Network => crate::tr!(
                 "云端服务器、用户身份与 Cookie 连接",
                 "Cloud server, user identity, and cookie connection",
+            ),
+            Self::Highlight => crate::tr!(
+                "日志着色、颜色标签、选区与关键词匹配样式",
+                "Log coloring, color labels, selection, and keyword match styles"
             ),
             Self::Appearance => crate::tr!(
                 "主题、搜索工具栏、日志字体、行号与内容呈现",
@@ -250,6 +259,9 @@ impl SettingsCategory {
             ),
             Self::Network => {
                 "网络 远程服务 云端服务器 服务器地址 用户名 工号 昵称 保存 测试 连接 Cookie HTTP HTTPS network remote server user connect"
+            }
+            Self::Highlight => {
+                "高亮 日志着色 颜色标签 选区 关键词 匹配 样式 highlight log coloring color labels selection keyword match styles"
             }
             Self::Appearance => {
                 "外观 界面主题 深色 浅色 搜索工具栏 搜索输入框 控件高度 文字大小 日志文字颜色 日志背景色 显示行号 显示行号行间分隔线 行号栏宽度 行号文字颜色 行号背景色 日志级别着色 日志分隔线 日志字体 日志字号 日志行距 theme search toolbar input height size log text background font color"
@@ -463,6 +475,7 @@ impl HistoryTab {
 
 pub struct SettingsDialog {
     draft: AppSettings,
+    highlight_editor: Option<Entity<crate::color_labels_dialog::ColorLabelsDialog>>,
     active_category: SettingsCategory,
     settings_search: Entity<InputState>,
     network_server_url: Entity<InputState>,
@@ -1088,6 +1101,7 @@ impl SettingsDialog {
         let cache_dir = crate::app_paths::index_cache_dir();
         let mut dialog = Self {
             draft: settings,
+            highlight_editor: None,
             active_category: if active_category.is_available() {
                 active_category
             } else {
@@ -1149,6 +1163,14 @@ impl SettingsDialog {
         };
         dialog.refresh_cache_info(cx);
         dialog
+    }
+
+    pub(crate) fn with_highlight_editor(
+        mut self,
+        editor: Entity<crate::color_labels_dialog::ColorLabelsDialog>,
+    ) -> Self {
+        self.highlight_editor = Some(editor);
+        self
     }
 
     pub fn settings(&self, cx: &gpui_kit::App) -> Result<AppSettings, String> {
@@ -2445,8 +2467,12 @@ impl Render for SettingsDialog {
                                     .gap_5()
                                     .px_6()
                                     .py_5()
-                                    .when(shortcuts_active || active_category == SettingsCategory::History, |content| {
+                                    .when(shortcuts_active || matches!(active_category, SettingsCategory::History | SettingsCategory::Highlight), |content| {
                                         content.flex_1().min_h_0()
+                                    })
+                                    .when(has_matches && active_category == SettingsCategory::Highlight, |content| {
+                                        content
+                                            .child(v_flex().flex_1().min_h_0().overflow_hidden().children(self.highlight_editor.clone()))
                                     })
                                     .when(!has_matches, |content| {
                                         content.child(
@@ -2878,7 +2904,7 @@ impl Render for SettingsDialog {
                                 div()
                                     .text_sm()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(crate::tr!("使用“高亮 → 高亮配置… → 日志着色”中的当前分组；保存后应用到所有窗口", "Use the current group in Highlight → Highlight settings… → Log coloring; applies to all windows after saving")),
+                                    .child(crate::tr!("使用“设置 → 高亮 → 日志着色”中的当前分组；保存后应用到所有窗口", "Use the current group in Settings → Highlight → Log coloring; applies to all windows after saving")),
                             ),
                     )
                     .child(

@@ -65,6 +65,13 @@ enum LogColoringSection {
     KeywordMatch,
 }
 
+#[derive(Default)]
+struct HighlightNavigation {
+    last_section: LogColoringSection,
+}
+
+impl gpui_kit::Global for HighlightNavigation {}
+
 pub struct ColorLabelsDialog {
     keyword_match: Entity<crate::keyword_match_style_section::KeywordMatchStyleSection>,
     selection_style: Entity<crate::selection_style_section::SelectionStyleSection>,
@@ -109,7 +116,10 @@ impl ColorLabelsDialog {
             selection_style,
             saving: false,
             error: None,
-            active_section: LogColoringSection::default(),
+            active_section: cx
+                .try_global::<HighlightNavigation>()
+                .map(|navigation| navigation.last_section)
+                .unwrap_or_default(),
             highlight_log_levels,
             groups: Vec::new(),
             selected_group: 0,
@@ -455,18 +465,13 @@ impl ColorLabelsDialog {
             .small()
             .underline()
             .selected_index(match self.active_section {
-                LogColoringSection::LogLevels => 0,
-                LogColoringSection::ColorLabels => 1,
-                LogColoringSection::SelectionStyle => 2,
-                LogColoringSection::KeywordMatch => 3,
+                LogColoringSection::LogLevels => 3,
+                LogColoringSection::ColorLabels => 0,
+                LogColoringSection::SelectionStyle => 1,
+                LogColoringSection::KeywordMatch => 2,
             })
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(
-                Tab::new()
-                    .label(crate::tr!("日志着色", "Log coloring"))
-                    .disabled(self.saving),
-            )
             .child(
                 Tab::new()
                     .label(crate::tr!("颜色标签", "Color labels"))
@@ -482,16 +487,24 @@ impl ColorLabelsDialog {
                     .label(crate::tr!("搜索匹配", "Search matches"))
                     .disabled(self.saving),
             )
+            .child(
+                Tab::new()
+                    .label(crate::tr!("日志着色", "Log coloring"))
+                    .disabled(self.saving),
+            )
             .on_click(cx.listener(|this, index: &usize, _, cx| {
                 if this.saving {
                     return;
                 }
                 this.active_section = match index {
-                    0 => LogColoringSection::LogLevels,
-                    1 => LogColoringSection::ColorLabels,
-                    2 => LogColoringSection::SelectionStyle,
-                    _ => LogColoringSection::KeywordMatch,
+                    0 => LogColoringSection::ColorLabels,
+                    1 => LogColoringSection::SelectionStyle,
+                    2 => LogColoringSection::KeywordMatch,
+                    _ => LogColoringSection::LogLevels,
                 };
+                cx.set_global(HighlightNavigation {
+                    last_section: this.active_section,
+                });
                 cx.notify();
             }))
     }
@@ -537,15 +550,6 @@ impl ColorLabelsDialog {
                                 div()
                                     .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                     .child(crate::tr!("日志级别规则", "Log-level rules")),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(crate::tr!(
-                                        "关键词按 ASCII 单词匹配；正则可用 (?P<highlight>…) 指定着色范围。",
-                                        "Keywords match ASCII words; regex may use (?P<highlight>…) to select the colored range."
-                                    )),
                             ),
                     )
                     .child(
