@@ -14,6 +14,7 @@ fn isolated_panel_send_workflow() {
         "parallel_cancel",
         "complete",
         "transcript",
+        "stream_fade",
         "workspace_transcript",
         "tabs",
         "queue",
@@ -104,6 +105,10 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
     let panel = panel.unwrap();
     pump_until(cx, &panel, |p| !p.busy);
     let mode = std::env::var("VCLOGG2_AI_TEST_MODE").unwrap();
+    if mode == "stream_fade" {
+        exercise_stream_fade(cx, &panel);
+        return;
+    }
     if mode == "questions" {
         super::parallel_tests::questions(cx, &panel, owner.as_ref().unwrap(), window);
         return;
@@ -556,6 +561,58 @@ fn panel_sends_streams_and_runs_tools(cx: &mut gpui_kit::TestAppContext) {
     drop(owner);
 }
 
+fn exercise_stream_fade(cx: &mut gpui_kit::TestAppContext, panel: &Entity<ConversationSession>) {
+    use gpui_kit::test::TestWindowExt as _;
+    struct Preview(Entity<TextViewState>);
+    impl Render for Preview {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            gpui_kit::component::text::TextView::new(&self.0)
+        }
+    }
+
+    for (streaming, reduced) in [(true, false), (false, false), (true, true)] {
+        cx.update(|cx| cx.set_reduce_motion(reduced));
+        let state = panel.update(cx, |panel, cx| {
+            if streaming {
+                panel.streaming_message_view("中文 first chunk", cx)
+            } else {
+                panel.message_view("中文 first chunk", 0, cx)
+            }
+        });
+        cx.run_until_parked();
+        let handle = cx.add_window(|window, cx| {
+            let preview = cx.new(|_| Preview(state.clone()));
+            Root::new(preview, window, cx)
+        });
+        let ticks = Rc::new(Cell::new(0));
+        let observed = ticks.clone();
+        let _subscription = cx.update(|cx| {
+            cx.observe(&state, move |_, _| {
+                observed.set(observed.get() + 1);
+            })
+        });
+        cx.update_window(handle.into(), |_, window, cx| window.render_frame(cx))
+            .unwrap();
+        cx.run_until_parked();
+        ticks.set(0);
+        cx.background_executor
+            .advance_clock(Duration::from_millis(40));
+        cx.run_until_parked();
+        assert_eq!(
+            ticks.get() > 0,
+            streaming && !reduced,
+            "only live text should request fade repaints (reduced={reduced})"
+        );
+        state.update(cx, |state, cx| {
+            state.select_all(cx);
+            assert_eq!(state.selected_text().trim_end(), "中文 first chunk");
+        });
+        cx.update_window(handle.into(), |_, window, _| window.remove_window())
+            .unwrap();
+    }
+    cx.update(|cx| cx.set_reduce_motion(false));
+}
+
 fn exercise_transcript(
     cx: &mut gpui_kit::TestAppContext,
     panel: &Entity<ConversationSession>,
@@ -620,8 +677,28 @@ fn exercise_transcript(
             assert!(!p.scroller.read(cx).is_following_tail());
         });
     }
+    let remeasurements = Rc::new(Cell::new(0));
+    let observed = remeasurements.clone();
+    let scroller = panel.read_with(cx, |p, _| p.scroller.clone());
+    let _subscription = cx.update(|cx| {
+        cx.observe(&scroller, move |_, _| {
+            observed.set(observed.get() + 1);
+        })
+    });
+    panel.update(cx, |p, cx| {
+        p.live_view.update(cx, |_, cx| cx.notify());
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        remeasurements.get(),
+        0,
+        "fade-only repaints must not remeasure the transcript"
+    );
+    let final_view = panel.read_with(cx, |p, _| p.live_view.clone());
     cx.update(|cx| {
         panel.update(cx, |p, cx| {
+            // A final event may overtake the pending 40 ms batch.
+            p.receive_event(AgentEvent::Text("\n\n最后一段🙂".into()), cx);
             p.receive_event(
                 AgentEvent::Assistant(AgentMessage::Assistant {
                     text: p.live.clone(),
@@ -663,6 +740,10 @@ fn exercise_transcript(
             assert!(p.scroller.read(cx).is_following_tail());
             assert!(p.messages.is_empty());
         })
+    });
+    cx.run_until_parked();
+    final_view.read_with(cx, |view, _| {
+        assert!(view.rendered_text().source().ends_with("最后一段🙂"));
     });
 }
 

@@ -466,12 +466,37 @@ impl ConversationSession {
         cx: &mut Context<Self>,
     ) -> Entity<TextViewState> {
         let view = cx.new(|cx| TextViewState::markdown(text, cx).selectable(true));
-        // Markdown parsing also completes asynchronously, after a stream update.
-        // Remeasure that row when its rendered document becomes ready.
+        // Fade ticks and selection changes repaint without changing row geometry.
+        // Only a newly committed Markdown document needs another measurement.
+        let mut rendered = view.read(cx).rendered_text();
         self.message_subscriptions
-            .push(cx.observe(&view, move |this, _, cx| {
-                this.remeasure_message(ix, cx);
+            .push(cx.observe(&view, move |this, view, cx| {
+                let next = view.read(cx).rendered_text();
+                if next != rendered {
+                    rendered = next;
+                    this.remeasure_message(ix, cx);
+                }
             }));
+        view
+    }
+
+    fn streaming_message_view(
+        &mut self,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) -> Entity<TextViewState> {
+        let view = self.message_view("", self.messages.len(), cx);
+        view.update(cx, |view, cx| {
+            // Match Kit's stream_fade policy, installing it before the first parse.
+            // push_str also fades the first chunk; set_text treats it as a replacement.
+            view.set_motion(
+                gpui_kit::component::text::TextViewMotion::default()
+                    .with_stream_fade(std::time::Duration::from_millis(280))
+                    .with_stream_fade_stagger(std::time::Duration::from_millis(10))
+                    .with_stream_fade_easing(gpui_kit::base::Easing::EaseOut),
+            );
+            view.push_str(text, cx);
+        });
         view
     }
     pub(super) fn rebuild_messages(&mut self, cx: &mut Context<Self>) {
@@ -521,9 +546,8 @@ impl ConversationSession {
         if self.live_row || (self.live.is_empty() && self.reasoning.is_empty()) {
             return;
         }
-        self.live_view = self.message_view(&safe_markdown(&self.live), self.messages.len(), cx);
-        self.live_reasoning_view =
-            self.message_view(&safe_markdown(&self.reasoning), self.messages.len(), cx);
+        self.live_view = self.streaming_message_view(&safe_markdown(&self.live), cx);
+        self.live_reasoning_view = self.streaming_message_view(&safe_markdown(&self.reasoning), cx);
         self.live_row = true;
         if self.conversation.messages.is_empty()
             || matches!(
@@ -1054,10 +1078,18 @@ impl ConversationSession {
             event @ (AgentEvent::Text(_) | AgentEvent::Thinking(_)) => {
                 match event {
                     AgentEvent::Text(text) => {
+                        if self.live_row && self.live.is_empty() {
+                            self.live_view
+                                .update(cx, |view, cx| view.push_str(&safe_markdown(&text), cx));
+                        }
                         self.live.push_str(&text);
                         self.progress = crate::tr!("正在生成回复", "Generating reply").into();
                     }
                     AgentEvent::Thinking(text) => {
+                        if self.live_row && self.reasoning.is_empty() {
+                            self.live_reasoning_view
+                                .update(cx, |view, cx| view.push_str(&safe_markdown(&text), cx));
+                        }
                         self.reasoning.push_str(&text);
                         self.progress = crate::tr!("模型正在思考", "Model is thinking").into();
                     }
