@@ -4,6 +4,7 @@ use gpui_kit::{Global, PlatformTextSystem};
 
 /// Shares the application's font backend without adding GPUI's fallback aliases
 /// to the settings picker. Font files are loaded by the backend when used.
+#[derive(Clone)]
 pub(crate) struct SystemFonts(Arc<dyn PlatformTextSystem>);
 
 impl Global for SystemFonts {}

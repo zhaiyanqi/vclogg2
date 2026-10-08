@@ -464,6 +464,7 @@ impl HistoryTab {
 pub struct SettingsDialog {
     draft: AppSettings,
     highlight_editor: Option<Entity<crate::color_labels_dialog::ColorLabelsDialog>>,
+    highlight_baseline: Option<crate::color_labels_dialog::LogColoringConfig>,
     active_category: SettingsCategory,
     settings_search: Entity<InputState>,
     network_server_url: Entity<InputState>,
@@ -481,6 +482,7 @@ pub struct SettingsDialog {
     search_history_filter: Entity<InputState>,
     search_history_scroll: UniformListScrollHandle,
     font_family: Entity<SelectState<SearchableVec<LogFontFamily>>>,
+    font_loading_task: Option<Task<()>>,
     app_log_level: Entity<SelectState<Vec<AppLogLevel>>>,
     font_size: Entity<SliderState>,
     search_toolbar_height: Entity<SliderState>,
@@ -739,23 +741,21 @@ impl SettingsDialog {
                 .placeholder(crate::tr!("筛选搜索历史…", "Filter search history…"))
                 .default_value("")
         });
-        let font_family = cx.new(|cx| {
-            let families = cx
-                .global::<SystemFonts>()
-                .available_families()
-                .into_iter()
-                .map(|name| LogFontFamily::from_family_name(&name))
-                .collect::<Vec<_>>();
-            let selected_name = settings
+        // Keep the saved choice usable while the OS font catalog is enumerated off-thread.
+        let selected_family = LogFontFamily::from_family_name(
+            settings
                 .log_font_family
                 .family_name()
-                .unwrap_or(cx.theme().mono_font_family.as_ref());
-            let selected_index = families
-                .iter()
-                .position(|family| family.family_name() == Some(selected_name))
-                .map(IndexPath::new);
-            SelectState::new(SearchableVec::new(families), selected_index, window, cx)
-                .searchable(true)
+                .unwrap_or(cx.theme().mono_font_family.as_ref()),
+        );
+        let font_family = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(vec![selected_family]),
+                Some(IndexPath::new(0)),
+                window,
+                cx,
+            )
+            .searchable(true)
         });
         let app_log_level = cx.new(|cx| {
             SelectState::new(
@@ -1090,6 +1090,7 @@ impl SettingsDialog {
         let mut dialog = Self {
             draft: settings,
             highlight_editor: None,
+            highlight_baseline: None,
             active_category: if active_category.is_available() {
                 active_category
             } else {
@@ -1111,6 +1112,7 @@ impl SettingsDialog {
             search_history_filter,
             search_history_scroll: UniformListScrollHandle::new(),
             font_family,
+            font_loading_task: None,
             app_log_level,
             font_size,
             search_toolbar_height,
@@ -1149,16 +1151,83 @@ impl SettingsDialog {
             log_export_task: None,
             _subscriptions: subscriptions,
         };
+        dialog.load_font_families(window, cx);
         dialog.refresh_cache_info(cx);
         dialog
     }
 
-    pub(crate) fn with_highlight_editor(
+    fn load_font_families(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let fonts = cx.global::<SystemFonts>().clone();
+        self.font_loading_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let families = cx
+                .background_spawn(async move {
+                    fonts
+                        .available_families()
+                        .into_iter()
+                        .map(|name| LogFontFamily::from_family_name(&name))
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                this.font_family.update(cx, |select, cx| {
+                    let selected = select.selected_value().cloned();
+                    let mut families = families;
+                    // Missing fonts remain selected so unrelated edits never replace them.
+                    if let Some(selected) = &selected
+                        && !families.contains(selected)
+                    {
+                        families.push(selected.clone());
+                    }
+                    select.set_items(SearchableVec::new(families), window, cx);
+                    if let Some(selected) = selected {
+                        select.set_selected_value(&selected, window, cx);
+                    }
+                    cx.notify();
+                });
+                this.font_loading_task = None;
+                cx.notify();
+            });
+        }));
+    }
+
+    pub(crate) fn with_highlight_baseline(
         mut self,
-        editor: Entity<crate::color_labels_dialog::ColorLabelsDialog>,
+        baseline: crate::color_labels_dialog::LogColoringConfig,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> Self {
-        self.highlight_editor = Some(editor);
+        self.highlight_baseline = Some(baseline);
+        if self.active_category == SettingsCategory::Highlight {
+            self.ensure_highlight_editor(window, cx);
+        }
         self
+    }
+
+    pub(crate) fn highlight_editor(
+        &self,
+    ) -> Option<Entity<crate::color_labels_dialog::ColorLabelsDialog>> {
+        self.highlight_editor.clone()
+    }
+
+    pub(crate) fn ensure_highlight_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.highlight_editor.is_some() {
+            return;
+        }
+        let Some(baseline) = self.highlight_baseline.take() else {
+            return;
+        };
+        self.highlight_editor = Some(cx.new(|cx| {
+            crate::color_labels_dialog::ColorLabelsDialog::new(
+                baseline.highlight_log_levels,
+                baseline.log_coloring,
+                baseline.labels,
+                window,
+                cx,
+            )
+            .with_selection_styles(baseline.selection_styles, window, cx)
+            .with_keyword_match_styles(baseline.keyword_match_styles, window, cx)
+        }));
+        cx.notify();
     }
 
     pub fn settings(&self, cx: &gpui_kit::App) -> Result<AppSettings, String> {
@@ -2944,6 +3013,7 @@ impl Render for SettingsDialog {
                     )
                     .child(
                         Select::new(&self.font_family)
+                            .disabled(self.font_loading_task.is_some())
                             .small()
                             .w_56()
                             .search_placeholder(crate::tr!("搜索字体…", "Search fonts…"))
@@ -3871,4 +3941,74 @@ fn shortcut_from_keystroke(keystroke: &Keystroke) -> String {
     };
     parts.push(key);
     parts.join("+")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui_kit::TestAppContext;
+
+    #[gpui_kit::test]
+    fn opening_general_defers_highlight_and_preserves_font_while_loading(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            cx.set_global(SystemFonts::new(std::sync::Arc::new(
+                gpui_kit::NoopTextSystem,
+            )));
+        });
+        let saved = AppSettings {
+            log_font_family: LogFontFamily::Named("Missing saved font".into()),
+            ..AppSettings::default()
+        };
+        let baseline = crate::color_labels_dialog::LogColoringConfig {
+            highlight_log_levels: saved.highlight_log_levels,
+            log_coloring: saved.log_coloring.clone(),
+            labels: crate::color_labels::default_color_labels(),
+            selection_styles: saved.selection_styles.clone(),
+            keyword_match_styles: saved.keyword_match_styles.clone(),
+        };
+        let (dialog, cx) = cx.add_window_view(|window, cx| {
+            SettingsDialog::new(
+                saved.clone(),
+                Vec::new(),
+                SettingsNetworkSnapshot {
+                    settings: CloudSettings::default(),
+                    client: None,
+                    connection: None,
+                    client_error: None,
+                },
+                SettingsCategory::General,
+                window,
+                cx,
+            )
+            .with_highlight_baseline(baseline, window, cx)
+        });
+        dialog.read_with(cx, |dialog, cx| {
+            assert!(dialog.highlight_editor().is_none());
+            assert_eq!(
+                dialog.settings(cx).unwrap().log_font_family,
+                saved.log_font_family
+            );
+        });
+        cx.update(|window, cx| {
+            dialog.update(cx, |dialog, cx| {
+                dialog.ensure_highlight_editor(window, cx);
+                let editor = dialog.highlight_editor().unwrap();
+                dialog.ensure_highlight_editor(window, cx);
+                assert_eq!(
+                    editor.entity_id(),
+                    dialog.highlight_editor().unwrap().entity_id()
+                );
+                assert!(editor.read(cx).config(cx).is_ok());
+            });
+        });
+        cx.run_until_parked();
+        dialog.read_with(cx, |dialog, cx| {
+            assert!(dialog.font_loading_task.is_none());
+            assert_eq!(
+                dialog.settings(cx).unwrap().log_font_family,
+                saved.log_font_family
+            );
+        });
+    }
 }

@@ -572,11 +572,7 @@ impl Workspace {
         self.remember_settings_category(active_category, window, cx);
         let original_settings = self.app_settings.clone();
         let original_search_history = self.search_history.clone();
-        let highlight_editor = self.highlight_editor(window, cx);
-        let highlight_baseline = highlight_editor
-            .read(cx)
-            .config(cx)
-            .unwrap_or_else(|_| self.highlight_config());
+        let highlight_baseline = self.highlight_config();
         let settings = cx.new(|cx| {
             SettingsDialog::new(
                 self.app_settings.clone(),
@@ -591,7 +587,7 @@ impl Workspace {
                 window,
                 cx,
             )
-            .with_highlight_editor(highlight_editor.clone())
+            .with_highlight_baseline(highlight_baseline.clone(), window, cx)
         });
         self.load_settings_history(&settings, window, cx);
         self.settings_dialog_subscription = Some(cx.subscribe_in(
@@ -609,6 +605,11 @@ impl Workspace {
                     this.preview_app_settings(draft, window, cx);
                 }
                 SettingsDialogEvent::CategoryChanged(category) => {
+                    if *category == SettingsCategory::Highlight {
+                        settings.update(cx, |settings, cx| {
+                            settings.ensure_highlight_editor(window, cx)
+                        });
+                    }
                     this.remember_settings_category(*category, window, cx)
                 }
                 SettingsDialogEvent::CloudSettings(settings) => {
@@ -628,9 +629,11 @@ impl Workspace {
                 settings_dialog_size.height,
             );
             let settings = settings.clone();
-            let highlight_editor = highlight_editor.clone();
+            let highlight_editor = settings.read(cx).highlight_editor();
             let highlight_baseline = highlight_baseline.clone();
-            let saving = highlight_editor.read(cx).is_saving();
+            let saving = highlight_editor
+                .as_ref()
+                .is_some_and(|editor| editor.read(cx).is_saving());
             let workspace_for_save = workspace.clone();
             let workspace_for_cancel = workspace.clone();
             let workspace_for_close = workspace.clone();
@@ -729,6 +732,14 @@ impl Workspace {
                     )
                 })
                 .on_ok(move |_, window, cx| {
+                    // Materialize only when needed; saving keeps the existing validation and
+                    // asynchronous commit/dismissal path, even if Highlight was never visited.
+                    settings.update(cx, |settings, cx| {
+                        settings.ensure_highlight_editor(window, cx)
+                    });
+                    let Some(highlight_editor) = settings.read(cx).highlight_editor() else {
+                        return false;
+                    };
                     if highlight_editor.read(cx).is_saving() {
                         return false;
                     }
