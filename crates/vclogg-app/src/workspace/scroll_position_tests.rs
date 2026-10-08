@@ -12,7 +12,10 @@ fn new_search_preserves_row_bookmarks_instead_of_short_result_bottom() {
     use super::search_tabs::SearchTabState;
     use crate::search_context::{PersistedSearchRowKey, PersistedSearchTab};
 
-    let mut saved = PersistedSearchTab::default();
+    let mut saved = PersistedSearchTab {
+        created_at: Some("2026-10-09 14:30:05".into()),
+        ..Default::default()
+    };
     saved.local.selected_source_row = Some(7_000);
     saved.local.viewport = Some(ViewportBookmark::new(7_000, 40., 12., true));
     saved.context.viewport = Some(PersistedSearchViewport::new(

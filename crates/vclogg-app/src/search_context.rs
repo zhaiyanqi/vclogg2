@@ -58,6 +58,8 @@ pub(crate) struct PersistedSearchTab {
     /// Position in the shared strip, independent of search scope and file identity.
     pub position: Option<u64>,
     pub name: Option<String>,
+    /// Local creation time used by the default title, retained across session restores.
+    pub created_at: Option<String>,
     pub draft: SearchTabQuery,
     pub completed: Option<SearchTabQuery>,
     pub context: PersistedGlobalSearchContext,
