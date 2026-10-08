@@ -170,7 +170,7 @@ impl Workspace {
         self.open_settings_dialog(Some(SettingsCategory::History), window, cx);
     }
 
-    fn load_settings_history(
+    pub(super) fn load_settings_history(
         &mut self,
         settings: &Entity<SettingsDialog>,
         window: &mut Window,
@@ -248,13 +248,22 @@ impl Workspace {
                                 window,
                                 |this, _, event: &HistoryDialogEvent, window, cx| match event {
                                     HistoryDialogEvent::Open(path) => {
-                                        // GPUI queues emitted events, so the owner closes the
-                                        // dialog only after this subscription receives the event.
-                                        window.close_dialog(cx);
-                                        this.open_recent_file(path.clone(), window, cx);
+                                        // Route files to a document window, never into the settings window.
+                                        let path = path.clone();
+                                        cx.defer(move |cx| {
+                                        if !Workspace::open_external_paths_in_last_active_window(
+                                            std::slice::from_ref(&path),
+                                            cx,
+                                        ) && let Err(error) = crate::open_workspace_window(
+                                            cx,
+                                            false,
+                                            vec![InitialDocument::from_path(path)],
+                                        ) {
+                                            log::error!("Could not open history file: {error:#}");
+                                        }
+                                    });
                                     }
                                     HistoryDialogEvent::ClearHistory => {
-                                        window.close_dialog(cx);
                                         this.confirm_clear_history(window, cx);
                                     }
                                     HistoryDialogEvent::HistoryChanged {
@@ -550,262 +559,6 @@ impl Workspace {
         .into_any_element()
     }
 
-    pub(super) fn open_settings_dialog(
-        &mut self,
-        requested_category: Option<SettingsCategory>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // The subscription stays alive until this dialog's on_close callback.
-        if self.settings_saving
-            || self.color_labels_saving
-            || self.settings_dialog_subscription.is_some()
-        {
-            return;
-        }
-        let active_category = requested_category
-            .filter(|category| category.is_available())
-            .unwrap_or_else(|| {
-                cx.global::<WorkspaceWindowRegistry>()
-                    .last_settings_category
-            });
-        self.remember_settings_category(active_category, window, cx);
-        let original_settings = self.app_settings.clone();
-        let original_search_history = self.search_history.clone();
-        let highlight_baseline = self.highlight_config();
-        let settings = cx.new(|cx| {
-            SettingsDialog::new(
-                self.app_settings.clone(),
-                original_search_history.clone(),
-                SettingsNetworkSnapshot {
-                    settings: self.cloud.settings.clone(),
-                    client: self.cloud.client.clone(),
-                    connection: self.cloud.connection.clone(),
-                    client_error: self.cloud.client_error.clone(),
-                },
-                active_category,
-                window,
-                cx,
-            )
-            .with_highlight_baseline(highlight_baseline.clone(), window, cx)
-        });
-        self.load_settings_history(&settings, window, cx);
-        self.settings_dialog_subscription = Some(cx.subscribe_in(
-            &settings,
-            window,
-            |this, settings, event: &SettingsDialogEvent, window, cx| match event {
-                SettingsDialogEvent::DraftChanged => {
-                    let draft = {
-                        let settings = settings.read(cx);
-                        let Ok(draft) = settings.settings(cx) else {
-                            return;
-                        };
-                        draft
-                    };
-                    this.preview_app_settings(draft, window, cx);
-                }
-                SettingsDialogEvent::CategoryChanged(category) => {
-                    if *category == SettingsCategory::Highlight {
-                        settings.update(cx, |settings, cx| {
-                            settings.ensure_highlight_editor(window, cx)
-                        });
-                    }
-                    this.remember_settings_category(*category, window, cx)
-                }
-                SettingsDialogEvent::CloudSettings(settings) => {
-                    this.save_cloud_settings(settings.clone(), window, cx)
-                }
-                SettingsDialogEvent::CloudConnection(connection) => {
-                    this.cloud.connection = connection.clone();
-                    cx.notify();
-                }
-            },
-        ));
-        let workspace = cx.entity();
-        window.open_dialog(cx, move |dialog, window, cx| {
-            let settings_dialog_size = workspace.read(cx).settings_dialog_geometry.size(window);
-            let settings_dialog_margin_top = centered_dialog_margin_top(
-                window.viewport_size().height,
-                settings_dialog_size.height,
-            );
-            let settings = settings.clone();
-            let highlight_editor = settings.read(cx).highlight_editor();
-            let highlight_baseline = highlight_baseline.clone();
-            let saving = highlight_editor
-                .as_ref()
-                .is_some_and(|editor| editor.read(cx).is_saving());
-            let workspace_for_save = workspace.clone();
-            let workspace_for_cancel = workspace.clone();
-            let workspace_for_close = workspace.clone();
-            let workspace_for_reset = workspace.clone();
-            let original_settings = original_settings.clone();
-            let original_settings_for_reset = original_settings.clone();
-            let original_coloring_enabled = original_settings.highlight_log_levels;
-            let original_search_history = original_search_history.clone();
-            let settings_content = settings.clone();
-            let workspace_for_resize = workspace.downgrade();
-            dialog
-                .w(settings_dialog_size.width)
-                .h(settings_dialog_size.height)
-                .margin_top(settings_dialog_margin_top)
-                .p_0()
-                .gap_0()
-                .keyboard(!saving)
-                .overlay_closable(!saving)
-                .close_button(false)
-                .content(move |content, _, cx| {
-                    let workspace_for_reset = workspace_for_reset.clone();
-                    let original_settings_for_reset = original_settings_for_reset.clone();
-                    // One full-surface owner keeps resize hitboxes aligned with the
-                    // rendered dialog, including its title and footer.
-                    content.p_0().gap_0().min_h_0().child(
-                        v_flex()
-                            .relative()
-                            .size_full()
-                            .min_h_0()
-                            .child(
-                                gpui_kit::component::dialog::DialogTitle::new()
-                                    .flex_shrink_0()
-                                    .px_4()
-                                    .pt_4()
-                                    .child(crate::tr!("设置", "Settings")),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_h_0()
-                                    .px_4()
-                                    .pt_2()
-                                    .pb_4()
-                                    .child(settings_content.clone()),
-                            )
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .flex_shrink_0()
-                                    .px_4()
-                                    .pb_4()
-                                    .justify_between()
-                                    .gap_2()
-                                    .child(
-                                        Button::new("settings-dialog-reset")
-                                            .disabled(saving)
-                                            .outline()
-                                            .label(crate::tr!(
-                                                "恢复默认设置",
-                                                "Restore default settings"
-                                            ))
-                                            .on_click(move |_, window, cx| {
-                                                workspace_for_reset.update(cx, |this, cx| {
-                                                    this.confirm_reset_app_settings(
-                                                        original_settings_for_reset.clone(),
-                                                        window,
-                                                        cx,
-                                                    )
-                                                });
-                                            }),
-                                    )
-                                    .child(
-                                        h_flex()
-                                            .gap_2()
-                                            .child(crate::dialog_focus::dialog_cancel_action(
-                                                "settings-dialog-cancel-action",
-                                                Button::new("settings-dialog-cancel")
-                                                    .disabled(saving)
-                                                    .label(crate::tr!("取消", "Cancel")),
-                                                cx,
-                                            ))
-                                            .child(crate::dialog_focus::dialog_confirm_action(
-                                                "settings-dialog-save-action",
-                                                Button::new("settings-dialog-save")
-                                                    .disabled(saving)
-                                                    .loading(saving)
-                                                    .primary()
-                                                    .label(crate::tr!("保存", "Save")),
-                                                cx,
-                                            )),
-                                    ),
-                            )
-                            .child(Self::render_settings_resize_layer(
-                                workspace_for_resize.clone(),
-                            )),
-                    )
-                })
-                .on_ok(move |_, window, cx| {
-                    // Materialize only when needed; saving keeps the existing validation and
-                    // asynchronous commit/dismissal path, even if Highlight was never visited.
-                    settings.update(cx, |settings, cx| {
-                        settings.ensure_highlight_editor(window, cx)
-                    });
-                    let Some(highlight_editor) = settings.read(cx).highlight_editor() else {
-                        return false;
-                    };
-                    if highlight_editor.read(cx).is_saving() {
-                        return false;
-                    }
-                    if let Err(error) = highlight_editor.read(cx).config(cx) {
-                        window.notify_message(error, cx);
-                        return false;
-                    }
-                    let (draft, search_history, network_settings) = {
-                        let settings = settings.read(cx);
-                        let draft = match settings.settings(cx) {
-                            Ok(draft) => draft,
-                            Err(error) => {
-                                window.notify_message(error, cx);
-                                return false;
-                            }
-                        };
-                        (
-                            draft,
-                            settings.search_history(),
-                            settings.network_settings(cx),
-                        )
-                    };
-                    let retained = search_history
-                        .iter()
-                        .map(String::as_str)
-                        .collect::<HashSet<_>>();
-                    let removed = original_search_history
-                        .iter()
-                        .filter(|query| !retained.contains(query.as_str()))
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    workspace_for_save.update(cx, |this, cx| {
-                        let mut draft = draft;
-                        if draft.highlight_log_levels == original_coloring_enabled {
-                            draft.highlight_log_levels = this.app_settings.highlight_log_levels;
-                        }
-                        this.save_app_settings(draft, window, cx);
-                        this.save_cloud_settings(network_settings, window, cx);
-                        this.remove_search_history_entries(&removed, window, cx);
-                        this.save_highlight_settings_dialog(
-                            highlight_editor.clone(),
-                            highlight_baseline.clone(),
-                            window,
-                            cx,
-                        );
-                    });
-                    false
-                })
-                .on_cancel(move |_, window, cx| {
-                    if workspace_for_cancel.read(cx).color_labels_saving {
-                        return false;
-                    }
-                    workspace_for_cancel.update(cx, |this, cx| {
-                        this.preview_app_settings(original_settings.clone(), window, cx);
-                    });
-                    true
-                })
-                .on_close(move |_, window, cx| {
-                    workspace_for_close.update(cx, |this, cx| {
-                        this.finish_settings_dialog_resize(window, cx);
-                        this.settings_dialog_subscription = None;
-                    });
-                })
-        });
-    }
-
     pub(super) fn apply_color_labels(&mut self, labels: Vec<ColorLabel>, cx: &mut Context<Self>) {
         self.cancel_color_rule_action();
         self.cancel_color_labels_resolution();
@@ -1026,12 +779,12 @@ impl Workspace {
             registry.predefined_filters = Some(filters.clone());
         });
         self.apply_predefined_filters(filters.clone(), cx);
-        let source_window = window.window_handle();
+        let source_entity = cx.entity_id();
         let other_workspaces = cx
             .global::<WorkspaceWindowRegistry>()
             .windows
             .iter()
-            .filter(|entry| entry.window != source_window)
+            .filter(|entry| entry.workspace.entity_id() != source_entity)
             .map(|entry| entry.workspace.clone())
             .collect::<Vec<_>>();
         for workspace in other_workspaces {
@@ -1127,12 +880,12 @@ impl Workspace {
             return;
         };
         self.cloud.settings = settings.clone();
-        let source_window = window.window_handle();
+        let source_entity = cx.entity_id();
         let other_workspaces = cx
             .global::<WorkspaceWindowRegistry>()
             .windows
             .iter()
-            .filter(|entry| entry.window != source_window)
+            .filter(|entry| entry.workspace.entity_id() != source_entity)
             .map(|entry| entry.workspace.clone())
             .collect::<Vec<_>>();
         for workspace in other_workspaces {
@@ -1149,7 +902,8 @@ impl Workspace {
                     .background_spawn(async move { store.save_cloud_settings(&settings) })
                     .await;
                 if let Err(error) = result {
-                    _ = this.update_in(cx, |_, window, cx| {
+                    _ = this.update_in(cx, |this, window, cx| {
+                        this.settings_save_failed = true;
                         window.notify_message(
                             crate::tr_args!(
                                 "云端连接设置未能保存：{error}",
@@ -1174,16 +928,16 @@ impl Workspace {
         &mut self,
         case_sensitive: bool,
         regex: bool,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let source_window = window.window_handle();
+        let source_entity = cx.entity_id();
         let other_workspaces = cx.update_global::<WorkspaceWindowRegistry, _>(|registry, _| {
             registry.search_options = Some((case_sensitive, regex));
             registry
                 .windows
                 .iter()
-                .filter(|entry| entry.window != source_window)
+                .filter(|entry| entry.workspace.entity_id() != source_entity)
                 .map(|entry| entry.workspace.clone())
                 .collect::<Vec<_>>()
         });
@@ -1207,8 +961,14 @@ impl Workspace {
         let Some(store) = self.persistence.store.clone() else {
             return;
         };
+        let settings = if report_completion {
+            settings
+        } else {
+            settings_window::SettingsWindow::committed_settings(settings, cx)
+        };
         let previous_save = self.persistence.app_settings_save_task.take();
         if report_completion {
+            self.settings_save_failed = false;
             self.settings_saving = true;
         }
         self.persistence.app_settings_save_task =
@@ -1236,6 +996,7 @@ impl Workspace {
                     .await;
                 _ = this.update_in(cx, |this, window, cx| {
                     if report_completion {
+                        this.settings_save_failed |= result.is_err();
                         this.settings_saving = false;
                     }
                     match result {
@@ -1263,7 +1024,7 @@ impl Workspace {
             }));
     }
 
-    fn confirm_reset_app_settings(
+    pub(super) fn confirm_reset_app_settings(
         &mut self,
         original_settings: AppSettings,
         window: &mut Window,
@@ -1325,7 +1086,7 @@ impl Workspace {
             return false;
         };
         let previous_save = self.persistence.app_settings_save_task.take();
-        self.settings_dialog_subscription = None;
+        self.settings_save_failed = false;
         self.settings_saving = true;
         self.persistence.app_settings_save_task =
             Some(cx.spawn_in(window, async move |this, cx| {
@@ -1350,6 +1111,7 @@ impl Workspace {
                                 crate::tr!("已恢复默认设置", "Default settings restored"),
                                 cx,
                             );
+                            settings_window::SettingsWindow::finish_saved(window, cx);
                         }
                         Err(error) => {
                             this.preview_app_settings(original_settings.clone(), window, cx);
@@ -1369,6 +1131,29 @@ impl Workspace {
     }
 
     pub(super) fn refresh_localized_input_copy(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let own_window = cx
+            .global::<WorkspaceWindowRegistry>()
+            .windows
+            .iter()
+            .find(|entry| entry.workspace.entity_id() == cx.entity_id())
+            .map(|entry| entry.window);
+        if let Some(handle) = own_window
+            && handle != window.window_handle()
+        {
+            let owner = cx.weak_entity();
+            cx.defer(move |cx| {
+                _ = handle.update(cx, |_, window, cx| {
+                    _ = owner.update(cx, |owner, cx| {
+                        owner.refresh_localized_input_copy(window, cx)
+                    });
+                });
+            });
+            return;
+        }
+        // An unregistered retained workspace no longer has visible input controls.
+        if own_window.is_none() {
+            return;
+        }
         self.query.update(cx, |input, cx| {
             input.set_placeholder(crate::tr!("搜索", "Search"), window, cx);
         });
@@ -1479,12 +1264,12 @@ impl Workspace {
         if let Some(anchors) = font_viewport_anchors {
             self.restore_font_viewport_anchors(anchors, cx);
         }
-        let source_window = window.window_handle();
+        let source_entity = cx.entity_id();
         let other_workspaces = cx
             .global::<WorkspaceWindowRegistry>()
             .windows
             .iter()
-            .filter(|entry| entry.window != source_window)
+            .filter(|entry| entry.workspace.entity_id() != source_entity)
             .map(|entry| entry.workspace.clone())
             .collect::<Vec<_>>();
         for workspace in other_workspaces {
@@ -1648,13 +1433,13 @@ impl Workspace {
         });
         self.restore_font_viewport_anchors(font_viewport_anchors, cx);
 
-        let source_window = window.window_handle();
+        let source_entity = cx.entity_id();
         let shared_settings = self.app_settings.clone();
         let other_workspaces = cx
             .global::<WorkspaceWindowRegistry>()
             .windows
             .iter()
-            .filter(|entry| entry.window != source_window)
+            .filter(|entry| entry.workspace.entity_id() != source_entity)
             .map(|entry| entry.workspace.clone())
             .collect::<Vec<_>>();
         for workspace in other_workspaces {
@@ -1953,7 +1738,8 @@ impl Workspace {
         let Some(store) = self.persistence.store.clone() else {
             return;
         };
-        let settings = self.app_settings.clone();
+        let settings =
+            settings_window::SettingsWindow::committed_settings(self.app_settings.clone(), cx);
         self.persistence.appearance_save_task = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(300))
@@ -2045,6 +1831,7 @@ impl Workspace {
                             this.recent_files = recent_files;
                             this.pinned_files = pinned_files;
                             this.last_workspace_files = last_workspace_files;
+                            settings_window::SettingsWindow::refresh_history(window, cx);
                             window.notify_message(
                                 if removed == 0 {
                                     crate::tr!(

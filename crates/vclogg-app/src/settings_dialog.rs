@@ -530,6 +530,24 @@ pub struct SettingsNetworkSnapshot {
 }
 
 impl SettingsDialog {
+    pub(crate) fn select_category(
+        &mut self,
+        category: SettingsCategory,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if category.is_available() {
+            self.settings_search
+                .update(cx, |search, cx| search.set_value("", window, cx));
+            self.active_category = category;
+            if category == SettingsCategory::Highlight {
+                self.ensure_highlight_editor(window, cx);
+            }
+            cx.emit(SettingsDialogEvent::CategoryChanged(category));
+            cx.notify();
+        }
+    }
+
     fn draft_changed(cx: &mut Context<Self>) {
         cx.emit(SettingsDialogEvent::DraftChanged);
         cx.notify();

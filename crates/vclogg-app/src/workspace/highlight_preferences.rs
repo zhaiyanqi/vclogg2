@@ -235,12 +235,12 @@ impl Workspace {
                     match result {
                         Ok(resolved) => {
                             this.install_highlight_settings(&merged, &resolved, cx);
-                            let source = window.window_handle();
+                            let source = cx.entity_id();
                             let others = cx
                                 .global::<WorkspaceWindowRegistry>()
                                 .windows
                                 .iter()
-                                .filter(|entry| entry.window != source)
+                                .filter(|entry| entry.workspace.entity_id() != source)
                                 .map(|entry| entry.workspace.clone())
                                 .collect::<Vec<_>>();
                             for workspace in others {
@@ -248,14 +248,11 @@ impl Workspace {
                                     workspace.install_highlight_settings(&merged, &resolved, cx)
                                 });
                             }
-                            if editor.is_some() {
-                                // Programmatic dismissal bypasses Dialog::on_close.
-                                // Release the settings-open guard before another menu command.
-                                this.settings_dialog_subscription = None;
-                                window.close_dialog(cx);
-                            }
                         }
                         Err(error) => {
+                            if editor.is_some() {
+                                this.settings_save_failed = true;
+                            }
                             let message = crate::tr_args!(
                                 "高亮配置未能保存：{error}",
                                 "Couldn’t save highlight settings: {error}"
@@ -322,7 +319,7 @@ mod tests {
     use gpui_kit::TestAppContext;
 
     #[gpui_kit::test]
-    fn async_highlight_save_releases_settings_open_guard(cx: &mut TestAppContext) {
+    fn async_highlight_save_completes_without_owning_window_dismissal(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_kit::init(cx);
             crate::actions::init(cx);
@@ -346,7 +343,6 @@ mod tests {
         cx.update_window(window.into(), |_, window, cx| {
             workspace.update(cx, |this, cx| {
                 let editor = this.highlight_editor(window, cx);
-                this.settings_dialog_subscription = Some(cx.observe(&editor, |_, _, _| {}));
                 let content = editor.clone();
                 window.open_dialog(cx, move |dialog, _, _| dialog.child(content.clone()));
                 let baseline = editor.read(cx).config(cx).unwrap();
@@ -359,7 +355,7 @@ mod tests {
         cx.update_window(window.into(), |_, _, cx| {
             workspace.update(cx, |this, _| {
                 assert!(!this.color_labels_saving);
-                assert!(this.settings_dialog_subscription.is_none());
+                assert!(!this.settings_save_failed);
             });
         })
         .unwrap();
