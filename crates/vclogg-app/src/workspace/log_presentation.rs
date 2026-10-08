@@ -3561,16 +3561,12 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let _performance_scope = crate::ui_performance::scope("Workspace::render_status_bar");
-        let workspace = cx.entity();
         let active_encoding = self.active_document().map(|tab| {
-            (
-                tab.id,
-                SharedString::from(if tab.load_state == DocumentLoadState::Opening {
-                    crate::tr!("检测中", "Detecting").to_string()
-                } else {
-                    tab.document.metadata().encoding_name.clone()
-                }),
-            )
+            if tab.load_state == DocumentLoadState::Opening {
+                crate::tr!("检测中", "Detecting").to_string()
+            } else {
+                tab.document.metadata().encoding_name.clone()
+            }
         });
         let file_size = self
             .active_document()
@@ -3584,7 +3580,7 @@ impl Workspace {
         });
 
         let colors = ui_theme::palette(cx);
-        // Keep the current/total line count separated from the encoding control.
+        // Keep the current/total line count separated from the encoding label.
         let file_meta_item = |text: String, leading_divider: bool| {
             div()
                 .px(px(9.))
@@ -3645,34 +3641,8 @@ impl Workspace {
                             .when_some(file_size, |meta, file_size| {
                                 meta.child(file_meta_item(file_size, false))
                             })
-                            .when_some(active_encoding, |meta, (document_id, encoding_name)| {
-                                let menu_encoding_name = encoding_name.clone();
-                                let workspace = workspace.clone();
-                                meta.child(
-                                    Button::new("document-encoding")
-                                        .small()
-                                        .ghost()
-                                        .label(encoding_name)
-                                        .h(px(26.))
-                                        .px(px(9.))
-                                        .rounded(px(8.))
-                                        .text_size(px(11.))
-                                        .disabled(self.open_task.is_some())
-                                        .dropdown_menu_with_anchor(
-                                            gpui_kit::Anchor::BottomLeft,
-                                            move |menu, window, cx| {
-                                                Self::build_encoding_menu(
-                                                    Self::popup_menu_with_workspace_action_context(
-                                                        menu, &workspace, cx,
-                                                    ),
-                                                    document_id,
-                                                    menu_encoding_name.clone(),
-                                                    workspace.clone(),
-                                                    window,
-                                                )
-                                            },
-                                        ),
-                                )
+                            .when_some(active_encoding, |meta, encoding_name| {
+                                meta.child(file_meta_item(encoding_name, false))
                             })
                             .when_some(line_position, |meta, line_position| {
                                 meta.child(file_meta_item(line_position, true))
