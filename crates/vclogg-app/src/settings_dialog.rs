@@ -7,7 +7,8 @@ use std::{
 use chrono::{DateTime, Local, Utc};
 use gpui_kit::base::Link;
 use gpui_kit::component::{
-    ActiveTheme as _, Colorize as _, Disableable as _, IconName, IndexPath, Sizable as _,
+    ActiveTheme as _, Colorize as _, Disableable as _, IconName, IndexPath, Selectable as _,
+    Sizable as _,
     button::{Button, ButtonVariants as _},
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     description_list::DescriptionList,
@@ -33,6 +34,9 @@ use crate::{
     app_icon::AppIcon,
     app_log::{self, AppLogLevel},
     cloud_filters::{CloudClient, CloudConnectionProfile},
+    history_dialog::{
+        HISTORY_ROW_HEIGHT_REMS, HistoryCategory, HistoryDialog, persistent_list_scrollbar,
+    },
     i18n::Language,
     notifications::NotificationWindowExt as _,
     state_store::{
@@ -117,6 +121,7 @@ pub(crate) enum SettingsCategory {
     Network,
     Appearance,
     Search,
+    History,
     Scrolling,
     Storage,
     Shortcuts,
@@ -125,11 +130,12 @@ pub(crate) enum SettingsCategory {
 }
 
 impl SettingsCategory {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::General,
         Self::Network,
         Self::Appearance,
         Self::Search,
+        Self::History,
         Self::Scrolling,
         Self::Storage,
         Self::Shortcuts,
@@ -143,6 +149,7 @@ impl SettingsCategory {
             "network" => Some(Self::Network),
             "appearance" => Some(Self::Appearance),
             "search" => Some(Self::Search),
+            "history" => Some(Self::History),
             "scrolling" => Some(Self::Scrolling),
             "storage" => Some(Self::Storage),
             "shortcuts" => Some(Self::Shortcuts),
@@ -158,6 +165,7 @@ impl SettingsCategory {
             Self::Network => "network",
             Self::Appearance => "appearance",
             Self::Search => "search",
+            Self::History => "history",
             Self::Scrolling => "scrolling",
             Self::Storage => "storage",
             Self::Shortcuts => "shortcuts",
@@ -176,6 +184,7 @@ impl SettingsCategory {
             Self::Network => crate::tr!("网络", "Network"),
             Self::Appearance => crate::tr!("外观", "Appearance"),
             Self::Search => crate::tr!("搜索", "Search"),
+            Self::History => crate::tr!("历史", "History"),
             Self::Scrolling => crate::tr!("滚动与交互", "Scrolling & interaction"),
             Self::Storage => crate::tr!("存储", "Storage"),
             Self::Shortcuts => crate::tr!("快捷键", "Shortcuts"),
@@ -199,8 +208,12 @@ impl SettingsCategory {
                 "Theme, search toolbar, log font, line numbers, and content presentation",
             ),
             Self::Search => crate::tr!(
-                "默认匹配方式、结果数量、高亮与搜索历史",
-                "Default matching, result limits, highlighting, and search history",
+                "默认匹配方式、结果数量与高亮",
+                "Default matching, result limits, and highlighting",
+            ),
+            Self::History => crate::tr!(
+                "文件历史、临时结果与搜索历史",
+                "File history, temporary results, and search history"
             ),
             Self::Scrolling => crate::tr!(
                 "滚轮行为、双击选词与预读取范围",
@@ -242,7 +255,10 @@ impl SettingsCategory {
                 "外观 界面主题 深色 浅色 搜索工具栏 搜索输入框 控件高度 文字大小 日志文字颜色 日志背景色 显示行号 显示行号行间分隔线 行号栏宽度 行号文字颜色 行号背景色 日志级别着色 日志分隔线 日志字体 日志字号 日志行距 theme search toolbar input height size log text background font color"
             }
             Self::Search => {
-                "搜索 区分大小写 使用正则表达式 最大搜索结果数 高亮已提交搜索的匹配文字 搜索历史 历史记录 管理 删除 清空 大小写 正则 结果 高亮 search regex case highlight history"
+                "搜索 区分大小写 使用正则表达式 最大搜索结果数 高亮已提交搜索的匹配文字 大小写 正则 结果 高亮 search regex case highlight"
+            }
+            Self::History => {
+                "历史 文件历史 搜索历史 临时结果 记录 管理 删除 清空 history files search temporary results"
             }
             Self::Scrolling => {
                 "滚动与交互 滚动与动态效果 按完整日志行滚动 每次滚动行数 自动换行时仍按完整日志行滚动 像素滚动距离 分词边界字符 相邻行预读取 减少动态效果 滚轮 像素 行数 自动换行 分词 双击 预读取 scroll motion word wrap"
@@ -427,6 +443,24 @@ struct LogColorDraft {
     background_custom: bool,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum HistoryTab {
+    #[default]
+    Files,
+    TemporaryResults,
+    Search,
+}
+
+impl HistoryTab {
+    fn file_category(self) -> Option<HistoryCategory> {
+        match self {
+            Self::Files => Some(HistoryCategory::Files),
+            Self::TemporaryResults => Some(HistoryCategory::TemporaryResults),
+            Self::Search => None,
+        }
+    }
+}
+
 pub struct SettingsDialog {
     draft: AppSettings,
     active_category: SettingsCategory,
@@ -439,6 +473,9 @@ pub struct SettingsDialog {
     network_status: SharedString,
     network_status_kind: NetworkStatusKind,
     network_task: Option<Task<()>>,
+    file_history: Option<Entity<HistoryDialog>>,
+    file_history_error: Option<SharedString>,
+    history_tab: HistoryTab,
     search_history: Vec<String>,
     search_history_filter: Entity<InputState>,
     search_history_scroll: UniformListScrollHandle,
@@ -1065,6 +1102,9 @@ impl SettingsDialog {
             network_status,
             network_status_kind,
             network_task: None,
+            file_history: None,
+            file_history_error: None,
+            history_tab: HistoryTab::default(),
             search_history: normalize_search_history(search_history),
             search_history_filter,
             search_history_scroll: UniformListScrollHandle::new(),
@@ -1755,6 +1795,102 @@ impl SettingsDialog {
             .into_any_element()
     }
 
+    pub(crate) fn set_file_history(
+        &mut self,
+        result: Result<Entity<HistoryDialog>, SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(history) => {
+                if let Some(category) = self.history_tab.file_category() {
+                    history.update(cx, |this, cx| this.set_category(category, cx));
+                }
+                self.file_history = Some(history);
+                self.file_history_error = None;
+            }
+            Err(error) => self.file_history_error = Some(error),
+        }
+        cx.notify();
+    }
+
+    fn render_history(&self, cx: &mut Context<Self>) -> AnyElement {
+        v_flex()
+            .id("settings-history-section")
+            .flex_1()
+            .min_h_0()
+            .gap_3()
+            .child(
+                div()
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                    .child(crate::tr!("历史", "History")),
+            )
+            .child(
+                h_flex()
+                    .flex_none()
+                    .gap_2()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .pb_2()
+                    .children(
+                        [
+                            (
+                                HistoryTab::Files,
+                                "settings-file-history-tab",
+                                crate::tr!("文件记录", "File entries"),
+                            ),
+                            (
+                                HistoryTab::TemporaryResults,
+                                "settings-temporary-history-tab",
+                                crate::tr!("临时搜索结果", "Temporary search results"),
+                            ),
+                            (
+                                HistoryTab::Search,
+                                "settings-search-history-tab",
+                                crate::tr!("搜索历史", "Search history"),
+                            ),
+                        ]
+                        .into_iter()
+                        .map(|(tab, id, label)| {
+                            Button::new(id)
+                                .small()
+                                .ghost()
+                                .label(label)
+                                .selected(self.history_tab == tab)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.history_tab = tab;
+                                    if let Some(category) = tab.file_category()
+                                        && let Some(history) = &this.file_history
+                                    {
+                                        history
+                                            .update(cx, |this, cx| this.set_category(category, cx));
+                                    }
+                                    cx.notify();
+                                }))
+                        }),
+                    ),
+            )
+            .child(if self.history_tab == HistoryTab::Search {
+                self.render_search_history_management(cx)
+            } else if let Some(history) = &self.file_history {
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(history.clone())
+                    .into_any_element()
+            } else {
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(
+                        self.file_history_error.clone().unwrap_or_else(|| {
+                            crate::tr!("正在读取历史…", "Loading history…").into()
+                        }),
+                    )
+                    .into_any_element()
+            })
+            .into_any_element()
+    }
+
     fn render_search_history_management(&self, cx: &mut Context<Self>) -> AnyElement {
         let filter = self
             .search_history_filter
@@ -1774,13 +1910,12 @@ impl SettingsDialog {
         let settings = cx.entity();
         let history_list = if entries.is_empty() {
             div()
-                .h_64()
+                .h_full()
+                .flex_1()
+                .min_w_0()
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(cx.theme().radius)
-                .border_1()
-                .border_color(cx.theme().border)
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
                 .child(if total_count == 0 {
@@ -1788,141 +1923,136 @@ impl SettingsDialog {
                 } else {
                     crate::tr!(
                         "没有符合筛选条件的搜索历史",
-                        "No search history matches the filter",
+                        "No search history matches the filter"
                     )
                 })
                 .into_any_element()
         } else {
-            div()
-                .relative()
-                .h_64()
-                .rounded(cx.theme().radius)
-                .border_1()
-                .border_color(cx.theme().border)
-                .overflow_hidden()
-                .child(
-                    uniform_list(
-                        "settings-search-history-list",
-                        entries.len(),
-                        move |visible_range, _, cx| {
-                            visible_range
-                                .map(|ix| {
-                                    let query = entries[ix].clone();
-                                    let query_for_delete = query.clone();
-                                    let settings = settings.clone();
-                                    h_flex()
-                                        .id(format!("settings-search-history-row:{query}"))
-                                        .h(gpui_kit::px(44.))
-                                        .w_full()
+            uniform_list(
+                "settings-search-history-list",
+                entries.len(),
+                move |visible_range, _, cx| {
+                    visible_range
+                        .map(|ix| {
+                            let query = entries[ix].clone();
+                            let query_for_delete = query.clone();
+                            let settings = settings.clone();
+                            h_flex()
+                                .id(format!("settings-search-history-row:{query}"))
+                                .h(gpui_kit::rems(HISTORY_ROW_HEIGHT_REMS))
+                                .w_full()
+                                .min_w_0()
+                                .flex_none()
+                                .gap_3()
+                                .px_5()
+                                .hover(|row| row.bg(cx.theme().tokens.list_hover))
+                                .child(
+                                    div()
+                                        .w_4()
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(
+                                            gpui_kit::component::Icon::new(IconName::Search)
+                                                .size_4()
+                                                .text_color(cx.theme().primary),
+                                        ),
+                                )
+                                .child(
+                                    div()
                                         .min_w_0()
-                                        .justify_between()
-                                        .gap_3()
-                                        .px_3()
-                                        .border_b_1()
-                                        .border_color(cx.theme().border.opacity(0.72))
-                                        .child(
-                                            div()
-                                                .min_w_0()
-                                                .flex_1()
-                                                .truncate()
-                                                .text_sm()
-                                                .child(query.clone()),
-                                        )
-                                        .child(
-                                            Button::new(format!(
-                                                "settings-search-history-delete:{query}"
-                                            ))
-                                            .xsmall()
-                                            .ghost()
-                                            .icon(IconName::Delete)
-                                            .tooltip(crate::tr!(
-                                                "删除此条搜索历史",
-                                                "Delete this search history entry",
-                                            ))
-                                            .on_click(move |_, _, cx| {
-                                                settings.update(cx, |this, cx| {
-                                                    this.remove_search_history(
-                                                        &query_for_delete,
-                                                        cx,
-                                                    );
-                                                });
-                                            }),
-                                        )
-                                        .into_any_element()
-                                })
-                                .collect()
-                        },
-                    )
-                    .size_full()
-                    .track_scroll(&self.search_history_scroll),
-                )
-                .vertical_scrollbar(&self.search_history_scroll)
-                .into_any_element()
+                                        .flex_1()
+                                        .truncate()
+                                        .text_sm()
+                                        .child(query.clone()),
+                                )
+                                .child(
+                                    Button::new(format!("settings-search-history-delete:{query}"))
+                                        .xsmall()
+                                        .ghost()
+                                        .danger()
+                                        .label(crate::tr!("删除记录", "Delete entry"))
+                                        .tooltip(query)
+                                        .on_click(move |_, _, cx| {
+                                            settings.update(cx, |this, cx| {
+                                                this.remove_search_history(&query_for_delete, cx);
+                                            });
+                                        }),
+                                )
+                                .into_any_element()
+                        })
+                        .collect()
+                },
+            )
+            .h_full()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .track_scroll(&self.search_history_scroll)
+            .into_any_element()
         };
 
         v_flex()
             .id("settings-search-history-section")
+            .flex_1()
+            .min_h_0()
+            .overflow_hidden()
             .gap_3()
-            .p_3()
-            .rounded(cx.theme().radius)
-            .border_1()
-            .border_color(cx.theme().border)
+            .child(
+                div()
+                    .w_full()
+                    .flex_none()
+                    .child(Input::new(&self.search_history_filter)),
+            )
             .child(
                 h_flex()
+                    .flex_none()
                     .justify_between()
-                    .gap_4()
+                    .gap_3()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(div().min_w_0().truncate().child(crate::tr_args!(
+                        "显示 {visible_count} / {total_count} 条记录",
+                        "Showing {visible_count} of {total_count} entries",
+                    )))
                     .child(
-                        v_flex()
-                            .gap_1()
+                        h_flex()
+                            .flex_none()
+                            .gap_2()
+                            .child(crate::tr!(
+                                "删除会在保存设置后生效",
+                                "Deletions take effect when settings are saved"
+                            ))
                             .child(
-                                div()
-                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                    .child(crate::tr!("搜索历史", "Search history")),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(
-                                        crate::tr!(
-                                            "按原文去重并保留全部记录，最新搜索排在最前；删除会在保存设置后生效。",
-                                            "Duplicate queries are removed and recent searches appear first. Deletions take effect when settings are saved.",
-                                        ),
-                                    ),
+                                Button::new("settings-search-history-clear")
+                                    .small()
+                                    .ghost()
+                                    .label(crate::tr!("清除历史", "Clear history"))
+                                    .disabled(total_count == 0)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.clear_search_history(cx);
+                                    })),
                             ),
-                    )
-                    .child(
-                        Button::new("settings-search-history-clear")
-                            .small()
-                            .outline()
-                            .icon(IconName::Delete)
-                            .label(crate::tr!("清空全部", "Clear all"))
-                            .disabled(total_count == 0)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.clear_search_history(cx);
-                            })),
                     ),
             )
             .child(
                 h_flex()
-                    .gap_3()
-                    .child(
-                        Input::new(&self.search_history_filter)
-                            .small()
-                            .prefix(IconName::Search)
-                            .flex_1(),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(crate::tr_args!(
-                                "显示 {visible_count} / 共 {total_count} 条",
-                                "Showing {visible_count} of {total_count}",
-                            )),
-                    ),
+                    .id("settings-search-history-list-container")
+                    .w_full()
+                    .flex_1()
+                    .min_h_0()
+                    .rounded(cx.theme().radius_lg)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().group_box)
+                    .overflow_hidden()
+                    .child(history_list)
+                    .child(persistent_list_scrollbar(
+                        "settings-search-history-list-scrollbar",
+                        &self.search_history_scroll,
+                    )),
             )
-            .child(history_list)
             .into_any_element()
     }
 
@@ -2315,7 +2445,7 @@ impl Render for SettingsDialog {
                                     .gap_5()
                                     .px_6()
                                     .py_5()
-                                    .when(shortcuts_active, |content| {
+                                    .when(shortcuts_active || active_category == SettingsCategory::History, |content| {
                                         content.flex_1().min_h_0()
                                     })
                                     .when(!has_matches, |content| {
@@ -2976,11 +3106,10 @@ impl Render for SettingsDialog {
                             ),
                     ),
             )
-                                            .child(
-                                                self.render_search_history_management(cx),
-                                            )
                                         },
                                     )
+                                    .when(has_matches && active_category == SettingsCategory::History,
+                                        |content| content.child(self.render_history(cx)))
                                     .when(
                                         has_matches
                                             && active_category == SettingsCategory::General,

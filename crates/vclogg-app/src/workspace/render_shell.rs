@@ -116,9 +116,6 @@ impl Workspace {
                 let close = window.listener_for(&file_workspace, |this, _, window, cx| {
                     this.close_active_tab(&CloseActiveTab, window, cx);
                 });
-                let history = window.listener_for(&file_workspace, |this, _, window, cx| {
-                    this.open_history_dialog(window, cx);
-                });
                 let reveal = window.listener_for(&file_workspace, |this, _, window, cx| {
                     let Some(document_id) = this.active_document().map(|tab| tab.id) else {
                         return;
@@ -163,13 +160,6 @@ impl Workspace {
                     ))
                     .disabled(!has_document)
                     .on_click(reveal),
-                )
-                .item(
-                    PopupMenuItem::new(crate::tr!("历史…", "History…"))
-                        .disabled(file_workspace.read_with(cx, |this, _| {
-                            this.persistence.store.is_none() || this.history_dialog_loading
-                        }))
-                        .on_click(history),
                 )
                 .separator()
                 .item(
@@ -402,30 +392,15 @@ impl Workspace {
                         window.listener_for(&tools_workspace, |this, _, window, cx| {
                             this.open_predefined_filters_dialog(window, cx);
                         });
-                    let clear_history =
-                        window.listener_for(&tools_workspace, |this, _, window, cx| {
-                            this.replace_search_history(Vec::new(), window, cx);
-                            window.notify_message(
-                                crate::tr!("已清除搜索历史", "Search history cleared"),
-                                cx,
-                            );
-                        });
                     let settings = window.listener_for(&tools_workspace, |this, _, window, cx| {
                         this.open_settings_dialog(None, window, cx);
                     });
-                    let (history_empty, settings_saving) = tools_workspace
-                        .read_with(cx, |this, _| {
-                            (this.search_history.is_empty(), this.settings_saving)
-                        });
+                    let settings_saving =
+                        tools_workspace.read_with(cx, |this, _| this.settings_saving);
                     menu.item(
                         PopupMenuItem::new(crate::tr!("预定义过滤器…", "Predefined filters…"))
                             .icon(IconName::Settings2)
                             .on_click(predefined_filters),
-                    )
-                    .item(
-                        PopupMenuItem::new(crate::tr!("清除搜索历史", "Clear search history"))
-                            .disabled(history_empty)
-                            .on_click(clear_history),
                     )
                     .separator()
                     .item(

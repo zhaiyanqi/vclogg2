@@ -2,8 +2,7 @@ use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use chrono::{DateTime, Local};
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, StyledExt as _,
-    WindowExt as _,
+    ActiveTheme as _, Disableable as _, Sizable as _, StyledExt as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::DialogFooter,
     h_flex,
@@ -27,12 +26,12 @@ use crate::{
     state_store::{DatabaseInfo, HistorySession, LastWorkspaceFile, RecentFile, StateStore},
 };
 
-const HISTORY_FILE_ROW_HEIGHT_REMS: f32 = 3.2;
+pub(crate) const HISTORY_ROW_HEIGHT_REMS: f32 = 3.2;
 const HISTORY_FILE_NAME_WIDTH_REMS: f32 = 17.;
 const HISTORY_FILE_TIME_WIDTH_REMS: f32 = 7.;
 const HISTORY_FILE_ACTIONS_WIDTH_REMS: f32 = 10.5;
 
-fn persistent_list_scrollbar(
+pub(crate) fn persistent_list_scrollbar(
     id: &'static str,
     scroll_handle: &(impl ScrollbarHandle + Clone),
 ) -> impl IntoElement {
@@ -50,7 +49,7 @@ fn persistent_list_scrollbar(
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum HistoryCategory {
+pub(crate) enum HistoryCategory {
     #[default]
     Files,
     TemporaryResults,
@@ -133,6 +132,11 @@ impl HistoryDialog {
         };
         this.refresh_visible_entries(cx);
         this
+    }
+
+    pub(crate) fn set_category(&mut self, category: HistoryCategory, cx: &mut Context<Self>) {
+        self.category = category;
+        cx.notify();
     }
 
     // The input and source-install paths own projection invalidation. Hover, focus and
@@ -539,7 +543,7 @@ impl HistoryDialog {
             .id(("history-session", id.unsigned_abs()))
             .w_full()
             .min_w_0()
-            .h(rems(HISTORY_FILE_ROW_HEIGHT_REMS))
+            .h(rems(HISTORY_ROW_HEIGHT_REMS))
             .flex_none()
             .gap_3()
             .px_5()
@@ -677,44 +681,6 @@ impl Render for HistoryDialog {
             .min_h_0()
             .overflow_hidden()
             .gap_3()
-            .child(
-                h_flex()
-                    .flex_none()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .pb_2()
-                    .child(
-                        Button::new("history-files-category")
-                            .small()
-                            .ghost()
-                            .label(crate::tr_args!(
-                                "文件记录 ({})",
-                                "File entries ({})",
-                                self.sessions.len()
-                            ))
-                            .selected(self.category == HistoryCategory::Files)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.category = HistoryCategory::Files;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("history-temporary-category")
-                            .small()
-                            .ghost()
-                            .label(crate::tr_args!(
-                                "临时搜索结果 ({})",
-                                "Temporary search results ({})",
-                                self.temporary_results.len()
-                            ))
-                            .selected(self.category == HistoryCategory::TemporaryResults)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.category = HistoryCategory::TemporaryResults;
-                                cx.notify();
-                            })),
-                    ),
-            )
             .child(
                 div()
                     .id("history-filter")
