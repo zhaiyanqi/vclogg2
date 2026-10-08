@@ -1842,11 +1842,6 @@ impl SettingsDialog {
             .min_h_0()
             .gap_3()
             .child(
-                div()
-                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                    .child(crate::tr!("历史", "History")),
-            )
-            .child(
                 h_flex()
                     .flex_none()
                     .gap_2()
