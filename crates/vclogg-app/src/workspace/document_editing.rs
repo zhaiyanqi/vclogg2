@@ -1157,7 +1157,8 @@ mod tests {
         cx.update_window(handle.into(), |_, window, cx| {
             window.render_frame(cx);
             assert!(!workspace.read(cx).search_panel_expanded());
-            assert!(window.try_find("add-search-tab").is_none());
+            // Search sessions remain reachable even when their result panel is collapsed.
+            assert!(window.try_find("add-search-tab").is_some());
             let collapsed_y = window.find("toggle-search-panel").bounds().top();
             window.click("toggle-search-panel", cx);
             window.render_frame(cx);

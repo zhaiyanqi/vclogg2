@@ -66,6 +66,7 @@ impl Workspace {
             .is_none()
             .then(|| self.global_result_groups_for_context(owner.scope(), &state.context));
         let source = self.search_tabs.installed;
+        let source_file = self.active_tab_id;
         let revision = self.search_tabs.activation_revision;
         let target_revision = state.revision;
         let expected_results = state.context.results.clone();
@@ -185,7 +186,10 @@ impl Workspace {
                 }
                 this.search_tabs.activation_task = None;
                 this.search_tabs.activation_cancellation = None;
-                if this.search_tabs.installed != source || this.search_tab_owner() != Some(owner) {
+                if this.search_tabs.installed != source
+                    || this.active_tab_id != source_file
+                    || !this.visible_search_tab_keys().contains(&(owner, id))
+                {
                     return;
                 }
                 let Some(target) = this.search_tabs.state(owner, id) else {

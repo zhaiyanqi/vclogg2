@@ -1,0 +1,598 @@
+use super::search_tabs::{SearchTabGroup, SearchTabId, SearchTabOwner, SearchTabs};
+use crate::search_context::{PersistedSearchTab, PersistedSearchTabGroup, SearchTabQuery};
+use gpui_kit::TestAppContext;
+
+fn group(ids: &[u64], active: u64) -> SearchTabGroup {
+    SearchTabGroup::restored(PersistedSearchTabGroup {
+        active,
+        next_id: 0,
+        tabs: ids
+            .iter()
+            .map(|&id| PersistedSearchTab {
+                id,
+                draft: SearchTabQuery {
+                    text: format!("query {id}"),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .collect(),
+    })
+}
+
+#[test]
+fn scope_selection_restores_file_selection_but_uses_first_global_or_directory_tab() {
+    let mut tabs = group(&[1, 3, 2], 2);
+    assert_eq!(
+        tabs.scope_target(SearchTabOwner::File(10)),
+        Some(SearchTabId(2))
+    );
+    for owner in [SearchTabOwner::AllOpen, SearchTabOwner::Directory] {
+        assert_eq!(tabs.scope_target(owner), Some(SearchTabId(1)));
+        tabs.tabs.swap(0, 1);
+        assert_eq!(tabs.scope_target(owner), Some(SearchTabId(3)));
+        tabs.tabs.swap(0, 1);
+    }
+    assert_eq!(tabs.active, SearchTabId(2));
+}
+
+#[test]
+fn closing_the_last_shared_tab_stays_closed_after_restore() {
+    for owner in [SearchTabOwner::AllOpen, SearchTabOwner::Directory] {
+        let mut tabs = group(&[5], 5);
+        tabs.close(owner, SearchTabId(5));
+        let restored = SearchTabGroup::restored(tabs.persisted());
+        assert!(restored.tabs.is_empty());
+        assert_eq!(restored.scope_target(owner), None);
+        assert_eq!(restored.next_id, 6);
+    }
+}
+
+#[test]
+fn closing_the_last_file_search_leaves_a_fresh_empty_session() {
+    let owner = SearchTabOwner::File(10);
+    let mut tabs = group(&[5], 5);
+    tabs.tabs[0].saved.completed = Some(tabs.tabs[0].saved.draft.clone());
+    tabs.tabs[0].saved.name = Some("custom title".into());
+    tabs.close(owner, SearchTabId(5));
+    assert_eq!(tabs.active, SearchTabId(6));
+    assert_eq!(tabs.tabs.len(), 1);
+    assert!(tabs.tabs[0].saved.draft.text.is_empty());
+    assert!(tabs.tabs[0].saved.completed.is_none());
+    assert!(tabs.tabs[0].saved.name.is_none());
+    assert!(
+        tabs.tabs[0].facade_dirty,
+        "the closed result facade must not overwrite the empty session"
+    );
+    let restored = SearchTabGroup::restored(tabs.persisted());
+    assert_eq!(restored.scope_target(owner), Some(SearchTabId(6)));
+    assert_eq!(restored.next_id, 7);
+}
+
+#[test]
+fn closing_an_inactive_search_keeps_selection_and_draft() {
+    let mut tabs = group(&[1, 2, 3], 2);
+    tabs.close(SearchTabOwner::AllOpen, SearchTabId(1));
+    assert_eq!(tabs.active, SearchTabId(2));
+    assert_eq!(tabs.tabs[0].saved.draft.text, "query 2");
+    tabs.close(SearchTabOwner::AllOpen, SearchTabId(2));
+    assert_eq!(tabs.active, SearchTabId(3));
+}
+
+#[test]
+fn restored_search_tabs_preserve_order_and_repair_duplicate_ids() {
+    let tabs = group(&[0, 3, 1, 3], 999);
+    assert_eq!(
+        tabs.tabs.iter().map(|tab| tab.saved.id).collect::<Vec<_>>(),
+        vec![3, 1]
+    );
+    assert_eq!(tabs.active, SearchTabId(3));
+    assert_eq!(tabs.next_id, 4);
+    assert!(group(&[0], 0).tabs.is_empty());
+}
+
+#[gpui_kit::test]
+fn shared_search_tabs_remain_visible_when_switching_or_closing_files(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        let mut tabs = SearchTabs::new(cx);
+        tabs.groups
+            .insert(SearchTabOwner::File(10), group(&[1, 2], 2));
+        tabs.groups.insert(SearchTabOwner::File(20), group(&[1], 1));
+        tabs.groups
+            .insert(SearchTabOwner::AllOpen, group(&[1, 2], 2));
+        tabs.groups
+            .insert(SearchTabOwner::Directory, group(&[1], 1));
+        let shared = vec![
+            (SearchTabOwner::AllOpen, SearchTabId(1)),
+            (SearchTabOwner::AllOpen, SearchTabId(2)),
+            (SearchTabOwner::Directory, SearchTabId(1)),
+        ];
+        let visible = tabs.visible_keys();
+        assert_eq!(
+            visible[..3],
+            [
+                (SearchTabOwner::File(10), SearchTabId(1)),
+                (SearchTabOwner::File(10), SearchTabId(2)),
+                (SearchTabOwner::File(20), SearchTabId(1)),
+            ]
+        );
+        assert_eq!(visible[3..], shared);
+        tabs.groups.remove(&SearchTabOwner::File(20));
+        let remaining = tabs.visible_keys();
+        assert_eq!(remaining[..2], visible[..2]);
+        assert_eq!(remaining[2..], shared);
+        assert_eq!(tabs.groups[&SearchTabOwner::AllOpen].active, SearchTabId(2));
+        assert_eq!(
+            tabs.groups[&SearchTabOwner::File(10)].active,
+            SearchTabId(2)
+        );
+    });
+}
+
+#[test]
+fn closing_a_remembered_file_tab_defers_facade_capture_until_replacement_is_installed() {
+    let mut tabs = group(&[1, 2], 1);
+    tabs.close(SearchTabOwner::File(10), SearchTabId(1));
+    assert_eq!(tabs.active, SearchTabId(2));
+    assert_eq!(tabs.tabs[0].saved.draft.text, "query 2");
+    assert!(tabs.tabs[0].facade_dirty);
+}
+
+#[gpui_kit::test]
+fn search_tab_menu_clicks_and_keyboard_share_scope_selection(cx: &mut TestAppContext) {
+    use super::{SearchScope, Workspace};
+    use gpui_kit::component::Root;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{AppContext as _, Task, px, size};
+
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::actions::init(cx);
+        Workspace::init_window_registry(cx);
+        crate::notifications::init(cx);
+        crate::app_icon::init(cx);
+    });
+    let mut workspace = None;
+    let handle = cx.open_window(size(px(1400.), px(900.)), |window, cx| {
+        let view = cx.new(|cx| Workspace::new(false, Vec::new(), window, cx));
+        view.update(cx, |view, _| {
+            view.persistence._bootstrap_task = Task::ready(());
+            view.persistence.state_tasks.clear();
+            view._cloud_client_bootstrap_task = Task::ready(());
+        });
+        workspace = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let workspace = workspace.unwrap();
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click("add-search-tab", cx);
+        assert!(
+            window.find("popup-menu").bounds().bottom()
+                <= window.find("add-search-tab").bounds().top(),
+            "the add menu must open above its trigger"
+        );
+        window.within("popup-menu").click(0usize, cx);
+        assert!(workspace.read(cx).active_search_tab_key().is_none());
+        window.within("popup-menu").click(1usize, cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            workspace.read(cx).global_search.scope,
+            SearchScope::AllOpenFiles
+        );
+        window.click("add-search-tab", cx);
+        window.within("popup-menu").click(2usize, cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            workspace.read(cx).global_search.scope,
+            SearchScope::Directory
+        );
+        assert!(window.find("search-tab-AllOpen-1").visible());
+        window.click("search-tab-AllOpen-1", cx);
+        assert_eq!(
+            workspace.read(cx).global_search.scope,
+            SearchScope::AllOpenFiles
+        );
+        window.press("right", cx);
+        assert_eq!(
+            workspace.read(cx).global_search.scope,
+            SearchScope::Directory
+        );
+        window.click("add-search-tab", cx);
+        window.within("popup-menu").click(1usize, cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            workspace.read(cx).active_search_tab_key(),
+            Some((SearchTabOwner::AllOpen, SearchTabId(2)))
+        );
+        window.click("search-scope", cx);
+        window.within("popup-menu").click(1usize, cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            workspace.read(cx).active_search_tab_key(),
+            Some((SearchTabOwner::AllOpen, SearchTabId(1)))
+        );
+        window.click("close-search-tab-Directory-1", cx);
+        assert_eq!(
+            workspace.read(cx).active_search_tab_key(),
+            Some((SearchTabOwner::AllOpen, SearchTabId(1)))
+        );
+        assert!(window.try_find("search-tab-Directory-1").is_none());
+        window.click("search-scope", cx);
+        window.within("popup-menu").click(2usize, cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            workspace.read(cx).active_search_tab_key(),
+            Some((SearchTabOwner::Directory, SearchTabId(2)))
+        );
+        window.click("toggle-search-panel", cx);
+        assert!(!workspace.read(cx).search_panel_expanded());
+        assert!(window.find("search-tab-AllOpen-1").visible());
+        window.click("search-tab-AllOpen-1", cx);
+        assert!(workspace.read(cx).search_panel_expanded());
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn file_switches_restore_local_queries_without_leaving_shared_searches(cx: &mut TestAppContext) {
+    use super::{DocumentLoadState, PreparedDocument, SearchScope, Workspace, WorkspaceTabId};
+    use gpui_kit::component::Root;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{AppContext as _, Task, px, size};
+    use std::{collections::BTreeMap, sync::Arc};
+    use vclogg_core::{LogDocument, SearchRange, SearchResult};
+
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::actions::init(cx);
+        Workspace::init_window_registry(cx);
+        crate::notifications::init(cx);
+        crate::app_icon::init(cx);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let paths = [
+        directory.path().join("a.log"),
+        directory.path().join("b.log"),
+    ];
+    let prepared = paths
+        .iter()
+        .map(|path| {
+            std::fs::write(path, "error\ninfo\n").unwrap();
+            (
+                path.clone(),
+                Ok(PreparedDocument {
+                    document: Arc::new(LogDocument::open(path).unwrap()),
+                    cached_complete_document: None,
+                    session: None,
+                    color_labels_snapshot: None,
+                    resolved_color_rules: Arc::default(),
+                    search_result: SearchResult::default(),
+                    search_range: SearchRange::default(),
+                    search_matcher: None,
+                    search_case_sensitive: false,
+                    search_regex: false,
+                    warning: None,
+                    load_state: DocumentLoadState::Ready,
+                    pending_index_cache: None,
+                    upgrade_frame: None,
+                }),
+            )
+        })
+        .collect();
+    let mut workspace = None;
+    let handle = cx.open_window(size(px(1400.), px(900.)), |window, cx| {
+        let view = cx.new(|cx| Workspace::new(false, Vec::new(), window, cx));
+        view.update(cx, |view, cx| {
+            view.persistence._bootstrap_task = Task::ready(());
+            view.persistence.state_tasks.clear();
+            view._cloud_client_bootstrap_task = Task::ready(());
+            view.install_documents(
+                prepared,
+                Some(&paths[0]),
+                &BTreeMap::new(),
+                None,
+                true,
+                window,
+                cx,
+            );
+        });
+        workspace = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let workspace = workspace.unwrap();
+    cx.update_window(handle.into(), |_, window, cx| {
+        workspace.update(cx, |view, cx| {
+            let a = view.documents[0].id;
+            let b = view.documents[1].id;
+            // Two local sessions belong to A; returning to A restores the selected one.
+            view.search_tabs
+                .groups
+                .insert(SearchTabOwner::File(a), group(&[1, 2], 1));
+            view.activate_search_tab(SearchTabOwner::File(a), SearchTabId(2), window, cx);
+            view.query
+                .update(cx, |query, cx| query.set_value("local A", window, cx));
+            view.commit_workspace_tab_activation(WorkspaceTabId::Document(b), false, window, cx);
+            assert_eq!(
+                view.active_search_tab_key(),
+                Some((SearchTabOwner::File(b), SearchTabId(1)))
+            );
+            view.query
+                .update(cx, |query, cx| query.set_value("local B", window, cx));
+            view.commit_workspace_tab_activation(WorkspaceTabId::Document(a), false, window, cx);
+            assert_eq!(
+                view.active_search_tab_key(),
+                Some((SearchTabOwner::File(a), SearchTabId(2)))
+            );
+            assert_eq!(view.query.read(cx).value(), "local A");
+            for scope in [SearchScope::AllOpenFiles, SearchScope::Directory] {
+                view.set_search_scope(scope, window, cx);
+                let selected = view.active_search_tab_key();
+                view.query
+                    .update(cx, |query, cx| query.set_value("shared query", window, cx));
+                view.commit_workspace_tab_activation(
+                    WorkspaceTabId::Document(b),
+                    false,
+                    window,
+                    cx,
+                );
+                assert_eq!(view.active_search_tab_key(), selected);
+                assert_eq!(view.query.read(cx).value(), "shared query");
+                view.set_search_scope(SearchScope::CurrentFile, window, cx);
+                assert_eq!(
+                    view.active_search_tab_key(),
+                    Some((SearchTabOwner::File(b), SearchTabId(1)))
+                );
+                assert_eq!(view.query.read(cx).value(), "local B");
+                view.commit_workspace_tab_activation(
+                    WorkspaceTabId::Document(a),
+                    false,
+                    window,
+                    cx,
+                );
+                assert_eq!(view.query.read(cx).value(), "local A");
+            }
+        });
+        window.render_frame(cx);
+        let a = workspace.read(cx).documents[0].id;
+        let b = workspace.read(cx).documents[1].id;
+        let a_tab = format!("search-tab-File({a})-2");
+        let b_tab = format!("search-tab-File({b})-1");
+        assert_eq!(window.find(a_tab.clone()).label(), Some("a.log_2"));
+        assert_eq!(window.find(b_tab.clone()).label(), Some("b.log_1"));
+        window.click(b_tab, cx);
+        assert_eq!(
+            workspace.read(cx).active_tab_id,
+            WorkspaceTabId::Document(b)
+        );
+        assert_eq!(workspace.read(cx).query.read(cx).value(), "local B");
+        assert!(window.find(a_tab.clone()).visible());
+        window.click(a_tab, cx);
+        assert_eq!(
+            workspace.read(cx).active_tab_id,
+            WorkspaceTabId::Document(a)
+        );
+        assert_eq!(workspace.read(cx).query.read(cx).value(), "local A");
+        // Closing an unrelated file's last search neither changes the active file nor its query.
+        window.click(format!("close-search-tab-File({b})-1"), cx);
+        assert_eq!(
+            workspace.read(cx).active_tab_id,
+            WorkspaceTabId::Document(a)
+        );
+        assert_eq!(workspace.read(cx).query.read(cx).value(), "local A");
+        let b_empty = format!("search-tab-File({b})-2");
+        assert_eq!(window.find(b_empty.clone()).label(), Some("b.log_2"));
+        window.click(b_empty, cx);
+        assert_eq!(
+            workspace.read(cx).active_tab_id,
+            WorkspaceTabId::Document(b)
+        );
+        assert!(workspace.read(cx).query.read(cx).value().is_empty());
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn search_tab_reordering_crosses_scopes_and_round_trips(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        let mut tabs = SearchTabs::new(cx);
+        tabs.groups.insert(SearchTabOwner::File(10), group(&[1], 1));
+        tabs.groups
+            .insert(SearchTabOwner::AllOpen, group(&[1, 2], 2));
+        tabs.groups
+            .insert(SearchTabOwner::Directory, group(&[1], 1));
+        let directory = (SearchTabOwner::Directory, SearchTabId(1));
+        assert!(tabs.reorder(directory, 0));
+        assert!(tabs.reorder((SearchTabOwner::AllOpen, SearchTabId(2)), 1));
+        let expected = tabs.visible_keys();
+        assert_eq!(expected[0], directory);
+        assert_eq!(expected[1], (SearchTabOwner::AllOpen, SearchTabId(2)));
+        assert_eq!(
+            tabs.groups[&SearchTabOwner::AllOpen].scope_target(SearchTabOwner::AllOpen),
+            Some(SearchTabId(2))
+        );
+        let saved = tabs
+            .groups
+            .iter()
+            .map(|(owner, group)| {
+                let json = serde_json::to_string(&group.persisted()).unwrap();
+                (
+                    *owner,
+                    SearchTabGroup::restored(serde_json::from_str(&json).unwrap()),
+                )
+            })
+            .collect();
+        tabs.groups = saved;
+        assert_eq!(tabs.visible_keys(), expected);
+        assert_eq!(tabs.groups[&SearchTabOwner::AllOpen].active, SearchTabId(2));
+    });
+}
+
+#[gpui_kit::test]
+fn search_tabs_reorder_during_drag_and_keep_labels_inside_the_strip(cx: &mut TestAppContext) {
+    use super::{SearchScope, Workspace};
+    use gpui_kit::component::{Root, Theme};
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{
+        AppContext as _, InputEvent as _, MouseButton, MouseDownEvent, MouseMoveEvent,
+        MouseUpEvent, Task, point, px, size,
+    };
+
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::actions::init(cx);
+        Workspace::init_window_registry(cx);
+        crate::notifications::init(cx);
+        crate::app_icon::init(cx);
+    });
+    let mut workspace = None;
+    let handle = cx.open_window(size(px(1400.), px(900.)), |window, cx| {
+        let view = cx.new(|cx| Workspace::new(false, Vec::new(), window, cx));
+        view.update(cx, |view, cx| {
+            view.persistence._bootstrap_task = Task::ready(());
+            view.persistence.state_tasks.clear();
+            view._cloud_client_bootstrap_task = Task::ready(());
+            let mut global = group(&[1, 2], 1);
+            global.tabs[0].saved.name = Some("中文上下边缘 gjpq_1".into());
+            view.search_tabs
+                .groups
+                .insert(SearchTabOwner::AllOpen, global);
+            view.search_tabs
+                .groups
+                .insert(SearchTabOwner::Directory, group(&[1], 1));
+            view.global_search.scope = SearchScope::AllOpenFiles;
+            view.sync_search_tab(window, cx);
+        });
+        workspace = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let workspace = workspace.unwrap();
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        let source_bounds = window.find("search-tab-Directory-1").bounds();
+        let from = source_bounds.center();
+        let to = window.find("search-tab-AllOpen-1").bounds().center();
+        window.dispatch_event(
+            MouseDownEvent {
+                position: from,
+                button: MouseButton::Left,
+                modifiers: Default::default(),
+                click_count: 1,
+                first_mouse: false,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        for fraction in [0.15, 0.5, 1.] {
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position: point(
+                        from.x + (to.x - from.x) * fraction,
+                        if fraction == 0.15 {
+                            from.y
+                        } else {
+                            from.y - px(120.)
+                        },
+                    ),
+                    pressed_button: Some(MouseButton::Left),
+                    modifiers: Default::default(),
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        }
+        // Assert before releasing the mouse: this must be live sorting, not drop-only sorting.
+        let directory = (SearchTabOwner::Directory, SearchTabId(1));
+        assert_eq!(workspace.read(cx).visible_search_tab_keys()[0], directory);
+        assert_eq!(workspace.read(cx).search_tabs.hidden_drag, Some(directory));
+        assert_eq!(
+            window.find("search-tab-drag-preview").bounds().size,
+            source_bounds.size
+        );
+        assert!(
+            workspace
+                .read(cx)
+                .search_tabs
+                .motion_offsets
+                .values()
+                .any(|offset| *offset != px(0.))
+        );
+        let layout = workspace.read(cx).search_tabs.layout.borrow();
+        assert!(
+            layout
+                .painted
+                .iter()
+                .any(|(key, bounds)| bounds.left() != layout.slots[key].left()),
+            "reordered tabs should be travelling between old and new slots"
+        );
+        drop(layout);
+        window.dispatch_event(
+            MouseUpEvent {
+                position: point(to.x, from.y - px(120.)),
+                button: MouseButton::Left,
+                modifiers: Default::default(),
+                click_count: 1,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        assert!(workspace.read(cx).tab_drag.flight.is_some());
+        window.render_frame(cx);
+        assert!(
+            window.find("search-tab-drag-preview").bounds().top()
+                < window.find("search-tab-Directory-1").bounds().top()
+        );
+        assert!(!workspace.read(cx).search_tabs.dragging);
+        assert_eq!(workspace.read(cx).search_tabs.hidden_drag, Some(directory));
+        cx.set_reduce_motion(true);
+        window.render_frame(cx);
+        assert_eq!(workspace.read(cx).visible_search_tab_keys()[0], directory);
+        for font_size in [13., 16., 22.] {
+            Theme::update(cx, |theme| theme.font_size = px(font_size));
+            window.render_frame(cx);
+            let tab = window.find("search-tab-AllOpen-1").bounds();
+            let label = window.find("search-tab-label-AllOpen-1").bounds();
+            assert!(label.top() >= tab.top());
+            assert!(label.bottom() <= tab.bottom());
+            assert!(
+                label.size.height >= px(font_size),
+                "CJK and descenders need a full line box"
+            );
+        }
+        window.click("search-tab-AllOpen-1", cx);
+        window.press("alt-left", cx);
+        assert_eq!(
+            workspace.read(cx).visible_search_tab_keys()[0],
+            (SearchTabOwner::AllOpen, SearchTabId(1))
+        );
+    })
+    .unwrap();
+    cx.run_until_parked();
+    for _ in 0..10 {
+        cx.background_executor
+            .advance_clock(std::time::Duration::from_millis(16));
+        cx.run_until_parked();
+    }
+    cx.update(|cx| assert_eq!(workspace.read(cx).search_tabs.hidden_drag, None));
+}

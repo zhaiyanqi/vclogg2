@@ -55,6 +55,8 @@ pub(crate) struct SearchTabRange {
 #[serde(default)]
 pub(crate) struct PersistedSearchTab {
     pub id: u64,
+    /// Position in the shared strip, independent of search scope and file identity.
+    pub position: Option<u64>,
     pub name: Option<String>,
     pub draft: SearchTabQuery,
     pub completed: Option<SearchTabQuery>,

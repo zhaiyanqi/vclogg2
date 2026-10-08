@@ -1483,17 +1483,17 @@ enum TabCloseGroup {
 #[derive(Clone)]
 struct DraggedTab {
     tab_id: WorkspaceTabId,
-    title: SharedString,
     position: Point<Pixels>,
+    size: Size<Pixels>,
     source: WeakEntity<Workspace>,
 }
 
 impl DraggedTab {
-    fn new(tab_id: WorkspaceTabId, title: SharedString, source: WeakEntity<Workspace>) -> Self {
+    fn new(tab_id: WorkspaceTabId, source: WeakEntity<Workspace>) -> Self {
         Self {
             tab_id,
-            title,
             position: Point::default(),
+            size: Size::default(),
             source,
         }
     }
@@ -1529,34 +1529,17 @@ impl Render for DraggedTab {
             }
             self.position
         };
-        let width = cx.theme().font_size * 15.;
-        let height = cx.theme().font_size * 2.5;
-
-        let element_id = match self.tab_id {
-            WorkspaceTabId::Document(id) => ElementId::from(("document-tab-drag-preview", id)),
-            WorkspaceTabId::New(id) => ElementId::from(("new-tab-drag-preview", id)),
-        };
-
+        let content = self
+            .source
+            .update(cx, |source, cx| {
+                source.render_workspace_tab_preview(self.tab_id, self.size, cx)
+            })
+            .unwrap_or_else(|_| div().into_any_element());
         div()
-            .id(element_id)
             .relative()
-            .child(
-                h_flex()
-                    .absolute()
-                    .left(position.x - width * 0.5)
-                    .top(position.y - height * 0.5)
-                    .w(width)
-                    .h(height)
-                    .px_3()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(cx.theme().primary)
-                    .bg(cx.theme().popover.opacity(0.96))
-                    .text_color(cx.theme().popover_foreground)
-                    .shadow_lg()
-                    .overflow_hidden()
-                    .child(div().truncate().child(self.title.clone())),
-            )
+            .left(position.x - self.position.x)
+            .top(position.y - self.position.y)
+            .child(content)
             .into_any_element()
     }
 }
@@ -1686,6 +1669,7 @@ pub struct Workspace {
     active_tab_id: WorkspaceTabId,
     active_ix: Option<usize>,
     document_tab_scroll: ScrollHandle,
+    tab_drag: tab_drag::TabDragState,
     pending_document_tab_reveal: Cell<Option<u64>>,
     pending_search_result_jump: Option<PendingSearchResultJump>,
     search_result_jump_revision: u64,
@@ -1786,11 +1770,17 @@ mod search_input;
 mod search_limits;
 mod search_orchestration;
 mod search_tab_activation;
+mod search_tab_order;
 mod search_tab_tasks;
+#[cfg(test)]
+mod search_tab_tests;
 mod search_tab_ui;
 mod search_tabs;
 mod settings_dialog_geometry;
 mod settings_window;
+mod tab_drag;
+#[cfg(test)]
+mod tab_drag_tests;
 mod tab_lifecycle;
 mod tab_view;
 mod view_state;
@@ -2365,6 +2355,7 @@ impl Workspace {
             active_tab_id: WorkspaceTabId::New(1),
             active_ix: None,
             document_tab_scroll: ScrollHandle::new(),
+            tab_drag: tab_drag::TabDragState::default(),
             pending_document_tab_reveal: Cell::new(None),
             pending_search_result_jump: None,
             search_result_jump_revision: 0,
@@ -2668,6 +2659,13 @@ impl Render for Workspace {
             .track_focus(&self.focus_handle)
             .capture_key_down(cx.listener(Self::cancel_tag_gesture))
             .child(self.render_tag_gesture_observer(cx))
+            .child(self.render_tab_drag_observer(cx))
+            .child(self.render_tab_flight())
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" {
+                    this.cancel_tab_drag(window, cx);
+                }
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {

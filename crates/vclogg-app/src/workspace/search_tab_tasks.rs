@@ -454,7 +454,10 @@ impl Workspace {
                 );
                 completed = true;
                 if let Some(notice) = notice {
-                    window.notify_message(format!("{}: {notice}", state.title()), cx);
+                    window.notify_message(
+                        format!("{}: {notice}", self.search_tab_title(job.owner, &state)),
+                        cx,
+                    );
                 }
             }
             Ok(SearchTabOutput::Cancelled) => {}
@@ -463,7 +466,7 @@ impl Workspace {
                     crate::tr_args!(
                         "{}：搜索失败，可重新搜索。{}",
                         "{}: Search failed; retry the search. {}",
-                        state.title(),
+                        self.search_tab_title(job.owner, &state),
                         error
                     ),
                     cx,

@@ -860,6 +860,10 @@ impl Workspace {
             .collect::<Vec<_>>();
         let tab_list_workspace = workspace.clone();
         let tab_drop_layout = self.tab_drop_layout.clone();
+        self.tab_drag
+            .file_bounds
+            .borrow_mut()
+            .retain(|id, _| self.tabs.contains(id));
         {
             let mut layout = tab_drop_layout.borrow_mut();
             layout.tabs.resize(tab_count, Bounds::default());
@@ -916,7 +920,11 @@ impl Workspace {
                 }
             }));
         if let Some(active_ix) = active_tab_ix {
-            tabs = tabs.selected_index(active_ix);
+            tabs = tabs.selected_index(if self.tab_drag.file_hidden == Some(self.active_tab_id) {
+                usize::MAX
+            } else {
+                active_ix
+            });
         }
 
         tabs.children((0..tab_count).map(|ix| self.render_workspace_tab(ix, has_other_window, cx)))
@@ -933,12 +941,7 @@ impl Workspace {
                         let tab_drop_layout = tab_drop_layout.clone();
                         move |bounds, _, _| tab_drop_layout.borrow_mut().end = bounds
                     })
-                    .drag_over::<DraggedTab>(|this, _, _, cx| {
-                        this.border_l_2().border_color(cx.theme().primary)
-                    })
-                    .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
-                        this.reorder_tab(dragged.tab_id, tab_count, window, cx);
-                    }))
+                    .on_drop(cx.listener(|_, _: &DraggedTab, _, _| {}))
                     .child(
                         Button::new("new-workspace-tab")
                             .small()
@@ -1123,7 +1126,7 @@ impl Workspace {
 
     pub(super) fn render_search_scope_menu_row(
         label: &'static str,
-        icon: IconName,
+        icon: gpui_kit::assets::IconName,
         selected: bool,
         cx: &mut App,
     ) -> AnyElement {
@@ -1174,6 +1177,9 @@ impl Workspace {
         let workspace = cx.entity();
         let menu_workspace = workspace.clone();
         let selected_scope = self.global_search.scope;
+        let file_unavailable = self
+            .active_document()
+            .is_none_or(|tab| tab.load_state != DocumentLoadState::Ready);
         let has_scope_settings = matches!(
             self.global_search.scope,
             SearchScope::AllOpenFiles | SearchScope::Directory
@@ -1221,9 +1227,9 @@ impl Workspace {
             .dropdown_caret(true)
             .when(has_scope_settings, |button| button.rounded_r_none())
             .icon(match self.global_search.scope {
-                SearchScope::CurrentFile => IconName::Search,
-                SearchScope::AllOpenFiles => IconName::File,
-                SearchScope::Directory => IconName::FolderOpen,
+                SearchScope::CurrentFile => gpui_kit::assets::IconName::Search,
+                SearchScope::AllOpenFiles => gpui_kit::assets::IconName::Earth,
+                SearchScope::Directory => gpui_kit::assets::IconName::FolderOpen,
             })
             .map(|button| {
                 self.search_toolbar_button_label(
@@ -1248,11 +1254,12 @@ impl Workspace {
                         PopupMenuItem::element(move |_, cx| {
                             Self::render_search_scope_menu_row(
                                 crate::tr!("当前文件", "Current file"),
-                                IconName::Search,
+                                gpui_kit::assets::IconName::Search,
                                 selected_scope == SearchScope::CurrentFile,
                                 cx,
                             )
                         })
+                        .disabled(file_unavailable)
                         .on_click(window.listener_for(
                             &current_workspace,
                             |this, _, window, cx| {
@@ -1264,7 +1271,7 @@ impl Workspace {
                         PopupMenuItem::element(move |_, cx| {
                             Self::render_search_scope_menu_row(
                                 crate::tr!("全局搜索", "Global search"),
-                                IconName::File,
+                                gpui_kit::assets::IconName::Earth,
                                 selected_scope == SearchScope::AllOpenFiles,
                                 cx,
                             )
@@ -1280,7 +1287,7 @@ impl Workspace {
                         PopupMenuItem::element(move |_, cx| {
                             Self::render_search_scope_menu_row(
                                 crate::tr!("目录搜索", "Directory search"),
-                                IconName::FolderOpen,
+                                gpui_kit::assets::IconName::FolderOpen,
                                 selected_scope == SearchScope::Directory,
                                 cx,
                             )

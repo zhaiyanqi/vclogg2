@@ -645,9 +645,18 @@ impl Workspace {
 
         for document_id in &document_ids {
             self.cancel_search_for(*document_id);
+            let owner = search_tabs::SearchTabOwner::File(*document_id);
+            self.search_tabs.groups.remove(&owner);
+            {
+                let mut layout = self.search_tabs.layout.borrow_mut();
+                layout.slots.retain(|(candidate, _), _| *candidate != owner);
+                layout
+                    .painted
+                    .retain(|(candidate, _), _| *candidate != owner);
+            }
             self.search_tabs
-                .groups
-                .remove(&search_tabs::SearchTabOwner::File(*document_id));
+                .motion_offsets
+                .retain(|(candidate, _), _| *candidate != owner);
             self.persistence.checkpoint_tasks.remove(*document_id);
         }
 

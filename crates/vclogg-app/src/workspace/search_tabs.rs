@@ -15,6 +15,14 @@ pub(super) enum SearchTabOwner {
 }
 
 impl SearchTabOwner {
+    pub(super) fn icon(self) -> gpui_kit::assets::IconName {
+        match self {
+            Self::File(_) => gpui_kit::assets::IconName::Search,
+            Self::AllOpen => gpui_kit::assets::IconName::Earth,
+            Self::Directory => gpui_kit::assets::IconName::FolderOpen,
+        }
+    }
+
     pub(super) fn scope(self) -> SearchScope {
         match self {
             Self::File(_) => SearchScope::CurrentFile,
@@ -67,13 +75,6 @@ impl SearchTabState {
             revision: 0,
         }
     }
-    pub(super) fn title(&self) -> SharedString {
-        self.saved
-            .name
-            .clone()
-            .unwrap_or_else(|| crate::tr_args!("搜索 {}", "Search {}", self.saved.id))
-            .into()
-    }
 }
 
 pub(super) struct SearchTabGroup {
@@ -86,16 +87,10 @@ impl SearchTabGroup {
     pub(super) fn restored(mut saved: PersistedSearchTabGroup) -> Self {
         let mut seen = BTreeSet::new();
         saved.tabs.retain(|tab| tab.id != 0 && seen.insert(tab.id));
-        if saved.tabs.is_empty() {
-            saved.tabs.push(PersistedSearchTab {
-                id: 1,
-                ..Default::default()
-            });
-        }
         let active = if saved.tabs.iter().any(|tab| tab.id == saved.active) {
             saved.active
         } else {
-            saved.tabs[0].id
+            saved.tabs.first().map_or(0, |tab| tab.id)
         };
         Self {
             active: SearchTabId(active),
@@ -115,6 +110,53 @@ impl SearchTabGroup {
                 .collect(),
         }
     }
+    pub(super) fn scope_target(&self, owner: SearchTabOwner) -> Option<SearchTabId> {
+        match owner {
+            SearchTabOwner::File(_) => self.tabs.iter().find(|tab| tab.saved.id == self.active.0),
+            _ => self.tabs.first(),
+        }
+        .map(|tab| SearchTabId(tab.saved.id))
+    }
+
+    pub(super) fn close(&mut self, owner: SearchTabOwner, id: SearchTabId) {
+        let Some(ix) = self.tabs.iter().position(|tab| tab.saved.id == id.0) else {
+            return;
+        };
+        let removed = self.tabs.remove(ix);
+        if self.tabs.is_empty() && matches!(owner, SearchTabOwner::File(_)) {
+            let next = self.next_id;
+            self.next_id = next.saturating_add(1);
+            let mut empty = SearchTabState::restored(PersistedSearchTab {
+                id: next,
+                position: removed.saved.position,
+                draft: SearchTabQuery {
+                    text: String::new(),
+                    ..removed.saved.draft
+                },
+                ..Default::default()
+            });
+            // The file's table still holds the closed session until this tab is installed.
+            empty.facade_dirty = true;
+            self.tabs.push(empty);
+        }
+        if self.active == id {
+            self.active = self
+                .tabs
+                .get(ix.min(self.tabs.len().saturating_sub(1)))
+                .map_or(SearchTabId(0), |tab| SearchTabId(tab.saved.id));
+            if matches!(owner, SearchTabOwner::File(_))
+                && let Some(tab) = self
+                    .tabs
+                    .iter_mut()
+                    .find(|tab| tab.saved.id == self.active.0)
+            {
+                // Closing a visible file tab while a global search is selected must not
+                // capture the old file result table into the newly selected local session.
+                tab.facade_dirty = true;
+            }
+        }
+    }
+
     pub(super) fn persisted(&self) -> PersistedSearchTabGroup {
         PersistedSearchTabGroup {
             active: self.active.0,
@@ -126,10 +168,16 @@ impl SearchTabGroup {
 
 pub(super) struct SearchTabs {
     pub(super) panel_expansion: BTreeMap<WorkspaceTabId, bool>,
+    pub(super) shared_panel_expanded: bool,
     pub(super) groups: BTreeMap<SearchTabOwner, SearchTabGroup>,
     pub(super) installed: Option<(SearchTabOwner, SearchTabId)>,
     pub(super) focus: FocusHandle,
     pub(super) scroll: ScrollHandle,
+    pub(super) layout: Rc<RefCell<super::search_tab_order::SearchTabLayout>>,
+    pub(super) order_revision: u64,
+    pub(super) hidden_drag: Option<(SearchTabOwner, SearchTabId)>,
+    pub(super) dragging: bool,
+    pub(super) motion_offsets: BTreeMap<(SearchTabOwner, SearchTabId), Pixels>,
     pub(super) queue: VecDeque<SearchTabJob>,
     pub(super) running: Option<(SearchTabOwner, SearchTabId, u64, SearchCancellation)>,
     pub(super) task: Option<Task<()>>,
@@ -141,13 +189,19 @@ pub(super) struct SearchTabs {
 }
 
 impl SearchTabs {
-    pub(super) fn new(cx: &mut Context<Workspace>) -> Self {
+    pub(super) fn new(cx: &mut App) -> Self {
         Self {
             panel_expansion: BTreeMap::new(),
+            shared_panel_expanded: true,
             groups: BTreeMap::new(),
             installed: None,
             focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
+            layout: Rc::default(),
+            order_revision: 0,
+            hidden_drag: None,
+            dragging: false,
+            motion_offsets: BTreeMap::new(),
             queue: VecDeque::new(),
             running: None,
             task: None,
@@ -176,6 +230,47 @@ impl SearchTabs {
             .iter_mut()
             .find(|tab| tab.saved.id == id.0)
     }
+    pub(super) fn visible_keys(&self) -> Vec<(SearchTabOwner, SearchTabId)> {
+        let mut keys = self
+            .groups
+            .iter()
+            .flat_map(|(owner, group)| {
+                group
+                    .tabs
+                    .iter()
+                    .map(move |tab| (*owner, SearchTabId(tab.saved.id)))
+            })
+            .collect::<Vec<_>>();
+        keys.sort_by_key(|&(owner, id)| {
+            self.state(owner, id)
+                .unwrap()
+                .saved
+                .position
+                .unwrap_or(u64::MAX)
+        });
+        keys
+    }
+
+    pub(super) fn reorder(&mut self, key: (SearchTabOwner, SearchTabId), target_ix: usize) -> bool {
+        let mut keys = self.visible_keys();
+        let Some(from) = keys.iter().position(|candidate| *candidate == key) else {
+            return false;
+        };
+        let to = target_ix.min(keys.len() - 1);
+        if from == to {
+            return false;
+        }
+        keys.remove(from);
+        keys.insert(to, key);
+        for (ix, &(owner, id)) in keys.iter().enumerate() {
+            self.state_mut(owner, id).unwrap().saved.position = Some(ix as u64);
+        }
+        for group in self.groups.values_mut() {
+            group.tabs.sort_by_key(|tab| tab.saved.position);
+        }
+        true
+    }
+
     pub(super) fn busy(&self) -> bool {
         self.running.is_some() || !self.queue.is_empty()
     }
@@ -229,6 +324,48 @@ impl SearchTabQuery {
 }
 
 impl Workspace {
+    pub(super) fn search_tab_title(
+        &self,
+        owner: SearchTabOwner,
+        state: &SearchTabState,
+    ) -> SharedString {
+        if let Some(name) = &state.saved.name {
+            return name.clone().into();
+        }
+        match owner {
+            SearchTabOwner::File(id) => {
+                let filename = self
+                    .documents
+                    .iter()
+                    .find(|tab| tab.id == id)
+                    .and_then(|tab| tab.document.path().file_name())
+                    .map(|name| name.to_string_lossy())
+                    .unwrap_or_else(|| crate::tr!("当前文件", "Current file").into());
+                format!("{}_{}", filename, state.saved.id).into()
+            }
+            SearchTabOwner::AllOpen => {
+                crate::tr_args!("全局搜索 {}", "Global search {}", state.saved.id).into()
+            }
+            SearchTabOwner::Directory => {
+                crate::tr_args!("目录搜索 {}", "Directory search {}", state.saved.id).into()
+            }
+        }
+    }
+
+    pub(super) fn persist_search_tab_changes(
+        &mut self,
+        owner: SearchTabOwner,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let SearchTabOwner::File(id) = owner
+            && self.active_document().map(|tab| tab.id) != Some(id)
+        {
+            self.schedule_checkpoint(id, window, cx);
+        }
+        self.persist_search_tabs(window, cx);
+    }
+
     pub(super) fn search_tab_owner(&self) -> Option<SearchTabOwner> {
         match self.global_search.scope {
             SearchScope::CurrentFile => self
@@ -241,7 +378,9 @@ impl Workspace {
 
     pub(super) fn active_search_tab_key(&self) -> Option<(SearchTabOwner, SearchTabId)> {
         let owner = self.search_tab_owner()?;
-        Some((owner, self.search_tabs.groups.get(&owner)?.active))
+        let id = self.search_tabs.groups.get(&owner)?.active;
+        self.search_tabs.state(owner, id)?;
+        Some((owner, id))
     }
 
     fn initial_search_tab(&self, owner: SearchTabOwner) -> PersistedSearchTab {
@@ -302,7 +441,18 @@ impl Workspace {
     }
 
     pub(super) fn ensure_search_tab_group(&mut self, owner: SearchTabOwner, cx: &App) {
-        if self.search_tabs.groups.contains_key(&owner) {
+        if let Some(group) = self.search_tabs.groups.get_mut(&owner) {
+            if group.tabs.is_empty() {
+                let id = group.next_id.max(1);
+                group.next_id = id.saturating_add(1);
+                group.active = SearchTabId(id);
+                group
+                    .tabs
+                    .push(SearchTabState::restored(PersistedSearchTab {
+                        id,
+                        ..Default::default()
+                    }));
+            }
             return;
         }
         let persisted = match owner {
@@ -320,6 +470,7 @@ impl Workspace {
             }
             _ => None,
         };
+        let persisted = persisted.filter(|group| !group.tabs.is_empty());
         let has_saved = persisted.is_some();
         let saved = persisted.unwrap_or_else(|| PersistedSearchTabGroup {
             active: 1,
@@ -329,6 +480,9 @@ impl Workspace {
         self.search_tabs
             .groups
             .insert(owner, SearchTabGroup::restored(saved));
+        if self.search_tabs.groups[&owner].tabs.is_empty() {
+            self.ensure_search_tab_group(owner, cx);
+        }
         if !has_saved {
             let id = self.search_tabs.groups[&owner].active;
             let state = self.capture_search_tab_state(owner, id, cx);
@@ -447,7 +601,17 @@ impl Workspace {
         self.global_search.directory_context.visible_lines = None;
     }
 
+    pub(super) fn visible_search_tab_keys(&self) -> Vec<(SearchTabOwner, SearchTabId)> {
+        self.search_tabs.visible_keys()
+    }
+
     pub(super) fn sync_search_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(tab) = self
+            .active_document()
+            .filter(|tab| tab.load_state == DocumentLoadState::Ready)
+        {
+            self.ensure_search_tab_group(SearchTabOwner::File(tab.id), cx);
+        }
         let Some(owner) = self.search_tab_owner() else {
             self.search_tabs.installed = None;
             return;
@@ -698,11 +862,10 @@ impl Workspace {
     }
 
     pub(super) fn persist_search_tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(SearchTabOwner::File(id)) = self.search_tab_owner() {
+        if let Some(id) = self.active_document().map(|tab| tab.id) {
             self.schedule_checkpoint(id, window, cx);
-        } else {
-            self.schedule_workspace_search_state_save(window, cx);
         }
+        self.schedule_workspace_search_state_save(window, cx);
     }
 
     pub(super) fn search_ranges_for_owner(
@@ -776,6 +939,22 @@ impl Workspace {
             (SearchTabOwner::Directory, state.directory_tabs.clone()),
         ] {
             let group = persisted.unwrap_or_else(|| {
+                let used = match owner {
+                    SearchTabOwner::AllOpen => {
+                        state.active_scope == PersistedSearchScope::AllOpenFiles
+                            || state.all_open.results_visible
+                            || !state.all_open.query.text.is_empty()
+                    }
+                    SearchTabOwner::Directory => {
+                        state.active_scope == PersistedSearchScope::Directory
+                            || !state.directories.is_empty()
+                            || state.directory_options.directory.is_some()
+                    }
+                    SearchTabOwner::File(_) => false,
+                };
+                if !used {
+                    return PersistedSearchTabGroup::default();
+                }
                 if owner == SearchTabOwner::Directory && !state.directories.is_empty() {
                     let tabs = state
                         .directories
