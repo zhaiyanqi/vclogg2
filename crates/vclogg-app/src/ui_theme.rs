@@ -364,6 +364,9 @@ fn apply_product_colors(mode: ThemeMode, cx: &mut App) {
     theme.font_size = px(15.);
     theme.mono_font_size = px(13.);
 
+    // Notification history spans the whole window, including the title bar.
+    theme.sheet.margin_top = Pixels::ZERO;
+
     theme.background = colors.background;
     theme.foreground = colors.foreground;
     theme.popover = colors.surface;
