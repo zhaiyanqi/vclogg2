@@ -1488,8 +1488,7 @@ impl Workspace {
 
         let current = self
             .pending_editor_font_zoom
-            .as_ref()
-            .map_or(self.app_settings.log_font_size, |(size, _)| *size);
+            .unwrap_or(self.app_settings.log_font_size);
         let next = if delta_y > px(0.) {
             current.saturating_add(1).min(32)
         } else {
@@ -1499,24 +1498,19 @@ impl Workspace {
             return;
         }
 
-        // A font change rebuilds the editor's display map for the entire document.
-        // Coalesce wheel ticks so a gesture pays that cost once.
-        let task = cx.spawn_in(window, async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(100))
-                .await;
-            _ = this.update_in(cx, |this, window, cx| {
-                let Some((next, _)) = this.pending_editor_font_zoom.as_ref() else {
-                    return;
-                };
-                let next = *next;
-                if next != this.app_settings.log_font_size {
-                    this.apply_log_font_size(next, window, cx);
-                }
-                this.pending_editor_font_zoom = None;
-            });
+        // Coalesce wheel ticks within a frame without waiting for the gesture to
+        // stop. Replacing a debounce timer on every tick starves live feedback.
+        if self.pending_editor_font_zoom.replace(next).is_some() {
+            return;
+        }
+        cx.on_next_frame(window, |this, window, cx| {
+            let Some(next) = this.pending_editor_font_zoom.take() else {
+                return;
+            };
+            if next != this.app_settings.log_font_size {
+                this.apply_log_font_size(next, window, cx);
+            }
         });
-        self.pending_editor_font_zoom = Some((next, task));
     }
 
     fn is_log_font_size_wheel(event: &ScrollWheelEvent) -> bool {
