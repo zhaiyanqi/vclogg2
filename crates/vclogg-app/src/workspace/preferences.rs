@@ -167,16 +167,25 @@ impl Workspace {
     }
 
     pub(super) fn open_history_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings_dialog(Some(SettingsCategory::History), window, cx);
+    }
+
+    fn load_settings_history(
+        &mut self,
+        settings: &Entity<SettingsDialog>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(store) = self.persistence.store.clone() else {
-            window.notify_message(
-                crate::tr!("状态库尚未就绪", "State storage is not ready"),
-                cx,
-            );
+            settings.update(cx, |this, cx| {
+                this.set_file_history(
+                    Err(crate::tr!("状态库尚未就绪", "State storage is not ready").into()),
+                    cx,
+                )
+            });
             return;
         };
-        if self.history_dialog_loading {
-            return;
-        }
+        let settings = settings.downgrade();
         let current_workspace_id = cx.entity_id();
         let workspaces = cx
             .global::<WorkspaceWindowRegistry>()
@@ -220,6 +229,9 @@ impl Workspace {
                     this.history_dialog_loading = false;
                     match result {
                         Ok((sessions, database_info, temporary_results)) => {
+                            let Some(settings) = settings.upgrade() else {
+                                return;
+                            };
                             let history = cx.new(|cx| {
                                 HistoryDialog::new(
                                     sessions,
@@ -257,39 +269,20 @@ impl Workspace {
                                     }
                                 },
                             ));
-                            let (history_dialog_size, history_dialog_margin_top) =
-                                management_dialog_geometry(window);
-                            window.open_dialog(cx, move |dialog, _, cx| {
-                                let history = history.clone();
-                                dialog
-                                    .w(history_dialog_size.width)
-                                    .h(history_dialog_size.height)
-                                    .margin_top(history_dialog_margin_top)
-                                    .title(crate::tr!("文件历史", "File history"))
-                                    .close_button(false)
-                                    .content(move |content, _, _| {
-                                        content.min_h_0().overflow_hidden().child(history.clone())
-                                    })
-                                    .footer(
-                                        DialogFooter::new().child(
-                                            crate::dialog_focus::dialog_confirm_action(
-                                                "history-dialog-close-action",
-                                                Button::new("history-dialog-close")
-                                                    .primary()
-                                                    .label(crate::tr!("关闭", "Close")),
-                                                cx,
-                                            ),
-                                        ),
+                            settings.update(cx, |this, cx| this.set_file_history(Ok(history), cx));
+                        }
+                        Err(error) => {
+                            _ = settings.update(cx, |this, cx| {
+                                this.set_file_history(
+                                    Err(crate::tr_args!(
+                                        "历史记录未能读取：{error}",
+                                        "Couldn’t read history: {error}"
                                     )
+                                    .into()),
+                                    cx,
+                                )
                             });
                         }
-                        Err(error) => window.notify_message(
-                            crate::tr_args!(
-                                "历史记录未能读取：{error}",
-                                "Couldn’t read history: {error}"
-                            ),
-                            cx,
-                        ),
                     }
                     cx.notify();
                 });
@@ -591,6 +584,7 @@ impl Workspace {
                 cx,
             )
         });
+        self.load_settings_history(&settings, window, cx);
         self.settings_dialog_subscription = Some(cx.subscribe_in(
             &settings,
             window,
