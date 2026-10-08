@@ -49,24 +49,24 @@ fn closing_the_last_shared_tab_stays_closed_after_restore() {
 }
 
 #[test]
-fn closing_the_last_file_search_leaves_a_fresh_empty_session() {
+fn closing_the_last_file_search_preserves_the_existing_session() {
     let owner = SearchTabOwner::File(10);
-    let mut tabs = group(&[5], 5);
+    let mut tabs = group(&[4, 5], 5);
+    assert!(tabs.is_closable(owner, SearchTabId(4)));
+    tabs.close(owner, SearchTabId(4));
     tabs.tabs[0].saved.completed = Some(tabs.tabs[0].saved.draft.clone());
     tabs.tabs[0].saved.name = Some("custom title".into());
+    assert!(!tabs.is_closable(owner, SearchTabId(5)));
     tabs.close(owner, SearchTabId(5));
-    assert_eq!(tabs.active, SearchTabId(6));
+    assert_eq!(tabs.active, SearchTabId(5));
     assert_eq!(tabs.tabs.len(), 1);
-    assert!(tabs.tabs[0].saved.draft.text.is_empty());
-    assert!(tabs.tabs[0].saved.completed.is_none());
-    assert!(tabs.tabs[0].saved.name.is_none());
-    assert!(
-        tabs.tabs[0].facade_dirty,
-        "the closed result facade must not overwrite the empty session"
-    );
+    assert_eq!(tabs.tabs[0].saved.draft.text, "query 5");
+    assert!(tabs.tabs[0].saved.completed.is_some());
+    assert_eq!(tabs.tabs[0].saved.name.as_deref(), Some("custom title"));
+    assert!(!tabs.tabs[0].facade_dirty);
     let restored = SearchTabGroup::restored(tabs.persisted());
-    assert_eq!(restored.scope_target(owner), Some(SearchTabId(6)));
-    assert_eq!(restored.next_id, 7);
+    assert_eq!(restored.scope_target(owner), Some(SearchTabId(5)));
+    assert_eq!(restored.next_id, 6);
 }
 
 #[test]
@@ -400,14 +400,22 @@ fn file_switches_restore_local_queries_without_leaving_shared_searches(cx: &mut 
             WorkspaceTabId::Document(a)
         );
         assert_eq!(workspace.read(cx).query.read(cx).value(), "local A");
-        let b_empty = format!("search-tab-File({b})-2");
-        assert_eq!(window.find(b_empty.clone()).label(), Some("b.log_2"));
-        window.click(b_empty, cx);
+        let b_remaining = format!("search-tab-File({b})-1");
+        assert_eq!(window.find(b_remaining.clone()).label(), Some("b.log_1"));
+        assert!(window.try_find(format!("search-tab-File({b})-2")).is_none());
+        window.click(b_remaining, cx);
         assert_eq!(
             workspace.read(cx).active_tab_id,
             WorkspaceTabId::Document(b)
         );
-        assert!(workspace.read(cx).query.read(cx).value().is_empty());
+        for key in ["delete", "backspace"] {
+            window.press(key, cx);
+            assert_eq!(workspace.read(cx).query.read(cx).value(), "local B");
+            assert_eq!(
+                workspace.read(cx).active_search_tab_key(),
+                Some((SearchTabOwner::File(b), SearchTabId(1)))
+            );
+        }
     })
     .unwrap();
 }

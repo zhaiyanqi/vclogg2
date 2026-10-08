@@ -118,27 +118,19 @@ impl SearchTabGroup {
         .map(|tab| SearchTabId(tab.saved.id))
     }
 
+    pub(super) fn is_closable(&self, owner: SearchTabOwner, id: SearchTabId) -> bool {
+        self.tabs.iter().any(|tab| tab.saved.id == id.0)
+            && (!matches!(owner, SearchTabOwner::File(_)) || self.tabs.len() > 1)
+    }
+
     pub(super) fn close(&mut self, owner: SearchTabOwner, id: SearchTabId) {
+        if !self.is_closable(owner, id) {
+            return;
+        }
         let Some(ix) = self.tabs.iter().position(|tab| tab.saved.id == id.0) else {
             return;
         };
-        let removed = self.tabs.remove(ix);
-        if self.tabs.is_empty() && matches!(owner, SearchTabOwner::File(_)) {
-            let next = self.next_id;
-            self.next_id = next.saturating_add(1);
-            let mut empty = SearchTabState::restored(PersistedSearchTab {
-                id: next,
-                position: removed.saved.position,
-                draft: SearchTabQuery {
-                    text: String::new(),
-                    ..removed.saved.draft
-                },
-                ..Default::default()
-            });
-            // The file's table still holds the closed session until this tab is installed.
-            empty.facade_dirty = true;
-            self.tabs.push(empty);
-        }
+        self.tabs.remove(ix);
         if self.active == id {
             self.active = self
                 .tabs

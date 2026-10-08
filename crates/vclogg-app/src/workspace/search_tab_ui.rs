@@ -13,6 +13,7 @@ struct DraggedSearchTab {
     title: SharedString,
     selected: bool,
     busy: bool,
+    closable: bool,
     size: Size<Pixels>,
 }
 
@@ -79,6 +80,7 @@ impl Render for DraggedSearchTab {
                 self.title.clone(),
                 self.busy,
                 Button::new("search-tab-drag-preview-close")
+                    .disabled(!self.closable)
                     .xsmall()
                     .ghost()
                     .icon(IconName::Close),
@@ -148,6 +150,7 @@ impl Workspace {
                 let title = self.search_tab_title(owner, state);
                 let menu_workspace = workspace.clone();
                 let selected = active == Some((owner, id));
+                let closable = self.search_tabs.groups[&owner].is_closable(owner, id);
                 let dragged = DraggedSearchTab {
                     owner,
                     id,
@@ -155,6 +158,7 @@ impl Workspace {
                     title: title.clone(),
                     selected,
                     busy: state.saved.submitted.is_some(),
+                    closable,
                     size: self
                         .search_tabs
                         .layout
@@ -204,14 +208,16 @@ impl Workspace {
                                                 },
                                             )),
                                     )
-                                    .item(PopupMenuItem::new(crate::tr!("关闭", "Close")).on_click(
-                                        window.listener_for(
-                                            &close_workspace,
-                                            move |this, _, window, cx| {
-                                                this.close_search_tab(owner, id, window, cx)
-                                            },
-                                        ),
-                                    ))
+                                    .item(
+                                        PopupMenuItem::new(crate::tr!("关闭", "Close"))
+                                            .disabled(!closable)
+                                            .on_click(window.listener_for(
+                                                &close_workspace,
+                                                move |this, _, window, cx| {
+                                                    this.close_search_tab(owner, id, window, cx)
+                                                },
+                                            )),
+                                    )
                                     .separator()
                                     .item(
                                         PopupMenuItem::new(crate::tr!("向左移动", "Move left"))
@@ -283,6 +289,7 @@ impl Workspace {
                             state.saved.submitted.is_some(),
                             crate::button_accessibility::with_label(
                                 Button::new(format!("close-search-tab-{owner:?}-{}", id.0))
+                                    .disabled(!closable)
                                     .xsmall()
                                     .ghost()
                                     .icon(IconName::Close),
@@ -535,6 +542,14 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self
+            .search_tabs
+            .groups
+            .get(&owner)
+            .is_some_and(|group| group.is_closable(owner, id))
+        {
+            return;
+        }
         let keys = self.visible_search_tab_keys();
         let Some(visible_ix) = keys.iter().position(|key| *key == (owner, id)) else {
             return;
