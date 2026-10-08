@@ -639,60 +639,95 @@ impl Workspace {
             let original_settings_for_reset = original_settings.clone();
             let original_coloring_enabled = original_settings.highlight_log_levels;
             let original_search_history = original_search_history.clone();
+            let settings_content = settings.clone();
+            let workspace_for_resize = workspace.downgrade();
             dialog
                 .w(settings_dialog_size.width)
                 .h(settings_dialog_size.height)
                 .margin_top(settings_dialog_margin_top)
-                .title(crate::tr!("设置", "Settings"))
+                .p_0()
+                .gap_0()
                 .keyboard(!saving)
                 .overlay_closable(!saving)
                 .close_button(false)
-                .child(settings.clone())
-                .footer(
-                    h_flex()
-                        .w_full()
-                        .justify_between()
-                        .gap_2()
-                        .child(
-                            Button::new("settings-dialog-reset")
-                                .disabled(saving)
-                                .outline()
-                                .label(crate::tr!("恢复默认设置", "Restore default settings"))
-                                .on_click(move |_, window, cx| {
-                                    workspace_for_reset.update(cx, |this, cx| {
-                                        this.confirm_reset_app_settings(
-                                            original_settings_for_reset.clone(),
-                                            window,
-                                            cx,
-                                        )
-                                    });
-                                }),
-                        )
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .child(crate::dialog_focus::dialog_cancel_action(
-                                    "settings-dialog-cancel-action",
-                                    Button::new("settings-dialog-cancel")
-                                        .disabled(saving)
-                                        .label(crate::tr!("取消", "Cancel")),
-                                    cx,
-                                ))
-                                .child(crate::dialog_focus::dialog_confirm_action(
-                                    "settings-dialog-save-action",
-                                    Button::new("settings-dialog-save")
-                                        .disabled(saving)
-                                        .loading(saving)
-                                        .primary()
-                                        .label(crate::tr!("保存", "Save")),
-                                    cx,
-                                ))
-                                .child(Self::render_settings_resize_grip(
-                                    workspace.downgrade(),
-                                    cx,
-                                )),
-                        ),
-                )
+                .content(move |content, _, cx| {
+                    let workspace_for_reset = workspace_for_reset.clone();
+                    let original_settings_for_reset = original_settings_for_reset.clone();
+                    // One full-surface owner keeps resize hitboxes aligned with the
+                    // rendered dialog, including its title and footer.
+                    content.p_0().gap_0().min_h_0().child(
+                        v_flex()
+                            .relative()
+                            .size_full()
+                            .min_h_0()
+                            .child(
+                                gpui_kit::component::dialog::DialogTitle::new()
+                                    .flex_shrink_0()
+                                    .px_4()
+                                    .pt_4()
+                                    .child(crate::tr!("设置", "Settings")),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .px_4()
+                                    .pt_2()
+                                    .pb_4()
+                                    .child(settings_content.clone()),
+                            )
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .flex_shrink_0()
+                                    .px_4()
+                                    .pb_4()
+                                    .justify_between()
+                                    .gap_2()
+                                    .child(
+                                        Button::new("settings-dialog-reset")
+                                            .disabled(saving)
+                                            .outline()
+                                            .label(crate::tr!(
+                                                "恢复默认设置",
+                                                "Restore default settings"
+                                            ))
+                                            .on_click(move |_, window, cx| {
+                                                workspace_for_reset.update(cx, |this, cx| {
+                                                    this.confirm_reset_app_settings(
+                                                        original_settings_for_reset.clone(),
+                                                        window,
+                                                        cx,
+                                                    )
+                                                });
+                                            }),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .gap_2()
+                                            .child(crate::dialog_focus::dialog_cancel_action(
+                                                "settings-dialog-cancel-action",
+                                                Button::new("settings-dialog-cancel")
+                                                    .disabled(saving)
+                                                    .label(crate::tr!("取消", "Cancel")),
+                                                cx,
+                                            ))
+                                            .child(crate::dialog_focus::dialog_confirm_action(
+                                                "settings-dialog-save-action",
+                                                Button::new("settings-dialog-save")
+                                                    .disabled(saving)
+                                                    .loading(saving)
+                                                    .primary()
+                                                    .label(crate::tr!("保存", "Save")),
+                                                cx,
+                                            )),
+                                    ),
+                            )
+                            .child(Self::render_settings_resize_layer(
+                                workspace_for_resize.clone(),
+                            )),
+                    )
+                })
                 .on_ok(move |_, window, cx| {
                     if highlight_editor.read(cx).is_saving() {
                         return false;

@@ -12,6 +12,24 @@ pub(super) struct SettingsDialogGeometry {
 struct ResizeGesture {
     start: Point<Pixels>,
     initial_size: Size<Pixels>,
+    direction: ResizeDirection,
+}
+
+#[derive(Clone, Copy)]
+struct ResizeDirection {
+    horizontal: f32,
+    vertical: f32,
+}
+
+impl ResizeDirection {
+    fn cursor(self) -> gpui_kit::CursorStyle {
+        match (self.horizontal, self.vertical) {
+            (0., _) => gpui_kit::CursorStyle::ResizeUpDown,
+            (_, 0.) => gpui_kit::CursorStyle::ResizeLeftRight,
+            (x, y) if x == y => gpui_kit::CursorStyle::ResizeUpLeftDownRight,
+            _ => gpui_kit::CursorStyle::ResizeUpRightDownLeft,
+        }
+    }
 }
 
 impl SettingsDialogGeometry {
@@ -105,155 +123,161 @@ impl Workspace {
         true
     }
 
-    pub(super) fn render_settings_resize_grip(workspace: WeakEntity<Self>, cx: &App) -> AnyElement {
-        let keyboard_workspace = workspace.clone();
-        div()
-            .id("settings-dialog-resize")
-            .focusable()
-            .tab_stop(true)
-            .border_1()
-            .border_color(cx.theme().transparent)
-            .focus_visible(|style| style.border_color(cx.theme().ring))
-            .on_key_down(move |event: &KeyDownEvent, window, cx| {
-                let (horizontal, vertical) = match event.keystroke.key.as_str() {
-                    "left" => (-1., 0.),
-                    "right" => (1., 0.),
-                    "up" => (0., -1.),
-                    "down" => (0., 1.),
-                    _ => return,
-                };
-                _ = keyboard_workspace.update(cx, |this, cx| {
-                    let current = this.settings_dialog_geometry.size(window);
-                    let next = SettingsDialogGeometry::clamp(
-                        size(
-                            current.width + window.rem_size() * horizontal,
-                            current.height + window.rem_size() * vertical,
-                        ),
-                        window,
+    pub(super) fn render_settings_resize_layer(workspace: WeakEntity<Self>) -> AnyElement {
+        canvas(
+            |bounds, window, _| {
+                let edge = window.rem_size() * 0.375;
+                let corner = window.rem_size() * 0.75;
+                let width = bounds.size.width;
+                let height = bounds.size.height;
+                // Edges exclude the corners so each pointer position has one owner.
+                [
+                    (
+                        0.,
+                        -1.,
+                        corner,
+                        px(0.),
+                        (width - corner * 2.).max(px(0.)),
+                        edge,
+                    ),
+                    (
+                        0.,
+                        1.,
+                        corner,
+                        height - edge,
+                        (width - corner * 2.).max(px(0.)),
+                        edge,
+                    ),
+                    (
+                        -1.,
+                        0.,
+                        px(0.),
+                        corner,
+                        edge,
+                        (height - corner * 2.).max(px(0.)),
+                    ),
+                    (
+                        1.,
+                        0.,
+                        width - edge,
+                        corner,
+                        edge,
+                        (height - corner * 2.).max(px(0.)),
+                    ),
+                    (-1., -1., px(0.), px(0.), corner, corner),
+                    (1., -1., width - corner, px(0.), corner, corner),
+                    (-1., 1., px(0.), height - corner, corner, corner),
+                    (1., 1., width - corner, height - corner, corner, corner),
+                ]
+                .map(|(horizontal, vertical, x, y, w, h)| {
+                    let hitbox = window.insert_hitbox(
+                        Bounds::new(bounds.origin + point(x, y), size(w, h)),
+                        HitboxBehavior::Normal,
                     );
-                    if next != current {
-                        this.settings_dialog_geometry.preferred_size = Some(next);
-                        this.settings_dialog_geometry.modified = true;
-                        this.save_settings_dialog_size(window, cx);
-                        cx.notify();
+                    (
+                        ResizeDirection {
+                            horizontal,
+                            vertical,
+                        },
+                        hitbox,
+                    )
+                })
+            },
+            move |_, grips, window, cx| {
+                for (direction, hitbox) in &grips {
+                    window.set_cursor_style(direction.cursor(), hitbox);
+                }
+                if let Some(gesture) = workspace
+                    .upgrade()
+                    .and_then(|this| this.read(cx).settings_dialog_geometry.gesture)
+                {
+                    window.set_window_cursor_style(gesture.direction.cursor());
+                }
+                window.on_mouse_event({
+                    let workspace = workspace.clone();
+                    move |event: &MouseDownEvent, phase, window, cx| {
+                        if phase.bubble() || event.button != MouseButton::Left {
+                            return;
+                        }
+                        let Some((direction, hitbox)) = grips.iter().find(|(_, hitbox)| {
+                            hitbox.is_hovered(window) && hitbox.bounds.contains(&event.position)
+                        }) else {
+                            return;
+                        };
+                        if workspace
+                            .update(cx, |this, cx| {
+                                this.settings_dialog_geometry.gesture = Some(ResizeGesture {
+                                    start: event.position,
+                                    initial_size: this.settings_dialog_geometry.size(window),
+                                    direction: *direction,
+                                });
+                                cx.notify();
+                            })
+                            .is_ok()
+                        {
+                            window.capture_pointer(hitbox.id);
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
                     }
                 });
-                cx.stop_propagation();
-            })
-            .relative()
-            .flex()
-            .items_center()
-            .justify_center()
-            .size_5()
-            .flex_shrink_0()
-            .text_color(cx.theme().muted_foreground)
-            .child("↘")
-            .tooltip(|window, cx| {
-                gpui_kit::component::tooltip::Tooltip::new(crate::tr!(
-                    "拖动调整大小，或聚焦后使用方向键",
-                    "Drag to resize, or focus and use arrow keys"
-                ))
-                .build(window, cx)
-            })
-            .child(
-                canvas(
-                    |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
-                    move |_, hitbox, window, cx| {
-                        let cursor = gpui_kit::CursorStyle::ResizeUpLeftDownRight;
-                        window.set_cursor_style(cursor, &hitbox);
-                        if workspace.upgrade().is_some_and(|this| {
-                            this.read(cx).settings_dialog_geometry.gesture.is_some()
-                        }) {
-                            window.set_window_cursor_style(cursor);
+                window.on_mouse_event({
+                    let workspace = workspace.clone();
+                    move |event: &MouseMoveEvent, phase, window, cx| {
+                        if phase.bubble() {
+                            return;
                         }
-                        window.on_mouse_event({
-                            let workspace = workspace.clone();
-                            move |event: &MouseDownEvent, phase, window, cx| {
-                                if phase.bubble()
-                                    || event.button != MouseButton::Left
-                                    || !hitbox.is_hovered(window)
-                                    || !hitbox.bounds.contains(&event.position)
-                                {
-                                    return;
+                        let consumed = workspace
+                            .update(cx, |this, cx| {
+                                let Some(gesture) = this.settings_dialog_geometry.gesture else {
+                                    return false;
+                                };
+                                if !event.dragging() {
+                                    return this.finish_settings_dialog_resize(window, cx);
                                 }
-                                if workspace
-                                    .update(cx, |this, cx| {
-                                        this.settings_dialog_geometry.gesture =
-                                            Some(ResizeGesture {
-                                                start: event.position,
-                                                initial_size: this
-                                                    .settings_dialog_geometry
-                                                    .size(window),
-                                            });
-                                        cx.notify();
-                                    })
-                                    .is_ok()
-                                {
-                                    window.capture_pointer(hitbox.id);
-                                    window.prevent_default();
-                                    cx.stop_propagation();
+                                // Centered dialogs move both opposite edges equally.
+                                let delta = event.position - gesture.start;
+                                let next = SettingsDialogGeometry::clamp(
+                                    size(
+                                        gesture.initial_size.width
+                                            + delta.x * (2. * gesture.direction.horizontal),
+                                        gesture.initial_size.height
+                                            + delta.y * (2. * gesture.direction.vertical),
+                                    ),
+                                    window,
+                                );
+                                if next != this.settings_dialog_geometry.size(window) {
+                                    this.settings_dialog_geometry.preferred_size = Some(next);
+                                    this.settings_dialog_geometry.modified = true;
+                                    cx.notify();
                                 }
-                            }
-                        });
-                        window.on_mouse_event({
-                            let workspace = workspace.clone();
-                            move |event: &MouseMoveEvent, phase, window, cx| {
-                                if phase.bubble() {
-                                    return;
-                                }
-                                let consumed = workspace
-                                    .update(cx, |this, cx| {
-                                        let Some(gesture) = this.settings_dialog_geometry.gesture
-                                        else {
-                                            return false;
-                                        };
-                                        if !event.dragging() {
-                                            return this.finish_settings_dialog_resize(window, cx);
-                                        }
-                                        // The dialog stays centered, so each dragged edge moves
-                                        // by half the change in the corresponding dimension.
-                                        let delta = event.position - gesture.start;
-                                        let next = SettingsDialogGeometry::clamp(
-                                            size(
-                                                gesture.initial_size.width + delta.x * 2.,
-                                                gesture.initial_size.height + delta.y * 2.,
-                                            ),
-                                            window,
-                                        );
-                                        if next != this.settings_dialog_geometry.size(window) {
-                                            this.settings_dialog_geometry.preferred_size =
-                                                Some(next);
-                                            this.settings_dialog_geometry.modified = true;
-                                            cx.notify();
-                                        }
-                                        true
-                                    })
-                                    .unwrap_or(false);
-                                if consumed {
-                                    cx.stop_propagation();
-                                }
-                            }
-                        });
-                        window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
-                            if phase.bubble() || event.button != MouseButton::Left {
-                                return;
-                            }
-                            if workspace
-                                .update(cx, |this, cx| {
-                                    this.finish_settings_dialog_resize(window, cx)
-                                })
-                                .unwrap_or(false)
-                            {
-                                cx.stop_propagation();
-                            }
-                        });
-                    },
-                )
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full(),
-            )
-            .into_any_element()
+                                true
+                            })
+                            .unwrap_or(false);
+                        if consumed {
+                            cx.stop_propagation();
+                        }
+                    }
+                });
+                window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                    if phase.bubble() || event.button != MouseButton::Left {
+                        return;
+                    }
+                    if workspace
+                        .update(cx, |this, cx| {
+                            this.finish_settings_dialog_resize(window, cx)
+                        })
+                        .unwrap_or(false)
+                    {
+                        cx.stop_propagation();
+                    }
+                });
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .into_any_element()
     }
 }
