@@ -123,7 +123,6 @@ pub(crate) enum SettingsCategory {
     Highlight,
     Search,
     History,
-    Scrolling,
     Storage,
     Shortcuts,
     Advanced,
@@ -131,14 +130,13 @@ pub(crate) enum SettingsCategory {
 }
 
 impl SettingsCategory {
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 10] = [
         Self::General,
         Self::Network,
         Self::Appearance,
         Self::Highlight,
         Self::Search,
         Self::History,
-        Self::Scrolling,
         Self::Storage,
         Self::Shortcuts,
         Self::Advanced,
@@ -147,13 +145,12 @@ impl SettingsCategory {
 
     pub(crate) fn from_storage_value(value: &str) -> Option<Self> {
         match value {
-            "general" => Some(Self::General),
+            "general" | "scrolling" => Some(Self::General),
             "network" => Some(Self::Network),
             "highlight" => Some(Self::Highlight),
             "appearance" => Some(Self::Appearance),
             "search" => Some(Self::Search),
             "history" => Some(Self::History),
-            "scrolling" => Some(Self::Scrolling),
             "storage" => Some(Self::Storage),
             "shortcuts" => Some(Self::Shortcuts),
             "advanced" | "windows" => Some(Self::Advanced),
@@ -170,7 +167,6 @@ impl SettingsCategory {
             Self::Appearance => "appearance",
             Self::Search => "search",
             Self::History => "history",
-            Self::Scrolling => "scrolling",
             Self::Storage => "storage",
             Self::Shortcuts => "shortcuts",
             Self::Advanced => "advanced",
@@ -190,7 +186,6 @@ impl SettingsCategory {
             Self::Appearance => crate::tr!("外观", "Appearance"),
             Self::Search => crate::tr!("搜索", "Search"),
             Self::History => crate::tr!("历史", "History"),
-            Self::Scrolling => crate::tr!("滚动与交互", "Scrolling & interaction"),
             Self::Storage => crate::tr!("存储", "Storage"),
             Self::Shortcuts => crate::tr!("快捷键", "Shortcuts"),
             Self::Advanced => crate::tr!("高级", "Advanced"),
@@ -201,8 +196,8 @@ impl SettingsCategory {
     fn description(self) -> &'static str {
         match self {
             Self::General => crate::tr!(
-                "文件显示、粘贴与关闭确认、打开目录行为",
-                "File display, paste and close confirmations, and opening folders",
+                "语言、文件与标签、滚动和交互行为",
+                "Language, files and tabs, scrolling, and interaction",
             ),
             Self::Network => crate::tr!(
                 "云端服务器、用户身份与 Cookie 连接",
@@ -223,10 +218,6 @@ impl SettingsCategory {
             Self::History => crate::tr!(
                 "文件历史、临时结果与搜索历史",
                 "File history, temporary results, and search history"
-            ),
-            Self::Scrolling => crate::tr!(
-                "滚轮行为、双击选词与预读取范围",
-                "Mouse wheel behavior, word selection, and read-ahead range",
             ),
             Self::Storage => crate::tr!(
                 "索引缓存的占用情况与清理操作",
@@ -254,8 +245,8 @@ impl SettingsCategory {
 
         let keywords = match self {
             Self::General => crate::tr!(
-                "常规 语言 中文 英文 文件与标签 在文件工具栏显示完整路径 关闭日志标签前确认 粘贴时确认 打开目录命令 路径 标签 关闭 粘贴 确认 目录 命令 full path close tab paste open language Chinese English",
-                "general language Chinese English files tabs full path close confirmation paste clipboard open folder command",
+                "常规 语言 中文 英文 文件与标签 在文件工具栏显示完整路径 关闭日志标签前确认 粘贴时确认 打开目录命令 路径 标签 关闭 粘贴 确认 目录 命令 full path close tab paste open language Chinese English 滚动与动态效果 按完整日志行滚动 每次滚动行数 自动换行时仍按完整日志行滚动 像素滚动距离 分词边界字符 减少动态效果 滚轮 像素 行数 自动换行 分词 双击 scrolling scroll motion word wrap pixel wheel boundary characters reduce",
+                "general language Chinese English files tabs full path close confirmation paste clipboard open folder command 滚动与动态效果 按完整日志行滚动 每次滚动行数 自动换行时仍按完整日志行滚动 像素滚动距离 分词边界字符 减少动态效果 滚轮 像素 行数 自动换行 分词 双击 scrolling scroll motion word wrap pixel wheel boundary characters reduce",
             ),
             Self::Network => {
                 "网络 远程服务 云端服务器 服务器地址 用户名 工号 昵称 保存 测试 连接 Cookie HTTP HTTPS network remote server user connect"
@@ -271,9 +262,6 @@ impl SettingsCategory {
             }
             Self::History => {
                 "历史 文件历史 搜索历史 临时结果 记录 管理 删除 清空 history files search temporary results"
-            }
-            Self::Scrolling => {
-                "滚动与交互 滚动与动态效果 按完整日志行滚动 每次滚动行数 自动换行时仍按完整日志行滚动 像素滚动距离 分词边界字符 相邻行预读取 减少动态效果 滚轮 像素 行数 自动换行 分词 双击 预读取 scroll motion word wrap"
             }
             Self::Storage => {
                 "存储 索引缓存 缓存大小 打开缓存文件夹 清理缓存 文件夹 清理 storage index cache"
@@ -3435,7 +3423,7 @@ impl Render for SettingsDialog {
                                     )
                                     .when(
                                         has_matches
-                                            && active_category == SettingsCategory::Scrolling,
+                                            && active_category == SettingsCategory::General,
                                         |content| {
                                             content.child(
                                                 v_flex()
