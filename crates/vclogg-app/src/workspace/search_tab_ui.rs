@@ -1,7 +1,9 @@
 use super::search_tabs::{SearchTabId, SearchTabOwner, SearchTabState};
 use super::*;
 use crate::search_context::{PersistedSearchTab, SearchTabQuery};
+use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::base::{Tab as SearchResultTab, Tabs as SearchResultTabs};
+use gpui_kit::component::spinner::Spinner;
 
 #[derive(Clone)]
 struct DraggedSearchTab {
@@ -9,16 +11,78 @@ struct DraggedSearchTab {
     id: SearchTabId,
     workspace: WeakEntity<Workspace>,
     title: SharedString,
+    selected: bool,
+    busy: bool,
+    size: Size<Pixels>,
+}
+
+fn search_tab_surface(id: impl Into<ElementId>, selected: bool, cx: &App) -> SearchResultTab {
+    // Bottom tabs join the results above: the active tab has no top border.
+    SearchResultTab::new(id)
+        .selected(selected)
+        .relative()
+        .flex()
+        .items_center()
+        .flex_shrink_0()
+        .h_full()
+        .px_2()
+        .text_sm()
+        .line_height(relative(1.5))
+        .border_t_0()
+        .border_color(cx.theme().border)
+        .text_color(cx.theme().tab_foreground)
+        .when(selected, |tab| {
+            tab.border_l_1()
+                .border_r_1()
+                .border_b_1()
+                .rounded_b(cx.theme().radius)
+                .bg(cx.theme().tab_active)
+                .text_color(cx.theme().tab_active_foreground)
+        })
+        .hover(|tab| tab.text_color(cx.theme().tab_active_foreground))
+}
+
+fn search_tab_contents(
+    label_id: impl Into<ElementId>,
+    owner: SearchTabOwner,
+    title: SharedString,
+    busy: bool,
+    close: Button,
+) -> impl IntoElement {
+    h_flex()
+        .gap_1()
+        .child(if busy {
+            Spinner::new().small().into_any_element()
+        } else {
+            Icon::new(owner.icon()).small().into_any_element()
+        })
+        .child(
+            div()
+                .id(label_id)
+                .test_support()
+                .max_w_40()
+                .line_height(relative(1.5))
+                .truncate()
+                .child(title),
+        )
+        .child(close)
 }
 
 impl Render for DraggedSearchTab {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px_2()
-            .py_1()
-            .bg(cx.theme().popover)
-            .text_color(cx.theme().popover_foreground)
-            .child(self.title.clone())
+        search_tab_surface("search-tab-drag-preview", self.selected, cx)
+            .w(self.size.width)
+            .h(self.size.height)
+            .child(search_tab_contents(
+                "search-tab-drag-preview-label",
+                self.owner,
+                self.title.clone(),
+                self.busy,
+                Button::new("search-tab-drag-preview-close")
+                    .xsmall()
+                    .ghost()
+                    .icon(IconName::Close),
+            ))
     }
 }
 
@@ -36,6 +100,9 @@ impl Workspace {
     }
 
     pub(super) fn search_panel_expanded(&self) -> bool {
+        if self.global_search.scope != SearchScope::CurrentFile {
+            return self.search_tabs.shared_panel_expanded;
+        }
         self.search_tabs
             .panel_expansion
             .get(&self.active_tab_id)
@@ -47,24 +114,23 @@ impl Workspace {
         self.search_tabs
             .panel_expansion
             .retain(|id, _| self.tabs.contains(id));
-        self.search_tabs
-            .panel_expansion
-            .insert(self.active_tab_id, expanded);
+        if self.global_search.scope == SearchScope::CurrentFile {
+            self.search_tabs
+                .panel_expansion
+                .insert(self.active_tab_id, expanded);
+        } else {
+            self.search_tabs.shared_panel_expanded = expanded;
+        }
         self.search_panel_resize_gesture = None;
         self.search_panel_resize_bounds.set(None);
         cx.notify();
     }
 
     pub(super) fn render_search_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(owner) = self.search_tab_owner() else {
-            return div().into_any_element();
-        };
-        let Some(group) = self.search_tabs.groups.get(&owner) else {
-            return div().into_any_element();
-        };
+        let keys = self.visible_search_tab_keys();
+        let active = self.active_search_tab_key();
         let workspace = cx.entity();
-        let count = group.tabs.len();
-        let track = SearchResultTabs::new(format!("search-tab-track-{owner:?}"))
+        let track = SearchResultTabs::new("search-tab-track")
             .flex()
             .items_start()
             .min_w_0()
@@ -72,150 +138,192 @@ impl Workspace {
             .h_full()
             .overflow_x_scroll()
             .track_scroll(&self.search_tabs.scroll)
-            .children(group.tabs.iter().map(|state| {
-                let id = SearchTabId(state.saved.id);
-                let title = state.title();
+            .on_prepaint({
+                let layout = self.search_tabs.layout.clone();
+                move |bounds, _, _| layout.borrow_mut().track = Some(bounds)
+            })
+            .on_drop(cx.listener(|_, _: &DraggedSearchTab, _, _| {}))
+            .children(keys.into_iter().map(|(owner, id)| {
+                let state = self.search_tabs.state(owner, id).unwrap();
+                let title = self.search_tab_title(owner, state);
                 let menu_workspace = workspace.clone();
+                let selected = active == Some((owner, id));
                 let dragged = DraggedSearchTab {
                     owner,
                     id,
                     workspace: workspace.downgrade(),
                     title: title.clone(),
+                    selected,
+                    busy: state.saved.submitted.is_some(),
+                    size: self
+                        .search_tabs
+                        .layout
+                        .borrow()
+                        .slots
+                        .get(&(owner, id))
+                        .map(|bounds| bounds.size)
+                        .unwrap_or_default(),
                 };
-                let selected = group.active == id;
-                // Bottom tabs join the results above: the active tab has no top border.
-                SearchResultTab::new(format!("search-tab-{owner:?}-{}", id.0))
-                    .selected(selected)
-                    .relative()
-                    .flex()
-                    .items_center()
-                    .flex_shrink_0()
-                    .h_full()
-                    .px_2()
-                    .text_sm()
-                    .border_t_0()
-                    .border_color(cx.theme().border)
-                    .text_color(cx.theme().tab_foreground)
-                    .when(selected, |tab| {
-                        tab.border_l_1()
-                            .border_r_1()
-                            .border_b_1()
-                            .rounded_b(cx.theme().radius)
-                            .bg(cx.theme().tab_active)
-                            .text_color(cx.theme().tab_active_foreground)
-                    })
-                    .hover(|tab| tab.text_color(cx.theme().tab_active_foreground))
-                    .child(
-                        div()
-                            .id(format!("search-tab-context-{owner:?}-{}", id.0))
-                            .absolute()
-                            .top_0()
-                            .right_0()
-                            .bottom_0()
-                            .left_0()
-                            .context_menu(move |menu, window, _| {
-                                let rename_workspace = menu_workspace.clone();
-                                let close_workspace = menu_workspace.clone();
-                                let left_workspace = menu_workspace.clone();
-                                let right_workspace = menu_workspace.clone();
-                                menu.item(
-                                    PopupMenuItem::new(crate::tr!("重命名…", "Rename…")).on_click(
+                let slot_layout = self.search_tabs.layout.clone();
+                let painted_layout = slot_layout.clone();
+                let offset = self
+                    .search_tabs
+                    .motion_offsets
+                    .get(&(owner, id))
+                    .copied()
+                    .unwrap_or_default();
+                let revision = self.search_tabs.order_revision;
+                let tab =
+                    search_tab_surface(format!("search-tab-{owner:?}-{}", id.0), selected, cx)
+                        .opacity(if self.search_tabs.hidden_drag == Some((owner, id)) {
+                            0.
+                        } else {
+                            1.
+                        })
+                        .child(
+                            div()
+                                .id(format!("search-tab-context-{owner:?}-{}", id.0))
+                                .absolute()
+                                .top_0()
+                                .right_0()
+                                .bottom_0()
+                                .left_0()
+                                .context_menu(move |menu, window, _| {
+                                    let rename_workspace = menu_workspace.clone();
+                                    let close_workspace = menu_workspace.clone();
+                                    let left_workspace = menu_workspace.clone();
+                                    let right_workspace = menu_workspace.clone();
+                                    menu.item(
+                                        PopupMenuItem::new(crate::tr!("重命名…", "Rename…"))
+                                            .on_click(window.listener_for(
+                                                &rename_workspace,
+                                                move |this, _, window, cx| {
+                                                    this.rename_search_tab_dialog(
+                                                        owner, id, window, cx,
+                                                    )
+                                                },
+                                            )),
+                                    )
+                                    .item(PopupMenuItem::new(crate::tr!("关闭", "Close")).on_click(
                                         window.listener_for(
-                                            &rename_workspace,
-                                            move |this, _, window, cx| {
-                                                this.rename_search_tab_dialog(owner, id, window, cx)
-                                            },
-                                        ),
-                                    ),
-                                )
-                                .item(
-                                    PopupMenuItem::new(crate::tr!("关闭", "Close"))
-                                        .disabled(count <= 1)
-                                        .on_click(window.listener_for(
                                             &close_workspace,
                                             move |this, _, window, cx| {
                                                 this.close_search_tab(owner, id, window, cx)
                                             },
-                                        )),
-                                )
-                                .separator()
-                                .item(
-                                    PopupMenuItem::new(crate::tr!("向左移动", "Move left"))
-                                        .on_click(window.listener_for(
-                                            &left_workspace,
-                                            move |this, _, window, cx| {
-                                                this.move_search_tab_by(owner, id, -1, window, cx)
-                                            },
-                                        )),
-                                )
-                                .item(
-                                    PopupMenuItem::new(crate::tr!("向右移动", "Move right"))
-                                        .on_click(window.listener_for(
-                                            &right_workspace,
-                                            move |this, _, window, cx| {
-                                                this.move_search_tab_by(owner, id, 1, window, cx)
-                                            },
-                                        )),
-                                )
-                            }),
-                    )
-                    .accessibility_label(title.clone())
-                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                        this.activate_search_tab(owner, id, window, cx);
-                        this.search_tabs.focus.focus(window, cx);
-                        if event.click_count() == 2 {
-                            this.rename_search_tab_dialog(owner, id, window, cx);
-                        }
-                    }))
-                    .on_aux_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                        if event.is_middle_click() {
-                            cx.stop_propagation();
-                            this.close_search_tab(owner, id, window, cx);
-                        }
-                    }))
-                    .on_drag(dragged, |dragged, _, _, cx| cx.new(|_| dragged.clone()))
-                    .drag_over::<DraggedSearchTab>(|this, _, _, cx| {
-                        this.border_l_2().border_color(cx.theme().primary)
-                    })
-                    .on_drop(
-                        cx.listener(move |this, dragged: &DraggedSearchTab, window, cx| {
-                            if dragged.owner == owner
-                                && dragged.workspace == cx.entity().downgrade()
-                            {
-                                this.move_search_tab_before(owner, dragged.id, id, window, cx);
+                                        ),
+                                    ))
+                                    .separator()
+                                    .item(
+                                        PopupMenuItem::new(crate::tr!("向左移动", "Move left"))
+                                            .on_click(window.listener_for(
+                                                &left_workspace,
+                                                move |this, _, window, cx| {
+                                                    this.move_search_tab_by(
+                                                        owner, id, -1, window, cx,
+                                                    )
+                                                },
+                                            )),
+                                    )
+                                    .item(
+                                        PopupMenuItem::new(crate::tr!("向右移动", "Move right"))
+                                            .on_click(window.listener_for(
+                                                &right_workspace,
+                                                move |this, _, window, cx| {
+                                                    this.move_search_tab_by(
+                                                        owner, id, 1, window, cx,
+                                                    )
+                                                },
+                                            )),
+                                    )
+                                }),
+                        )
+                        .accessibility_label(title.clone())
+                        .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                            this.activate_search_tab(owner, id, window, cx);
+                            this.search_tabs.focus.focus(window, cx);
+                            if event.click_count() == 2 {
+                                this.rename_search_tab_dialog(owner, id, window, cx);
                             }
-                        }),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .child(div().max_w_40().truncate().child(title.clone()))
-                            .when(state.saved.submitted.is_some(), |this| {
-                                this.child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(crate::tr!("等待完成", "Pending")),
+                        }))
+                        .on_aux_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                            if event.is_middle_click() {
+                                cx.stop_propagation();
+                                this.close_search_tab(owner, id, window, cx);
+                            }
+                        }))
+                        .on_drag(dragged, |dragged, cursor_offset, window, cx| {
+                            let mut preview = dragged.clone();
+                            _ = dragged.workspace.update(cx, |this, _| {
+                                if let Some(bounds) = this
+                                    .search_tabs
+                                    .layout
+                                    .borrow()
+                                    .slots
+                                    .get(&(dragged.owner, dragged.id))
+                                {
+                                    preview.size = bounds.size;
+                                }
+                            });
+                            let view = cx.new(|_| preview);
+                            _ = dragged.workspace.update(cx, |this, cx| {
+                                this.begin_tab_drag(
+                                    super::tab_drag::TabDragKey::Search(dragged.owner, dragged.id),
+                                    view.clone().into(),
+                                    cursor_offset,
+                                    cx,
+                                );
+                                this.move_search_tab_drag(window.mouse_position().x, window, cx);
+                            });
+                            view
+                        })
+                        .child(search_tab_contents(
+                            format!("search-tab-label-{owner:?}-{}", id.0),
+                            owner,
+                            title.clone(),
+                            state.saved.submitted.is_some(),
+                            crate::button_accessibility::with_label(
+                                Button::new(format!("close-search-tab-{owner:?}-{}", id.0))
+                                    .xsmall()
+                                    .ghost()
+                                    .icon(IconName::Close),
+                                crate::tr!("关闭搜索标签", "Close search tab"),
+                            )
+                            .tooltip(crate::tr_args!("关闭 {}", "Close {}", title))
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.close_search_tab(owner, id, window, cx);
+                                },
+                            )),
+                        ))
+                        .on_prepaint(move |bounds, _, _| {
+                            painted_layout
+                                .borrow_mut()
+                                .painted
+                                .insert((owner, id), bounds);
+                        })
+                        .map(|tab| {
+                            if offset == px(0.) {
+                                tab.into_any_element()
+                            } else {
+                                tab.with_animation(
+                                    ("search-tab-reorder", revision),
+                                    Animation::new(super::tab_drag::ANIMATION_DURATION)
+                                        .with_easing(ease_out_cubic),
+                                    move |tab, progress| tab.left(offset * (1. - progress)),
                                 )
-                            })
-                            .child(
-                                crate::button_accessibility::with_label(
-                                    Button::new(("close-search-tab", id.0))
-                                        .xsmall()
-                                        .ghost()
-                                        .icon(IconName::Close)
-                                        .disabled(count <= 1),
-                                    crate::tr!("关闭搜索标签", "Close search tab"),
-                                )
-                                .tooltip(crate::tr_args!("关闭 {}", "Close {}", title))
-                                .on_click(cx.listener(
-                                    move |this, _, window, cx| {
-                                        cx.stop_propagation();
-                                        this.close_search_tab(owner, id, window, cx);
-                                    },
-                                )),
-                            ),
-                    )
+                                .into_any_element()
+                            }
+                        });
+                div()
+                    .id(format!("search-tab-slot-{owner:?}-{}", id.0))
+                    .flex()
+                    .flex_shrink_0()
+                    .h_full()
+                    .on_prepaint(move |bounds, _, _| {
+                        slot_layout.borrow_mut().slots.insert((owner, id), bounds);
+                    })
+                    .child(tab)
             }));
         h_flex()
             .id("search-tabs")
@@ -223,7 +331,7 @@ impl Workspace {
             .key_context("SearchTabs")
             .min_w_0()
             .w_full()
-            .h(px(30.))
+            .h_8()
             .gap_1()
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if !this.search_tabs.focus.is_focused(window) {
@@ -243,15 +351,14 @@ impl Workspace {
                         }
                     }
                     "home" | "end" => {
-                        let group = &this.search_tabs.groups[&owner];
+                        let keys = this.visible_search_tab_keys();
                         let target = if key == "home" {
-                            group.tabs.first()
+                            keys.first()
                         } else {
-                            group.tabs.last()
-                        }
-                        .map(|tab| SearchTabId(tab.saved.id));
-                        if let Some(target) = target {
-                            this.activate_search_tab(owner, target, window, cx);
+                            keys.last()
+                        };
+                        if let Some(&(owner, id)) = target {
+                            this.activate_search_tab(owner, id, window, cx);
                         }
                     }
                     "f2" => this.rename_search_tab_dialog(owner, id, window, cx),
@@ -266,28 +373,74 @@ impl Workspace {
     }
 
     pub(super) fn render_add_search_tab(&self, cx: &mut Context<Self>) -> AnyElement {
-        let can_add = self
-            .search_tab_owner()
-            .is_some_and(|owner| self.search_tabs.groups.contains_key(&owner));
+        let workspace = cx.entity();
+        let file_owner = self
+            .active_document()
+            .filter(|tab| tab.load_state == DocumentLoadState::Ready)
+            .map(|tab| SearchTabOwner::File(tab.id));
         crate::button_accessibility::with_label(
             Button::new("add-search-tab")
                 .small()
                 .ghost()
-                .icon(IconName::Plus)
-                .disabled(!can_add),
+                .icon(IconName::Plus),
             crate::tr!("新增搜索标签", "Add search tab"),
         )
         .tooltip(crate::tr!("新增搜索标签", "Add search tab"))
-        .on_click(cx.listener(|this, _, window, cx| this.add_search_tab(window, cx)))
+        .dropdown_menu_with_anchor(gpui_kit::Anchor::BottomLeft, move |menu, window, cx| {
+            let mut menu = Self::popup_menu_with_workspace_action_context(menu, &workspace, cx);
+            for (label, owner, icon) in [
+                (
+                    crate::tr!("当前文件", "Current file"),
+                    file_owner,
+                    gpui_kit::assets::IconName::Search,
+                ),
+                (
+                    crate::tr!("全局搜索", "Global search"),
+                    Some(SearchTabOwner::AllOpen),
+                    gpui_kit::assets::IconName::Earth,
+                ),
+                (
+                    crate::tr!("目录搜索", "Directory search"),
+                    Some(SearchTabOwner::Directory),
+                    gpui_kit::assets::IconName::FolderOpen,
+                ),
+            ] {
+                menu = menu.item(
+                    PopupMenuItem::new(label)
+                        .icon(icon)
+                        .disabled(owner.is_none())
+                        .on_click(window.listener_for(&workspace, move |this, _, window, cx| {
+                            if let Some(owner) = owner {
+                                this.add_search_tab(owner, window, cx);
+                            }
+                        })),
+                );
+            }
+            menu
+        })
         .into_any_element()
     }
 
-    fn add_search_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.sync_search_tab(window, cx);
+    fn add_search_tab(
+        &mut self,
+        owner: SearchTabOwner,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.capture_active_search_tab(cx);
-        let Some((owner, current)) = self.active_search_tab_key() else {
+        let existed = self
+            .search_tabs
+            .groups
+            .get(&owner)
+            .is_some_and(|group| !group.tabs.is_empty());
+        self.ensure_search_tab_group(owner, cx);
+        let current = self.search_tabs.groups[&owner].active;
+        if !existed {
+            self.activate_search_tab(owner, current, window, cx);
+            self.set_search_panel_expanded(true, cx);
+            self.search_input_focus_handle(cx).focus(window, cx);
             return;
-        };
+        }
         let Some(source) = self.search_tabs.state(owner, current).cloned() else {
             return;
         };
@@ -316,6 +469,7 @@ impl Workspace {
         state.context.word_wrap = state.saved.context.word_wrap;
         group.tabs.push(state);
         self.activate_search_tab(owner, id, window, cx);
+        self.set_search_panel_expanded(true, cx);
         self.search_input_focus_handle(cx).focus(window, cx);
     }
 
@@ -326,10 +480,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.search_tab_owner() != Some(owner) || self.search_tabs.state(owner, id).is_none() {
+        if !self.visible_search_tab_keys().contains(&(owner, id)) {
             return;
         }
         if self.search_tabs.installed == Some((owner, id)) {
+            self.set_search_panel_expanded(true, cx);
             self.cancel_search_tab_activation();
             return;
         }
@@ -344,14 +499,33 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.capture_active_search_tab(cx);
+        self.cancel_pending_tab_activation();
+        if let SearchTabOwner::File(document_id) = owner
+            && self.active_tab_id != WorkspaceTabId::Document(document_id)
+        {
+            // File activation syncs its remembered search. Preserve the preloaded frame
+            // for the explicitly requested session instead of letting that sync consume it.
+            let frame = self.search_tabs.prepared_frame.take();
+            self.commit_workspace_tab_activation(
+                WorkspaceTabId::Document(document_id),
+                false,
+                window,
+                cx,
+            );
+            self.search_tabs.prepared_frame = frame;
+        }
+        self.global_search.scope = owner.scope();
+        self.set_search_panel_expanded(true, cx);
         self.search_tabs.groups.get_mut(&owner).unwrap().active = id;
         self.install_search_tab(owner, id, window, cx);
-        if let Some(group) = self.search_tabs.groups.get(&owner)
-            && let Some(ix) = group.tabs.iter().position(|tab| tab.saved.id == id.0)
+        if let Some(ix) = self
+            .visible_search_tab_keys()
+            .iter()
+            .position(|key| *key == (owner, id))
         {
             self.search_tabs.scroll.scroll_to_item(ix);
         }
-        self.persist_search_tabs(window, cx);
+        self.persist_search_tab_changes(owner, window, cx);
     }
 
     fn close_search_tab(
@@ -361,28 +535,45 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.search_tab_owner() != Some(owner) {
-            return;
-        }
-        let Some(group) = self.search_tabs.groups.get(&owner) else {
+        let keys = self.visible_search_tab_keys();
+        let Some(visible_ix) = keys.iter().position(|key| *key == (owner, id)) else {
             return;
         };
-        if group.tabs.len() <= 1 {
-            return;
-        }
-        let Some(ix) = group.tabs.iter().position(|tab| tab.saved.id == id.0) else {
-            return;
-        };
+        let was_active = self.active_search_tab_key() == Some((owner, id));
         self.capture_active_search_tab(cx);
+        self.cancel_search_tab_activation();
         self.search_tabs.cancel(owner, id);
-        let group = self.search_tabs.groups.get_mut(&owner).unwrap();
-        group.tabs.remove(ix);
-        if group.active == id {
-            group.active = SearchTabId(group.tabs[ix.min(group.tabs.len() - 1)].saved.id);
-            let next = group.active;
-            self.install_search_tab(owner, next, window, cx);
+        self.search_tabs
+            .groups
+            .get_mut(&owner)
+            .unwrap()
+            .close(owner, id);
+        {
+            let mut layout = self.search_tabs.layout.borrow_mut();
+            layout.slots.remove(&(owner, id));
+            layout.painted.remove(&(owner, id));
         }
-        self.persist_search_tabs(window, cx);
+        self.search_tabs.motion_offsets.remove(&(owner, id));
+        if was_active {
+            self.search_tabs.installed = None;
+            let remaining = self.visible_search_tab_keys();
+            if let Some(&(next_owner, next_id)) =
+                remaining.get(visible_ix.min(remaining.len().saturating_sub(1)))
+            {
+                self.commit_search_tab_activation(next_owner, next_id, window, cx);
+            } else {
+                self.global_search.scope = SearchScope::CurrentFile;
+                self.global_search.results_visible = false;
+                self.view_state.active_search = None;
+                self.query
+                    .update(cx, |input, cx| input.set_value("", window, cx));
+                self.global_table.update(cx, |table, cx| {
+                    table.delegate_mut().set_groups(Vec::new());
+                    table.refresh(cx);
+                });
+            }
+        }
+        self.persist_search_tab_changes(owner, window, cx);
         self.pump_search_tab_queue(window, cx);
         cx.notify();
     }
@@ -395,15 +586,13 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(group) = self.search_tabs.groups.get(&owner) else {
+        let keys = self.visible_search_tab_keys();
+        let Some(ix) = keys.iter().position(|key| *key == (owner, id)) else {
             return;
         };
-        let Some(ix) = group.tabs.iter().position(|tab| tab.saved.id == id.0) else {
-            return;
-        };
-        let next = ix.saturating_add_signed(delta).min(group.tabs.len() - 1);
-        let target = SearchTabId(group.tabs[next].saved.id);
-        self.activate_search_tab(owner, target, window, cx);
+        let next = ix.saturating_add_signed(delta).min(keys.len() - 1);
+        let (owner, id) = keys[next];
+        self.activate_search_tab(owner, id, window, cx);
     }
 
     fn move_search_tab_by(
@@ -414,42 +603,12 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(group) = self.search_tabs.groups.get_mut(&owner) else {
+        let keys = self.visible_search_tab_keys();
+        let Some(ix) = keys.iter().position(|key| *key == (owner, id)) else {
             return;
         };
-        let Some(ix) = group.tabs.iter().position(|tab| tab.saved.id == id.0) else {
-            return;
-        };
-        let next = ix.saturating_add_signed(delta).min(group.tabs.len() - 1);
-        group.tabs.swap(ix, next);
-        self.persist_search_tabs(window, cx);
-        cx.notify();
-    }
-
-    fn move_search_tab_before(
-        &mut self,
-        owner: SearchTabOwner,
-        id: SearchTabId,
-        target: SearchTabId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if id == target {
-            return;
-        }
-        let Some(group) = self.search_tabs.groups.get_mut(&owner) else {
-            return;
-        };
-        let Some(from) = group.tabs.iter().position(|tab| tab.saved.id == id.0) else {
-            return;
-        };
-        let Some(to) = group.tabs.iter().position(|tab| tab.saved.id == target.0) else {
-            return;
-        };
-        let tab = group.tabs.remove(from);
-        group.tabs.insert(to, tab);
-        self.persist_search_tabs(window, cx);
-        cx.notify();
+        let next = ix.saturating_add_signed(delta).min(keys.len() - 1);
+        self.reorder_search_tab((owner, id), next, window, cx);
     }
 
     fn rename_search_tab_dialog(
@@ -462,7 +621,8 @@ impl Workspace {
         let Some(state) = self.search_tabs.state(owner, id) else {
             return;
         };
-        let rename = cx.new(|cx| RenameTabDialog::new(&state.title(), window, cx));
+        let rename =
+            cx.new(|cx| RenameTabDialog::new(&self.search_tab_title(owner, state), window, cx));
         let input = rename.read(cx).input();
         input.focus_handle(cx).focus(window, cx);
         input.update(cx, |input, cx| input.select_all(window, cx));
@@ -498,7 +658,7 @@ impl Workspace {
                         if let Some(state) = this.search_tabs.state_mut(owner, id) {
                             state.saved.name = Some(title);
                         }
-                        this.persist_search_tabs(window, cx);
+                        this.persist_search_tab_changes(owner, window, cx);
                         cx.notify();
                     });
                     true

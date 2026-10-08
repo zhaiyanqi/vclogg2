@@ -125,7 +125,11 @@ impl Workspace {
     ) {
         // Save the outgoing scope before directory-session restoration changes
         // the shared query input. Reuse directory history and cancellation rules.
-        self.set_search_scope(SearchScope::Directory, window, cx);
+        let owner = search_tabs::SearchTabOwner::Directory;
+        self.ensure_search_tab_group(owner, cx);
+        let id = self.search_tabs.groups[&owner].scope_target(owner).unwrap();
+        self.cancel_search_tab_activation();
+        self.commit_search_tab_activation(owner, id, window, cx);
         let options = DirectorySearchOptions {
             directory: Some(directory),
             ..self.global_search.directory_options.clone()
@@ -1247,12 +1251,14 @@ impl Workspace {
                 .search_tabs
                 .groups
                 .get(&search_tabs::SearchTabOwner::AllOpen)
-                .map(search_tabs::SearchTabGroup::persisted),
+                .map(search_tabs::SearchTabGroup::persisted)
+                .or_else(|| Some(Default::default())),
             directory_tabs: self
                 .search_tabs
                 .groups
                 .get(&search_tabs::SearchTabOwner::Directory)
-                .map(search_tabs::SearchTabGroup::persisted),
+                .map(search_tabs::SearchTabGroup::persisted)
+                .or_else(|| Some(Default::default())),
             ..WorkspaceSearchState::default()
         };
         state.normalize_directory_sessions();
@@ -1639,27 +1645,23 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.global_search.scope == next_scope {
-            return;
-        }
-        if let Some(owner) = self.search_tab_owner() {
-            self.ensure_search_tab_group(owner, cx);
-        }
-        self.capture_active_search_tab(cx);
-        self.commit_search_scope(next_scope, window, cx);
-    }
-
-    fn commit_search_scope(
-        &mut self,
-        next_scope: SearchScope,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.global_search.scope = next_scope;
-        self.sync_search_tab(window, cx);
-        self.schedule_workspace_search_state_save(window, cx);
+        let owner = match next_scope {
+            SearchScope::CurrentFile => {
+                let Some(tab) = self
+                    .active_document()
+                    .filter(|tab| tab.load_state == DocumentLoadState::Ready)
+                else {
+                    return;
+                };
+                search_tabs::SearchTabOwner::File(tab.id)
+            }
+            SearchScope::AllOpenFiles => search_tabs::SearchTabOwner::AllOpen,
+            SearchScope::Directory => search_tabs::SearchTabOwner::Directory,
+        };
+        self.ensure_search_tab_group(owner, cx);
+        let id = self.search_tabs.groups[&owner].scope_target(owner).unwrap();
+        self.activate_search_tab(owner, id, window, cx);
         self.search_input_focus_handle(cx).focus(window, cx);
-        cx.notify();
     }
 
     /// All windows and search scopes share application-wide matching options.

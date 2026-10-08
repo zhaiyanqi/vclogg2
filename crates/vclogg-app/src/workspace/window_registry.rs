@@ -350,7 +350,7 @@ impl Workspace {
         });
     }
 
-    fn cross_window_tab_drop_target(
+    pub(super) fn cross_window_tab_drop_target(
         position: Point<Pixels>,
         window: &mut Window,
         cx: &mut App,
@@ -458,6 +458,23 @@ impl Workspace {
         }
         if let Some(next_target) = next_target {
             Self::set_cross_window_drop_visual(&next_target, true, cx);
+        }
+    }
+
+    pub(super) fn cancel_cross_window_tab_drag(source: gpui_kit::EntityId, cx: &mut App) {
+        let drag = cx.update_global::<WorkspaceWindowRegistry, _>(|registry, _| {
+            if registry
+                .cross_window_tab_drag
+                .as_ref()
+                .is_some_and(|drag| drag.source.entity_id() == source)
+            {
+                registry.cross_window_tab_drag.take()
+            } else {
+                None
+            }
+        });
+        if let Some(target) = drag.and_then(|drag| drag.target) {
+            Self::set_cross_window_drop_visual(&target, false, cx);
         }
     }
 

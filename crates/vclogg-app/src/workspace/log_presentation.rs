@@ -3624,20 +3624,17 @@ impl Workspace {
             .unwrap_or_else(|| format!("core {}", crate::build_info::VERSION));
 
         StatusBar::new()
-            .h(px(30.))
+            .h_8()
             .py_0()
             .border_t_0()
             .px(px(12.))
             .gap(px(8.))
             .text_size(px(11.))
             .bg(ui_theme::footer_material(&colors))
-            .when(
-                self.search_panel_visible() && self.search_panel_expanded(),
-                |bar| {
-                    bar.left(self.render_add_search_tab(cx))
-                        .child(self.render_search_tabs(cx))
-                },
-            )
+            .when(self.search_panel_visible(), |bar| {
+                bar.left(self.render_add_search_tab(cx))
+                    .child(self.render_search_tabs(cx))
+            })
             .right(
                 h_flex()
                     .gap_2()

@@ -57,11 +57,11 @@ impl IconNamed for AppIcon {
 
 pub(crate) struct Assets;
 
-gpui_kit::assets::icon_assets!(SearchInputAssets, [TextWrap]);
+gpui_kit::assets::icon_assets!(SearchAssets, [TextWrap, Earth]);
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        if let Some(icon) = SearchInputAssets.load(path)? {
+        if let Some(icon) = SearchAssets.load(path)? {
             return Ok(Some(icon));
         }
         if let Some(icon) = AppIcon::ALL
@@ -75,7 +75,7 @@ impl AssetSource for Assets {
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         let mut assets = gpui_kit::assets::Assets.list(path)?;
-        assets.extend(SearchInputAssets.list(path)?);
+        assets.extend(SearchAssets.list(path)?);
         assets.extend(
             AppIcon::ALL
                 .into_iter()
@@ -93,6 +93,13 @@ mod tests {
     #[test]
     fn multiline_search_icon_is_bundled() {
         let path = gpui_kit::assets::IconName::TextWrap.path();
+        assert!(Assets.load(&path).unwrap().is_some());
+        assert!(Assets.list("icons/").unwrap().contains(&path));
+    }
+
+    #[test]
+    fn global_search_earth_icon_is_bundled() {
+        let path = gpui_kit::assets::IconName::Earth.path();
         assert!(Assets.load(&path).unwrap().is_some());
         assert!(Assets.list("icons/").unwrap().contains(&path));
     }

@@ -1,4 +1,5 @@
 use super::*;
+use gpui_kit::base::TestSupportExt as _;
 
 impl Workspace {
     pub(super) fn render_workspace_tab(
@@ -20,7 +21,7 @@ impl Workspace {
                 .find(|tab| tab.id == document_id)
                 .is_some_and(|tab| tab.file.custom_title.is_some())
         });
-        let dragged_tab = DraggedTab::new(tab_id, tab_title.clone(), source_workspace.clone());
+        let dragged_tab = DraggedTab::new(tab_id, source_workspace.clone());
         let tab_menu_state = TabMenuState {
             tab_ix: ix,
             tab_count,
@@ -62,7 +63,22 @@ impl Workspace {
                 ElementId::from(("new-tab-context-target", id)),
             ),
         };
+        let offset = self
+            .tab_drag
+            .file_offsets
+            .get(&tab_id)
+            .copied()
+            .unwrap_or_default()
+            * (1. - self.tab_drag.file_progress);
+        let painted = self.tab_drag.file_bounds.clone();
         Tab::new()
+            .relative()
+            .left(offset)
+            .opacity(if self.tab_drag.file_hidden == Some(tab_id) {
+                0.
+            } else {
+                1.
+            })
             .aria_label(tab_title.clone())
             .selected(selected)
             .on_click(cx.listener(move |this, _, window, cx| {
@@ -73,22 +89,33 @@ impl Workspace {
             })
             .on_prepaint(move |bounds, _, _| {
                 if let Some(slot) = tab_layout.borrow_mut().tabs.get_mut(ix) {
-                    *slot = bounds;
+                    *slot = Bounds::new(
+                        point(bounds.origin.x - offset, bounds.origin.y),
+                        bounds.size,
+                    );
                 }
+                painted.borrow_mut().insert(tab_id, bounds);
             })
-            .on_drag(dragged_tab, |dragged, position, _, cx| {
-                cx.new(|_| dragged.clone().position(position))
+            .on_drag(dragged_tab, |dragged, position, window, cx| {
+                let mut preview = dragged.clone().position(position);
+                _ = dragged.source.update(cx, |this, _| {
+                    if let Some(bounds) = this.tab_drag.file_bounds.borrow().get(&dragged.tab_id) {
+                        preview.size = bounds.size;
+                    }
+                });
+                let view = cx.new(|_| preview);
+                _ = dragged.source.update(cx, |this, cx| {
+                    this.begin_tab_drag(
+                        super::tab_drag::TabDragKey::File(dragged.tab_id),
+                        view.clone().into(),
+                        position,
+                        cx,
+                    );
+                    this.move_file_tab_drag(window.mouse_position().x, window, cx);
+                });
+                view
             })
-            .drag_over::<DraggedTab>(move |this, dragged, _, cx| {
-                if dragged.tab_id == tab_id {
-                    this
-                } else {
-                    this.border_l_2().border_color(cx.theme().primary)
-                }
-            })
-            .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
-                this.reorder_tab(dragged.tab_id, ix, window, cx);
-            }))
+            .on_drop(cx.listener(|_, _: &DraggedTab, _, _| {}))
             .on_aux_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 if event.is_middle_click() {
                     this.request_close_workspace_tabs(BTreeSet::from([tab_id]), window, cx);
@@ -120,6 +147,33 @@ impl Workspace {
                     }),
             )
             .child(self.render_workspace_tab_body(tab_id, cx).mx(px(-6.)))
+    }
+
+    pub(super) fn render_workspace_tab_preview(
+        &self,
+        id: WorkspaceTabId,
+        size: Size<Pixels>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let element_id = match id {
+            WorkspaceTabId::Document(id) => ElementId::from(("document-tab-drag-preview", id)),
+            WorkspaceTabId::New(id) => ElementId::from(("new-tab-drag-preview", id)),
+        };
+        div()
+            .id(element_id)
+            .test_support()
+            .w(size.width)
+            .h(size.height)
+            .child(
+                Tab::new()
+                    .segmented()
+                    .with_size(gpui_kit::component::Size::Large)
+                    .selected(self.active_tab_id == id)
+                    .w(size.width)
+                    .h(size.height)
+                    .child(self.render_workspace_tab_body(id, cx).mx(px(-6.))),
+            )
+            .into_any_element()
     }
 
     fn render_workspace_tab_body(
