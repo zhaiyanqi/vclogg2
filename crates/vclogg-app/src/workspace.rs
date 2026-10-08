@@ -1747,7 +1747,7 @@ pub struct Workspace {
     history_clearing: bool,
     pinned_updating: bool,
     app_settings: AppSettings,
-    pending_editor_font_zoom: Option<(u16, Task<()>)>,
+    pending_editor_font_zoom: Option<u16>,
     scale_factor: f32,
     color_labels: Vec<ColorLabel>,
     last_color_label_id: Option<String>,
