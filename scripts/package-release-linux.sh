@@ -63,12 +63,12 @@ install -m 644 \
   "$repository_root/third-party/ripgrep-LICENSE-MIT" \
   "$stage_directory/ripgrep-LICENSE-MIT"
 install -m 644 \
-  "$repository_root/crates/vclogg-app/resources/windows/vclogg2.png" \
+  "$repository_root/crates/vclogg-app/resources/icons/runtime/512/soft.png" \
   "$stage_directory/vclogg2.png"
 mkdir -p "$stage_directory/icons"
-for icon in soft compact illustration sticker; do
+for icon in compact illustration sticker; do
   install -m 644 \
-    "$repository_root/crates/vclogg-app/resources/icons/$icon.png" \
+    "$repository_root/crates/vclogg-app/resources/icons/runtime/512/$icon.png" \
     "$stage_directory/icons/$icon.png"
 done
 install -m 755 \

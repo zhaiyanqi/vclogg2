@@ -12,8 +12,6 @@ path = "src/lib.rs"
 anyhow.workspace = true
 rusqlite.workspace = true
 roaring.workspace = true
-serde.workspace = true
-serde_json.workspace = true
 
 [lints]
 workspace = true
