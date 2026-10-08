@@ -20,8 +20,9 @@ use crate::{
 };
 
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
-pub const STATE_SCHEMA_VERSION: u32 = 21;
+pub const STATE_SCHEMA_VERSION: u32 = 22;
 mod ai;
+mod ai_command_approvals;
 mod ai_memory;
 pub use ai_memory::AiMemoryRecord;
 
@@ -1411,6 +1412,11 @@ fn initialize_schema(connection: &Connection, defaults: &StateMigrationDefaults)
                  payload TEXT NOT NULL,
                  revision INTEGER NOT NULL DEFAULT 1,
                  updated_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS ai_command_approvals (
+                 directory TEXT NOT NULL,
+                 command TEXT NOT NULL,
+                 PRIMARY KEY(directory,command)
              );
              CREATE TABLE IF NOT EXISTS ai_conversation_flags (
                  id TEXT PRIMARY KEY,
