@@ -1999,9 +1999,9 @@ impl Workspace {
                                 } else {
                                     IconName::ChevronUp
                                 })
-                                .w(control_height)
+                                .w(px(34.).max(control_height))
                                 .h(control_height)
-                                .selected(panel_expanded),
+                                .rounded(px(10.)),
                             panel_toggle_label,
                         )
                         .tooltip(panel_toggle_label)
