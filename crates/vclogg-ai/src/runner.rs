@@ -36,6 +36,7 @@ pub struct RunExtensions {
     summarized_messages: usize,
     context_summary: String,
     mode: AgentMode,
+    command_approvals: Option<std::sync::Arc<dyn CommandApprovalStore>>,
 }
 impl RunExtensions {
     pub fn from_settings(settings: &AiSettings) -> Self {
@@ -51,6 +52,7 @@ impl RunExtensions {
             summarized_messages: 0,
             context_summary: String::new(),
             mode: AgentMode::default(),
+            command_approvals: None,
         }
     }
 
@@ -60,6 +62,14 @@ impl RunExtensions {
             .min(conversation.messages.len());
         self.context_summary = conversation.context_summary.clone();
         self.mode = conversation.mode;
+        self
+    }
+
+    pub fn with_command_approvals(
+        mut self,
+        store: std::sync::Arc<dyn CommandApprovalStore>,
+    ) -> Self {
+        self.command_approvals = Some(store);
         self
     }
 
@@ -315,16 +325,24 @@ fn install_summary(
     through
 }
 
+#[derive(Debug, PartialEq)]
+enum ExternalApproval {
+    Deny,
+    Once,
+    Always,
+}
+
 async fn confirm_external(
     decision: ToolDecision,
+    remember: bool,
     call: &ToolCall,
     cancellation: &Cancellation,
     events: &async_channel::Sender<AgentEvent>,
     results: &async_channel::Receiver<(String, ToolResult)>,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<ExternalApproval> {
     let reason = match decision {
-        ToolDecision::Automatic => return Ok(true),
-        ToolDecision::Deny(_) => return Ok(false),
+        ToolDecision::Automatic => return Ok(ExternalApproval::Once),
+        ToolDecision::Deny(_) => return Ok(ExternalApproval::Deny),
         ToolDecision::Confirm(reason) => reason,
     };
     events
@@ -343,7 +361,11 @@ async fn confirm_external(
                     description: "仅授权显示的目标和参数 / Only the displayed target and arguments"
                         .into(),
                 },
-            ],
+            ].into_iter().chain(remember.then(|| QuestionOption {
+                id: "allow_always".into(),
+                label: "总是允许 / Always allow".into(),
+                description: "保存完整命令和工作目录；可在 AI 设置 → 工具中撤销 / Save exact command and directory; revoke in AI Settings → Tools".into(),
+            })).collect(),
             allow_free_text: false,
             detail: format!(
                 "{reason}\n{}\n{}",
@@ -359,11 +381,17 @@ async fn confirm_external(
     if id != call.id {
         anyhow::bail!("Confirmation identity mismatch");
     }
-    Ok(response.value["option_id"] == "allow")
+    Ok(match response.value["option_id"].as_str() {
+        Some("allow") => ExternalApproval::Once,
+        Some("allow_always") if remember => ExternalApproval::Always,
+        _ => ExternalApproval::Deny,
+    })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_shell_tool(
     roots: &[std::path::PathBuf],
+    approvals: &Option<std::sync::Arc<dyn CommandApprovalStore>>,
     workspace_directory: &std::path::Path,
     call: &ToolCall,
     cancellation: &Cancellation,
@@ -388,6 +416,7 @@ async fn execute_shell_tool(
             }
         },
     };
+    let root = root.canonicalize()?;
     let command = call.arguments["command"].as_str().unwrap_or_default();
     let decision = match crate::shell::classify(command) {
         ToolDecision::Deny(reason) => return Ok(ToolResult::error(reason)),
@@ -397,9 +426,46 @@ async fn execute_shell_tool(
         )),
         decision => decision,
     };
-    let allowed = confirm_external(decision, call, cancellation, events, results).await?;
-    if !allowed {
+    let remembered = if matches!(decision, ToolDecision::Confirm(_)) {
+        if let Some(store) = approvals.clone() {
+            let directory = root.clone();
+            let command = command.to_owned();
+            tokio::task::spawn_blocking(move || store.is_allowed(&directory, &command)).await??
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    let approval = if remembered {
+        ExternalApproval::Once
+    } else {
+        confirm_external(
+            decision,
+            approvals.is_some(),
+            call,
+            cancellation,
+            events,
+            results,
+        )
+        .await?
+    };
+    if approval == ExternalApproval::Deny {
         return Ok(ToolResult::ok(json!({"status":"denied","command":command})));
+    }
+    if cancellation.is_cancelled() {
+        anyhow::bail!("Analysis stopped");
+    }
+    if approval == ExternalApproval::Always {
+        let store = approvals
+            .clone()
+            .expect("remember offered only with a store");
+        let directory = root.clone();
+        let command = command.to_owned();
+        tokio::task::spawn_blocking(move || store.allow(&directory, &command)).await??;
+    }
+    if cancellation.is_cancelled() {
+        anyhow::bail!("Analysis stopped");
     }
     events
         .send(AgentEvent::ExtensionToolStarted(call.clone()))
@@ -738,6 +804,7 @@ async fn run(
             } else if route == Some(ToolRoute::Shell) {
                 execute_shell_tool(
                     &project_directories,
+                    &extensions.command_approvals,
                     &workspace_directory,
                     &call,
                     cancellation,
@@ -754,10 +821,16 @@ async fn run(
                 match mcp.decision(&call) {
                     Err(error) => ToolResult::error(error.to_string()),
                     Ok(decision) => {
-                        let allowed =
-                            confirm_external(decision, &call, cancellation, events, &results)
-                                .await?;
-                        if allowed {
+                        let allowed = confirm_external(
+                            decision,
+                            false,
+                            &call,
+                            cancellation,
+                            events,
+                            &results,
+                        )
+                        .await?;
+                        if allowed != ExternalApproval::Deny {
                             events
                                 .send(AgentEvent::ExtensionToolStarted(call.clone()))
                                 .await?;
@@ -915,6 +988,7 @@ mod tests {
             .unwrap();
         let result = execute_shell_tool(
             std::slice::from_ref(&project_root),
+            &None,
             &output,
             &call,
             &Cancellation::default(),
@@ -930,6 +1004,7 @@ mod tests {
         call.arguments = json!({"command":if cfg!(windows) { "cd" } else { "pwd" },"root":0});
         let result = execute_shell_tool(
             std::slice::from_ref(&project_root),
+            &None,
             &output,
             &call,
             &Cancellation::default(),
@@ -960,6 +1035,7 @@ mod tests {
             .unwrap();
         let result = execute_shell_tool(
             &[],
+            &None,
             directory.path(),
             &call,
             &Cancellation::default(),
@@ -981,6 +1057,7 @@ mod tests {
         };
         let result = execute_shell_tool(
             &[],
+            &None,
             directory.path(),
             &invalid_root,
             &Cancellation::default(),
@@ -1001,8 +1078,8 @@ mod tests {
             arguments: json!({"server_id":"server","tool_name":"write","arguments_json":"{\"target\":\"item\"}"}),
         };
         for (answer_id, option, expected) in [
-            ("one", "allow", Some(true)),
-            ("one", "deny", Some(false)),
+            ("one", "allow", Some(ExternalApproval::Once)),
+            ("one", "deny", Some(ExternalApproval::Deny)),
             ("other", "allow", None),
         ] {
             let (events, receiver) = async_channel::unbounded();
@@ -1016,6 +1093,7 @@ mod tests {
                 .unwrap();
             let result = confirm_external(
                 ToolDecision::Confirm("Unknown effects".into()),
+                false,
                 &call,
                 &Cancellation::default(),
                 &events,
@@ -1039,8 +1117,9 @@ mod tests {
         let cancel = Cancellation::default();
         cancel.cancel();
         assert!(
-            !confirm_external(
+            confirm_external(
                 ToolDecision::Deny("Unsafe".into()),
+                false,
                 &call,
                 &cancel,
                 &events,
@@ -1048,10 +1127,12 @@ mod tests {
             )
             .await
             .unwrap()
+                == ExternalApproval::Deny
         );
         assert!(
             confirm_external(
                 ToolDecision::Automatic,
+                false,
                 &call,
                 &Cancellation::default(),
                 &events,
@@ -1059,11 +1140,13 @@ mod tests {
             )
             .await
             .unwrap()
+                == ExternalApproval::Once
         );
         let (events, _receiver) = async_channel::unbounded();
         assert!(
             confirm_external(
                 ToolDecision::Confirm("Unknown".into()),
+                false,
                 &call,
                 &cancel,
                 &events,
@@ -1168,3 +1251,7 @@ mod tests {
         assert!(matches!(&messages[0], AgentMessage::User { text } if text == "New question"));
     }
 }
+
+#[cfg(test)]
+#[path = "runner_approval_tests.rs"]
+mod approval_tests;

@@ -1494,3 +1494,20 @@ mod session_load_tests {
         );
     }
 }
+
+impl vclogg_ai::CommandApprovalStore for StateStore {
+    fn is_allowed(&self, directory: &Path, command: &str) -> Result<bool> {
+        self.repository.ai_command_allowed(directory, command)
+    }
+    fn allow(&self, directory: &Path, command: &str) -> Result<()> {
+        self.repository.allow_ai_command(directory, command)
+    }
+}
+impl StateStore {
+    pub(crate) fn ai_command_approvals(&self) -> Result<Vec<(PathBuf, String)>> {
+        self.repository.ai_command_approvals()
+    }
+    pub(crate) fn revoke_ai_command(&self, directory: &Path, command: &str) -> Result<()> {
+        self.repository.revoke_ai_command(directory, command)
+    }
+}

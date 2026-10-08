@@ -1,5 +1,7 @@
 //! Provider-independent, bounded log analysis. The host alone implements log access.
 mod builtin_skills;
+mod command_approvals;
+pub use command_approvals::CommandApprovalStore;
 mod compaction;
 mod context_usage;
 mod defaults;

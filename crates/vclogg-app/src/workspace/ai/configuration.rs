@@ -41,6 +41,7 @@ impl ConversationSession {
             return;
         }
         self.load_memories(cx);
+        self.load_command_approvals(None, cx);
         self.show_settings = true;
         self.settings_generation += 1;
         let panel = cx.entity();
