@@ -2011,9 +2011,11 @@ impl Workspace {
                         })),
                     ),
             )
-            .child(deferred_workspace_overlay(
-                ui_theme::workspace_bar_bottom_shadow(cx),
-            ))
+            .when(panel_expanded, |bar| {
+                bar.child(deferred_workspace_overlay(
+                    ui_theme::workspace_bar_bottom_shadow(cx),
+                ))
+            })
             .when(!self.app_settings.show_horizontal_scrollbar, |bar| {
                 bar.child(deferred_workspace_overlay(
                     ui_theme::log_scrollbar_edge_shadow(gpui_kit::Axis::Horizontal, cx),
