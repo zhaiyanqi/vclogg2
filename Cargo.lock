@@ -7637,8 +7637,6 @@ dependencies = [
  "anyhow",
  "roaring",
  "rusqlite",
- "serde",
- "serde_json",
  "tempfile",
 ]
 

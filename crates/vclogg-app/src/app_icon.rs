@@ -45,12 +45,26 @@ impl AppIcon {
         }
     }
 
+    // The Dock can magnify the running application icon independently of UI previews.
+    #[cfg(target_os = "macos")]
     fn png(self) -> &'static [u8] {
         match self {
-            Self::Soft => include_bytes!("../resources/icons/soft.png"),
-            Self::Compact => include_bytes!("../resources/icons/compact.png"),
-            Self::Illustration => include_bytes!("../resources/icons/illustration.png"),
-            Self::Sticker => include_bytes!("../resources/icons/sticker.png"),
+            Self::Soft => include_bytes!("../resources/icons/runtime/512/soft.png"),
+            Self::Compact => include_bytes!("../resources/icons/runtime/512/compact.png"),
+            Self::Illustration => include_bytes!("../resources/icons/runtime/512/illustration.png"),
+            Self::Sticker => include_bytes!("../resources/icons/runtime/512/sticker.png"),
+        }
+    }
+
+    // 64 logical pixels at 2x. Windows native icons come from ICO resources;
+    // Linux X11 uses 128px and Wayland resolves separately packaged desktop icons.
+    #[cfg(not(target_os = "macos"))]
+    fn png(self) -> &'static [u8] {
+        match self {
+            Self::Soft => include_bytes!("../resources/icons/runtime/128/soft.png"),
+            Self::Compact => include_bytes!("../resources/icons/runtime/128/compact.png"),
+            Self::Illustration => include_bytes!("../resources/icons/runtime/128/illustration.png"),
+            Self::Sticker => include_bytes!("../resources/icons/runtime/128/sticker.png"),
         }
     }
 
