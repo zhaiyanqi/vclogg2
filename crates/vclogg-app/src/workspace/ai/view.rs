@@ -985,48 +985,10 @@ impl Render for ConversationSession {
                         h_flex()
                             .gap_1()
                             .flex_wrap()
-                            .child(
-                                Button::new("ai-add-context")
-                                    .small()
-                                    .ghost()
-                                    .icon(IconName::Plus)
-                                    .tooltip(crate::tr!("附加所选日志", "Attach selected logs"))
-                                    .disabled(
-                                        (disabled && self.run.is_none())
-                                            || self.attachments_loading,
-                                    )
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        let targets = this
-                                            .workspace
-                                            .read_with(cx, |workspace, cx| {
-                                                workspace.ai_attachment_targets(
-                                                    workspace.active_log_region,
-                                                    cx,
-                                                )
-                                            })
-                                            .unwrap_or_default();
-                                        if targets.is_empty() {
-                                            this.error = crate::tr!(
-                                                "先在日志区域选择要附加的行",
-                                                "Select log rows to attach first"
-                                            )
-                                            .into();
-                                            cx.notify();
-                                        } else {
-                                            this.attach_logs(targets, window, cx);
-                                        }
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(crate::tr!("日志访问", "Log access")),
-                            )
-                            .child(div().flex_1().min_w_0())
+                            .child(self.render_composer_menu(cx))
                             .child(self.render_context_sources_popover(cx))
+                            .child(div().flex_1().min_w_0())
                             .child(self.render_context_usage_popover(cx))
-                            .child(self.render_mode(cx))
                             .child(
                                 Button::new("ai-model-menu")
                                     .small()

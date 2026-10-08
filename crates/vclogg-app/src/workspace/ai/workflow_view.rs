@@ -3,22 +3,19 @@ use vclogg_ai::{AgentMode, StepStatus};
 
 fn mode_label(mode: AgentMode) -> &'static str {
     match mode {
-        AgentMode::Ask => crate::tr!("问答", "Ask"),
-        AgentMode::Plan => crate::tr!("计划", "Plan"),
-        AgentMode::Execute => crate::tr!("执行", "Execute"),
+        AgentMode::Ask => "Ask",
+        AgentMode::Plan => "Plan",
+        AgentMode::Execute => "Agent",
     }
 }
 impl ConversationSession {
-    pub(super) fn render_mode(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_composer_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let owner = cx.entity();
-        Button::new("ai-mode")
+        Button::new("ai-add-context")
             .small()
             .ghost()
-            .text_label(mode_label(self.conversation.mode))
-            .tooltip(crate::tr!(
-                "下一轮模式：问答和计划只使用只读工具",
-                "Next run mode: Ask and Plan use read-only tools"
-            ))
+            .icon(IconName::Plus)
+            .tooltip(crate::tr!("模式与附件", "Mode and attachments"))
             .dropdown_menu(move |mut menu, window, cx| {
                 for mode in [AgentMode::Ask, AgentMode::Plan, AgentMode::Execute] {
                     menu = menu.item(
@@ -32,7 +29,32 @@ impl ConversationSession {
                             })),
                     );
                 }
-                menu
+                menu.separator().item(
+                    PopupMenuItem::new(crate::tr!("附加所选日志", "Attach selected logs"))
+                        .disabled({
+                            let session = owner.read(cx);
+                            session.attachments_loading
+                                || ((session.busy || session.ui_busy) && session.run.is_none())
+                        })
+                        .on_click(window.listener_for(&owner, |this, _, window, cx| {
+                            let targets = this
+                                .workspace
+                                .read_with(cx, |workspace, cx| {
+                                    workspace.ai_attachment_targets(workspace.active_log_region, cx)
+                                })
+                                .unwrap_or_default();
+                            if targets.is_empty() {
+                                this.error = crate::tr!(
+                                    "先在日志区域选择要附加的行",
+                                    "Select log rows to attach first"
+                                )
+                                .into();
+                                cx.notify();
+                            } else {
+                                this.attach_logs(targets, window, cx);
+                            }
+                        })),
+                )
             })
             .into_any_element()
     }
