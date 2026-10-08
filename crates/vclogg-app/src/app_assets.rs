@@ -6,8 +6,6 @@ use gpui_kit::{AssetSource, Result, SharedString};
 /// Additional icons rendered by the standard Icon component.
 /// Lucide SVGs: existing icons from 1.27.0; file-pen-line and save-check from 1.43.0.
 /// License: assets/icons/lucide-LICENSE.txt.
-/// Tabler Letter M: https://github.com/tabler/tabler-icons.
-/// License: assets/icons/tabler-LICENSE.txt.
 #[derive(Clone, Copy)]
 pub(crate) enum AppIcon {
     History,
@@ -16,18 +14,16 @@ pub(crate) enum AppIcon {
     SaveCheck,
     Edit,
     ColorLabel,
-    LetterM,
 }
 
 impl AppIcon {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 6] = [
         Self::History,
         Self::Refresh,
         Self::FollowEnd,
         Self::SaveCheck,
         Self::Edit,
         Self::ColorLabel,
-        Self::LetterM,
     ];
 
     fn asset_path(self) -> &'static str {
@@ -38,7 +34,6 @@ impl AppIcon {
             Self::SaveCheck => "vclogg/icons/save-check.svg",
             Self::Edit => "vclogg/icons/file-pen-line.svg",
             Self::ColorLabel => "vclogg/icons/tag.svg",
-            Self::LetterM => "vclogg/icons/letter-m.svg",
         }
     }
 
@@ -50,7 +45,6 @@ impl AppIcon {
             Self::SaveCheck => include_bytes!("../assets/icons/save-check.svg"),
             Self::Edit => include_bytes!("../assets/icons/file-pen-line.svg"),
             Self::ColorLabel => include_bytes!("../assets/icons/tag.svg"),
-            Self::LetterM => include_bytes!("../assets/icons/letter-m.svg"),
         }
     }
 }

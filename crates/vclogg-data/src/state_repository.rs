@@ -21,10 +21,6 @@ use crate::{
 
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
 pub const STATE_SCHEMA_VERSION: u32 = 22;
-mod ai;
-mod ai_command_approvals;
-mod ai_memory;
-pub use ai_memory::AiMemoryRecord;
 
 /// Owns SQLite access for durable file-history and workspace records.
 pub struct StateRepository {
@@ -1405,23 +1401,6 @@ fn initialize_schema(connection: &Connection, defaults: &StateMigrationDefaults)
              CREATE TABLE IF NOT EXISTS ui_state (
                  key TEXT PRIMARY KEY,
                  value TEXT NOT NULL
-             );
-             CREATE TABLE IF NOT EXISTS ai_conversations (
-                 id TEXT PRIMARY KEY,
-                 title TEXT NOT NULL,
-                 payload TEXT NOT NULL,
-                 revision INTEGER NOT NULL DEFAULT 1,
-                 updated_at INTEGER NOT NULL
-             );
-             CREATE TABLE IF NOT EXISTS ai_command_approvals (
-                 directory TEXT NOT NULL,
-                 command TEXT NOT NULL,
-                 PRIMARY KEY(directory,command)
-             );
-             CREATE TABLE IF NOT EXISTS ai_conversation_flags (
-                 id TEXT PRIMARY KEY,
-                 pinned INTEGER NOT NULL DEFAULT 0,
-                 archived INTEGER NOT NULL DEFAULT 0
              );
              CREATE TABLE IF NOT EXISTS global_search_preferences (
                  path TEXT PRIMARY KEY,

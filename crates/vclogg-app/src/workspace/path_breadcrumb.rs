@@ -85,8 +85,7 @@ impl Workspace {
             } else {
                 directory.to_path_buf()
             };
-            let click_path = item_path.clone();
-            let context_path = item_path.clone();
+            let click_directory = directory.clone();
             let context_workspace = workspace.clone();
             let label = if is_file && !show_full_path {
                 tab.file.title.to_string()
@@ -126,7 +125,14 @@ impl Workspace {
                         })
                         .on_click(cx.listener(
                             move |this, _, window, cx| {
-                                this.reveal_in_sidebar(click_path.clone(), !is_file, window, cx);
+                                match crate::open_directory::launch_custom_directory(
+                                    &this.app_settings.open_directory_command,
+                                    &click_directory,
+                                ) {
+                                    Ok(true) => {}
+                                    Ok(false) => cx.open_with_system(&click_directory),
+                                    Err(error) => window.notify_message(error.to_string(), cx),
+                                }
                             },
                         )),
                     )
@@ -134,8 +140,6 @@ impl Workspace {
                         Self::build_breadcrumb_menu(
                             menu,
                             directory.clone(),
-                            context_path.clone(),
-                            !is_file,
                             &context_workspace,
                             window,
                             cx,
@@ -157,8 +161,6 @@ impl Workspace {
     fn build_breadcrumb_menu(
         menu: PopupMenu,
         directory: PathBuf,
-        target: PathBuf,
-        target_is_directory: bool,
         workspace: &Entity<Self>,
         window: &mut Window,
         cx: &App,
@@ -168,13 +170,6 @@ impl Workspace {
         let find_directory = directory;
         let opening = workspace.read(cx).open_task.is_some();
         Self::popup_menu_with_workspace_action_context(menu, workspace, cx)
-            .item(
-                PopupMenuItem::new(crate::tr!("侧边栏打开", "Show in sidebar")).on_click(
-                    window.listener_for(workspace, move |this, _, window, cx| {
-                        this.reveal_in_sidebar(target.clone(), target_is_directory, window, cx);
-                    }),
-                ),
-            )
             .item(
                 PopupMenuItem::new(crate::tr!("打开目录文件", "Open files in folder"))
                     .disabled(opening)

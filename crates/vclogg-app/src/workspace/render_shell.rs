@@ -773,7 +773,6 @@ impl Workspace {
                 h_flex()
                     .gap(px(3.))
                     .flex_shrink_0()
-                    .child(self.sidebar_toggle_button(false, cx))
                     .child(toolbar_icon_button(
                         Button::new("open-files")
                             .icon(IconName::FolderOpen)
@@ -866,7 +865,6 @@ impl Workspace {
                     )),
             )
             .child(self.render_path_breadcrumb(window, cx))
-            .child(self.sidebar_toggle_button(true, cx))
     }
 
     pub(super) fn render_tabs(
@@ -879,14 +877,6 @@ impl Workspace {
         let tab_count = self.tabs.len();
         let active_tab_id = self.active_tab_id;
         let active_tab_ix = self.active_workspace_tab_ix();
-        if self.tab_drop_layout.borrow().vertical
-            && let Some(ix) = active_tab_ix
-        {
-            // The active tab may have changed while the horizontal track was hidden.
-            self.document_tab_scroll.scroll_to_item(ix + 1);
-            self.pending_document_tab_reveal
-                .set(active_tab_id.document_id());
-        }
         self.reveal_pending_document_tab();
         let tab_list_items = self
             .tabs
@@ -900,7 +890,6 @@ impl Workspace {
             layout.tabs.resize(tab_count, Bounds::default());
             layout.tabs.fill(Bounds::default());
             layout.end = Bounds::default();
-            layout.vertical = false;
             layout.viewport = None;
         }
         let colors = ui_theme::palette(cx);
@@ -955,52 +944,50 @@ impl Workspace {
             tabs = tabs.selected_index(active_ix);
         }
 
-        tabs.children(
-            (0..tab_count).map(|ix| self.render_workspace_tab(ix, has_other_window, false, cx)),
-        )
-        .last_empty_space(
-            h_flex()
-                .id("document-tab-end-drop")
-                .h_full()
-                .min_w_12()
-                .flex_grow_1()
-                .when(self.cross_window_drop_ix == Some(tab_count), |this| {
-                    this.border_l_2().border_color(cx.theme().primary)
-                })
-                .on_prepaint({
-                    let tab_drop_layout = tab_drop_layout.clone();
-                    move |bounds, _, _| tab_drop_layout.borrow_mut().end = bounds
-                })
-                .drag_over::<DraggedTab>(|this, _, _, cx| {
-                    this.border_l_2().border_color(cx.theme().primary)
-                })
-                .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
-                    this.reorder_tab(dragged.tab_id, tab_count, window, cx);
-                }))
-                .child(
-                    Button::new("new-workspace-tab")
-                        .small()
-                        .ghost()
-                        .icon(IconName::Plus)
-                        .tooltip(crate::tr!("新建标签页", "New tab"))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.create_new_tab(window, cx);
-                        })),
-                ),
-        )
-        .map(|tabs| {
-            div()
-                .id("document-tab-scroll-wheel")
-                .relative()
-                .w_full()
-                .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
-                    this.scroll_document_tabs_from_wheel(event, window, cx);
-                }))
-                .child(tabs)
-                .child(deferred_workspace_overlay(
-                    ui_theme::workspace_bar_bottom_shadow(cx),
-                ))
-        })
+        tabs.children((0..tab_count).map(|ix| self.render_workspace_tab(ix, has_other_window, cx)))
+            .last_empty_space(
+                h_flex()
+                    .id("document-tab-end-drop")
+                    .h_full()
+                    .min_w_12()
+                    .flex_grow_1()
+                    .when(self.cross_window_drop_ix == Some(tab_count), |this| {
+                        this.border_l_2().border_color(cx.theme().primary)
+                    })
+                    .on_prepaint({
+                        let tab_drop_layout = tab_drop_layout.clone();
+                        move |bounds, _, _| tab_drop_layout.borrow_mut().end = bounds
+                    })
+                    .drag_over::<DraggedTab>(|this, _, _, cx| {
+                        this.border_l_2().border_color(cx.theme().primary)
+                    })
+                    .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                        this.reorder_tab(dragged.tab_id, tab_count, window, cx);
+                    }))
+                    .child(
+                        Button::new("new-workspace-tab")
+                            .small()
+                            .ghost()
+                            .icon(IconName::Plus)
+                            .tooltip(crate::tr!("新建标签页", "New tab"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.create_new_tab(window, cx);
+                            })),
+                    ),
+            )
+            .map(|tabs| {
+                div()
+                    .id("document-tab-scroll-wheel")
+                    .relative()
+                    .w_full()
+                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
+                        this.scroll_document_tabs_from_wheel(event, window, cx);
+                    }))
+                    .child(tabs)
+                    .child(deferred_workspace_overlay(
+                        ui_theme::workspace_bar_bottom_shadow(cx),
+                    ))
+            })
     }
 
     pub(super) fn highlighted_search_suggestion(value: &str, needle: &str, cx: &App) -> StyledText {

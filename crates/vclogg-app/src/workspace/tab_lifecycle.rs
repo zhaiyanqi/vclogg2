@@ -1330,22 +1330,14 @@ impl Workspace {
                     .on_click(close_others),
             )
             .item(
-                PopupMenuItem::new(if state.vertical {
-                    crate::tr!("关闭上方标签", "Close tabs above")
-                } else {
-                    crate::tr!("关闭左侧标签", "Close tabs to the left")
-                })
-                .disabled(state.tab_ix == 0)
-                .on_click(close_left),
+                PopupMenuItem::new(crate::tr!("关闭左侧标签", "Close tabs to the left"))
+                    .disabled(state.tab_ix == 0)
+                    .on_click(close_left),
             )
             .item(
-                PopupMenuItem::new(if state.vertical {
-                    crate::tr!("关闭下方标签", "Close tabs below")
-                } else {
-                    crate::tr!("关闭右侧标签", "Close tabs to the right")
-                })
-                .disabled(state.tab_ix + 1 >= state.tab_count)
-                .on_click(close_right),
+                PopupMenuItem::new(crate::tr!("关闭右侧标签", "Close tabs to the right"))
+                    .disabled(state.tab_ix + 1 >= state.tab_count)
+                    .on_click(close_right),
             )
             .item(
                 PopupMenuItem::new(crate::tr!("关闭所有标签", "Close all tabs"))
@@ -1385,22 +1377,20 @@ impl Workspace {
                     .disabled(!state.can_restore_title)
                     .on_click(restore_title),
             );
-        Self::tab_orientation_menu(menu, state.vertical_tabs, workspace, window)
-            .separator()
-            .item(
-                PopupMenuItem::element(move |_, cx| {
-                    div()
-                        .text_color(cx.theme().primary)
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(if state.editing {
-                            crate::tr!("退出编辑模式", "Exit edit mode")
-                        } else {
-                            crate::tr!("编辑日志", "Edit log")
-                        })
-                })
-                .disabled(!state.can_edit)
-                .on_click(edit),
-            )
+        menu.separator().item(
+            PopupMenuItem::element(move |_, cx| {
+                div()
+                    .text_color(cx.theme().primary)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(if state.editing {
+                        crate::tr!("退出编辑模式", "Exit edit mode")
+                    } else {
+                        crate::tr!("编辑日志", "Edit log")
+                    })
+            })
+            .disabled(!state.can_edit)
+            .on_click(edit),
+        )
     }
 
     pub(super) fn build_new_tab_menu(
@@ -1458,28 +1448,19 @@ impl Workspace {
                     .on_click(close_others),
             )
             .item(
-                PopupMenuItem::new(if state.vertical {
-                    crate::tr!("关闭上方标签", "Close tabs above")
-                } else {
-                    crate::tr!("关闭左侧标签", "Close tabs to the left")
-                })
-                .disabled(state.tab_ix == 0)
-                .on_click(close_left),
+                PopupMenuItem::new(crate::tr!("关闭左侧标签", "Close tabs to the left"))
+                    .disabled(state.tab_ix == 0)
+                    .on_click(close_left),
             )
             .item(
-                PopupMenuItem::new(if state.vertical {
-                    crate::tr!("关闭下方标签", "Close tabs below")
-                } else {
-                    crate::tr!("关闭右侧标签", "Close tabs to the right")
-                })
-                .disabled(state.tab_ix + 1 >= state.tab_count)
-                .on_click(close_right),
+                PopupMenuItem::new(crate::tr!("关闭右侧标签", "Close tabs to the right"))
+                    .disabled(state.tab_ix + 1 >= state.tab_count)
+                    .on_click(close_right),
             )
             .item(
                 PopupMenuItem::new(crate::tr!("关闭所有标签", "Close all tabs"))
                     .on_click(close_all),
             );
-        let menu = Self::tab_orientation_menu(menu, state.vertical_tabs, workspace, window);
         if state.can_edit {
             menu.separator().item(
                 PopupMenuItem::element(move |_, cx| {

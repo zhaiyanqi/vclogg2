@@ -1860,7 +1860,6 @@ impl Workspace {
                         query,
                         search_matcher,
                         global_search,
-                        refresh_kind,
                     )))
                 })
                 .await;
@@ -1872,26 +1871,25 @@ impl Workspace {
                 });
                 return;
             }
-            let (document, search_result, query, search_matcher, global_search, refresh_kind) =
-                match result {
-                    Ok(Some(prepared)) => prepared,
-                    Ok(None) => unreachable!("cancelled refresh was handled above"),
-                    Err(error) => {
-                        _ = this.update_in(cx, |this, window, cx| {
-                            // A rotation can temporarily remove/lock the path. Keep the last
-                            // frame and follow preference; monitoring retries on the next round.
-                            if matches!(strategy, ReloadStrategy::Full) {
-                                let message: SharedString = error.to_string().into();
-                                window.notify_message(message, cx);
-                                this.activity = Activity::Error;
-                            }
-                            this.finish_reload(strategy);
-                            this.open_queued_external_paths_if_idle(window, cx);
-                            cx.notify();
-                        });
-                        return;
-                    }
-                };
+            let (document, search_result, query, search_matcher, global_search) = match result {
+                Ok(Some(prepared)) => prepared,
+                Ok(None) => unreachable!("cancelled refresh was handled above"),
+                Err(error) => {
+                    _ = this.update_in(cx, |this, window, cx| {
+                        // A rotation can temporarily remove/lock the path. Keep the last
+                        // frame and follow preference; monitoring retries on the next round.
+                        if matches!(strategy, ReloadStrategy::Full) {
+                            let message: SharedString = error.to_string().into();
+                            window.notify_message(message, cx);
+                            this.activity = Activity::Error;
+                        }
+                        this.finish_reload(strategy);
+                        this.open_queued_external_paths_if_idle(window, cx);
+                        cx.notify();
+                    });
+                    return;
+                }
+            };
 
             let plan = this
                 .update_in(cx, |this, window, cx| {
@@ -1900,9 +1898,6 @@ impl Workspace {
                             || this.active_tab_id != WorkspaceTabId::Document(document_id))
                     {
                         return None;
-                    }
-                    if refresh_kind == DocumentRefreshKind::Appended {
-                        this.note_sidebar_append(previous_document.clone(), document.clone(), cx);
                     }
                     this.prepare_reload_replacement(
                         ReloadReplacementInput {

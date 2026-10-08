@@ -440,75 +440,6 @@ pub struct StateStore {
 }
 
 impl StateStore {
-    pub(crate) fn load_ai_settings(&self, path: &Path) -> Result<vclogg_ai::AiSettings> {
-        vclogg_ai::AiSettings::load(path)
-    }
-
-    pub(crate) fn save_ai_settings(
-        &self,
-        path: &Path,
-        settings: &vclogg_ai::AiSettings,
-    ) -> Result<()> {
-        settings.save(path)
-    }
-
-    pub(crate) fn ai_memories(&self) -> Result<Vec<vclogg_data::AiMemoryRecord>> {
-        self.repository.ai_memories()
-    }
-    pub(crate) fn save_ai_memory(
-        &self,
-        record: &vclogg_data::AiMemoryRecord,
-    ) -> Result<vclogg_data::AiMemoryRecord> {
-        self.repository.save_ai_memory(record)
-    }
-    pub(crate) fn delete_ai_memory(&self, id: &str, revision: u64) -> Result<()> {
-        self.repository.delete_ai_memory(id, revision)
-    }
-
-    pub(crate) fn ai_conversations(
-        &self,
-        offset: usize,
-    ) -> Result<Vec<vclogg_data::AiConversationRecord>> {
-        self.repository.ai_conversations(offset, 100)
-    }
-    pub(crate) fn search_ai_conversations(
-        &self,
-        query: &str,
-        archived: bool,
-        offset: usize,
-    ) -> Result<Vec<vclogg_data::AiConversationRecord>> {
-        self.repository
-            .search_ai_conversations(query, archived, offset, 100)
-    }
-    pub(crate) fn ai_conversation_flags(
-        &self,
-    ) -> Result<std::collections::BTreeMap<String, (bool, bool)>> {
-        self.repository.ai_conversation_flags()
-    }
-    pub(crate) fn set_ai_conversation_flags(
-        &self,
-        id: &str,
-        pinned: bool,
-        archived: bool,
-    ) -> Result<()> {
-        self.repository
-            .set_ai_conversation_flags(id, pinned, archived)
-    }
-    pub(crate) fn load_ai_conversation(
-        &self,
-        id: &str,
-    ) -> Result<Option<vclogg_data::AiConversationRecord>> {
-        self.repository.load_ai_conversation(id)
-    }
-    pub(crate) fn save_ai_conversation(
-        &self,
-        record: &vclogg_data::AiConversationRecord,
-    ) -> Result<u64> {
-        self.repository.save_ai_conversation(record)
-    }
-    pub(crate) fn delete_ai_conversation(&self, id: &str, revision: u64) -> Result<()> {
-        self.repository.delete_ai_conversation(id, revision)
-    }
     pub fn open_default() -> Result<Self> {
         let data_root =
             crate::app_paths::application_data_dir().context("无法确定本机应用数据目录")?;
@@ -611,15 +542,6 @@ impl StateStore {
                 .ok()
                 .filter(|height| height.is_finite() && *height > 0.)
         }))
-    }
-
-    pub(crate) fn load_sidebar_layout(&self) -> Result<Option<String>> {
-        self.repository.load_ui_value("workspace.sidebar_layout")
-    }
-
-    pub(crate) fn save_sidebar_layout(&self, layout: &str) -> Result<()> {
-        self.repository
-            .save_ui_value("workspace.sidebar_layout", layout)
     }
 
     pub fn save_search_panel_height(&self, height: f32) -> Result<()> {
@@ -1492,22 +1414,5 @@ mod session_load_tests {
             "重复打开状态库 {RUNS} 次：{elapsed:?}，平均：{:?}",
             elapsed / RUNS as u32
         );
-    }
-}
-
-impl vclogg_ai::CommandApprovalStore for StateStore {
-    fn is_allowed(&self, directory: &Path, command: &str) -> Result<bool> {
-        self.repository.ai_command_allowed(directory, command)
-    }
-    fn allow(&self, directory: &Path, command: &str) -> Result<()> {
-        self.repository.allow_ai_command(directory, command)
-    }
-}
-impl StateStore {
-    pub(crate) fn ai_command_approvals(&self) -> Result<Vec<(PathBuf, String)>> {
-        self.repository.ai_command_approvals()
-    }
-    pub(crate) fn revoke_ai_command(&self, directory: &Path, command: &str) -> Result<()> {
-        self.repository.revoke_ai_command(directory, command)
     }
 }
