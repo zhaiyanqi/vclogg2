@@ -24,7 +24,6 @@ pub(super) struct SettingsWindow {
     highlight_baseline: crate::color_labels_dialog::LogColoringConfig,
     focus: FocusHandle,
     saving: bool,
-    first_frame_presented: bool,
     pub(super) save_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -71,13 +70,7 @@ impl Workspace {
                                 });
                             });
                         }
-                        // A newly created hidden window still owns its first-frame reveal.
-                        if view
-                            .upgrade()
-                            .is_some_and(|view| view.read(cx).first_frame_presented)
-                        {
-                            window.activate_window();
-                        }
+                        window.activate_window();
                     })
                     .is_ok()
             {
@@ -91,32 +84,29 @@ impl Workspace {
                 show: false,
                 focus: false,
                 window_min_size: Some(size(px(720.), px(480.))),
-                ..WindowOptions::default()
+                ..TitleBar::window_options()
             };
+            #[cfg(target_os = "macos")]
+            let (options, traffic_light_position) =
+                crate::macos_window_controls::configure(options);
             match gpui_kit::open_window(options, cx, |window, cx| {
                 window.set_window_title(crate::tr!("设置", "Settings"));
                 crate::app_icon::attach_window(window, cx);
+                #[cfg(target_os = "macos")]
+                if let Some(position) = traffic_light_position
+                    && let Err(error) = crate::macos_window_controls::attach(window, position)
+                {
+                    log::error!("Could not initialize settings window controls: {error:#}");
+                }
                 cx.new(|cx| SettingsWindow::new(workspace.clone(), requested_category, window, cx))
             }) {
                 Ok((handle, view)) => {
                     cx.global_mut::<WorkspaceWindowRegistry>().settings_window =
                         Some((handle, view.downgrade()));
-                    let view = view.downgrade();
-                    _ = handle.update(cx, move |_, window, _| {
-                        // GPUI runs next-frame callbacks before drawing/presenting that
-                        // frame. The second callback reveals the window only after a
-                        // complete hidden frame, including the settings content.
-                        window.on_next_frame(move |window, _| {
-                            window.on_next_frame(move |window, cx| {
-                                if view
-                                    .update(cx, |view, _| view.first_frame_presented = true)
-                                    .is_ok()
-                                {
-                                    window.activate_window();
-                                }
-                            });
-                        });
-                    });
+                    // GPUI's open_window builds and draws the root before returning.
+                    // Reveal only after that work, without waiting for display-link
+                    // callbacks: macOS suspends those while a native window is hidden.
+                    _ = handle.update(cx, |_, window, _| window.activate_window());
                 }
                 Err(error) => log::error!("Could not open settings window: {error:#}"),
             }
@@ -210,7 +200,6 @@ impl SettingsWindow {
             highlight_baseline,
             focus,
             saving: false,
-            first_frame_presented: false,
             save_task: None,
             _subscriptions: vec![subscription, observer],
         }
@@ -482,6 +471,30 @@ impl Render for SettingsWindow {
                 }
             }))
             .on_action(cx.listener(|this, _: &SaveSettings, window, cx| this.save(window, cx)))
+            .child(
+                TitleBar::new()
+                    .h(px(36.))
+                    .border_b_0()
+                    .bg(cx.theme().background)
+                    .when(cfg!(target_os = "macos") && window.is_fullscreen(), |bar| {
+                        // Keep the native controls' lane, accounting for TitleBar's fullscreen inset.
+                        bar.pl(px(80.) - rems(0.75).to_pixels(window.rem_size()))
+                    })
+                    .on_close_window(cx.listener(|this, _, window, cx| {
+                        if this.cancel(window, cx) {
+                            window.remove_window();
+                        }
+                    }))
+                    .child(
+                        h_flex()
+                            .h_full()
+                            .flex_1()
+                            .items_center()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(crate::tr!("设置", "Settings")),
+                    ),
+            )
             .child(div().flex_1().min_h_0().p_4().child(self.settings.clone()))
             .child(
                 h_flex()
@@ -639,6 +652,21 @@ mod tests {
                 .unwrap();
             (handle, view.upgrade().unwrap())
         })
+    }
+
+    #[gpui_kit::test]
+    fn settings_window_activates_without_hidden_window_frame_callbacks(cx: &mut TestAppContext) {
+        init(cx);
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(StateStore::open(directory.path().join("state.db")).unwrap());
+        let (main, owner) = workspace(cx, store);
+        let (settings, _view) = open(cx, main, &owner);
+        // The test platform does not deliver native display-link callbacks to hidden windows.
+        cx.update(|cx| assert_eq!(cx.active_window(), Some(settings)));
+        cx.update_window(main, |_, window, _| window.activate_window())
+            .unwrap();
+        assert_eq!(open(cx, main, &owner).0, settings);
+        cx.update(|cx| assert_eq!(cx.active_window(), Some(settings)));
     }
 
     #[gpui_kit::test]
