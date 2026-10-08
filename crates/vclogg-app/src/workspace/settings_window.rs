@@ -24,6 +24,7 @@ pub(super) struct SettingsWindow {
     highlight_baseline: crate::color_labels_dialog::LogColoringConfig,
     focus: FocusHandle,
     saving: bool,
+    first_frame_presented: bool,
     pub(super) save_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -70,7 +71,13 @@ impl Workspace {
                                 });
                             });
                         }
-                        window.activate_window();
+                        // A newly created hidden window still owns its first-frame reveal.
+                        if view
+                            .upgrade()
+                            .is_some_and(|view| view.read(cx).first_frame_presented)
+                        {
+                            window.activate_window();
+                        }
                     })
                     .is_ok()
             {
@@ -81,6 +88,8 @@ impl Workspace {
                     display_id, preferred, cx,
                 ))),
                 display_id,
+                show: false,
+                focus: false,
                 window_min_size: Some(size(px(720.), px(480.))),
                 ..WindowOptions::default()
             };
@@ -92,7 +101,22 @@ impl Workspace {
                 Ok((handle, view)) => {
                     cx.global_mut::<WorkspaceWindowRegistry>().settings_window =
                         Some((handle, view.downgrade()));
-                    _ = handle.update(cx, |_, window, _| window.activate_window());
+                    let view = view.downgrade();
+                    _ = handle.update(cx, move |_, window, _| {
+                        // GPUI runs next-frame callbacks before drawing/presenting that
+                        // frame. The second callback reveals the window only after a
+                        // complete hidden frame, including the settings content.
+                        window.on_next_frame(move |window, _| {
+                            window.on_next_frame(move |window, cx| {
+                                if view
+                                    .update(cx, |view, _| view.first_frame_presented = true)
+                                    .is_ok()
+                                {
+                                    window.activate_window();
+                                }
+                            });
+                        });
+                    });
                 }
                 Err(error) => log::error!("Could not open settings window: {error:#}"),
             }
@@ -186,6 +210,7 @@ impl SettingsWindow {
             highlight_baseline,
             focus,
             saving: false,
+            first_frame_presented: false,
             save_task: None,
             _subscriptions: vec![subscription, observer],
         }
