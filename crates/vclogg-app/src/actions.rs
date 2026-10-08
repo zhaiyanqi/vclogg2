@@ -7,6 +7,7 @@ pub const LOG_TABLE_CONTEXT: &str = "VCLogg2LogTable";
 pub const EDITOR_CONTEXT: &str = "VCLogg2Editor";
 // Keep application commands from preempting text entry in gpui-component inputs.
 const WORKSPACE_SHORTCUT_CONTEXT: &str = "VCLogg2Workspace && !Input";
+const SETTINGS_SHORTCUT_CONTEXT: &str = "(VCLogg2Workspace && !Input) || VCLogg2Settings";
 const LOG_TABLE_SHORTCUT_CONTEXT: &str = "VCLogg2LogTable && !Input";
 
 actions!(
@@ -145,7 +146,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(
             &format!("{primary}-,"),
             OpenSettings,
-            Some(WORKSPACE_SHORTCUT_CONTEXT),
+            Some(SETTINGS_SHORTCUT_CONTEXT),
         ),
         KeyBinding::new(
             "alt-c",
@@ -241,7 +242,7 @@ pub fn apply_shortcuts(previous: &ShortcutSettings, next: &ShortcutSettings, cx:
         &previous.open_settings,
         &next.open_settings,
         OpenSettings,
-        WORKSPACE_SHORTCUT_CONTEXT,
+        SETTINGS_SHORTCUT_CONTEXT,
     );
     rebind(
         &mut bindings,
