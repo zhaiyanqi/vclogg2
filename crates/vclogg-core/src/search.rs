@@ -866,10 +866,12 @@ impl SearchMatcher {
     }
 
     /// Return UTF-8 byte ranges for every non-empty match in rendered text.
+    /// Literal keywords include overlapping occurrences; regexes retain their
+    /// usual non-overlapping match semantics.
     pub fn matching_ranges(&self, text: &str) -> Vec<Range<usize>> {
         let mut ranges: Vec<Range<usize>> = match &self.inner {
             Matcher::Literal(matcher) => matcher
-                .find_iter(text.as_bytes())
+                .find_overlapping_iter(text.as_bytes())
                 .filter(|matched| {
                     text.is_char_boundary(matched.start()) && text.is_char_boundary(matched.end())
                 })
