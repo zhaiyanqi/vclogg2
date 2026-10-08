@@ -1610,6 +1610,25 @@ mod tests {
     }
 
     #[test]
+    fn search_highlights_cover_the_union_of_overlapping_keywords() {
+        let search = SearchMatcher::new(&vclogg_core::SearchQuery {
+            text: "abc|bcd".to_string(),
+            ..Default::default()
+        })
+        .unwrap()
+        .unwrap();
+        let highlights = combined_match_ranges(
+            "abcdefg",
+            &ResolvedColorRules::default(),
+            Some(&search),
+            None,
+            None,
+        );
+
+        assert_eq!(highlights, vec![(0..4, TextHighlight::Search)]);
+    }
+
+    #[test]
     fn highlight_sweep_preserves_quick_color_and_search_priority() {
         let color_rules = crate::color_labels::resolve_color_rules(
             &[crate::color_labels::KeywordColorRule {
