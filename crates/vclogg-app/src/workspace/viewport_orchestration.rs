@@ -506,9 +506,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.mark_group_expansion_is_current(cx) {
-            return false;
-        }
         let applied = self.global_table.update(cx, |table, cx| {
             if !table
                 .delegate_mut()
@@ -541,7 +538,6 @@ impl Workspace {
             window,
             cx,
         );
-        self.complete_mark_result_jump(cx);
         self.schedule_workspace_search_state_save(window, cx);
         cx.notify();
         true

@@ -42,7 +42,6 @@ require_file crates/vclogg-data/Cargo.toml
 require_file crates/vclogg-data/src/lib.rs
 require_file crates/vclogg-app/Cargo.toml
 require_file crates/vclogg-app/src/main.rs
-require_file crates/vclogg-ai/src/lib.rs
 # Allow only the existing macOS block patch and the X11 decoder bridge.
 # GPUI framework and input-method source must stay in upstream packages.
 if ! awk '
@@ -62,10 +61,6 @@ for dependency_directory in vendor/*; do
     *) fail "unexpected vendored dependency: $dependency_directory" ;;
   esac
 done
-for dependency in gpui gpui-base gpui-component vclogg2 vclogg-core vclogg-data; do
-  forbid_manifest_dependency crates/vclogg-ai/Cargo.toml "$dependency"
-done
-
 workspace_capabilities=(
   document_commands
   document_lifecycle

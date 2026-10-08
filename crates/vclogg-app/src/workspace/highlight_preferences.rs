@@ -120,28 +120,6 @@ impl Workspace {
         }
     }
 
-    pub(super) fn select_log_coloring_group(
-        &mut self,
-        id: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !self
-            .app_settings
-            .log_coloring
-            .groups
-            .iter()
-            .any(|group| group.id == id)
-        {
-            return;
-        }
-        let baseline = self.highlight_config();
-        let mut draft = baseline.clone();
-        draft.log_coloring.active_group_id = id;
-        draft.highlight_log_levels = true;
-        self.commit_highlight_change(draft, baseline, None, true, window, cx);
-    }
-
     pub(super) fn set_log_coloring_enabled(
         &mut self,
         enabled: bool,
@@ -202,7 +180,7 @@ impl Workspace {
             window.refresh();
             cx.notify();
         }
-        // Quick changes share the save queue without dimming or rebuilding the sidebar.
+        // Quick changes share the save queue without rebuilding the highlight editor.
         // Subsequent group selections stay usable while a previous acknowledgement is pending.
         let previous_save = self.persistence.app_settings_save_task.take();
         let (completion, receiver) = async_channel::bounded::<()>(1);

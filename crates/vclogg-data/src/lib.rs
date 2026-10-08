@@ -18,13 +18,4 @@ pub use state::{
     FileSessionRecords, HistorySession, LastWorkspaceFile, PredefinedFilterRecord, RecentFile,
     SessionRecordSaveResult, StateMigrationDefaults,
 };
-pub use state_repository::{AiMemoryRecord, STATE_SCHEMA_VERSION, StateRepository};
-
-/// Opaque app-owned conversation payload and optimistic storage revision.
-#[derive(Clone, Debug)]
-pub struct AiConversationRecord {
-    pub id: String,
-    pub title: String,
-    pub payload: String,
-    pub revision: u64,
-}
+pub use state_repository::{STATE_SCHEMA_VERSION, StateRepository};

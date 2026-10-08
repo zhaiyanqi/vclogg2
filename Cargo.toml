@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "compat/xim-ctext",
-    "crates/vclogg-ai",
     "crates/vclogg-app",
     "crates/vclogg-core",
     "crates/vclogg-data",

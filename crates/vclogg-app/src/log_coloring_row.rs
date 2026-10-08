@@ -1,4 +1,4 @@
-//! Shared group-row presentation for the highlight editor and sidebar.
+//! Group-row presentation for the highlight editor.
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},

@@ -195,15 +195,6 @@ impl TagColor {
 }
 
 impl RowTags {
-    /// Source identities, independent of whether the row is also marked.
-    pub(crate) fn source_rows(&self) -> impl Iterator<Item = usize> + '_ {
-        self.0.keys().copied()
-    }
-
-    pub(crate) fn shares_storage(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-
     pub(crate) fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
