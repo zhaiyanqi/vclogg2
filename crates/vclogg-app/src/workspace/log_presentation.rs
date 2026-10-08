@@ -3021,65 +3021,69 @@ impl Workspace {
                                             ),
                                     )
                                     .child(
-                                        Button::new("empty-open-files")
-                                            .primary()
-                                            .w(rems(14.))
-                                            .h(rems(3.))
-                                            .max_w_full()
-                                            .icon(IconName::FolderOpen)
-                                            .label(crate::tr!("打开日志文件", "Open log file"))
-                                            .rounded(cx.theme().radius_lg * 2.)
-                                            .shadow_lg()
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.open_files(&OpenFiles, window, cx);
-                                            })),
-                                    ),
-                            )
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        Button::new("empty-create-file")
-                                            .small()
-                                            .outline()
-                                            .icon(IconName::Plus)
-                                            .label(if draft_id.is_some() {
-                                                crate::tr!("继续编辑", "Continue editing")
-                                            } else {
-                                                crate::tr!("创建新文件", "Create new file")
-                                            })
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.create_editable_file(window, cx);
-                                            })),
-                                    )
-                                    .when(
-                                        draft.is_some_and(|(_, draft)| {
-                                            draft.path.is_some() && !draft.dirty && !draft.saving
-                                        }),
-                                        |row| {
-                                            row.child(
-                                                Button::new("draft-open-saved-file")
-                                                    .small()
-                                                    .ghost()
-                                                    .label(crate::tr!(
-                                                        "查看已保存文件",
-                                                        "View saved file"
-                                                    ))
-                                                    .on_click(cx.listener(
-                                                        move |this, _, window, cx| {
-                                                            if let Some(id) = draft_id {
-                                                                this.exit_new_file_draft(
-                                                                    id, window, cx,
-                                                                );
-                                                            }
-                                                        },
-                                                    )),
+                                        h_flex()
+                                            .w_full()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                Button::new("empty-open-files")
+                                                    .primary()
+                                                    .w(rems(14.))
+                                                    .h(rems(3.))
+                                                    .max_w_full()
+                                                    .icon(IconName::FolderOpen)
+                                                    .label(crate::tr!("打开日志文件", "Open log file"))
+                                                    .rounded(cx.theme().radius_lg * 2.)
+                                                    .shadow_lg()
+                                                    .on_click(cx.listener(|this, _, window, cx| {
+                                                        this.open_files(&OpenFiles, window, cx);
+                                                    })),
                                             )
-                                        },
-                                    )
-                                    .child(div().flex_1()),
+                                            .child(
+                                                Button::new("empty-create-file")
+                                                    .primary()
+                                                    .w(rems(14.))
+                                                    .h(rems(3.))
+                                                    .max_w_full()
+                                                    .icon(IconName::Plus)
+                                                    .label(if draft_id.is_some() {
+                                                        crate::tr!("继续编辑", "Continue editing")
+                                                    } else {
+                                                        crate::tr!("创建新文件", "Create new file")
+                                                    })
+                                                    .rounded(cx.theme().radius_lg * 2.)
+                                                    .shadow_lg()
+                                                    .on_click(cx.listener(|this, _, window, cx| {
+                                                        this.create_editable_file(window, cx);
+                                                    })),
+                                            )
+                                            .when(
+                                                draft.is_some_and(|(_, draft)| {
+                                                    draft.path.is_some() && !draft.dirty && !draft.saving
+                                                }),
+                                                |row| {
+                                                    row.child(
+                                                        Button::new("draft-open-saved-file")
+                                                            .small()
+                                                            .ghost()
+                                                            .label(crate::tr!(
+                                                                "查看已保存文件",
+                                                                "View saved file"
+                                                            ))
+                                                            .on_click(cx.listener(
+                                                                move |this, _, window, cx| {
+                                                                    if let Some(id) = draft_id {
+                                                                        this.exit_new_file_draft(
+                                                                            id, window, cx,
+                                                                        );
+                                                                    }
+                                                                },
+                                                            )),
+                                                    )
+                                                },
+                                            )
+                                            .child(div().flex_1()),
+                                    ),
                             )
                             .when(
                                 !self.history_loading && !self.pinned_files.is_empty(),
