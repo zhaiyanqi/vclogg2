@@ -21,6 +21,7 @@ impl Workspace {
         self.open_settings_dialog(Some(SettingsCategory::Highlight), window, cx);
     }
 
+    #[cfg(test)]
     pub(super) fn highlight_editor(
         &self,
         window: &mut Window,
