@@ -23,23 +23,31 @@ impl Workspace {
         };
         let saved_path = path.clone();
         let desired_state = state.clone();
+        self.persistence.session_saves.begin(&path);
         let previous_save = self.persistence.session_save_task.take();
         self.persistence.session_save_task = Some(cx.spawn_in(window, async move |this, cx| {
             if let Some(previous_save) = previous_save {
                 previous_save.await;
             }
             let effective_base = this
-                .update_in(cx, |this, _, _| {
-                    path_buf_map_get(&this.persistence.last_saved_sessions, &saved_path)
-                        .filter(|saved| saved.revision > base.revision)
-                        .cloned()
+                .update(cx, |this, _| {
+                    this.persistence
+                        .session_saves
+                        .baseline(&saved_path, base.clone())
                 })
                 .ok()
-                .flatten()
                 .unwrap_or(base);
             let result = cx
                 .background_spawn(async move { store.save_session(&path, &effective_base, &state) })
                 .await;
+            // The window may already be closed while a retained workspace is still
+            // finishing saves. Retire bookkeeping independently of window updates.
+            _ = this.update(cx, |this, _| {
+                this.persistence.session_saves.finish(
+                    &saved_path,
+                    result.as_ref().ok().map(|result| result.state.clone()),
+                );
+            });
             _ = this.update_in(cx, |this, window, cx| match result {
                 Ok(result) => {
                     if path_buf_map_get(&this.persistence.pending_session_overrides, &saved_path)
@@ -50,11 +58,6 @@ impl Workspace {
                             &saved_path,
                         );
                     }
-                    path_buf_map_insert(
-                        &mut this.persistence.last_saved_sessions,
-                        saved_path.clone(),
-                        result.state.clone(),
-                    );
                     if let Some(tab) = this
                         .documents
                         .iter_mut()
@@ -205,7 +208,7 @@ impl Workspace {
             .filter(|tab| !path_match_set_contains(&self.transient_paths, tab.document.path()))
             .map(|tab| tab.document.path().to_path_buf());
 
-        let mut state_tasks = std::mem::take(&mut self.persistence.state_tasks);
+        let mut state_tasks = self.persistence.state_tasks.take_all();
         if let Some(task) = self.persistence.session_save_task.take() {
             state_tasks.push(task);
         }
@@ -770,16 +773,17 @@ impl Workspace {
         }
         self.record_recent_paths(recorded_paths, window, cx);
         for cache_write in cache_writes {
-            self.persistence
-                .state_tasks
-                .push(cx.spawn(async move |_, cx| {
+            self.persistence.state_tasks.push(
+                cx.spawn(async move |_, cx| {
                     if let Err(error) = cx
                         .background_spawn(async move { cache_write.persist() })
                         .await
                     {
                         log::error!("索引缓存未能保存：{error:#}");
                     }
-                }));
+                }),
+                cx,
+            );
         }
 
         if !warnings.is_empty() {

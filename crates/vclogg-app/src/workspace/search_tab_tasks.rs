@@ -407,7 +407,7 @@ impl Workspace {
                 let results = results
                     .into_iter()
                     .map(|result| {
-                        let document_id = self
+                        let open_document_id = self
                             .documents
                             .iter()
                             .find(|tab| {
@@ -417,10 +417,16 @@ impl Workspace {
                                     &tab.document,
                                 )
                             })
-                            .map(|tab| tab.id)
-                            .unwrap_or_else(|| {
-                                self.global_search.directory_document_id(&result.path)
-                            });
+                            .map(|tab| tab.id);
+                        let directory_identity = open_document_id
+                            .is_none()
+                            .then(|| self.global_search.directory_document_identity(&result.path));
+                        let document_id = open_document_id.unwrap_or_else(|| {
+                            directory_identity
+                                .as_ref()
+                                .expect("directory identity")
+                                .id()
+                        });
                         if job.owner == SearchTabOwner::AllOpen {
                             state.ranges.completed(
                                 &result.path,
@@ -431,6 +437,7 @@ impl Workspace {
                         (
                             document_id,
                             GlobalSearchDocumentResult {
+                                _directory_identity: directory_identity,
                                 title: result.title,
                                 path: result.path,
                                 document: result.document,

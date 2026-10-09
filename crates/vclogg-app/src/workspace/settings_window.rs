@@ -419,9 +419,9 @@ impl SettingsWindow {
                         log::warn!("Could not save settings window size: {error:#}");
                     }
                 });
-                cx.global_mut::<WorkspaceWindowRegistry>()
-                    .closed_flush_tasks
-                    .push(task);
+                cx.update_global::<WorkspaceWindowRegistry, _>(|registry, cx| {
+                    registry.closed_flush_tasks.push(task, cx);
+                });
             }
         });
     }

@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex, Weak},
 };
 
 use gpui_kit::component::{
@@ -112,6 +112,8 @@ impl SearchScope {
 
 #[derive(Clone)]
 pub(crate) struct GlobalSearchDocumentResult {
+    // Shared by every clone of the result; retires the path after its last snapshot.
+    pub(crate) _directory_identity: Option<Arc<DirectoryDocumentIdentity>>,
     pub(crate) title: SharedString,
     pub(crate) path: PathBuf,
     pub(crate) document: Arc<LogDocument>,
@@ -456,33 +458,75 @@ impl PathPreferences {
     }
 }
 
+type DirectoryIdentityMap = BTreeMap<PathMatchKey, (u64, Weak<DirectoryDocumentIdentity>)>;
+
+pub(crate) struct DirectoryDocumentIdentity {
+    id: u64,
+    path: PathMatchKey,
+    registry: Weak<Mutex<DirectoryIdentityMap>>,
+}
+
+impl DirectoryDocumentIdentity {
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
+}
+
+impl Drop for DirectoryDocumentIdentity {
+    fn drop(&mut self) {
+        if let Some(registry) = self.registry.upgrade() {
+            let mut registry = registry.lock().unwrap_or_else(|error| error.into_inner());
+            // A replacement may have been allocated after our last strong reference
+            // disappeared but before this destructor acquired the lock.
+            if registry
+                .get(&self.path)
+                .is_some_and(|(id, _)| *id == self.id)
+            {
+                registry.remove(&self.path);
+            }
+        }
+    }
+}
+
 struct DirectoryDocumentIds {
-    by_path: BTreeMap<PathMatchKey, u64>,
+    by_path: Arc<Mutex<DirectoryIdentityMap>>,
     next: u64,
 }
 
 impl Default for DirectoryDocumentIds {
     fn default() -> Self {
         Self {
-            by_path: BTreeMap::new(),
+            by_path: Arc::default(),
             next: DIRECTORY_DOCUMENT_ID_BASE,
         }
     }
 }
 
 impl DirectoryDocumentIds {
-    fn id_for_path(&mut self, path: &Path) -> u64 {
+    fn id_for_path(&mut self, path: &Path) -> Arc<DirectoryDocumentIdentity> {
         let key = path_match_key(path);
-        if let Some(id) = self.by_path.get(&key) {
-            return *id;
+        let mut entries = self
+            .by_path
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(identity) = entries
+            .get(&key)
+            .and_then(|(_, identity)| identity.upgrade())
+        {
+            return identity;
         }
         let id = self.next;
         self.next = self
             .next
             .checked_add(1)
             .expect("directory result identity space exhausted");
-        self.by_path.insert(key, id);
-        id
+        let identity = Arc::new(DirectoryDocumentIdentity {
+            id,
+            path: key.clone(),
+            registry: Arc::downgrade(&self.by_path),
+        });
+        entries.insert(key, (id, Arc::downgrade(&identity)));
+        identity
     }
 }
 
@@ -510,7 +554,10 @@ impl GlobalSearchState {
         }
     }
 
-    pub(crate) fn directory_document_id(&mut self, path: &Path) -> u64 {
+    pub(crate) fn directory_document_identity(
+        &mut self,
+        path: &Path,
+    ) -> Arc<DirectoryDocumentIdentity> {
         self.directory_document_ids.id_for_path(path)
     }
 
@@ -567,8 +614,42 @@ impl<T> DocumentTaskRegistry<T> {
     }
 }
 
+/// Keep a merged baseline only while another save of the same path needs it.
+#[derive(Default)]
+pub(crate) struct PendingSessionSaves {
+    by_path: BTreeMap<PathMatchKey, (usize, Option<FileSessionState>)>,
+}
+
+impl PendingSessionSaves {
+    pub(crate) fn begin(&mut self, path: &Path) {
+        self.by_path.entry(path_match_key(path)).or_default().0 += 1;
+    }
+
+    pub(crate) fn baseline(&self, path: &Path, base: FileSessionState) -> FileSessionState {
+        self.by_path
+            .get(&path_match_key(path))
+            .and_then(|(_, saved)| saved.as_ref())
+            .filter(|saved| saved.revision > base.revision)
+            .cloned()
+            .unwrap_or(base)
+    }
+
+    pub(crate) fn finish(&mut self, path: &Path, saved: Option<FileSessionState>) {
+        let key = path_match_key(path);
+        let Some((pending, previous)) = self.by_path.get_mut(&key) else {
+            return;
+        };
+        *pending -= 1;
+        if *pending == 0 {
+            self.by_path.remove(&key);
+        } else if let Some(saved) = saved {
+            *previous = Some(saved);
+        }
+    }
+}
+
 pub(crate) struct PersistenceController {
-    pub(crate) state_tasks: Vec<Task<()>>,
+    pub(crate) state_tasks: crate::pending_tasks::PendingTasks,
     pub(crate) checkpoint_tasks: DocumentTaskRegistry<Task<()>>,
     pub(crate) workspace_order_task: Option<Task<()>>,
     pub(crate) search_history_save_task: Option<Task<()>>,
@@ -581,7 +662,7 @@ pub(crate) struct PersistenceController {
     pub(crate) store: Option<Arc<StateStore>>,
     pub(crate) pending_sessions: Vec<(PathBuf, FileSessionState, FileSessionState)>,
     pub(crate) pending_session_overrides: BTreeMap<PathBuf, FileSessionState>,
-    pub(crate) last_saved_sessions: BTreeMap<PathBuf, FileSessionState>,
+    pub(crate) session_saves: PendingSessionSaves,
     pub(crate) session_save_task: Option<Task<()>>,
     pub(crate) _bootstrap_task: Task<()>,
 }
@@ -589,7 +670,7 @@ pub(crate) struct PersistenceController {
 impl PersistenceController {
     pub(crate) fn new(bootstrap_task: Task<()>) -> Self {
         Self {
-            state_tasks: Vec::new(),
+            state_tasks: crate::pending_tasks::PendingTasks::default(),
             checkpoint_tasks: DocumentTaskRegistry::default(),
             workspace_order_task: None,
             search_history_save_task: None,
@@ -602,7 +683,7 @@ impl PersistenceController {
             store: None,
             pending_sessions: Vec::new(),
             pending_session_overrides: BTreeMap::new(),
-            last_saved_sessions: BTreeMap::new(),
+            session_saves: PendingSessionSaves::default(),
             session_save_task: None,
             _bootstrap_task: bootstrap_task,
         }
@@ -615,6 +696,7 @@ mod state_controller_tests {
 
     fn global_result(path: &str) -> GlobalSearchDocumentResult {
         GlobalSearchDocumentResult {
+            _directory_identity: None,
             title: path.to_string().into(),
             path: PathBuf::from(path),
             document: Arc::new(LogDocument::placeholder(path)),
@@ -783,14 +865,76 @@ mod state_controller_tests {
         let first = identities.id_for_path(Path::new("logs/a.log"));
         let second = identities.id_for_path(Path::new("logs/b.log"));
 
-        assert_ne!(first, second);
-        assert_eq!(identities.id_for_path(Path::new("logs/a.log")), first);
-        assert_eq!(identities.id_for_path(Path::new("logs/b.log")), second);
-        assert!(first >= DIRECTORY_DOCUMENT_ID_BASE);
+        assert_ne!(first.id(), second.id());
         assert_eq!(
-            identities.id_for_path(Path::new("LOGS/A.LOG")) == first,
+            identities.id_for_path(Path::new("logs/a.log")).id(),
+            first.id()
+        );
+        assert_eq!(
+            identities.id_for_path(Path::new("logs/b.log")).id(),
+            second.id()
+        );
+        assert!(first.id() >= DIRECTORY_DOCUMENT_ID_BASE);
+        assert_eq!(
+            identities.id_for_path(Path::new("LOGS/A.LOG")).id() == first.id(),
             cfg!(windows)
         );
+    }
+
+    #[test]
+    fn directory_identities_follow_the_last_result_snapshot() {
+        let mut identities = DirectoryDocumentIds::default();
+        let path = Path::new("logs/retained.log");
+        let identity = identities.id_for_path(path);
+        let first_id = identity.id();
+        let mut result = global_result("logs/retained.log");
+        result._directory_identity = Some(identity);
+        let results = [(first_id, result)]
+            .into_iter()
+            .collect::<GlobalSearchResults>();
+        let retained_snapshot = results.clone();
+        drop(results);
+
+        for ix in 0..1_000 {
+            drop(identities.id_for_path(Path::new(&format!("logs/rotated-{ix}.log"))));
+            assert_eq!(identities.by_path.lock().unwrap().len(), 1);
+        }
+        assert_eq!(identities.id_for_path(path).id(), first_id);
+        drop(retained_snapshot);
+        assert!(identities.by_path.lock().unwrap().is_empty());
+        assert_ne!(identities.id_for_path(path).id(), first_id);
+    }
+
+    #[test]
+    fn session_save_baselines_survive_queued_saves_and_release_after_failure() {
+        let mut saves = PendingSessionSaves::default();
+        let path = Path::new("logs/a.log");
+        for _ in 0..3 {
+            saves.begin(path);
+        }
+        let saved = FileSessionState {
+            revision: 7,
+            query_text: "merged".into(),
+            ..Default::default()
+        };
+        saves.finish(path, Some(saved.clone()));
+        assert_eq!(saves.baseline(path, FileSessionState::default()), saved);
+        saves.finish(path, None);
+        assert_eq!(saves.baseline(path, FileSessionState::default()), saved);
+        let newer = FileSessionState {
+            revision: 8,
+            ..Default::default()
+        };
+        assert_eq!(saves.baseline(path, newer.clone()), newer);
+        saves.finish(path, None);
+        assert!(saves.by_path.is_empty());
+
+        for ix in 0..1_000 {
+            let path = PathBuf::from(format!("logs/{ix}.log"));
+            saves.begin(&path);
+            saves.finish(&path, Some(saved.clone()));
+        }
+        assert!(saves.by_path.is_empty());
     }
 
     #[test]
