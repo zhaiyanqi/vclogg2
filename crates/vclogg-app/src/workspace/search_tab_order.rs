@@ -32,6 +32,69 @@ impl SearchTabLayout {
 }
 
 impl Workspace {
+    pub(super) fn animate_search_tab_close(
+        &mut self,
+        key: Key,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if cx.reduce_motion() || self.search_tabs.strip_collapsed {
+            return;
+        }
+        let Some(width) = self
+            .search_tabs
+            .layout
+            .borrow()
+            .slots
+            .get(&key)
+            .map(|bounds| bounds.size.width)
+        else {
+            return;
+        };
+        let Some(state) = self.search_tabs.state(key.0, key.1) else {
+            return;
+        };
+        let title = self.search_tab_title(key.0, state);
+        let mut index = index;
+        for closing in &self.search_tabs.closing {
+            if closing.index <= index {
+                index += 1;
+            }
+        }
+        self.search_tabs
+            .closing
+            .push(super::search_tabs::ClosingSearchTab {
+                key,
+                index,
+                title,
+                selected: self.active_search_tab_key() == Some(key),
+                width,
+            });
+        self.search_tabs.closing.sort_by_key(|tab| tab.index);
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(super::tab_drag::ANIMATION_DURATION)
+                .await;
+            _ = this.update(cx, |this, cx| {
+                if let Some(ix) = this
+                    .search_tabs
+                    .closing
+                    .iter()
+                    .position(|tab| tab.key == key)
+                {
+                    let removed = this.search_tabs.closing.remove(ix);
+                    for tab in &mut this.search_tabs.closing {
+                        if tab.index > removed.index {
+                            tab.index -= 1;
+                        }
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn move_search_tab_drag(
         &mut self,
         x: Pixels,

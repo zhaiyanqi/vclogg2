@@ -323,6 +323,15 @@ fn search_tab_list_opens_upward_and_switches_and_closes_tabs(cx: &mut TestAppCon
         assert_eq!(workspace.read(cx).active_search_tab_key(), active);
         assert!(window.find("popup-menu").visible());
         assert!(window.try_find("search-tab-list-close-AllOpen-2").is_none());
+        assert!(
+            workspace
+                .read(cx)
+                .search_tabs
+                .closing
+                .iter()
+                .any(|tab| { tab.key == (SearchTabOwner::AllOpen, SearchTabId(2)) })
+        );
+        assert!(window.try_find("closing-search-tab-AllOpen-2").is_some());
         window.press("escape", cx);
     })
     .unwrap();
@@ -345,6 +354,15 @@ fn search_tab_list_opens_upward_and_switches_and_closes_tabs(cx: &mut TestAppCon
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
         assert!(window.try_find("popup-menu").is_none());
+    })
+    .unwrap();
+    cx.background_executor
+        .advance_clock(std::time::Duration::from_millis(200));
+    cx.run_until_parked();
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(workspace.read(cx).search_tabs.closing.is_empty());
+        assert!(window.try_find("closing-search-tab-AllOpen-2").is_none());
     })
     .unwrap();
 }
@@ -649,6 +667,7 @@ fn search_tab_strip_toggle_stays_fixed_while_tabs_scroll(cx: &mut TestAppContext
         Root::new(view, window, cx)
     });
     let workspace = workspace.unwrap();
+    let executor = cx.background_executor.clone();
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
         let button = window.find("toggle-search-tab-strip").bounds();
@@ -668,10 +687,18 @@ fn search_tab_strip_toggle_stays_fixed_while_tabs_scroll(cx: &mut TestAppContext
         assert_eq!(window.find("toggle-search-tab-strip").bounds(), button);
         let active = workspace.read(cx).active_search_tab_key();
         let keys = workspace.read(cx).visible_search_tab_keys();
+        cx.set_reduce_motion(true);
         window.click("toggle-search-tab-strip", cx);
         assert!(workspace.read(cx).search_tabs.strip_collapsed);
-        assert!(window.try_find("search-tab-viewport").is_none());
-        assert_eq!(window.find("toggle-search-tab-strip").bounds(), button);
+        assert_eq!(
+            window.find("search-tab-viewport").bounds().size.width,
+            px(0.)
+        );
+        assert!(window.find("toggle-search-tab-strip").bounds().left() < button.left());
+        let add = window.find("add-search-tab").bounds();
+        let list = window.find("search-tab-list").bounds();
+        let toggle = window.find("toggle-search-tab-strip").bounds();
+        assert_eq!(toggle.left() - list.right(), list.left() - add.right());
         assert_eq!(workspace.read(cx).active_search_tab_key(), active);
         assert_eq!(workspace.read(cx).visible_search_tab_keys(), keys);
         window.click("toggle-search-tab-strip", cx);
@@ -679,6 +706,44 @@ fn search_tab_strip_toggle_stays_fixed_while_tabs_scroll(cx: &mut TestAppContext
         assert!(window.find("search-tab-viewport").visible());
         assert_eq!(window.find("toggle-search-tab-strip").bounds(), button);
         assert_eq!(workspace.read(cx).search_tabs.scroll.offset(), scrolled);
+        workspace.update(cx, |view, cx| {
+            view.search_tabs
+                .groups
+                .get_mut(&SearchTabOwner::AllOpen)
+                .unwrap()
+                .tabs
+                .truncate(1);
+            cx.notify();
+        });
+        window.render_frame(cx);
+        let last = window.find("search-tab-AllOpen-1").bounds();
+        let toggle = window.find("toggle-search-tab-strip").bounds();
+        assert!(toggle.left() >= last.right());
+        assert_eq!(toggle.left() - last.right(), list.left() - add.right());
+        let close = window.find("close-search-tab-AllOpen-1").bounds();
+        assert!(last.right() - close.right() <= px(1.));
+        assert!(toggle.right() < container.right());
+        cx.set_reduce_motion(false);
+        window.click("toggle-search-tab-strip", cx);
+        let initial_width = window.find("search-tab-viewport").bounds().size.width;
+        for _ in 0..5 {
+            executor.advance_clock(std::time::Duration::from_millis(16));
+            window.simulate_next_frame(cx);
+            window.render_frame(cx);
+        }
+        let intermediate_width = window.find("search-tab-viewport").bounds().size.width;
+        assert!(intermediate_width > px(0.) && intermediate_width < initial_width);
+        // Retarget the moving strip without racing a pointer hit against the next frame.
+        workspace.update(cx, |view, cx| {
+            view.search_tabs.strip_collapsed = false;
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert!(window.find("search-tab-viewport").bounds().size.width < initial_width);
+        cx.set_reduce_motion(true);
+        window.render_frame(cx);
+        assert!(!workspace.read(cx).search_tabs.strip_collapsed);
+        assert_eq!(window.find("toggle-search-tab-strip").bounds(), toggle);
     })
     .unwrap();
 }
