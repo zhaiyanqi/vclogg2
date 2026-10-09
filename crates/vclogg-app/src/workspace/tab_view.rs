@@ -1,6 +1,13 @@
 use super::*;
 use gpui_kit::base::TestSupportExt as _;
 
+pub(super) struct WorkspaceTabPresentation {
+    title: SharedString,
+    selected: bool,
+    dirty: bool,
+    editing: bool,
+}
+
 impl Workspace {
     pub(super) fn render_workspace_tab(
         &self,
@@ -77,7 +84,7 @@ impl Workspace {
             .opacity(if self.tab_drag.file_hidden == Some(tab_id) {
                 0.
             } else {
-                1.
+                self.workspace_tab_opacity(tab_id)
             })
             .aria_label(tab_title.clone())
             .selected(selected)
@@ -181,6 +188,18 @@ impl Workspace {
         tab_id: WorkspaceTabId,
         cx: &mut Context<Self>,
     ) -> gpui_kit::Div {
+        Self::render_workspace_tab_contents(
+            tab_id,
+            &self.workspace_tab_presentation(tab_id),
+            false,
+            cx,
+        )
+    }
+
+    pub(super) fn workspace_tab_presentation(
+        &self,
+        tab_id: WorkspaceTabId,
+    ) -> WorkspaceTabPresentation {
         let tab_title = self.workspace_tab_title(tab_id);
         let selected = self.active_tab_id == tab_id;
         let dirty = match tab_id {
@@ -207,6 +226,27 @@ impl Workspace {
                 .get(&id)
                 .is_some_and(|draft| draft.active),
         };
+        WorkspaceTabPresentation {
+            title: tab_title,
+            selected,
+            dirty,
+            editing,
+        }
+    }
+
+    pub(super) fn render_workspace_tab_contents(
+        tab_id: WorkspaceTabId,
+        presentation: &WorkspaceTabPresentation,
+        closing: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::Div {
+        let WorkspaceTabPresentation {
+            title: tab_title,
+            selected,
+            dirty,
+            editing,
+        } = presentation;
+        let (selected, dirty, editing) = (*selected, *dirty, *editing);
         let tab_icon: &'static [u8] = if editing {
             include_bytes!("../../assets/icons/file-pen-line.svg")
         } else {
@@ -229,6 +269,7 @@ impl Workspace {
             WorkspaceTabId::New(id) => ElementId::from(("close-new-tab", id)),
         };
         let close_button = Button::new(close_button_id)
+            .disabled(closing)
             .xsmall()
             .ghost()
             .icon(IconName::Close)
