@@ -49,24 +49,15 @@ fn closing_the_last_shared_tab_stays_closed_after_restore() {
 }
 
 #[test]
-fn closing_the_last_file_search_preserves_the_existing_session() {
+fn closing_the_last_file_search_removes_the_session() {
     let owner = SearchTabOwner::File(10);
     let mut tabs = group(&[4, 5], 5);
-    assert!(tabs.is_closable(owner, SearchTabId(4)));
     tabs.close(owner, SearchTabId(4));
-    tabs.tabs[0].saved.completed = Some(tabs.tabs[0].saved.draft.clone());
-    tabs.tabs[0].saved.name = Some("custom title".into());
-    assert!(!tabs.is_closable(owner, SearchTabId(5)));
+    assert!(tabs.is_closable(owner, SearchTabId(5)));
     tabs.close(owner, SearchTabId(5));
-    assert_eq!(tabs.active, SearchTabId(5));
-    assert_eq!(tabs.tabs.len(), 1);
-    assert_eq!(tabs.tabs[0].saved.draft.text, "query 5");
-    assert!(tabs.tabs[0].saved.completed.is_some());
-    assert_eq!(tabs.tabs[0].saved.name.as_deref(), Some("custom title"));
-    assert!(!tabs.tabs[0].facade_dirty);
-    let restored = SearchTabGroup::restored(tabs.persisted());
-    assert_eq!(restored.scope_target(owner), Some(SearchTabId(5)));
-    assert_eq!(restored.next_id, 6);
+    assert!(tabs.tabs.is_empty());
+    assert_eq!(tabs.active, SearchTabId(0));
+    assert!(!tabs.is_closable(owner, SearchTabId(5)));
 }
 
 #[test]
@@ -506,39 +497,59 @@ fn file_switches_restore_local_queries_without_leaving_shared_searches(cx: &mut 
             WorkspaceTabId::Document(a)
         );
         assert_eq!(workspace.read(cx).query.read(cx).value(), "local A");
-        // Closing an unrelated file's last search neither changes the active file nor its query.
+        // Closing an inactive file's final search closes that file, preserving the active one.
         window.click(format!("close-search-tab-File({b})-1"), cx);
         assert_eq!(
             workspace.read(cx).active_tab_id,
             WorkspaceTabId::Document(a)
         );
         assert_eq!(workspace.read(cx).query.read(cx).value(), "local A");
-        let b_remaining = format!("search-tab-File({b})-1");
-        assert_eq!(window.find(b_remaining.clone()).label(), Some("b.log_1"));
-        assert!(window.try_find(format!("search-tab-File({b})-2")).is_none());
+        assert!(
+            !workspace
+                .read(cx)
+                .tabs
+                .contains(&WorkspaceTabId::Document(b))
+        );
+        assert!(
+            !workspace
+                .read(cx)
+                .search_tabs
+                .groups
+                .contains_key(&SearchTabOwner::File(b))
+        );
+        assert!(paths[1].exists());
+        // A file with multiple searches remains open until its final search closes.
         window.click("search-tab-list", cx);
-        window.click(format!("search-tab-list-close-File({b})-1"), cx);
+        window.click(format!("search-tab-list-close-File({a})-2"), cx);
+        assert!(
+            workspace
+                .read(cx)
+                .tabs
+                .contains(&WorkspaceTabId::Document(a))
+        );
+        window.click(format!("search-tab-list-close-File({a})-1"), cx);
+        assert!(
+            !workspace
+                .read(cx)
+                .tabs
+                .contains(&WorkspaceTabId::Document(a))
+        );
+        assert!(workspace.read(cx).documents.is_empty());
         assert!(
             workspace
                 .read(cx)
                 .search_tabs
-                .state(SearchTabOwner::File(b), SearchTabId(1))
-                .is_some()
+                .groups
+                .contains_key(&SearchTabOwner::AllOpen)
         );
-        window.press("escape", cx);
-        window.click(b_remaining, cx);
-        assert_eq!(
-            workspace.read(cx).active_tab_id,
-            WorkspaceTabId::Document(b)
+        assert!(
+            workspace
+                .read(cx)
+                .search_tabs
+                .groups
+                .contains_key(&SearchTabOwner::Directory)
         );
-        for key in ["delete", "backspace"] {
-            window.press(key, cx);
-            assert_eq!(workspace.read(cx).query.read(cx).value(), "local B");
-            assert_eq!(
-                workspace.read(cx).active_search_tab_key(),
-                Some((SearchTabOwner::File(b), SearchTabId(1)))
-            );
-        }
+        assert!(paths[0].exists());
     })
     .unwrap();
 }

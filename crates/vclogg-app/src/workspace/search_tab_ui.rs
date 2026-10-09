@@ -610,6 +610,10 @@ impl Workspace {
                                     this.close_search_tab(owner, id, window, cx);
                                 });
                                 _ = menu_handle.update(cx, |menu, cx| {
+                                    if window.has_active_dialog(cx) {
+                                        cx.emit(gpui_kit::DismissEvent);
+                                        return;
+                                    }
                                     if workspace.read(cx).visible_search_tab_keys().is_empty() {
                                         workspace.read(cx).focus_handle.clone().focus(window, cx);
                                         cx.emit(gpui_kit::DismissEvent);
@@ -764,6 +768,16 @@ impl Workspace {
         let Some(visible_ix) = keys.iter().position(|key| *key == (owner, id)) else {
             return;
         };
+        if let SearchTabOwner::File(document_id) = owner
+            && self.search_tabs.groups[&owner].tabs.len() == 1
+        {
+            self.request_close_workspace_tabs(
+                BTreeSet::from([WorkspaceTabId::Document(document_id)]),
+                window,
+                cx,
+            );
+            return;
+        }
         let was_active = self.active_search_tab_key() == Some((owner, id));
         self.animate_search_tab_close((owner, id), visible_ix, cx);
         self.capture_active_search_tab(cx);
