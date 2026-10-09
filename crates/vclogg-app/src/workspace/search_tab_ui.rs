@@ -421,6 +421,106 @@ impl Workspace {
         .into_any_element()
     }
 
+    pub(super) fn render_search_tab_list(&self, cx: &mut Context<Self>) -> AnyElement {
+        let workspace = cx.entity();
+        crate::button_accessibility::with_label(
+            Button::new("search-tab-list")
+                .small()
+                .ghost()
+                .dropdown_caret(true)
+                .disabled(self.visible_search_tab_keys().is_empty()),
+            crate::tr!("所有搜索标签", "All search tabs"),
+        )
+        .tooltip(crate::tr!("所有搜索标签", "All search tabs"))
+        .dropdown_menu_with_anchor(gpui_kit::Anchor::BottomLeft, move |menu, window, cx| {
+            Self::build_search_tab_list(menu, &workspace, window, cx)
+        })
+        .into_any_element()
+    }
+
+    fn build_search_tab_list(
+        menu: PopupMenu,
+        workspace: &Entity<Self>,
+        window: &mut Window,
+        cx: &mut Context<PopupMenu>,
+    ) -> PopupMenu {
+        let mut menu =
+            Self::popup_menu_with_workspace_action_context(menu, workspace, cx).scrollable(true);
+        let view = workspace.read(cx);
+        let active = view.active_search_tab_key();
+        let items = view
+            .visible_search_tab_keys()
+            .into_iter()
+            .map(|(owner, id)| {
+                let state = view.search_tabs.state(owner, id).unwrap();
+                (
+                    owner,
+                    id,
+                    view.search_tab_title(owner, state),
+                    view.search_tabs.groups[&owner].is_closable(owner, id),
+                )
+            })
+            .collect::<Vec<_>>();
+        if items.is_empty() {
+            return menu.label(crate::tr!("暂无搜索标签", "No search tabs"));
+        }
+        for (owner, id, title, closable) in items {
+            let close_workspace = workspace.downgrade();
+            let menu_handle = cx.entity().downgrade();
+            menu = menu.item(
+                PopupMenuItem::element(move |_, _| {
+                    let workspace = close_workspace.clone();
+                    let menu_handle = menu_handle.clone();
+                    h_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_2()
+                        .child(div().flex_1().truncate().child(title.clone()))
+                        .child(
+                            crate::button_accessibility::with_label(
+                                Button::new(format!("search-tab-list-close-{owner:?}-{}", id.0))
+                                    .xsmall()
+                                    .ghost()
+                                    .icon(IconName::Close)
+                                    .disabled(!closable),
+                                crate::tr_args!("关闭 {}", "Close {}", title),
+                            )
+                            .tooltip(crate::tr_args!("关闭 {}", "Close {}", title))
+                            .on_click(move |_, window, cx| {
+                                cx.stop_propagation();
+                                let Some(workspace) = workspace.upgrade() else {
+                                    return;
+                                };
+                                workspace.update(cx, |this, cx| {
+                                    this.close_search_tab(owner, id, window, cx);
+                                });
+                                _ = menu_handle.update(cx, |menu, cx| {
+                                    if workspace.read(cx).visible_search_tab_keys().is_empty() {
+                                        workspace.read(cx).focus_handle.clone().focus(window, cx);
+                                        cx.emit(gpui_kit::DismissEvent);
+                                        return;
+                                    }
+                                    menu.rebuild(window, cx, |menu, window, cx| {
+                                        Self::build_search_tab_list(menu, &workspace, window, cx)
+                                    });
+                                    menu.focus_handle(cx).focus(window, cx);
+                                });
+                            }),
+                        )
+                })
+                .icon(owner.icon())
+                .checked(active == Some((owner, id)))
+                .on_click(window.listener_for(
+                    workspace,
+                    move |this, _, window, cx| {
+                        this.activate_search_tab(owner, id, window, cx);
+                    },
+                )),
+            );
+        }
+        menu
+    }
+
     fn add_search_tab(
         &mut self,
         owner: SearchTabOwner,
@@ -444,11 +544,13 @@ impl Workspace {
         let Some(source) = self.search_tabs.state(owner, current).cloned() else {
             return;
         };
+        let position = self.search_tabs.next_position();
         let group = self.search_tabs.groups.get_mut(&owner).unwrap();
         let id = SearchTabId(group.next_id);
         group.next_id = group.next_id.saturating_add(1);
         let saved = PersistedSearchTab {
             id: id.0,
+            position: Some(position),
             draft: SearchTabQuery {
                 text: String::new(),
                 ..source.saved.draft

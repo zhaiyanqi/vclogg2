@@ -244,6 +244,26 @@ impl SearchTabs {
         keys
     }
 
+    pub(super) fn next_position(&mut self) -> u64 {
+        let mut next = self
+            .groups
+            .values()
+            .flat_map(|group| &group.tabs)
+            .filter_map(|tab| tab.saved.position)
+            .max()
+            .map_or(0, |position| position.saturating_add(1));
+        // Give legacy sessions a position before appending anything new, preserving
+        // the order already displayed across all three search scopes.
+        for (owner, id) in self.visible_keys() {
+            let saved = &mut self.state_mut(owner, id).unwrap().saved;
+            if saved.position.is_none() {
+                saved.position = Some(next);
+                next = next.saturating_add(1);
+            }
+        }
+        next
+    }
+
     pub(super) fn reorder(&mut self, key: (SearchTabOwner, SearchTabId), target_ix: usize) -> bool {
         let mut keys = self.visible_keys();
         let Some(from) = keys.iter().position(|candidate| *candidate == key) else {
@@ -440,6 +460,15 @@ impl Workspace {
     }
 
     pub(super) fn ensure_search_tab_group(&mut self, owner: SearchTabOwner, cx: &App) {
+        if self
+            .search_tabs
+            .groups
+            .get(&owner)
+            .is_some_and(|group| !group.tabs.is_empty())
+        {
+            return;
+        }
+        let position = self.search_tabs.next_position();
         if let Some(group) = self.search_tabs.groups.get_mut(&owner) {
             if group.tabs.is_empty() {
                 let id = group.next_id.max(1);
@@ -449,6 +478,7 @@ impl Workspace {
                     .tabs
                     .push(SearchTabState::restored(PersistedSearchTab {
                         id,
+                        position: Some(position),
                         ..Default::default()
                     }));
             }
@@ -479,6 +509,7 @@ impl Workspace {
         self.search_tabs
             .groups
             .insert(owner, SearchTabGroup::restored(saved));
+        self.search_tabs.next_position();
         if self.search_tabs.groups[&owner].tabs.is_empty() {
             self.ensure_search_tab_group(owner, cx);
         }
