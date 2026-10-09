@@ -646,6 +646,18 @@ impl Workspace {
         for document_id in &document_ids {
             self.cancel_search_for(*document_id);
             let owner = search_tabs::SearchTabOwner::File(*document_id);
+            if let Some(group) = self.search_tabs.groups.get(&owner)
+                && group.tabs.len() == 1
+            {
+                let key = (owner, group.active);
+                if let Some(index) = self
+                    .visible_search_tab_keys()
+                    .iter()
+                    .position(|item| *item == key)
+                {
+                    self.animate_search_tab_close(key, index, cx);
+                }
+            }
             self.search_tabs.groups.remove(&owner);
             {
                 let mut layout = self.search_tabs.layout.borrow_mut();

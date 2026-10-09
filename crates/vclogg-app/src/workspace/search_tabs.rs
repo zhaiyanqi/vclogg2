@@ -121,9 +121,8 @@ impl SearchTabGroup {
         .map(|tab| SearchTabId(tab.saved.id))
     }
 
-    pub(super) fn is_closable(&self, owner: SearchTabOwner, id: SearchTabId) -> bool {
+    pub(super) fn is_closable(&self, _owner: SearchTabOwner, id: SearchTabId) -> bool {
         self.tabs.iter().any(|tab| tab.saved.id == id.0)
-            && (!matches!(owner, SearchTabOwner::File(_)) || self.tabs.len() > 1)
     }
 
     pub(super) fn close(&mut self, owner: SearchTabOwner, id: SearchTabId) {
