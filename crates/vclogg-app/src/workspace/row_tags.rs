@@ -637,9 +637,8 @@ impl Workspace {
             }
             registry.row_tag_preset_save_completion.replace(receiver)
         });
-        self.persistence
-            .state_tasks
-            .push(cx.spawn_in(window, async move |_, cx| {
+        self.persistence.state_tasks.push(
+            cx.spawn_in(window, async move |_, cx| {
                 if let Some(previous) = previous {
                     _ = previous.recv().await;
                 }
@@ -717,7 +716,9 @@ impl Workspace {
                 }
                 // Publish the result before the next queued add/delete can commit.
                 drop(sender);
-            }));
+            }),
+            cx,
+        );
     }
 
     fn tag_region_focus(&self, region: WrappedRegion) -> FocusHandle {

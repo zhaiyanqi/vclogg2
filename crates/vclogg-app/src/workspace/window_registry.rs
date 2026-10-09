@@ -336,8 +336,8 @@ impl Workspace {
                 log::error!("关闭窗口时文件会话未能保存：{error}");
             }
         });
-        cx.update_global::<WorkspaceWindowRegistry, _>(|registry, _| {
-            registry.closed_flush_tasks.push(task)
+        cx.update_global::<WorkspaceWindowRegistry, _>(|registry, cx| {
+            registry.closed_flush_tasks.push(task, cx)
         });
     }
 
@@ -596,7 +596,7 @@ impl Workspace {
                         .iter()
                         .map(|entry| entry.workspace.clone())
                         .collect::<Vec<_>>(),
-                    std::mem::take(&mut registry.closed_flush_tasks),
+                    registry.closed_flush_tasks.take_all(),
                 )
             });
         closed_flush_tasks.extend(settings_save);

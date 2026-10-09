@@ -485,6 +485,7 @@ fn pending_search_jump_rejects_a_reopened_snapshot_at_the_same_path() {
 #[test]
 fn unopened_match_rows_create_pending_jumps_for_global_and_directory_results() {
     let result = GlobalSearchDocumentResult {
+        _directory_identity: None,
         title: "unopened.log".into(),
         path: PathBuf::from("logs/unopened.log"),
         document: Arc::new(LogDocument::placeholder("logs/unopened.log")),

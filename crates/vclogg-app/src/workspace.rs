@@ -393,7 +393,7 @@ struct RegisteredWorkspaceWindow {
 struct WorkspaceWindowRegistry {
     windows: Vec<RegisteredWorkspaceWindow>,
     next_focus_order: u64,
-    closed_flush_tasks: Vec<Task<()>>,
+    closed_flush_tasks: crate::pending_tasks::PendingTasks,
     predefined_filters: Option<Vec<PredefinedFilter>>,
     row_tag_presets: Option<Vec<crate::log_tags::TagPreset>>,
     row_tag_sequence: u64,
@@ -2317,7 +2317,9 @@ impl Workspace {
             });
         });
         let mut persistence = PersistenceController::new(state_bootstrap_task);
-        persistence.state_tasks.extend(index_cache_cleanup_task);
+        if let Some(task) = index_cache_cleanup_task {
+            persistence.state_tasks.push(task, cx);
+        }
 
         Self {
             primary_window,

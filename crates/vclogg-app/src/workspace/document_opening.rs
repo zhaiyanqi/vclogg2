@@ -560,9 +560,8 @@ impl Workspace {
             return;
         }
 
-        self.persistence
-            .state_tasks
-            .push(cx.spawn_in(window, async move |this, cx| {
+        self.persistence.state_tasks.push(
+            cx.spawn_in(window, async move |this, cx| {
                 let result = cx
                     .background_spawn(async move {
                         store.record_opened(&paths)?;
@@ -583,6 +582,8 @@ impl Workspace {
                         cx,
                     ),
                 });
-            }));
+            }),
+            cx,
+        );
     }
 }

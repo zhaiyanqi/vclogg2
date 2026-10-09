@@ -34,6 +34,7 @@ mod modal_event_layer;
 mod notifications;
 mod open_directory;
 mod path_identity;
+mod pending_tasks;
 mod predefined_filters;
 mod predefined_filters_dialog;
 mod rename_tab_dialog;

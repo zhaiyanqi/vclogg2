@@ -99,9 +99,8 @@ impl Workspace {
         let pinned = !self.active_file_is_pinned();
         self.pinned_updating = true;
         cx.notify();
-        self.persistence
-            .state_tasks
-            .push(cx.spawn_in(window, async move |this, cx| {
+        self.persistence.state_tasks.push(
+            cx.spawn_in(window, async move |this, cx| {
                 let result = cx
                     .background_spawn(async move {
                         store.set_pinned(&path, pinned)?;
@@ -125,7 +124,9 @@ impl Workspace {
                     }
                     cx.notify();
                 });
-            }));
+            }),
+            cx,
+        );
     }
 
     pub(super) fn clear_pinned_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -137,9 +138,8 @@ impl Workspace {
         }
         self.pinned_updating = true;
         cx.notify();
-        self.persistence
-            .state_tasks
-            .push(cx.spawn_in(window, async move |this, cx| {
+        self.persistence.state_tasks.push(
+            cx.spawn_in(window, async move |this, cx| {
                 let result = cx
                     .background_spawn(async move {
                         store.clear_pinned()?;
@@ -163,7 +163,9 @@ impl Workspace {
                     }
                     cx.notify();
                 });
-            }));
+            }),
+            cx,
+        );
     }
 
     pub(super) fn open_history_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -212,9 +214,8 @@ impl Workspace {
         }
         self.history_dialog_loading = true;
         cx.notify();
-        self.persistence
-            .state_tasks
-            .push(cx.spawn_in(window, async move |this, cx| {
+        self.persistence.state_tasks.push(
+            cx.spawn_in(window, async move |this, cx| {
                 let store_for_query = store.clone();
                 let result = cx
                     .background_spawn(async move {
@@ -295,7 +296,9 @@ impl Workspace {
                     }
                     cx.notify();
                 });
-            }));
+            }),
+            cx,
+        );
     }
 
     pub(super) fn remember_settings_category(
@@ -830,9 +833,8 @@ impl Workspace {
         };
         self.predefined_filters_saving = true;
         cx.notify();
-        self.persistence
-            .state_tasks
-            .push(cx.spawn_in(window, async move |this, cx| {
+        self.persistence.state_tasks.push(
+            cx.spawn_in(window, async move |this, cx| {
                 let result = cx
                     .background_spawn(async move {
                         save_predefined_filters_if_current(&store, &filters, revision)
@@ -860,7 +862,9 @@ impl Workspace {
                     }
                     cx.notify();
                 });
-            }));
+            }),
+            cx,
+        );
     }
 
     pub(super) fn save_cloud_settings(
@@ -895,9 +899,8 @@ impl Workspace {
                 cx.notify();
             });
         }
-        self.persistence
-            .state_tasks
-            .push(cx.spawn_in(window, async move |this, cx| {
+        self.persistence.state_tasks.push(
+            cx.spawn_in(window, async move |this, cx| {
                 let result = cx
                     .background_spawn(async move { store.save_cloud_settings(&settings) })
                     .await;
@@ -913,7 +916,9 @@ impl Workspace {
                         );
                     });
                 }
-            }));
+            }),
+            cx,
+        );
     }
 
     pub(super) fn apply_global_search_options(&mut self, case_sensitive: bool, regex: bool) {
@@ -1804,9 +1809,8 @@ impl Workspace {
             .collect::<Vec<_>>();
         self.history_clearing = true;
         cx.notify();
-        self.persistence
-            .state_tasks
-            .push(cx.spawn_in(window, async move |this, cx| {
+        self.persistence.state_tasks.push(
+            cx.spawn_in(window, async move |this, cx| {
                 let result = cx
                     .background_spawn(async move {
                         let removed = store.clear_history(&open_paths)?;
@@ -1852,6 +1856,8 @@ impl Workspace {
                     }
                     cx.notify();
                 });
-            }));
+            }),
+            cx,
+        );
     }
 }
