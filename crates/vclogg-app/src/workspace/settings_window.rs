@@ -4,6 +4,12 @@ use gpui_kit::{KeyBinding, WindowBounds, WindowOptions};
 #[cfg(target_os = "macos")]
 mod macos;
 
+#[cfg(target_os = "macos")]
+const ENTER_SCALE_DURATION: Duration = Duration::from_millis(190);
+const ENTER_FADE_DURATION: Duration = Duration::from_millis(90);
+#[cfg(target_os = "macos")]
+const ENTER_SCALE: f64 = 0.985;
+
 const SETTINGS_CONTEXT: &str = "VCLogg2Settings";
 gpui_kit::actions!(settings_window, [CloseSettings, SaveSettings]);
 
@@ -28,6 +34,8 @@ pub(super) struct SettingsWindow {
     focus: FocusHandle,
     saving: bool,
     enter_opacity: f32,
+    enter_started: Option<std::time::Instant>,
+    #[cfg(target_os = "macos")]
     enter_task: Option<Task<()>>,
     pub(super) save_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -208,6 +216,8 @@ impl SettingsWindow {
             focus,
             saving: false,
             enter_opacity: 1.,
+            enter_started: None,
+            #[cfg(target_os = "macos")]
             enter_task: None,
             save_task: None,
             _subscriptions: vec![subscription, observer],
@@ -225,28 +235,46 @@ impl SettingsWindow {
         if !animate {
             return;
         }
-        self.enter_task = Some(cx.spawn_in(window, async move |this, cx| {
-            const FRAMES: u32 = 10;
-            for frame in 1..=FRAMES {
-                cx.background_executor()
-                    .timer(TRANSIENT_SURFACE_ENTER_DURATION / FRAMES)
-                    .await;
-                if this
-                    .update_in(cx, |this, window, cx| {
-                        this.enter_opacity = ease_out_cubic(frame as f32 / FRAMES as f32);
-                        #[cfg(target_os = "macos")]
-                        macos::set_opacity(window, this.enter_opacity);
-                        #[cfg(not(target_os = "macos"))]
-                        let _ = window;
-                        cx.notify();
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        }));
+        #[cfg(target_os = "macos")]
+        if let Some(animation) = macos::animate(window) {
+            // Core Animation owns frame pacing. This timer only restores the
+            // window background after the presentation-layer animation ends.
+            self.enter_opacity = 1.;
+            self.enter_task = Some(cx.spawn(async move |_, cx| {
+                cx.background_executor().timer(ENTER_SCALE_DURATION).await;
+                drop(animation);
+            }));
+            return;
+        }
+        // Other platforms (and headless windows) use a frame-driven fade.
+        // Measure elapsed time rather than stretching the duration after delays.
+        self.enter_started = Some(std::time::Instant::now());
+        Self::fade_frame(cx.weak_entity(), window);
         cx.notify();
+    }
+
+    fn fade_frame(view: WeakEntity<Self>, window: &Window) {
+        window.on_next_frame(move |window, cx| {
+            let pending = view
+                .update(cx, |this, cx| {
+                    let Some(started) = this.enter_started else {
+                        return false;
+                    };
+                    let progress = (started.elapsed().as_secs_f32()
+                        / ENTER_FADE_DURATION.as_secs_f32())
+                    .min(1.);
+                    this.enter_opacity = ease_out_cubic(progress);
+                    if progress >= 1. {
+                        this.enter_started = None;
+                    }
+                    cx.notify();
+                    this.enter_started.is_some()
+                })
+                .unwrap_or(false);
+            if pending {
+                Self::fade_frame(view, window);
+            }
+        });
     }
 
     /// Persist a log-window command without accidentally committing the settings preview.
@@ -493,9 +521,7 @@ impl Render for SettingsWindow {
         let busy = self.busy(cx);
         v_flex()
             .size_full()
-            .when(!cfg!(target_os = "macos"), |surface| {
-                surface.opacity(self.enter_opacity)
-            })
+            .opacity(self.enter_opacity)
             .min_h_0()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
@@ -718,18 +744,16 @@ mod tests {
             assert_eq!(cx.active_window(), Some(settings));
             assert_eq!(view.read(cx).enter_opacity, 0.);
         });
-        for _ in 0..5 {
-            cx.background_executor
-                .advance_clock(Duration::from_millis(16));
-            cx.run_until_parked();
-        }
-        cx.update(|cx| assert!((0.0..1.0).contains(&view.read(cx).enter_opacity)));
         assert_eq!(open(cx, main, &owner).0, settings);
-        for _ in 0..5 {
-            cx.background_executor
-                .advance_clock(Duration::from_millis(16));
-            cx.run_until_parked();
-        }
+        cx.update(|cx| {
+            view.update(cx, |view, _| {
+                view.enter_started = Some(std::time::Instant::now() - ENTER_FADE_DURATION);
+            })
+        });
+        cx.update_window(settings, |_, window, cx| {
+            window.simulate_next_frame(cx);
+        })
+        .unwrap();
         cx.update(|cx| assert_eq!(view.read(cx).enter_opacity, 1.));
     }
 
