@@ -45,7 +45,8 @@ raw-window-handle = { version = "0.6.2", features = ["std"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSImage", "NSButton", "NSControl", "NSEvent", "NSGraphics", "NSResponder", "NSTrackingArea", "NSView", "NSWindow"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSColor", "objc2-quartz-core", "NSImage", "NSButton", "NSControl", "NSEvent", "NSGraphics", "NSResponder", "NSTrackingArea", "NSView", "NSWindow"] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CAAnimation", "CALayer", "CAMediaTiming", "CAMediaTimingFunction", "CATransform3D", "objc2-core-foundation"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSGeometry", "NSNotification", "NSObject", "NSString", "NSUserDefaults"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
