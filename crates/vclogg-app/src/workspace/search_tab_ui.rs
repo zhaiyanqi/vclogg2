@@ -317,12 +317,6 @@ impl Workspace {
                         slot_layout.borrow_mut().slots.insert((owner, id), bounds);
                     })
                     .child(tab)
-                    .with_animation(
-                        format!("search-tab-enter-{owner:?}-{}", id.0),
-                        Animation::new(super::tab_drag::ANIMATION_DURATION)
-                            .with_easing(ease_out_cubic),
-                        |tab, progress| tab.opacity(progress),
-                    )
                     .into_any_element()
             })
             .collect::<Vec<_>>();

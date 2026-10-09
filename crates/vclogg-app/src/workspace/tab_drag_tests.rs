@@ -191,7 +191,7 @@ fn file_tabs_reorder_outside_strip_and_fly_back_before_restoring(cx: &mut TestAp
 }
 
 #[gpui_kit::test]
-fn file_tabs_fade_in_and_close_without_delaying_removal(cx: &mut TestAppContext) {
+fn file_tabs_close_without_delaying_removal(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         crate::actions::init(cx);
@@ -218,24 +218,9 @@ fn file_tabs_fade_in_and_close_without_delaying_removal(cx: &mut TestAppContext)
         window.click("new-workspace-tab", cx);
         let view = workspace.read(cx);
         assert_eq!(view.tabs.len(), 3);
-        assert_eq!(view.workspace_tab_opacity(view.tabs[2]), 0.);
     })
     .unwrap();
     cx.run_until_parked();
-    for frame in 1..=10 {
-        cx.background_executor
-            .advance_clock(Duration::from_millis(16));
-        cx.run_until_parked();
-        cx.update(|cx| {
-            let view = workspace.read(cx);
-            let opacity = view.workspace_tab_opacity(view.tabs[2]);
-            if frame < 10 {
-                assert!(opacity > 0. && opacity < 1.);
-            } else {
-                assert_eq!(opacity, 1.);
-            }
-        });
-    }
     let mut initial_x = px(0.);
     let mut middle_x = px(0.);
     let mut last_id = WorkspaceTabId::New(0);
@@ -301,7 +286,6 @@ fn file_tabs_fade_in_and_close_without_delaying_removal(cx: &mut TestAppContext)
             "closing the last tab creates a blank tab"
         );
         assert_ne!(view.tabs[0], last_id);
-        assert_eq!(view.workspace_tab_opacity(view.tabs[0]), 1.);
     })
     .unwrap();
 }

@@ -84,7 +84,7 @@ impl Workspace {
             .opacity(if self.tab_drag.file_hidden == Some(tab_id) {
                 0.
             } else {
-                self.workspace_tab_opacity(tab_id)
+                1.
             })
             .aria_label(tab_title.clone())
             .selected(selected)

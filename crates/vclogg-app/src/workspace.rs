@@ -2498,7 +2498,6 @@ impl Workspace {
         let tab_id = WorkspaceTabId::New(self.next_new_tab_id);
         self.next_new_tab_id = self.next_new_tab_id.saturating_add(1);
         self.tabs.push(tab_id);
-        self.animate_workspace_tab_open(tab_id, cx);
         self.activate_workspace_tab(tab_id, window, cx);
     }
 

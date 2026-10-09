@@ -933,7 +933,7 @@ impl Workspace {
                 .w(closing.width * closing.remaining())
                 .min_w_0()
                 .overflow_hidden()
-                .opacity(closing.opacity())
+                .opacity(closing.remaining())
                 .child(
                     Self::render_workspace_tab_contents(
                         closing.id,

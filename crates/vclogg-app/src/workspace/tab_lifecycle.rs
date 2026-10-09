@@ -692,7 +692,6 @@ impl Workspace {
             let tab_id = WorkspaceTabId::New(self.next_new_tab_id);
             self.next_new_tab_id = self.next_new_tab_id.saturating_add(1);
             self.tabs.push(tab_id);
-            self.animate_workspace_tab_open(tab_id, cx);
             self.active_tab_id = tab_id;
         } else if ids.contains(&previous_active_id) {
             self.active_tab_id = self.tabs[previous_active_ix.min(self.tabs.len() - 1)];

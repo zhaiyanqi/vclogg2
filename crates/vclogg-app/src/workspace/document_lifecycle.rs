@@ -738,7 +738,6 @@ impl Workspace {
             } else {
                 self.tabs.push(workspace_tab_id);
             }
-            self.animate_workspace_tab_open(workspace_tab_id, cx);
             if !defer_directory_group_activation {
                 self.active_tab_id = workspace_tab_id;
             }
