@@ -1,12 +1,10 @@
 use super::*;
-use gpui_kit::{KeyBinding, WindowBounds, WindowOptions};
+use gpui_kit::{KeyBinding, WindowBounds, WindowOptions, base::animation::cubic_bezier};
 
 #[cfg(target_os = "macos")]
 mod macos;
 
-const ENTER_DURATION: Duration = Duration::from_millis(190);
-const ENTER_FADE_DURATION: Duration = Duration::from_millis(160);
-const ENTER_OFFSET: f32 = 8.;
+const ENTER_DURATION: Duration = Duration::from_millis(150);
 
 #[derive(Clone, Copy)]
 enum Entrance {
@@ -39,7 +37,6 @@ pub(super) struct SettingsWindow {
     focus: FocusHandle,
     saving: bool,
     enter_opacity: f32,
-    enter_progress: f32,
     entrance: Entrance,
 
     pub(super) save_task: Option<Task<()>>,
@@ -213,7 +210,6 @@ impl SettingsWindow {
         // The first hidden-window frame must already match the entrance start;
         // otherwise showing the window can flash the fully visible page first.
         let enter_opacity = if original.reduce_motion { 1. } else { 0. };
-        let enter_progress = if original.reduce_motion { 1. } else { 0. };
         Self {
             workspace,
             settings,
@@ -225,7 +221,6 @@ impl SettingsWindow {
             focus,
             saving: false,
             enter_opacity,
-            enter_progress,
             entrance: Entrance::Idle,
 
             save_task: None,
@@ -238,7 +233,6 @@ impl SettingsWindow {
         // preference. The explicit in-app reduced-motion setting still applies.
         let animate = !self.original.reduce_motion;
         self.enter_opacity = if animate { 0. } else { 1. };
-        self.enter_progress = if animate { 0. } else { 1. };
         #[cfg(target_os = "macos")]
         macos::prepare(window);
         window.activate_window();
@@ -272,10 +266,8 @@ impl SettingsWindow {
                         Entrance::Running(started) => started,
                     };
                     let elapsed = started.elapsed();
-                    let fade = (elapsed.as_secs_f32() / ENTER_FADE_DURATION.as_secs_f32()).min(1.);
                     let progress = (elapsed.as_secs_f32() / ENTER_DURATION.as_secs_f32()).min(1.);
-                    this.enter_opacity = ease_out_cubic(fade);
-                    this.enter_progress = ease_out_cubic(progress);
+                    this.enter_opacity = cubic_bezier(0.33, 0., 0.67, 1.)(progress);
                     if progress >= 1. {
                         this.entrance = Entrance::Idle;
                     }
@@ -531,15 +523,9 @@ impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_window_title(crate::tr!("设置", "Settings"));
         let busy = self.busy(cx);
-        let extent = window.viewport_size();
-        let offset = px(ENTER_OFFSET * (1. - self.enter_progress));
-        let content = v_flex()
+        v_flex()
             .id("settings-window-content")
-            .w(extent.width)
-            .h(extent.height)
-            .absolute()
-            .left_0()
-            .top(offset)
+            .size_full()
             .opacity(self.enter_opacity)
             .min_h_0()
             .bg(cx.theme().background)
@@ -639,15 +625,7 @@ impl Render for SettingsWindow {
                                     ),
                             ),
                     ),
-            );
-        // Move the fixed-size content as a unit. Unlike the old centered crop,
-        // this is visible motion without changing layout or wrapping text.
-        div()
-            .id("settings-window-entrance")
-            .size_full()
-            .relative()
-            .overflow_hidden()
-            .child(content)
+            )
     }
 }
 
@@ -779,7 +757,6 @@ mod tests {
             window.simulate_next_frame(cx);
             assert!(matches!(view.read(cx).entrance, Entrance::Running(_)));
             assert!(view.read(cx).enter_opacity < 0.1);
-            assert!(view.read(cx).enter_progress < 0.1);
         })
         .unwrap();
         let initial_button = cx
@@ -798,9 +775,7 @@ mod tests {
             window.simulate_next_frame(cx);
             window.render_frame(cx);
             let current = window.find("settings-window-save").bounds();
-            assert_eq!(initial_button.size, current.size);
-            assert!(current.origin.y < initial_button.origin.y);
-            assert!(current.origin.y > initial_button.origin.y - px(ENTER_OFFSET));
+            assert_eq!(initial_button, current);
             assert!((0.0..1.0).contains(&view.read(cx).enter_opacity));
         })
         .unwrap();
@@ -813,17 +788,11 @@ mod tests {
             window.simulate_next_frame(cx);
             window.render_frame(cx);
             let final_button = window.find("settings-window-save").bounds();
-            assert_eq!(initial_button.size, final_button.size);
-            assert!((initial_button.origin.x - final_button.origin.x).abs() <= px(1.));
-            assert!(
-                (initial_button.origin.y - final_button.origin.y - px(ENTER_OFFSET)).abs()
-                    <= px(1.)
-            );
+            assert_eq!(initial_button, final_button);
         })
         .unwrap();
         cx.update(|cx| {
             assert_eq!(view.read(cx).enter_opacity, 1.);
-            assert_eq!(view.read(cx).enter_progress, 1.);
             assert!(matches!(view.read(cx).entrance, Entrance::Idle));
         });
     }
