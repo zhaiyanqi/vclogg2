@@ -1670,6 +1670,7 @@ pub struct Workspace {
     active_ix: Option<usize>,
     document_tab_scroll: ScrollHandle,
     tab_drag: tab_drag::TabDragState,
+    tab_motion: tab_motion::TabMotionState,
     pending_document_tab_reveal: Cell<Option<u64>>,
     pending_search_result_jump: Option<PendingSearchResultJump>,
     search_result_jump_revision: u64,
@@ -1782,6 +1783,7 @@ mod tab_drag;
 #[cfg(test)]
 mod tab_drag_tests;
 mod tab_lifecycle;
+mod tab_motion;
 mod tab_view;
 mod view_state;
 mod viewport_orchestration;
@@ -2358,6 +2360,7 @@ impl Workspace {
             active_ix: None,
             document_tab_scroll: ScrollHandle::new(),
             tab_drag: tab_drag::TabDragState::default(),
+            tab_motion: tab_motion::TabMotionState::default(),
             pending_document_tab_reveal: Cell::new(None),
             pending_search_result_jump: None,
             search_result_jump_revision: 0,
@@ -2495,6 +2498,7 @@ impl Workspace {
         let tab_id = WorkspaceTabId::New(self.next_new_tab_id);
         self.next_new_tab_id = self.next_new_tab_id.saturating_add(1);
         self.tabs.push(tab_id);
+        self.animate_workspace_tab_open(tab_id, cx);
         self.activate_workspace_tab(tab_id, window, cx);
     }
 

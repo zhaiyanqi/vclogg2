@@ -189,3 +189,119 @@ fn file_tabs_reorder_outside_strip_and_fly_back_before_restoring(cx: &mut TestAp
         .unwrap();
     }
 }
+
+#[gpui_kit::test]
+fn file_tabs_fade_in_and_close_without_delaying_removal(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::actions::init(cx);
+        Workspace::init_window_registry(cx);
+        crate::notifications::init(cx);
+        crate::app_icon::init(cx);
+    });
+    let mut workspace = None;
+    let handle = cx.open_window(size(px(1400.), px(900.)), |window, cx| {
+        let view = cx.new(|cx| Workspace::new(false, Vec::new(), window, cx));
+        view.update(cx, |view, _| {
+            view.persistence._bootstrap_task = Task::ready(());
+            view.persistence.state_tasks.clear();
+            view._cloud_client_bootstrap_task = Task::ready(());
+        });
+        Workspace::register_window(&view, window, cx);
+        workspace = Some(view.clone());
+        gpui_kit::component::Root::new(view, window, cx)
+    });
+    let workspace = workspace.unwrap();
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click("new-workspace-tab", cx);
+        window.click("new-workspace-tab", cx);
+        let view = workspace.read(cx);
+        assert_eq!(view.tabs.len(), 3);
+        assert_eq!(view.workspace_tab_opacity(view.tabs[2]), 0.);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    for frame in 1..=10 {
+        cx.background_executor
+            .advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let view = workspace.read(cx);
+            let opacity = view.workspace_tab_opacity(view.tabs[2]);
+            if frame < 10 {
+                assert!(opacity > 0. && opacity < 1.);
+            } else {
+                assert_eq!(opacity, 1.);
+            }
+        });
+    }
+    let mut initial_x = px(0.);
+    let mut middle_x = px(0.);
+    let mut last_id = WorkspaceTabId::New(0);
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        let view = workspace.read(cx);
+        let WorkspaceTabId::New(id) = view.tabs[1] else {
+            unreachable!()
+        };
+        last_id = view.tabs[2];
+        initial_x = view.tab_drag.file_bounds.borrow()[&last_id].left();
+        window.click(ElementId::from(("close-new-tab", id)), cx);
+        let view = workspace.read(cx);
+        assert_eq!(view.tabs.len(), 2);
+        assert!(!view.tabs.contains(&WorkspaceTabId::New(id)));
+        assert_eq!(view.tab_motion.closing.len(), 1);
+        assert_eq!(
+            view.tab_drag.file_bounds.borrow()[&last_id].left(),
+            initial_x
+        );
+    })
+    .unwrap();
+    cx.run_until_parked();
+    for _ in 0..5 {
+        cx.background_executor
+            .advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+    }
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        middle_x = workspace.read(cx).tab_drag.file_bounds.borrow()[&last_id].left();
+        assert!(middle_x < initial_x);
+        // Closing another tab mid-animation must preserve both visual slots.
+        let WorkspaceTabId::New(id) = workspace.read(cx).tabs[0] else {
+            unreachable!()
+        };
+        window.click(ElementId::from(("close-new-tab", id)), cx);
+        assert_eq!(workspace.read(cx).tab_motion.closing.len(), 2);
+        assert_eq!(workspace.read(cx).workspace_tab_visual_index(0), 2);
+    })
+    .unwrap();
+    for _ in 0..10 {
+        cx.background_executor
+            .advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+    }
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        let view = workspace.read(cx);
+        assert!(view.tab_motion.closing.is_empty());
+        assert_eq!(view.tabs, vec![last_id]);
+        assert!(view.tab_drag.file_bounds.borrow()[&last_id].left() < middle_x);
+        cx.set_reduce_motion(true);
+        let WorkspaceTabId::New(id) = last_id else {
+            unreachable!()
+        };
+        window.click(ElementId::from(("close-new-tab", id)), cx);
+        let view = workspace.read(cx);
+        assert!(view.tab_motion.closing.is_empty());
+        assert_eq!(
+            view.tabs.len(),
+            1,
+            "closing the last tab creates a blank tab"
+        );
+        assert_ne!(view.tabs[0], last_id);
+        assert_eq!(view.workspace_tab_opacity(view.tabs[0]), 1.);
+    })
+    .unwrap();
+}

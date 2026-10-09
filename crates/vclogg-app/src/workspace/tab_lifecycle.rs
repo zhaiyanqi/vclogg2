@@ -357,11 +357,10 @@ impl Workspace {
             return;
         };
 
-        // Segmented TabBar inserts its absolute selection indicator before the tab children.
-        // ScrollHandle indices address those direct children, so the document index is shifted by
-        // one. Before the first frame supplies child bounds, leave the reveal unacknowledged so
-        // the next frame retries against the indicator-inclusive children.
-        self.document_tab_scroll.scroll_to_item(ix + 1);
+        // GPUI Kit 0.7.1 nests the indicator inside the first tab wrapper.
+        // Closing presentation slots still occupy scroll-child indices.
+        self.document_tab_scroll
+            .scroll_to_item(self.workspace_tab_visual_index(ix));
         if self.document_tab_scroll.children_count() > 0 {
             self.pending_document_tab_reveal.set(None);
         }
@@ -676,6 +675,7 @@ impl Workspace {
             self.save_file_session(path, base, session, window, cx);
         }
 
+        self.animate_workspace_tabs_close(&ids, cx);
         self.tabs.retain(|tab_id| !ids.contains(tab_id));
         self.new_file_drafts
             .retain(|id, _| !ids.contains(&WorkspaceTabId::New(*id)));
@@ -692,6 +692,7 @@ impl Workspace {
             let tab_id = WorkspaceTabId::New(self.next_new_tab_id);
             self.next_new_tab_id = self.next_new_tab_id.saturating_add(1);
             self.tabs.push(tab_id);
+            self.animate_workspace_tab_open(tab_id, cx);
             self.active_tab_id = tab_id;
         } else if ids.contains(&previous_active_id) {
             self.active_tab_id = self.tabs[previous_active_ix.min(self.tabs.len() - 1)];

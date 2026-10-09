@@ -851,7 +851,9 @@ impl Workspace {
         let workspace = cx.entity();
         let tab_count = self.tabs.len();
         let active_tab_id = self.active_tab_id;
-        let active_tab_ix = self.active_workspace_tab_ix();
+        let active_tab_ix = self
+            .active_workspace_tab_ix()
+            .map(|ix| self.workspace_tab_visual_index(ix));
         self.reveal_pending_document_tab();
         let tab_list_items = self
             .tabs
@@ -913,12 +915,7 @@ impl Workspace {
                         }
                         menu
                     }),
-            )
-            .on_click(cx.listener(|this, ix: &usize, window, cx| {
-                if let Some(tab_id) = this.tabs.get(*ix).copied() {
-                    this.activate_workspace_tab(tab_id, window, cx);
-                }
-            }));
+            );
         if let Some(active_ix) = active_tab_ix {
             tabs = tabs.selected_index(if self.tab_drag.file_hidden == Some(self.active_tab_id) {
                 usize::MAX
@@ -927,7 +924,28 @@ impl Workspace {
             });
         }
 
-        tabs.children((0..tab_count).map(|ix| self.render_workspace_tab(ix, has_other_window, cx)))
+        let mut children = (0..tab_count)
+            .map(|ix| self.render_workspace_tab(ix, has_other_window, cx))
+            .collect::<Vec<_>>();
+        for closing in &self.tab_motion.closing {
+            let ghost = Tab::new()
+                .disabled(true)
+                .w(closing.width * closing.remaining())
+                .min_w_0()
+                .overflow_hidden()
+                .opacity(closing.opacity())
+                .child(
+                    Self::render_workspace_tab_contents(
+                        closing.id,
+                        &closing.presentation,
+                        true,
+                        cx,
+                    )
+                    .mx(px(-6.)),
+                );
+            children.insert(closing.index.min(children.len()), ghost);
+        }
+        tabs.children(children)
             .last_empty_space(
                 h_flex()
                     .id("document-tab-end-drop")
