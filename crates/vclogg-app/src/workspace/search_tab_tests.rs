@@ -615,6 +615,75 @@ fn search_tab_reordering_crosses_scopes_and_round_trips(cx: &mut TestAppContext)
 }
 
 #[gpui_kit::test]
+fn search_tab_strip_toggle_stays_fixed_while_tabs_scroll(cx: &mut TestAppContext) {
+    use super::{SearchScope, Workspace};
+    use gpui_kit::component::Root;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{AppContext as _, ScrollDelta, Task, point, px, size};
+
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::actions::init(cx);
+        Workspace::init_window_registry(cx);
+        crate::notifications::init(cx);
+        crate::app_icon::init(cx);
+    });
+    let mut workspace = None;
+    let handle = cx.open_window(size(px(1000.), px(700.)), |window, cx| {
+        let view = cx.new(|cx| Workspace::new(false, Vec::new(), window, cx));
+        view.update(cx, |view, cx| {
+            view.persistence._bootstrap_task = Task::ready(());
+            view.persistence.state_tasks.clear();
+            view._cloud_client_bootstrap_task = Task::ready(());
+            let mut tabs = group(&(1..=20).collect::<Vec<_>>(), 1);
+            for tab in &mut tabs.tabs {
+                tab.saved.name = Some(format!("Long search tab title {}", tab.saved.id));
+            }
+            view.search_tabs
+                .groups
+                .insert(SearchTabOwner::AllOpen, tabs);
+            view.global_search.scope = SearchScope::AllOpenFiles;
+            view.sync_search_tab(window, cx);
+        });
+        workspace = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let workspace = workspace.unwrap();
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        let button = window.find("toggle-search-tab-strip").bounds();
+        let container = window.find("search-tabs").bounds();
+        let track = window.find("search-tab-viewport").bounds();
+        assert_eq!(button.right(), container.right());
+        assert!(track.right() <= button.left());
+        assert!(workspace.read(cx).search_tabs.scroll.max_offset().x > px(0.));
+        let before = workspace.read(cx).search_tabs.scroll.offset();
+        window.scroll(
+            "search-tab-viewport",
+            ScrollDelta::Pixels(point(px(-300.), px(0.))),
+            cx,
+        );
+        let scrolled = workspace.read(cx).search_tabs.scroll.offset();
+        assert!(scrolled.x < before.x);
+        assert_eq!(window.find("toggle-search-tab-strip").bounds(), button);
+        let active = workspace.read(cx).active_search_tab_key();
+        let keys = workspace.read(cx).visible_search_tab_keys();
+        window.click("toggle-search-tab-strip", cx);
+        assert!(workspace.read(cx).search_tabs.strip_collapsed);
+        assert!(window.try_find("search-tab-viewport").is_none());
+        assert_eq!(window.find("toggle-search-tab-strip").bounds(), button);
+        assert_eq!(workspace.read(cx).active_search_tab_key(), active);
+        assert_eq!(workspace.read(cx).visible_search_tab_keys(), keys);
+        window.click("toggle-search-tab-strip", cx);
+        assert!(!workspace.read(cx).search_tabs.strip_collapsed);
+        assert!(window.find("search-tab-viewport").visible());
+        assert_eq!(window.find("toggle-search-tab-strip").bounds(), button);
+        assert_eq!(workspace.read(cx).search_tabs.scroll.offset(), scrolled);
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn search_tabs_reorder_during_drag_and_keep_labels_inside_the_strip(cx: &mut TestAppContext) {
     use super::{SearchScope, Workspace};
     use gpui_kit::component::{Root, Theme};

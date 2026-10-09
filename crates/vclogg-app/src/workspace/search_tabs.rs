@@ -162,6 +162,7 @@ impl SearchTabGroup {
 }
 
 pub(super) struct SearchTabs {
+    pub(super) strip_collapsed: bool,
     pub(super) panel_expansion: BTreeMap<WorkspaceTabId, bool>,
     pub(super) groups: BTreeMap<SearchTabOwner, SearchTabGroup>,
     pub(super) installed: Option<(SearchTabOwner, SearchTabId)>,
@@ -185,6 +186,7 @@ pub(super) struct SearchTabs {
 impl SearchTabs {
     pub(super) fn new(cx: &mut App) -> Self {
         Self {
+            strip_collapsed: false,
             panel_expansion: BTreeMap::new(),
             groups: BTreeMap::new(),
             installed: None,

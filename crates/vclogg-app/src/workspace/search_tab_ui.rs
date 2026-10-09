@@ -327,6 +327,7 @@ impl Workspace {
             }));
         h_flex()
             .id("search-tabs")
+            .test_support()
             .track_focus(&self.search_tabs.focus)
             .key_context("SearchTabs")
             .min_w_0()
@@ -368,7 +369,48 @@ impl Workspace {
                 }
                 cx.stop_propagation();
             }))
-            .child(track)
+            .child(div().flex_1().min_w_0().h_full().flex().when(
+                !self.search_tabs.strip_collapsed,
+                |container| {
+                    container.child(
+                        div()
+                            .id("search-tab-viewport")
+                            .test_support()
+                            .flex()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .child(track),
+                    )
+                },
+            ))
+            .child(
+                crate::button_accessibility::with_label(
+                    Button::new("toggle-search-tab-strip")
+                        .small()
+                        .ghost()
+                        .flex_shrink_0()
+                        .icon(if self.search_tabs.strip_collapsed {
+                            IconName::ChevronRight
+                        } else {
+                            IconName::ChevronLeft
+                        }),
+                    if self.search_tabs.strip_collapsed {
+                        crate::tr!("展开搜索标签栏", "Expand search tab bar")
+                    } else {
+                        crate::tr!("收起搜索标签栏", "Collapse search tab bar")
+                    },
+                )
+                .tooltip(if self.search_tabs.strip_collapsed {
+                    crate::tr!("展开搜索标签栏", "Expand search tab bar")
+                } else {
+                    crate::tr!("收起搜索标签栏", "Collapse search tab bar")
+                })
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.search_tabs.strip_collapsed = !this.search_tabs.strip_collapsed;
+                    cx.notify();
+                })),
+            )
             .into_any_element()
     }
 
