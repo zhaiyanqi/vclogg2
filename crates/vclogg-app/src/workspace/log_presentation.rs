@@ -3632,13 +3632,15 @@ impl Workspace {
             .text_size(px(11.))
             .bg(ui_theme::footer_material(&colors))
             .when(self.search_panel_visible(), |bar| {
-                bar.left(
+                bar.child(
                     h_flex()
+                        .w_full()
+                        .min_w_0()
                         .gap_1()
                         .child(self.render_add_search_tab(cx))
-                        .child(self.render_search_tab_list(cx)),
+                        .child(self.render_search_tab_list(cx))
+                        .child(self.render_search_tabs(cx)),
                 )
-                .child(self.render_search_tabs(cx))
             })
             .right(
                 h_flex()

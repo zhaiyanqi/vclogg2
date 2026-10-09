@@ -4,6 +4,7 @@ use crate::search_context::{PersistedSearchTab, SearchTabQuery};
 use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::base::{Tab as SearchResultTab, Tabs as SearchResultTabs};
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::{SpringAnimation, SpringConfig};
 
 #[derive(Clone)]
 struct DraggedSearchTab {
@@ -123,22 +124,13 @@ impl Workspace {
 
     pub(super) fn render_search_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
         let keys = self.visible_search_tab_keys();
+        let last_key = keys.last().copied();
         let active = self.active_search_tab_key();
         let workspace = cx.entity();
-        let track = SearchResultTabs::new("search-tab-track")
-            .flex()
-            .items_start()
-            .min_w_0()
-            .flex_1()
-            .h_full()
-            .overflow_x_scroll()
-            .track_scroll(&self.search_tabs.scroll)
-            .on_prepaint({
-                let layout = self.search_tabs.layout.clone();
-                move |bounds, _, _| layout.borrow_mut().track = Some(bounds)
-            })
-            .on_drop(cx.listener(|_, _: &DraggedSearchTab, _, _| {}))
-            .children(keys.into_iter().map(|(owner, id)| {
+        let expanded_width = self.search_tabs.strip_expanded_width;
+        let mut tabs = keys
+            .into_iter()
+            .map(|(owner, id)| {
                 let state = self.search_tabs.state(owner, id).unwrap();
                 let title = self.search_tab_title(owner, state);
                 let menu_workspace = workspace.clone();
@@ -172,6 +164,7 @@ impl Workspace {
                 let revision = self.search_tabs.order_revision;
                 let tab =
                     search_tab_surface(format!("search-tab-{owner:?}-{}", id.0), selected, cx)
+                        .when(last_key == Some((owner, id)), |tab| tab.pr_0())
                         .opacity(if self.search_tabs.hidden_drag == Some((owner, id)) {
                             0.
                         } else {
@@ -324,16 +317,72 @@ impl Workspace {
                         slot_layout.borrow_mut().slots.insert((owner, id), bounds);
                     })
                     .child(tab)
-            }));
+                    .with_animation(
+                        format!("search-tab-enter-{owner:?}-{}", id.0),
+                        Animation::new(super::tab_drag::ANIMATION_DURATION)
+                            .with_easing(ease_out_cubic),
+                        |tab, progress| tab.opacity(progress),
+                    )
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
+        for closing in &self.search_tabs.closing {
+            let width = closing.width;
+            let ghost = div()
+                .id(format!(
+                    "closing-search-tab-{:?}-{}",
+                    closing.key.0, closing.key.1.0
+                ))
+                .test_support()
+                .flex()
+                .flex_shrink_0()
+                .h_full()
+                .overflow_hidden()
+                .child(
+                    search_tab_surface("closing-search-tab-surface", closing.selected, cx)
+                        .w(width)
+                        .flex_shrink_0()
+                        .child(search_tab_contents(
+                            "closing-search-tab-label",
+                            closing.key.0,
+                            closing.title.clone(),
+                            false,
+                            Button::new("closing-search-tab-close")
+                                .xsmall()
+                                .ghost()
+                                .icon(IconName::Close)
+                                .disabled(true),
+                        )),
+                )
+                .with_animation(
+                    format!("search-tab-exit-{:?}-{}", closing.key.0, closing.key.1.0),
+                    Animation::new(super::tab_drag::ANIMATION_DURATION).with_easing(ease_out_cubic),
+                    move |tab, progress| tab.w(width * (1. - progress)).opacity(1. - progress),
+                )
+                .into_any_element();
+            tabs.insert(closing.index.min(tabs.len()), ghost);
+        }
+        let track = SearchResultTabs::new("search-tab-track")
+            .flex()
+            .items_start()
+            .min_w_0()
+            .h_full()
+            .overflow_x_scroll()
+            .track_scroll(&self.search_tabs.scroll)
+            .on_prepaint({
+                let layout = self.search_tabs.layout.clone();
+                move |bounds, _, _| layout.borrow_mut().track = Some(bounds)
+            })
+            .on_drop(cx.listener(|_, _: &DraggedSearchTab, _, _| {}))
+            .children(tabs);
         h_flex()
             .id("search-tabs")
             .test_support()
             .track_focus(&self.search_tabs.focus)
             .key_context("SearchTabs")
             .min_w_0()
-            .w_full()
+            .flex_1()
             .h_8()
-            .gap_1()
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if !this.search_tabs.focus.is_focused(window) {
                     return;
@@ -369,21 +418,37 @@ impl Workspace {
                 }
                 cx.stop_propagation();
             }))
-            .child(div().flex_1().min_w_0().h_full().flex().when(
-                !self.search_tabs.strip_collapsed,
-                |container| {
-                    container.child(
-                        div()
-                            .id("search-tab-viewport")
-                            .test_support()
-                            .flex()
-                            .flex_1()
-                            .min_w_0()
-                            .h_full()
-                            .child(track),
-                    )
-                },
-            ))
+            .child(
+                div()
+                    .id("search-tab-viewport")
+                    .test_support()
+                    .flex()
+                    .min_w_0()
+                    .h_full()
+                    .overflow_hidden()
+                    .with_spring(
+                        "search-tab-strip-expansion",
+                        // A fast, critically damped spring keeps reversal smooth without a long tail.
+                        SpringAnimation::new(SpringConfig::new(3600., 120., 1.)).to(
+                            if self.search_tabs.strip_collapsed {
+                                0.
+                            } else {
+                                1.
+                            },
+                        ),
+                        move |viewport, progress: f32| {
+                            let progress = progress.clamp(0., 1.);
+                            if progress < 1. {
+                                viewport
+                                    .w(expanded_width * progress)
+                                    .mr(rems(0.25 * progress))
+                                    .child(track.w(expanded_width).flex_shrink_0())
+                            } else {
+                                viewport.mr_1().child(track)
+                            }
+                        },
+                    ),
+            )
             .child(
                 crate::button_accessibility::with_label(
                     Button::new("toggle-search-tab-strip")
@@ -407,6 +472,14 @@ impl Workspace {
                     crate::tr!("收起搜索标签栏", "Collapse search tab bar")
                 })
                 .on_click(cx.listener(|this, _, _, cx| {
+                    if !this.search_tabs.strip_collapsed {
+                        this.search_tabs.strip_expanded_width = this
+                            .search_tabs
+                            .layout
+                            .borrow()
+                            .track
+                            .map_or(px(0.), |bounds| bounds.size.width);
+                    }
                     this.search_tabs.strip_collapsed = !this.search_tabs.strip_collapsed;
                     cx.notify();
                 })),
@@ -469,7 +542,7 @@ impl Workspace {
             Button::new("search-tab-list")
                 .small()
                 .ghost()
-                .dropdown_caret(true)
+                .icon(IconName::ChevronUp)
                 .disabled(self.visible_search_tab_keys().is_empty()),
             crate::tr!("所有搜索标签", "All search tabs"),
         )
@@ -692,6 +765,7 @@ impl Workspace {
             return;
         };
         let was_active = self.active_search_tab_key() == Some((owner, id));
+        self.animate_search_tab_close((owner, id), visible_ix, cx);
         self.capture_active_search_tab(cx);
         self.cancel_search_tab_activation();
         self.search_tabs.cancel(owner, id);

@@ -161,8 +161,18 @@ impl SearchTabGroup {
     }
 }
 
+pub(super) struct ClosingSearchTab {
+    pub(super) key: (SearchTabOwner, SearchTabId),
+    pub(super) index: usize,
+    pub(super) title: SharedString,
+    pub(super) selected: bool,
+    pub(super) width: Pixels,
+}
+
 pub(super) struct SearchTabs {
+    pub(super) closing: Vec<ClosingSearchTab>,
     pub(super) strip_collapsed: bool,
+    pub(super) strip_expanded_width: Pixels,
     pub(super) panel_expansion: BTreeMap<WorkspaceTabId, bool>,
     pub(super) groups: BTreeMap<SearchTabOwner, SearchTabGroup>,
     pub(super) installed: Option<(SearchTabOwner, SearchTabId)>,
@@ -187,6 +197,8 @@ impl SearchTabs {
     pub(super) fn new(cx: &mut App) -> Self {
         Self {
             strip_collapsed: false,
+            closing: Vec::new(),
+            strip_expanded_width: px(0.),
             panel_expansion: BTreeMap::new(),
             groups: BTreeMap::new(),
             installed: None,
