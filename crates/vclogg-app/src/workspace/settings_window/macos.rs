@@ -1,4 +1,4 @@
-//! Disable AppKit's extra window entrance; GPUI owns the shared presentation.
+//! Show the settings window immediately, without an AppKit entrance animation.
 use gpui_kit::Window;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSView, NSWindow, NSWindowAnimationBehavior};
@@ -14,7 +14,7 @@ fn native_window(window: &Window) -> Option<Retained<NSWindow>> {
     view.window()
 }
 
-pub(super) fn prepare(window: &Window) {
+pub(super) fn disable_animation(window: &Window) {
     if let Some(native) = native_window(window) {
         native.setAnimationBehavior(NSWindowAnimationBehavior::None);
     }

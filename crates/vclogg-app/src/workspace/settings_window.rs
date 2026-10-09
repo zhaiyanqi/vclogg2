@@ -1,17 +1,8 @@
 use super::*;
-use gpui_kit::{KeyBinding, WindowBounds, WindowOptions, base::animation::cubic_bezier};
+use gpui_kit::{KeyBinding, WindowBounds, WindowOptions};
 
 #[cfg(target_os = "macos")]
 mod macos;
-
-const ENTER_DURATION: Duration = Duration::from_millis(150);
-
-#[derive(Clone, Copy)]
-enum Entrance {
-    Idle,
-    AwaitingFrame,
-    Running(std::time::Instant),
-}
 
 const SETTINGS_CONTEXT: &str = "VCLogg2Settings";
 gpui_kit::actions!(settings_window, [CloseSettings, SaveSettings]);
@@ -36,9 +27,6 @@ pub(super) struct SettingsWindow {
     highlight_baseline: crate::color_labels_dialog::LogColoringConfig,
     focus: FocusHandle,
     saving: bool,
-    enter_opacity: f32,
-    entrance: Entrance,
-
     pub(super) save_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -121,8 +109,10 @@ impl Workspace {
                     // GPUI's open_window builds and draws the root before returning.
                     // Reveal only after that work, without waiting for display-link
                     // callbacks: macOS suspends those while a native window is hidden.
-                    _ = handle.update(cx, |_, window, cx| {
-                        view.update(cx, |view, cx| view.reveal(window, cx));
+                    _ = handle.update(cx, |_, window, _| {
+                        #[cfg(target_os = "macos")]
+                        macos::disable_animation(window);
+                        window.activate_window();
                     });
                 }
                 Err(error) => log::error!("Could not open settings window: {error:#}"),
@@ -207,9 +197,6 @@ impl SettingsWindow {
         });
         let focus = cx.focus_handle();
         focus.focus(window, cx);
-        // The first hidden-window frame must already match the entrance start;
-        // otherwise showing the window can flash the fully visible page first.
-        let enter_opacity = if original.reduce_motion { 1. } else { 0. };
         Self {
             workspace,
             settings,
@@ -220,65 +207,9 @@ impl SettingsWindow {
             highlight_baseline,
             focus,
             saving: false,
-            enter_opacity,
-            entrance: Entrance::Idle,
-
             save_task: None,
             _subscriptions: vec![subscription, observer],
         }
-    }
-
-    fn reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Own this transition rather than relying on the OS window animation
-        // preference. The explicit in-app reduced-motion setting still applies.
-        let animate = !self.original.reduce_motion;
-        self.enter_opacity = if animate { 0. } else { 1. };
-        #[cfg(target_os = "macos")]
-        macos::prepare(window);
-        window.activate_window();
-        if !animate {
-            return;
-        }
-        // All platforms share frame timing, easing and reveal geometry.
-        // Native window decorations remain owned by their platform.
-        // Activation can be asynchronous and the first visible frame can be
-        // delayed. Do not spend the animation duration while waiting for it.
-        self.entrance = Entrance::AwaitingFrame;
-        Self::entrance_frame(cx.weak_entity(), window);
-        cx.notify();
-    }
-
-    fn entrance_frame(view: WeakEntity<Self>, window: &Window) {
-        window.on_next_frame(move |window, cx| {
-            if !window.is_visible() {
-                Self::entrance_frame(view, window);
-                return;
-            }
-            let pending = view
-                .update(cx, |this, cx| {
-                    let started = match this.entrance {
-                        Entrance::Idle => return false,
-                        Entrance::AwaitingFrame => {
-                            let now = std::time::Instant::now();
-                            this.entrance = Entrance::Running(now);
-                            now
-                        }
-                        Entrance::Running(started) => started,
-                    };
-                    let elapsed = started.elapsed();
-                    let progress = (elapsed.as_secs_f32() / ENTER_DURATION.as_secs_f32()).min(1.);
-                    this.enter_opacity = cubic_bezier(0.33, 0., 0.67, 1.)(progress);
-                    if progress >= 1. {
-                        this.entrance = Entrance::Idle;
-                    }
-                    cx.notify();
-                    !matches!(this.entrance, Entrance::Idle)
-                })
-                .unwrap_or(false);
-            if pending {
-                Self::entrance_frame(view, window);
-            }
-        });
     }
 
     /// Persist a log-window command without accidentally committing the settings preview.
@@ -526,7 +457,6 @@ impl Render for SettingsWindow {
         v_flex()
             .id("settings-window-content")
             .size_full()
-            .opacity(self.enter_opacity)
             .min_h_0()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
@@ -735,66 +665,6 @@ mod tests {
                 .unwrap();
             (handle, view.upgrade().unwrap())
         })
-    }
-
-    #[gpui_kit::test]
-    fn settings_window_entrance_preserves_layout_and_ignores_global_motion_policy(
-        cx: &mut TestAppContext,
-    ) {
-        init(cx);
-        let directory = tempfile::tempdir().unwrap();
-        let store = Arc::new(StateStore::open(directory.path().join("state.db")).unwrap());
-        let (main, owner) = workspace(cx, store);
-        cx.update(|cx| cx.set_reduce_motion(true));
-        let (settings, view) = open(cx, main, &owner);
-        cx.update(|cx| {
-            assert_eq!(cx.active_window(), Some(settings));
-            assert_eq!(view.read(cx).enter_opacity, 0.);
-        });
-        assert_eq!(open(cx, main, &owner).0, settings);
-        cx.update(|cx| assert!(matches!(view.read(cx).entrance, Entrance::AwaitingFrame)));
-        cx.update_window(settings, |_, window, cx| {
-            window.simulate_next_frame(cx);
-            assert!(matches!(view.read(cx).entrance, Entrance::Running(_)));
-            assert!(view.read(cx).enter_opacity < 0.1);
-        })
-        .unwrap();
-        let initial_button = cx
-            .update_window(settings, |_, window, cx| {
-                window.render_frame(cx);
-                window.find("settings-window-save").bounds()
-            })
-            .unwrap();
-        cx.update(|cx| {
-            view.update(cx, |view, _| {
-                view.entrance =
-                    Entrance::Running(std::time::Instant::now() - Duration::from_millis(60));
-            })
-        });
-        cx.update_window(settings, |_, window, cx| {
-            window.simulate_next_frame(cx);
-            window.render_frame(cx);
-            let current = window.find("settings-window-save").bounds();
-            assert_eq!(initial_button, current);
-            assert!((0.0..1.0).contains(&view.read(cx).enter_opacity));
-        })
-        .unwrap();
-        cx.update(|cx| {
-            view.update(cx, |view, _| {
-                view.entrance = Entrance::Running(std::time::Instant::now() - ENTER_DURATION);
-            })
-        });
-        cx.update_window(settings, |_, window, cx| {
-            window.simulate_next_frame(cx);
-            window.render_frame(cx);
-            let final_button = window.find("settings-window-save").bounds();
-            assert_eq!(initial_button, final_button);
-        })
-        .unwrap();
-        cx.update(|cx| {
-            assert_eq!(view.read(cx).enter_opacity, 1.);
-            assert!(matches!(view.read(cx).entrance, Entrance::Idle));
-        });
     }
 
     #[gpui_kit::test]
