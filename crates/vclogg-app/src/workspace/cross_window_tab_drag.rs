@@ -104,17 +104,14 @@ impl Workspace {
                     return None;
                 }
                 let layout = candidate.workspace.read(cx).tab_drop_layout.borrow();
-                let ix = layout.drop_index(position).or_else(|| {
+                // The entire window receives the file; horizontal tab positions
+                // determine insertion even when the pointer is over its body.
+                let ix = layout.drop_index(position).unwrap_or_else(|| {
                     layout
-                        .viewport
-                        .filter(|bounds| bounds.contains(&position))
-                        .map(|_| {
-                            layout
-                                .tabs
-                                .iter()
-                                .take_while(|tab| tab.center().x < position.x)
-                                .count()
-                        })
+                        .tabs
+                        .iter()
+                        .take_while(|tab| tab.center().x < position.x)
+                        .count()
                 });
                 Some((ix, position))
             };
@@ -128,11 +125,10 @@ impl Workspace {
                     .flatten()
             };
             if let Some((ix, position)) = hit {
-                // Do not dock through another window's document area.
-                return ix.map(|target_ix| CrossWindowDropTarget {
+                return Some(CrossWindowDropTarget {
                     window: candidate.window,
                     workspace: candidate.workspace,
-                    target_ix,
+                    target_ix: ix,
                     position,
                 });
             }

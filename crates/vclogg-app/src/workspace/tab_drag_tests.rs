@@ -414,6 +414,15 @@ fn start_document_drag(
 
 #[gpui_kit::test]
 fn document_moves_between_windows_and_detaches_in_one_gesture(cx: &mut TestAppContext) {
+    move_document_between_windows(cx, false);
+}
+
+#[gpui_kit::test]
+fn entering_window_body_transfers_immediately_without_creating_a_window(cx: &mut TestAppContext) {
+    move_document_between_windows(cx, true);
+}
+
+fn move_document_between_windows(cx: &mut TestAppContext, enter_body: bool) {
     init_drag_test(cx);
     let directory = tempfile::tempdir().unwrap();
     let a = directory.path().join("a.log");
@@ -438,7 +447,15 @@ fn document_moves_between_windows_and_detaches_in_one_gesture(cx: &mut TestAppCo
         let target_point = target_window
             .update(cx, |_, window, cx| {
                 window.render_frame(cx);
-                window.bounds().origin + target.read(cx).tab_drop_layout.borrow().tabs[0].center()
+                let layout = target.read(cx).tab_drop_layout.borrow();
+                let local = if enter_body {
+                    let position = point(px(450.), px(400.));
+                    assert!(layout.drop_index(position).is_none());
+                    position
+                } else {
+                    layout.tabs[0].center()
+                };
+                window.bounds().origin + local
             })
             .unwrap();
         drag_move(window, target_point, false, cx);
@@ -447,6 +464,11 @@ fn document_moves_between_windows_and_detaches_in_one_gesture(cx: &mut TestAppCo
             "move immediately, before mouse up"
         );
         assert_eq!(target.read(cx).documents.len(), 2);
+        assert_eq!(
+            cx.global::<WorkspaceWindowRegistry>().windows.len(),
+            2,
+            "entering any part of the target must not create a floating shell"
+        );
         let moved = target.read(cx).active_document().unwrap();
         assert!(
             Arc::ptr_eq(&original_document, &moved.document),
@@ -489,7 +511,11 @@ fn document_moves_between_windows_and_detaches_in_one_gesture(cx: &mut TestAppCo
             })
             .unwrap();
         window.render_frame(cx);
-        let back = source.read(cx).tab_drop_layout.borrow().tabs[0].center();
+        let back = if enter_body {
+            point(px(450.), px(400.))
+        } else {
+            source.read(cx).tab_drop_layout.borrow().tabs[0].center()
+        };
         drag_move(window, back, false, cx);
         assert_eq!(
             source.read(cx).documents.len(),
