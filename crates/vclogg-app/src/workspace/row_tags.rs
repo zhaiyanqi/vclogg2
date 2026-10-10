@@ -4,7 +4,6 @@ use crate::{
     log_tags::{RowTag, TagColor, TagPreset, TagStyle, source_digest},
     row_tag_dialog::{RowTagDialog, RowTagDialogEvent, RowTagPreview},
 };
-use gpui_kit::AvailableSpace;
 use std::sync::Weak;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -333,23 +332,10 @@ impl Workspace {
             if tag.source_digest != digest {
                 continue;
             }
-            // Measure the same capped component used by the row renderer, including
-            // custom fonts, padding and borders, before appending the new mark.
-            let mut element = div()
-                .max_w(font_size * 24.)
-                .overflow_hidden()
-                .child(
-                    tag.preset()
-                        .render_tag(font_size, self.log_row_height(), cx)
-                        .child(div().min_w_0().truncate().child(tag.label.clone())),
-                )
-                .into_any_element();
-            let measured = element.layout_as_root(
-                size(AvailableSpace::MaxContent, AvailableSpace::MinContent),
-                window,
-                cx,
-            );
-            let end = font_size * (tag.x as f32 / 1000.) + measured.width + gap;
+            let width = tag
+                .preset()
+                .measured_width(font_size, self.log_row_height(), window, cx);
+            let end = font_size * (tag.x as f32 / 1000.) + width + gap;
             last_tag_end = Some(last_tag_end.map_or(end, |previous| previous.max(end)));
         }
         let draft = RowTag {
@@ -1185,3 +1171,7 @@ impl Workspace {
 fn position_units(position: Pixels, font_size: Pixels) -> u32 {
     ((position / font_size).max(0.) * 1000.).round() as u32
 }
+
+#[cfg(test)]
+#[path = "row_tag_tests.rs"]
+mod tests;

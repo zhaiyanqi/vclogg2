@@ -2,9 +2,13 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use gpui_kit::component::ColorName;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, tag::Tag};
-use gpui_kit::{App, FontWeight, Hsla, Pixels, Styled as _, px};
+use gpui_kit::{App, FontWeight, Hsla, Pixels, Styled as _, TextStyle, Window, px, rems};
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
+
+// Match the small Tag component padding in both rendering and event-time measurement.
+const TAG_HORIZONTAL_PADDING_REMS: f32 = 0.375;
 
 /// File-owned annotations, indexed by source row so rendering never scans every tag.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -118,11 +122,47 @@ impl TagPreset {
         )
     }
 
+    /// Text shaping is valid during input events; component layout is not.
+    pub(crate) fn measured_width(
+        &self,
+        font: Pixels,
+        row_height: Pixels,
+        window: &Window,
+        cx: &App,
+    ) -> Pixels {
+        let (text_size, _) = self.dimensions(font, row_height);
+        let style = TextStyle {
+            font_family: self.style.font_family.as_ref().map_or_else(
+                || cx.theme().font_family.clone(),
+                |font| font.clone().into(),
+            ),
+            font_weight: if self.style.bold {
+                FontWeight::BOLD
+            } else {
+                FontWeight::NORMAL
+            },
+            ..Default::default()
+        };
+        let text_width = window
+            .text_system()
+            .shape_line(
+                self.label.clone().into(),
+                text_size,
+                &[style.to_run(self.label.len())],
+                None,
+            )
+            .width;
+        // Two physical border pixels, as in Tag::border_1().
+        (text_width + window.rem_size() * (2. * TAG_HORIZONTAL_PADDING_REMS) + px(2.))
+            .min(font * 24.)
+    }
+
     pub(crate) fn render_tag(&self, font: Pixels, row_height: Pixels, cx: &App) -> Tag {
         let (text, height) = self.dimensions(font, row_height);
         let (foreground, background) = self.colors(cx);
         Tag::color(self.color.color_name())
             .small()
+            .px(rems(TAG_HORIZONTAL_PADDING_REMS))
             .h(height)
             .py_0()
             .rounded(if self.style.pill {
