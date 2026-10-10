@@ -1867,7 +1867,8 @@ impl Workspace {
                     )
                     .items_center()
                     .gap(px(6.))
-                    .px(px(12.))
+                    .pl_3()
+                    .pr_1()
                     .py(ui_theme::WORKSPACE_BAR_VERTICAL_INSET)
                     .bg(ui_theme::header_material(&colors))
                     .child(ui_theme::glass_sheen_layer(&colors))
@@ -1889,9 +1890,9 @@ impl Workspace {
                     .child(
                         Button::new("case-sensitive")
                             .small()
-                            .w(px(34.).max(control_height))
-                            .h(control_height)
+                            .size(control_height)
                             .p_0()
+                            .flex_none()
                             .rounded(px(10.))
                             .font_weight(FontWeight(700.))
                             .custom(case_sensitive_variant)
@@ -1907,9 +1908,9 @@ impl Workspace {
                     .child(
                         Button::new("regular-expression")
                             .small()
-                            .w(px(34.).max(control_height))
-                            .h(control_height)
+                            .size(control_height)
                             .p_0()
+                            .flex_none()
                             .rounded(px(10.))
                             .font_weight(FontWeight(700.))
                             .custom(regex_variant)
@@ -2001,61 +2002,73 @@ impl Workspace {
                             })),
                     )
                     .child(
-                        Button::new("clear-search")
-                            .small()
-                            .ghost()
-                            .icon(IconName::Close)
-                            .w(px(34.).max(control_height))
-                            .h(control_height)
-                            .rounded(px(10.))
-                            .disabled(clear_disabled)
-                            .tooltip(crate::tr!("清除搜索结果", "Clear search results"))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.clear_search(window, cx);
-                            })),
-                    )
-                    .when(committed_results_visible, |controls| {
-                        controls.child(
-                            h_flex()
-                                .flex_shrink_0()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(
+                        h_flex()
+                            .flex_shrink_0()
+                            .gap_0p5()
+                            .child(
+                                Button::new("clear-search")
+                                    .small()
+                                    .ghost()
+                                    .icon(IconName::Close)
+                                    .size(control_height)
+                                    .p_0()
+                                    .flex_none()
+                                    .rounded(px(10.))
+                                    .disabled(clear_disabled)
+                                    .tooltip(crate::tr!("清除搜索结果", "Clear search results"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.clear_search(window, cx);
+                                    })),
+                            )
+                            .when(committed_results_visible, |controls| {
+                                controls.child(
                                     h_flex()
-                                        .min_w(px(68.))
-                                        .h(control_height)
-                                        .justify_center()
-                                        .px(px(8.))
-                                        .rounded(px(999.))
-                                        .border_1()
-                                        .border_color(cx.theme().primary.opacity(0.24))
-                                        .bg(cx.theme().primary.opacity(0.08))
-                                        .text_size(font_size)
-                                        .font_weight(FontWeight(650.))
-                                        .text_color(cx.theme().primary)
-                                        .child(result_count_label),
-                                ),
-                        )
-                    })
-                    .child(
-                        crate::button_accessibility::with_label(
-                            Button::new("toggle-search-panel")
-                                .small()
-                                .ghost()
-                                .icon(if panel_expanded {
-                                    IconName::ChevronDown
-                                } else {
-                                    IconName::ChevronUp
-                                })
-                                .w(px(34.).max(control_height))
-                                .h(control_height)
-                                .rounded(px(10.)),
-                            panel_toggle_label,
-                        )
-                        .tooltip(panel_toggle_label)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.set_search_panel_expanded(!this.search_panel_expanded(), cx);
-                            this.search_input_focus_handle(cx).focus(window, cx);
-                        })),
+                                        .flex_shrink_0()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(
+                                            h_flex()
+                                                .min_w(px(68.))
+                                                .h(control_height)
+                                                .justify_center()
+                                                .px(px(8.))
+                                                .rounded(px(999.))
+                                                .border_1()
+                                                .border_color(cx.theme().primary.opacity(0.24))
+                                                .bg(cx.theme().primary.opacity(0.08))
+                                                .text_size(font_size * (12. / 13.))
+                                                .font_weight(FontWeight(650.))
+                                                .text_color(cx.theme().primary)
+                                                .child(result_count_label),
+                                        ),
+                                )
+                            })
+                            .child(
+                                crate::button_accessibility::with_label(
+                                    Button::new("toggle-search-panel")
+                                        .small()
+                                        .ghost()
+                                        .icon(if panel_expanded {
+                                            IconName::ChevronDown
+                                        } else {
+                                            IconName::ChevronUp
+                                        })
+                                        .size(control_height)
+                                        .p_0()
+                                        .flex_none()
+                                        .rounded(px(10.)),
+                                    panel_toggle_label,
+                                )
+                                .tooltip(panel_toggle_label)
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
+                                        this.set_search_panel_expanded(
+                                            !this.search_panel_expanded(),
+                                            cx,
+                                        );
+                                        this.search_input_focus_handle(cx).focus(window, cx);
+                                    },
+                                )),
+                            ),
                     ),
             )
             .when(panel_expanded, |bar| {
