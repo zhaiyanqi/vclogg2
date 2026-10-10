@@ -10,6 +10,7 @@ use gpui_kit::{
 pub(crate) struct TagGeometry {
     pub(crate) content: Bounds<Pixels>,
     pub(crate) tag: Bounds<Pixels>,
+    visible: Bounds<Pixels>,
     vertical_center: bool,
 }
 
@@ -24,11 +25,10 @@ impl TagGeometry {
 
     fn constrain_position(self, position: Point<Pixels>) -> Point<Pixels> {
         let vertical_space = (self.content.size.height - self.tag.size.height).max(px(0.));
+        let left = (self.visible.left() - self.content.left()).max(px(0.));
+        let right = (self.visible.right() - self.content.left() - self.tag.size.width).max(left);
         point(
-            position.x.clamp(
-                px(0.),
-                (self.content.size.width - self.tag.size.width).max(px(0.)),
-            ),
+            position.x.clamp(left, right),
             if self.vertical_center {
                 vertical_space / 2.
             } else {
@@ -121,13 +121,22 @@ impl Element for LogTagLayer {
         window: &mut Window,
         cx: &mut App,
     ) {
+        // Horizontal scrolling can place the content bounds outside the viewport.
+        // Keep coordinates relative to the content so dragging and persistence agree.
+        let mask = window.content_mask().bounds;
+        let left = bounds.left().max(mask.left());
+        let right = bounds.right().min(mask.right()).max(left);
+        let visible = Bounds::new(
+            point(left, bounds.top()),
+            size(right - left, bounds.size.height),
+        );
         // The layer has no hitbox: empty space belongs to SelectableLogText.
         for tag in &mut self.tags {
             let Some(content) = tag.element.take() else {
                 continue;
             };
             let mut element = div()
-                .max_w(bounds.size.width)
+                .max_w(visible.size.width)
                 .max_h(bounds.size.height)
                 .overflow_hidden()
                 .child(content)
@@ -139,6 +148,7 @@ impl Element for LogTagLayer {
             );
             let mut geometry = TagGeometry {
                 content: bounds,
+                visible,
                 tag: Bounds::new(bounds.origin, measured),
                 vertical_center: tag.vertical_center,
             };
@@ -162,5 +172,36 @@ impl Element for LogTagLayer {
         for element in elements {
             element.paint(window, cx);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TagGeometry;
+    use gpui_kit::{Bounds, point, px, size};
+
+    #[test]
+    fn line_end_placement_keeps_the_whole_tag_in_the_visible_row() {
+        let geometry = TagGeometry {
+            content: Bounds::new(point(px(-200.), px(0.)), size(px(2000.), px(24.))),
+            visible: Bounds::new(point(px(100.), px(0.)), size(px(500.), px(24.))),
+            tag: Bounds::new(point(px(0.), px(0.)), size(px(80.), px(20.))),
+            vertical_center: true,
+        };
+        // A visible line end remains the anchor, including after horizontal scrolling.
+        assert_eq!(
+            geometry.constrain_position(point(px(400.), px(0.))),
+            point(px(400.), px(2.))
+        );
+        // An offscreen line end leaves room for the complete tag at the right edge.
+        assert_eq!(
+            geometry.constrain_position(point(px(1800.), px(0.))),
+            point(px(720.), px(2.))
+        );
+        // A line end scrolled past the left edge remains reachable.
+        assert_eq!(
+            geometry.constrain_position(point(px(50.), px(0.))),
+            point(px(300.), px(2.))
+        );
     }
 }

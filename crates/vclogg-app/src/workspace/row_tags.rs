@@ -90,9 +90,8 @@ impl Workspace {
             );
             return;
         };
-        // Keyboard creation starts at the content origin, independent of the mouse
-        // and any previous context-menu target. The dialog defaults to vertical centering.
-        self.add_row_tag_at_position(context, Point::default(), None, window, cx);
+        // Keyboard and context-menu creation share the same line-end placement.
+        self.add_row_tag_at_line_end(context, None, window, cx);
     }
 
     fn selected_tag_context(&self, cx: &App) -> Option<TagContext> {
@@ -150,7 +149,7 @@ impl Workspace {
                 }
                 _ => return None,
             };
-        // No pointer geometry is needed for the keyboard's content-relative origin.
+        // Line-end placement uses the text, independent of pointer geometry.
         self.tag_row_context(
             document_id,
             source_row,
@@ -225,7 +224,7 @@ impl Workspace {
                 && this.persistence.store.is_some()
                 && this.tag_target_is_current(context.target, &context.document)
         });
-        let Some((context, position)) = context else {
+        let Some((context, _)) = context else {
             return menu
                 .item(PopupMenuItem::new(crate::tr!("文字标记", "Text mark")).disabled(true));
         };
@@ -249,7 +248,7 @@ impl Workspace {
                     PopupMenuItem::new(crate::tr!("新增标记…", "New mark…"))
                         .action(Box::new(AddTextMark))
                         .on_click(window.listener_for(&workspace, move |this, _, window, cx| {
-                            this.add_row_tag(create_context.clone(), position, None, window, cx);
+                            this.add_row_tag(create_context.clone(), None, window, cx);
                         })),
                 );
                 let clear_context = context.clone();
@@ -273,13 +272,7 @@ impl Workspace {
                     let preset = preset.clone();
                     menu = menu.item(PopupMenuItem::new(preset.label.clone()).on_click(
                         window.listener_for(&workspace, move |this, _, window, cx| {
-                            this.add_row_tag(
-                                context.clone(),
-                                position,
-                                Some(preset.clone()),
-                                window,
-                                cx,
-                            );
+                            this.add_row_tag(context.clone(), Some(preset.clone()), window, cx);
                         }),
                     ));
                 }
@@ -291,21 +284,19 @@ impl Workspace {
     fn add_row_tag(
         &mut self,
         context: TagContext,
-        pointer: Point<Pixels>,
         preset: Option<TagPreset>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(bounds) = context.bounds.get() else {
+        let Some(_) = context.bounds.get() else {
             return;
         };
-        self.add_row_tag_at_position(context, pointer - bounds.origin, preset, window, cx);
+        self.add_row_tag_at_line_end(context, preset, window, cx);
     }
 
-    fn add_row_tag_at_position(
+    fn add_row_tag_at_line_end(
         &mut self,
         context: TagContext,
-        position: Point<Pixels>,
         preset: Option<TagPreset>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -317,13 +308,30 @@ impl Workspace {
             return;
         }
         let font_size = px(self.app_settings.log_font_size as f32);
+        let tab = self
+            .documents
+            .iter()
+            .find(|tab| tab.id == context.target.document_id)
+            .unwrap();
+        let mut text_style = window.text_style();
+        text_style.font_family = tab.log_table.read(cx).delegate().resolved_font_family(cx);
+        let text = context.text.display().clone();
+        let line_end = window
+            .text_system()
+            .shape_line(
+                text.clone(),
+                font_size,
+                &[text_style.to_run(text.len())],
+                None,
+            )
+            .width;
         let draft = RowTag {
             source_row: context.target.source_row,
             label: String::new(),
             color: TagColor::Neutral,
             style: TagStyle::default(),
-            x: position_units(position.x.max(px(0.)), font_size),
-            y: position_units(position.y.max(px(0.)), font_size),
+            x: position_units(line_end, font_size),
+            y: 0,
             source_digest: source_digest(context.text.source()),
         };
         let id = uuid::Uuid::new_v4().to_string();
