@@ -4,7 +4,29 @@ const WORKSPACE_OVERLAY_PRIORITY: usize = 1;
 const _: () = assert!(WORKSPACE_OVERLAY_PRIORITY < POPUP_PRIORITY);
 
 pub(super) fn deferred_workspace_overlay(child: impl IntoElement) -> impl IntoElement {
-    deferred(child).with_priority(WORKSPACE_OVERLAY_PRIORITY)
+    WorkspaceOverlay {
+        child: child.into_any_element(),
+    }
+}
+
+#[derive(IntoElement)]
+struct WorkspaceOverlay {
+    child: AnyElement,
+}
+
+impl gpui_kit::RenderOnce for WorkspaceOverlay {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        // Kit 0.7 renders sheets in the normal Root pass. A deferred decoration
+        // escapes that ordering, even at priority 0, and paints over the sheet.
+        // Keep workspace decorations in the content pass while a sheet is open.
+        if window.has_active_sheet(cx) {
+            self.child
+        } else {
+            deferred(self.child)
+                .with_priority(WORKSPACE_OVERLAY_PRIORITY)
+                .into_any_element()
+        }
+    }
 }
 
 impl Workspace {
@@ -2405,10 +2427,15 @@ mod tests {
 
     #[gpui_kit::test]
     fn workspace_overlay_paints_above_deferred_content(cx: &mut TestAppContext) {
-        let (_, cx) = cx.add_window_view(|_, _| DeferredOverlayHarness);
-        cx.update(|window, cx| window.draw(cx).clear(cx));
-
-        let (content_order, overlay_order) = cx.update(|window, _| {
+        cx.update(gpui_kit::init);
+        let (handle, _) = cx.update(|cx| {
+            gpui_kit::open_window(gpui_kit::WindowOptions::default(), cx, |_, cx| {
+                cx.new(|_| DeferredOverlayHarness)
+            })
+            .unwrap()
+        });
+        cx.update_window(handle, |_, window, cx| {
+            window.draw(cx).clear(cx);
             let quads = window.painted_quads();
             let order_for = |color| {
                 quads
@@ -2417,9 +2444,38 @@ mod tests {
                     .unwrap_or_else(|| panic!("missing {color:#x} quad in {quads:#?}"))
                     .order
             };
-            (order_for(CONTENT_COLOR), order_for(OVERLAY_COLOR))
-        });
+            assert!(order_for(OVERLAY_COLOR) > order_for(CONTENT_COLOR));
+        })
+        .unwrap();
 
-        assert!(overlay_order > content_order);
+        const SHEET_COLOR: u32 = 0x23_45_67;
+        cx.update_window(handle, |_, window, cx| {
+            window.open_sheet(cx, |sheet, _, _| sheet.bg(rgb(SHEET_COLOR)));
+            window.refresh();
+            window.draw(cx).clear(cx);
+            let quads = window.painted_quads();
+            let order_for = |color| {
+                quads
+                    .iter()
+                    .find(|quad| quad.background == rgb(color).into())
+                    .unwrap_or_else(|| panic!("missing {color:#x} quad"))
+                    .order
+            };
+            assert!(order_for(SHEET_COLOR) > order_for(OVERLAY_COLOR));
+
+            window.close_sheet(cx);
+            window.refresh();
+            window.draw(cx).clear(cx);
+            let quads = window.painted_quads();
+            let order_for = |color| {
+                quads
+                    .iter()
+                    .find(|quad| quad.background == rgb(color).into())
+                    .unwrap_or_else(|| panic!("missing {color:#x} quad"))
+                    .order
+            };
+            assert!(order_for(OVERLAY_COLOR) > order_for(CONTENT_COLOR));
+        })
+        .unwrap();
     }
 }
