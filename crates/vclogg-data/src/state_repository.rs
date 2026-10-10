@@ -378,7 +378,11 @@ impl StateRepository {
 
     pub fn save_sessions(&self, sessions: &[(PathBuf, FileSessionRecord)]) -> Result<()> {
         let mut connection = self.lock()?;
-        let transaction = connection.transaction().context("无法开始窗口会话事务")?;
+        // Reserve the writer before reading row tags so concurrent windows wait
+        // instead of failing when a deferred read transaction upgrades to a write.
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("无法开始窗口会话事务")?;
         for (path, state) in sessions {
             save_session_snapshot(&transaction, path, state)?;
         }
@@ -392,7 +396,9 @@ impl StateRepository {
         active_path: Option<&Path>,
     ) -> Result<()> {
         let mut connection = self.lock()?;
-        let transaction = connection.transaction().context("无法开始退出状态事务")?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("无法开始退出状态事务")?;
         for (path, state) in sessions {
             save_session_snapshot(&transaction, path, state)?;
         }
@@ -1643,6 +1649,79 @@ mod tests {
         FileSessionRecord, StateMigrationDefaults, StateRepository, count_marked_rows,
         initialize_schema, merge_session_changes, table_columns,
     };
+
+    #[test]
+    fn window_session_save_waits_for_another_window_writer() {
+        save_while_another_window_is_writing(false);
+    }
+
+    #[test]
+    fn workspace_save_waits_for_another_window_writer() {
+        save_while_another_window_is_writing(true);
+    }
+
+    fn save_while_another_window_is_writing(workspace: bool) {
+        use std::{sync::mpsc, time::Duration};
+
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("state.db");
+        let store = StateRepository::open(
+            database.clone(),
+            &StateMigrationDefaults {
+                app_log_level: "error".into(),
+                color_labels: Vec::new(),
+            },
+        )
+        .unwrap();
+        let path = directory.path().join("dragged.log");
+        store.record_opened(std::slice::from_ref(&path)).unwrap();
+        let mut other_window = Connection::open(database).unwrap();
+        let transaction = other_window
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let saved_path = path.clone();
+        let worker = std::thread::spawn(move || {
+            let sessions = vec![(
+                saved_path.clone(),
+                FileSessionRecord {
+                    query_text: "preserved while dragging".into(),
+                    ..FileSessionRecord::default()
+                },
+            )];
+            started_tx.send(()).unwrap();
+            let result = if workspace {
+                store.save_workspace(
+                    &sessions,
+                    std::slice::from_ref(&saved_path),
+                    Some(&saved_path),
+                )
+            } else {
+                store.save_sessions(&sessions)
+            };
+            finished_tx.send(result).unwrap();
+            store
+        });
+        started_rx.recv().unwrap();
+        // A read-first transaction fails immediately on its write upgrade;
+        // a write transaction must wait until the other window releases its lock.
+        let early_result = finished_rx.recv_timeout(Duration::from_millis(150));
+        transaction.commit().unwrap();
+        let store = worker.join().unwrap();
+        assert!(
+            matches!(early_result, Err(mpsc::RecvTimeoutError::Timeout)),
+            "{early_result:?}"
+        );
+        finished_rx.recv().unwrap().unwrap();
+        assert_eq!(
+            store.load_session(&path).unwrap().unwrap().query_text,
+            "preserved while dragging"
+        );
+        if workspace {
+            assert_eq!(store.last_workspace().unwrap().len(), 1);
+        }
+    }
 
     #[test]
     fn resetting_app_settings_removes_only_the_settings_record() {
