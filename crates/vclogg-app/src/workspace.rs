@@ -74,7 +74,6 @@ use crate::{
         ColorLabel, KeywordColorRule, ResolvedColorRules, color_with_alpha, default_color_labels,
         resolve_color_rules,
     },
-    color_labels_dialog::ColorLabelsDialog,
     directory_search_dialog::{
         DirectorySearchDialog, DirectorySearchOptions, enumerate_directory_search_paths,
     },
@@ -1731,7 +1730,6 @@ pub struct Workspace {
     scale_factor: f32,
     color_labels: Vec<ColorLabel>,
     last_color_label_id: Option<String>,
-    color_labels_saving: bool,
     log_coloring_pending: Option<highlight_preferences::PendingLogColoring>,
     log_coloring_request_sequence: u64,
     predefined_filters_saving: bool,
@@ -2422,7 +2420,6 @@ impl Workspace {
             scale_factor: 1.,
             color_labels: default_color_labels(),
             last_color_label_id: None,
-            color_labels_saving: false,
             log_coloring_pending: None,
             log_coloring_request_sequence: 0,
             predefined_filters_saving: false,

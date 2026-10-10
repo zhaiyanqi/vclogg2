@@ -508,9 +508,9 @@ impl Workspace {
                     .item(
                         PopupMenuItem::new(crate::tr!("高亮…", "Highlight…"))
                             .icon(IconName::Settings2)
-                            .disabled(highlight_workspace.read_with(cx, |this, _| {
-                                this.history_loading || this.color_labels_saving
-                            }))
+                            .disabled(
+                                highlight_workspace.read_with(cx, |this, _| this.history_loading),
+                            )
                             .on_click(manage_labels),
                     )
                     .separator()

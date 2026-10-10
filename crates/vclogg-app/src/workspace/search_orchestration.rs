@@ -953,6 +953,11 @@ impl Workspace {
             });
         }
 
+        self.queue_search_history_save(window, cx);
+    }
+
+    fn queue_search_history_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let history = self.search_history.clone();
         let Some(store) = self.persistence.store.clone() else {
             return;
         };
@@ -996,7 +1001,12 @@ impl Workspace {
             .filter(|query| !removed.contains(query.as_str()))
             .cloned()
             .collect();
-        self.replace_search_history(history, window, cx);
+        if history == self.search_history {
+            // A retry must write even if the failed attempt already updated the live list.
+            self.queue_search_history_save(window, cx);
+        } else {
+            self.replace_search_history(history, window, cx);
+        }
     }
 
     pub(super) fn record_search_history(

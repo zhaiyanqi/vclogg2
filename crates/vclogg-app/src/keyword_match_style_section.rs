@@ -1,5 +1,5 @@
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _,
+    ActiveTheme as _, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
@@ -22,7 +22,6 @@ pub(crate) struct KeywordMatchStyleSection {
     // Theme -> search/quick find -> foreground/background. All pickers survive tab switches.
     controls: [[[Entity<ColorPickerState>; 2]; 2]; 2],
     scroll: ScrollHandle,
-    saving: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -48,9 +47,6 @@ impl KeywordMatchStyleSection {
                         window,
                         move |this: &mut Self, picker, _: &ColorPickerEvent, window, cx| {
                             crate::dialog_focus::restore_color_picker_trigger(picker, window, cx);
-                            if this.saving {
-                                return;
-                            }
                             if let Some(color) = picker.read(cx).value() {
                                 let value = Some(format!("#{:08x}", u32::from(Rgba::from(color))));
                                 let style = this.draft.style_mut(theme_ix == 1, kind_ix == 1);
@@ -71,18 +67,12 @@ impl KeywordMatchStyleSection {
             dark: ui_theme::is_dark(cx),
             controls,
             scroll: ScrollHandle::new(),
-            saving: false,
             _subscriptions: subscriptions,
         }
     }
 
     pub(crate) fn draft(&self) -> KeywordMatchStyles {
         self.draft.clone()
-    }
-
-    pub(crate) fn set_saving(&mut self, saving: bool, cx: &mut Context<Self>) {
-        self.saving = saving;
-        cx.notify();
     }
 
     fn colors(draft: &KeywordMatchStyles, dark: bool, quick_find: bool) -> [Hsla; 2] {
@@ -110,15 +100,7 @@ impl KeywordMatchStyleSection {
         let picker = &self.controls[usize::from(self.dark)][usize::from(quick_find)]
             [usize::from(background)];
         let color = picker.read(cx).value().unwrap_or(cx.theme().transparent);
-        let control = if self.saving {
-            gpui_kit::base::ColorSwatch::new(("keyword-saving-color", picker.entity_id()), color)
-                .disabled(true)
-                .size_6()
-                .rounded(cx.theme().radius)
-                .into_any_element()
-        } else {
-            ColorPicker::new(picker).small().into_any_element()
-        };
+        let control = ColorPicker::new(picker).small();
         let value = format!(
             "#{:06X} · {}%",
             u32::from(Rgba::from(color)) >> 8,
@@ -144,7 +126,6 @@ impl KeywordMatchStyleSection {
                     .small()
                     .ghost()
                     .label(crate::tr!("恢复默认", "Reset"))
-                    .disabled(self.saving)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let style = this.draft.style_mut(this.dark, quick_find);
                         if background {
@@ -190,7 +171,6 @@ impl KeywordMatchStyleSection {
                         Checkbox::new(format!("keyword-{quick_find}-{id}"))
                             .label(label)
                             .checked(checked)
-                            .disabled(self.saving)
                             .on_click(cx.listener(move |this, checked: &bool, _, cx| {
                                 let style = this.draft.style_mut(this.dark, quick_find);
                                 match id {
@@ -270,7 +250,6 @@ impl Render for KeywordMatchStyleSection {
                             crate::tr!("浅色", "Light")
                         })
                         .selected(self.dark == dark)
-                        .disabled(self.saving)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.dark = dark;
                             cx.notify();
@@ -282,7 +261,6 @@ impl Render for KeywordMatchStyleSection {
                             .small()
                             .ghost()
                             .label(crate::tr!("恢复当前主题默认", "Reset this theme"))
-                            .disabled(self.saving)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 *this.draft.theme_mut(this.dark) = Default::default();
                                 this.sync_controls(window, cx);

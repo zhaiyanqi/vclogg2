@@ -6,7 +6,7 @@ use crate::{
     ui_theme,
 };
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _,
+    ActiveTheme as _, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     h_flex,
@@ -67,7 +67,6 @@ pub(crate) struct SelectionStyleSection {
     controls: [ThemeControls; 2],
     scroll: ScrollHandle,
     preview_selections: TextSelectionCache<usize>,
-    saving: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -84,9 +83,6 @@ impl SelectionStyleSection {
                     window,
                     move |this: &mut Self, picker, _: &ColorPickerEvent, window, cx| {
                         crate::dialog_focus::restore_color_picker_trigger(picker, window, cx);
-                        if this.saving {
-                            return;
-                        }
                         if let Some(color) = picker.read(cx).value() {
                             let value = Some(format!("#{:08x}", u32::from(Rgba::from(color))));
                             let style = this.draft.theme_mut(dark);
@@ -112,11 +108,9 @@ impl SelectionStyleSection {
             subscriptions.push(cx.subscribe(
                 &opacity,
                 move |this: &mut Self, slider, _: &SliderEvent, cx| {
-                    if !this.saving {
-                        this.draft.theme_mut(dark).inactive_opacity =
-                            slider.read(cx).value().start().round() as u8;
-                        cx.notify();
-                    }
+                    this.draft.theme_mut(dark).inactive_opacity =
+                        slider.read(cx).value().start().round() as u8;
+                    cx.notify();
                 },
             ));
             ThemeControls { colors, opacity }
@@ -128,17 +122,12 @@ impl SelectionStyleSection {
             controls,
             scroll: ScrollHandle::new(),
             preview_selections: TextSelectionCache::default(),
-            saving: false,
             _subscriptions: subscriptions,
         }
     }
 
     pub(crate) fn draft(&self) -> SelectionStyles {
         self.draft.clone()
-    }
-    pub(crate) fn set_saving(&mut self, saving: bool, cx: &mut Context<Self>) {
-        self.saving = saving;
-        cx.notify();
     }
 
     fn picker_colors(style: &SelectionThemeStyle, dark: bool) -> [Hsla; 5] {
@@ -205,7 +194,6 @@ impl SelectionStyleSection {
                 "恢复此项默认值",
                 "Restore this value to its default"
             ))
-            .disabled(self.saving)
             .on_click(cx.listener(move |this, _, window, cx| this.reset(setting, window, cx)))
     }
 
@@ -267,22 +255,9 @@ impl SelectionStyleSection {
         self.field(label, control, setting, cx)
     }
 
-    fn color_picker_control(&self, index: usize, cx: &Context<Self>) -> gpui_kit::AnyElement {
+    fn color_picker_control(&self, index: usize, _cx: &Context<Self>) -> gpui_kit::AnyElement {
         let picker = &self.controls[usize::from(self.dark)].colors[index];
-        if self.saving {
-            // The styled ColorPicker does not expose disabled; use its standard disabled swatch
-            // while saving, so neither pointer nor keyboard can open another popup.
-            gpui_kit::base::ColorSwatch::new(
-                format!("selection-saving-color-{index}"),
-                picker.read(cx).value().unwrap_or(cx.theme().transparent),
-            )
-            .disabled(true)
-            .size_6()
-            .rounded(cx.theme().radius)
-            .into_any_element()
-        } else {
-            ColorPicker::new(picker).small().into_any_element()
-        }
+        ColorPicker::new(picker).small().into_any_element()
     }
 
     fn choices(&self, setting: Setting, cx: &mut Context<Self>) -> gpui_kit::Div {
@@ -332,7 +307,6 @@ impl SelectionStyleSection {
                     .small()
                     .label(label)
                     .selected(selected == index)
-                    .disabled(self.saving)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let style = this.draft.theme_mut(this.dark);
                         match setting {
@@ -381,7 +355,6 @@ impl SelectionStyleSection {
                         crate::tr!("保留原色", "Original colors")
                     })
                     .selected(custom == foreground.is_some())
-                    .disabled(self.saving)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let value = this.controls[usize::from(this.dark)].colors[index]
                             .read(cx)
@@ -460,14 +433,14 @@ impl SelectionStyleSection {
             .child(Self::group(crate::tr!("文字选择", "Selected text").into(), crate::tr!("拖选或双击选词时的外观；保留原色可继续显示搜索和标签颜色。", "Appearance when dragging over text or selecting a word. Original colors preserve search and label colors.").into(), cx))
             .child(self.color_field(2, crate::tr!("背景色", "Background").into(), Setting::TextBackground, cx))
             .child(self.field(crate::tr!("文字颜色", "Text color"), self.foreground_control(false, cx), Setting::TextForeground, cx))
-            .child(self.field(crate::tr!("下划线", "Underline"), Switch::new("selection-underline").small().checked(style.text_underline).disabled(self.saving)
+            .child(self.field(crate::tr!("下划线", "Underline"), Switch::new("selection-underline").small().checked(style.text_underline)
                 .on_click(cx.listener(|this, checked: &bool, _, cx| { this.draft.theme_mut(this.dark).text_underline = *checked; cx.notify(); })), Setting::Underline, cx));
         let inactive = v_flex().gap_3()
             .child(Self::group(crate::tr!("失去焦点", "Unfocused selection").into(), crate::tr!("切换到其他区域或窗口时淡化选区，选中内容仍然保留。", "Dim selections when another region or window gains focus. The selection is retained.").into(), cx))
-            .child(self.field(crate::tr!("淡化选区", "Dim selection"), Switch::new("selection-dim-inactive").small().checked(style.dim_inactive).disabled(self.saving)
+            .child(self.field(crate::tr!("淡化选区", "Dim selection"), Switch::new("selection-dim-inactive").small().checked(style.dim_inactive)
                 .on_click(cx.listener(|this, checked: &bool, _, cx| { this.draft.theme_mut(this.dark).dim_inactive = *checked; cx.notify(); })), Setting::DimInactive, cx))
             .when(style.dim_inactive, |fields| fields.child(self.field(crate::tr!("保留强度", "Remaining opacity"), h_flex().gap_3()
-                .child(Slider::new(&self.controls[usize::from(self.dark)].opacity).flex_1().disabled(self.saving))
+                .child(Slider::new(&self.controls[usize::from(self.dark)].opacity).flex_1())
                 .child(format!("{}%", style.inactive_opacity)), Setting::InactiveOpacity, cx)));
         v_flex()
             .gap_5()
@@ -595,7 +568,6 @@ impl SelectionStyleSection {
                             .small()
                             .label(crate::tr!("模拟失去焦点", "Preview unfocused"))
                             .checked(self.preview_inactive)
-                            .disabled(self.saving)
                             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                 this.preview_inactive = *checked;
                                 cx.notify();
@@ -673,7 +645,6 @@ impl Render for SelectionStyleSection {
                             crate::tr!("浅色", "Light")
                         })
                         .selected(self.dark == dark)
-                        .disabled(self.saving)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.dark = dark;
                             cx.notify();
@@ -685,7 +656,6 @@ impl Render for SelectionStyleSection {
                             .small()
                             .ghost()
                             .label(crate::tr!("恢复当前主题默认", "Reset this theme"))
-                            .disabled(self.saving)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 *this.draft.theme_mut(this.dark) = SelectionThemeStyle::default();
                                 this.sync_controls(window, cx);

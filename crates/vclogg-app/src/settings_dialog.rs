@@ -8,10 +8,11 @@ use chrono::{DateTime, Local, Utc};
 use gpui_kit::base::Link;
 use gpui_kit::component::{
     ActiveTheme as _, Colorize as _, Disableable as _, IconName, IndexPath, Selectable as _,
-    Sizable as _,
+    Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     description_list::DescriptionList,
+    dialog::DialogFooter,
     h_flex,
     input::{Input, InputContentType, InputEvent, InputState, NumberInput},
     radio::{Radio, RadioGroup},
@@ -516,7 +517,6 @@ pub struct SettingsDialog {
 pub(crate) enum SettingsDialogEvent {
     DraftChanged,
     CategoryChanged(SettingsCategory),
-    CloudSettings(CloudSettings),
     CloudConnection(Option<CloudConnectionProfile>),
 }
 
@@ -946,8 +946,13 @@ impl SettingsDialog {
                 cx.notify();
             }),
         );
-        subscriptions
-            .push(cx.subscribe(&network_server_url, |_, _, _: &InputEvent, cx| cx.notify()));
+        subscriptions.push(
+            cx.subscribe(&network_server_url, |_, _, event: &InputEvent, cx| {
+                if !matches!(event, InputEvent::Focus) {
+                    Self::draft_changed(cx);
+                }
+            }),
+        );
         let bounded_display_name = network_display_name.clone();
         subscriptions.push(cx.subscribe_in(
             &network_display_name,
@@ -960,7 +965,7 @@ impl SettingsDialog {
                         bounded_display_name
                             .update(cx, move |state, cx| state.set_value(bounded, window, cx));
                     }
-                    cx.notify();
+                    Self::draft_changed(cx);
                 }
                 InputEvent::PressEnter { .. } => this.connect_network(window, cx),
                 InputEvent::Focus | InputEvent::Blur => cx.notify(),
@@ -1234,9 +1239,9 @@ impl SettingsDialog {
         let Some(baseline) = self.highlight_baseline.take() else {
             return;
         };
-        self.highlight_editor = Some(cx.new(|cx| {
+        let editor = cx.new(|cx| {
             crate::color_labels_dialog::ColorLabelsDialog::new(
-                baseline.highlight_log_levels,
+                self.draft.highlight_log_levels,
                 baseline.log_coloring,
                 baseline.labels,
                 window,
@@ -1244,12 +1249,32 @@ impl SettingsDialog {
             )
             .with_selection_styles(baseline.selection_styles, window, cx)
             .with_keyword_match_styles(baseline.keyword_match_styles, window, cx)
-        }));
+        });
+        self._subscriptions
+            .push(cx.observe(&editor, |_, _, cx| Self::draft_changed(cx)));
+        self.highlight_editor = Some(editor);
         cx.notify();
     }
 
     pub fn settings(&self, cx: &gpui_kit::App) -> Result<AppSettings, String> {
+        let (settings, error) = self.settings_for_autosave(&self.draft, cx);
+        match error {
+            Some(error) => Err(error),
+            None => Ok(settings),
+        }
+    }
+
+    /// Keep each invalid field at its last valid value while other controls remain usable.
+    pub(crate) fn settings_for_autosave(
+        &self,
+        previous: &AppSettings,
+        cx: &gpui_kit::App,
+    ) -> (AppSettings, Option<String>) {
+        let mut error = None;
         let mut settings = self.draft.clone();
+        if let Some(editor) = &self.highlight_editor {
+            settings.highlight_log_levels = editor.read(cx).is_log_coloring_enabled();
+        }
         settings.app_log_level = self
             .app_log_level
             .read(cx)
@@ -1349,13 +1374,19 @@ impl SettingsDialog {
         settings.mouse_wheel_scroll_lines =
             self.scroll_lines.read(cx).value().start().round() as u16;
         let max_search_results = self.max_search_results.read(cx).value();
-        settings.max_search_results = max_search_results.trim().parse::<u32>().map_err(|_| {
-            crate::tr!(
-                "最大搜索结果数必须是 0 到 4,294,967,295 之间的整数",
-                "Maximum search results must be an integer from 0 to 4,294,967,295",
-            )
-            .to_string()
-        })?;
+        settings.max_search_results = match max_search_results.trim().parse::<u32>() {
+            Ok(value) => value,
+            Err(_) => {
+                error = Some(
+                    crate::tr!(
+                        "最大搜索结果数必须是 0 到 4,294,967,295 之间的整数",
+                        "Maximum search results must be an integer from 0 to 4,294,967,295",
+                    )
+                    .to_owned(),
+                );
+                previous.max_search_results
+            }
+        };
         settings.word_boundary_characters =
             self.word_boundary_characters.read(cx).value().to_string();
         settings.open_directory_command = self
@@ -1366,31 +1397,40 @@ impl SettingsDialog {
             .take(2048)
             .collect();
         if settings.word_boundary_characters.chars().count() > MAX_WORD_BOUNDARY_CHARACTERS {
-            return Err(crate::tr_args!(
+            error.get_or_insert_with(|| crate::tr_args!(
                 "分词边界字符最多允许 {MAX_WORD_BOUNDARY_CHARACTERS} 个 Unicode 字符",
                 "Word-boundary characters may contain at most {MAX_WORD_BOUNDARY_CHARACTERS} Unicode characters",
             ));
+            settings.word_boundary_characters = previous.word_boundary_characters.clone();
         }
+        let mut shortcut_error = None;
         for action in ShortcutAction::ALL {
             let value = self.shortcut_value(action, cx);
             if !value.is_empty() && crate::actions::shortcut_to_key_binding(&value).is_none() {
-                return Err(crate::tr_args!(
-                    "“{}”的快捷键无效，请重新录入",
-                    "The shortcut for “{}” is invalid. Enter it again.",
-                    action.label(),
-                ));
+                shortcut_error.get_or_insert_with(|| {
+                    crate::tr_args!(
+                        "“{}”的快捷键无效，请重新录入",
+                        "The shortcut for “{}” is invalid. Enter it again.",
+                        action.label(),
+                    )
+                });
             }
             action.set(&mut settings.shortcuts, value);
         }
-
         if !self.conflicts(cx).is_empty() {
-            return Err(crate::tr!(
-                "存在重复快捷键，请先解决标红的冲突",
-                "Some shortcuts are duplicated. Resolve the highlighted conflicts first.",
-            )
-            .to_string());
+            shortcut_error.get_or_insert_with(|| {
+                crate::tr!(
+                    "存在重复快捷键，请先解决标红的冲突",
+                    "Some shortcuts are duplicated. Resolve the highlighted conflicts first.",
+                )
+                .to_owned()
+            });
         }
-        Ok(settings)
+        if let Some(shortcut_error) = shortcut_error {
+            error.get_or_insert(shortcut_error);
+            settings.shortcuts = previous.shortcuts.clone();
+        }
+        (settings, error)
     }
 
     pub fn search_history(&self) -> Vec<String> {
@@ -1415,7 +1455,7 @@ impl SettingsDialog {
         }
 
         let settings = self.network_settings(cx);
-        cx.emit(SettingsDialogEvent::CloudSettings(settings.clone()));
+        cx.emit(SettingsDialogEvent::DraftChanged);
         if settings.server_url.is_empty() || settings.display_name.is_empty() {
             self.network_status = crate::tr!(
                 "请填写服务器地址和用户名。",
@@ -1472,10 +1512,6 @@ impl SettingsDialog {
                 this.network_task = None;
                 match result {
                     Ok(connection) => {
-                        let normalized_settings = CloudSettings {
-                            server_url: connection.server_url.clone(),
-                            display_name: connection.display_name.clone(),
-                        };
                         this.network_server_url.update(cx, |state, cx| {
                             state.set_value(connection.server_url.clone(), window, cx)
                         });
@@ -1490,7 +1526,7 @@ impl SettingsDialog {
                         )
                         .into();
                         this.network_status_kind = NetworkStatusKind::Success;
-                        cx.emit(SettingsDialogEvent::CloudSettings(normalized_settings));
+                        cx.emit(SettingsDialogEvent::DraftChanged);
                         cx.emit(SettingsDialogEvent::CloudConnection(Some(connection)));
                     }
                     Err(error) => {
@@ -1508,6 +1544,36 @@ impl SettingsDialog {
     fn remove_search_history(&mut self, query: &str, cx: &mut Context<Self>) {
         self.search_history.retain(|entry| entry != query);
         Self::draft_changed(cx);
+    }
+
+    fn confirm_clear_search_history(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let settings = cx.entity();
+        window.open_alert_dialog(cx, move |alert, _, cx| {
+            let settings = settings.clone();
+            alert
+                .title(crate::tr!("清除搜索历史？", "Clear search history?"))
+                .description(crate::tr!("清除后无法恢复。", "This cannot be undone."))
+                .footer(
+                    DialogFooter::new()
+                        .child(crate::dialog_focus::dialog_cancel_action(
+                            "settings-history-cancel-action",
+                            Button::new("settings-history-cancel")
+                                .label(crate::tr!("取消", "Cancel")),
+                            cx,
+                        ))
+                        .child(crate::dialog_focus::dialog_confirm_action(
+                            "settings-history-clear-action",
+                            Button::new("settings-history-clear-confirm")
+                                .danger()
+                                .label(crate::tr!("清除历史", "Clear history")),
+                            cx,
+                        )),
+                )
+                .on_ok(move |_, _, cx| {
+                    settings.update(cx, |settings, cx| settings.clear_search_history(cx));
+                    true
+                })
+        });
     }
 
     fn clear_search_history(&mut self, cx: &mut Context<Self>) {
@@ -2113,8 +2179,8 @@ impl SettingsDialog {
                             .flex_none()
                             .gap_2()
                             .child(crate::tr!(
-                                "删除会在保存设置后生效",
-                                "Deletions take effect when settings are saved"
+                                "删除后自动保存",
+                                "Deletions are saved automatically"
                             ))
                             .child(
                                 Button::new("settings-search-history-clear")
@@ -2122,8 +2188,8 @@ impl SettingsDialog {
                                     .ghost()
                                     .label(crate::tr!("清除历史", "Clear history"))
                                     .disabled(total_count == 0)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.clear_search_history(cx);
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.confirm_clear_search_history(window, cx);
                                     })),
                             ),
                     ),
@@ -2158,8 +2224,8 @@ impl SettingsDialog {
             .border_color(cx.theme().border)
             .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("应用图标", "Application icon")))
             .child(div().text_sm().text_color(cx.theme().muted_foreground).child(crate::tr!(
-                "选择后立即预览，保存后下次启动继续使用。",
-                "Preview immediately; save to keep your choice on the next launch."
+                "选择后立即生效，下次启动继续使用。",
+                "Your choice applies immediately and is kept for the next launch."
             )))
             .child(
                 RadioGroup::horizontal("settings-application-icon")
@@ -2589,7 +2655,7 @@ impl Render for SettingsDialog {
                                 div()
                                     .text_sm()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(crate::tr!("保存后立即同步到所有窗口。", "Changes are synchronized to every window after saving.")),
+                                    .child(crate::tr!("更改会自动保存并同步到所有窗口。", "Changes are saved automatically and synchronized to every window.")),
                             ),
                     )
                     .child(
@@ -2974,16 +3040,19 @@ impl Render for SettingsDialog {
                                 div()
                                     .text_sm()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(crate::tr!("使用“设置 → 高亮 → 日志着色”中的当前分组；保存后应用到所有窗口", "Use the current group in Settings → Highlight → Log coloring; applies to all windows after saving")),
+                                    .child(crate::tr!("使用“设置 → 高亮 → 日志着色”中的当前分组；更改会自动应用到所有窗口", "Use the current group in Settings → Highlight → Log coloring; changes apply automatically to all windows")),
                             ),
                     )
                     .child(
                         Switch::new("settings-highlight-log-levels")
                             .small()
-                            .checked(self.draft.highlight_log_levels)
+                            .checked(self.highlight_editor.as_ref().map_or(self.draft.highlight_log_levels, |editor| editor.read(cx).is_log_coloring_enabled()))
                             .tooltip(crate::tr!("日志级别着色", "Log-level coloring"))
                             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                 this.draft.highlight_log_levels = *checked;
+                                if let Some(editor) = &this.highlight_editor {
+                                    editor.update(cx, |editor, cx| editor.set_log_coloring_enabled(*checked, cx));
+                                }
                                 SettingsDialog::draft_changed(cx);
                             })),
                     ),
@@ -3430,7 +3499,7 @@ impl Render for SettingsDialog {
                                                             .child(
                                                                 Input::new(
                                                                     &self.network_server_url,
-                                                                )
+                                                                ).id("settings-network-server")
                                                                 .w_full()
                                                                 .content_type(
                                                                     InputContentType::Url,
@@ -3663,7 +3732,7 @@ impl Render for SettingsDialog {
                                 div()
                                     .id("settings-word-boundary-characters")
                                     .w_72()
-                                    .child(Input::new(&self.word_boundary_characters).w_full()),
+                                    .child(Input::new(&self.word_boundary_characters).id("settings-word-boundary-input").w_full()),
                             ),
                     )
                     .child(
@@ -4027,6 +4096,55 @@ mod tests {
                 dialog.settings(cx).unwrap().log_font_family,
                 saved.log_font_family
             );
+        });
+    }
+    #[gpui_kit::test]
+    fn invalid_fields_keep_the_last_valid_value_without_blocking_other_settings(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            cx.set_global(SystemFonts::new(std::sync::Arc::new(
+                gpui_kit::NoopTextSystem,
+            )));
+        });
+        let previous = AppSettings {
+            max_search_results: 123,
+            ..AppSettings::default()
+        };
+        let (dialog, cx) = cx.add_window_view(|window, cx| {
+            SettingsDialog::new(
+                previous.clone(),
+                Vec::new(),
+                SettingsNetworkSnapshot {
+                    settings: CloudSettings::default(),
+                    client: None,
+                    connection: None,
+                    client_error: None,
+                },
+                SettingsCategory::General,
+                window,
+                cx,
+            )
+        });
+        cx.update(|window, cx| {
+            dialog.update(cx, |dialog, cx| {
+                dialog
+                    .max_search_results
+                    .update(cx, |input, cx| input.set_value("invalid", window, cx));
+                dialog.draft.show_full_path = !previous.show_full_path;
+                let (next, error) = dialog.settings_for_autosave(&previous, cx);
+                assert!(error.is_some());
+                assert_eq!(next.max_search_results, 123);
+                assert_eq!(next.show_full_path, !previous.show_full_path);
+                assert!(dialog.settings(cx).is_err());
+                dialog
+                    .max_search_results
+                    .update(cx, |input, cx| input.set_value("456", window, cx));
+                let (next, error) = dialog.settings_for_autosave(&next, cx);
+                assert!(error.is_none());
+                assert_eq!(next.max_search_results, 456);
+            })
         });
     }
 }

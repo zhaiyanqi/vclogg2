@@ -374,8 +374,8 @@ impl Workspace {
             .settings_window
             .as_ref()
             .and_then(|(_, view)| view.upgrade())
-            .and_then(|view| view.update(cx, |view, _| view.save_task.take()));
-        let (registered, mut closed_flush_tasks) =
+            .map(|view| view.update(cx, |view, cx| view.take_quit_save(cx)));
+        let (registered, closed_flush_tasks) =
             cx.update_global::<WorkspaceWindowRegistry, _>(|registry, _| {
                 registry.cross_window_tab_drag = None;
                 (
@@ -387,7 +387,6 @@ impl Workspace {
                     registry.closed_flush_tasks.take_all(),
                 )
             });
-        closed_flush_tasks.extend(settings_save);
         let snapshots = registered
             .into_iter()
             .map(|workspace| workspace.update(cx, |workspace, cx| workspace.take_quit_snapshot(cx)))
@@ -445,6 +444,9 @@ impl Workspace {
                 }
             }
 
+            if let Some(settings_save) = settings_save {
+                settings_save.flush(background_executor.clone()).await;
+            }
             let result = background_executor
                 .spawn(async move {
                     let store = match store {

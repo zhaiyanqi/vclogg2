@@ -966,11 +966,6 @@ impl Workspace {
         let Some(store) = self.persistence.store.clone() else {
             return;
         };
-        let settings = if report_completion {
-            settings
-        } else {
-            settings_window::SettingsWindow::committed_settings(settings, cx)
-        };
         let previous_save = self.persistence.app_settings_save_task.take();
         if report_completion {
             self.settings_save_failed = false;
@@ -1005,9 +1000,6 @@ impl Workspace {
                         this.settings_saving = false;
                     }
                     match result {
-                        Ok(()) if report_completion => {
-                            window.notify_message(crate::tr!("设置已保存", "Settings saved"), cx)
-                        }
                         Ok(()) => {}
                         Err(error) if report_completion => window.notify_message(
                             crate::tr_args!(
@@ -1116,7 +1108,7 @@ impl Workspace {
                                 crate::tr!("已恢复默认设置", "Default settings restored"),
                                 cx,
                             );
-                            settings_window::SettingsWindow::finish_saved(window, cx);
+                            settings_window::SettingsWindow::reset_finished(window, cx);
                         }
                         Err(error) => {
                             this.preview_app_settings(original_settings.clone(), window, cx);
@@ -1731,8 +1723,7 @@ impl Workspace {
         let Some(store) = self.persistence.store.clone() else {
             return;
         };
-        let settings =
-            settings_window::SettingsWindow::committed_settings(self.app_settings.clone(), cx);
+        let settings = self.app_settings.clone();
         self.persistence.appearance_save_task = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(300))

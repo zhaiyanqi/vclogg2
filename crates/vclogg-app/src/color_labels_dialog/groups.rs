@@ -82,7 +82,7 @@ impl ColorLabelsDialog {
     }
 
     fn delete_group(&mut self, id: &str, cx: &mut Context<Self>) {
-        if self.saving || self.groups.len() <= 1 {
+        if self.groups.len() <= 1 {
             return;
         }
         let Some(index) = self.groups.iter().position(|group| group.id == id) else {
@@ -101,7 +101,7 @@ impl ColorLabelsDialog {
     }
 
     fn confirm_delete_group(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
-        if self.saving || self.groups.len() <= 1 {
+        if self.groups.len() <= 1 {
             return;
         }
         let Some(group) = self.groups.iter().find(|group| group.id == id) else {
@@ -313,7 +313,6 @@ impl ColorLabelsDialog {
                             .child(
                                 Button::new("coloring-add-group")
                                     .small()
-                                    .disabled(self.saving)
                                     .icon(IconName::Plus)
                                     .label(crate::tr!("新增分组", "Add group"))
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -323,7 +322,6 @@ impl ColorLabelsDialog {
                             .child(
                                 Button::new("coloring-add-preset")
                                     .small()
-                                    .disabled(self.saving)
                                     .label(crate::tr!("添加预置…", "Add preset…"))
                                     .dropdown_menu(move |mut menu, _, _| {
                                         for preset in crate::log_coloring::presets() {
@@ -332,9 +330,6 @@ impl ColorLabelsDialog {
                                                 PopupMenuItem::new(preset.name.clone()).on_click(
                                                     move |_, window, cx| {
                                                         editor.update(cx, |this, cx| {
-                                                            if this.saving {
-                                                                return;
-                                                            }
                                                             let mut group = preset.clone();
                                                             group.id =
                                                                 uuid::Uuid::new_v4().to_string();
@@ -374,7 +369,6 @@ impl ColorLabelsDialog {
                                     cx,
                                 )
                                 .tooltip(group.name.read(cx).value())
-                                .disabled(self.saving)
                                 .on_click(cx.listener(move |this, event, _, cx| {
                                     if !crate::log_coloring_row::is_activation(event) {
                                         return;
@@ -395,7 +389,7 @@ impl ColorLabelsDialog {
                                             .small()
                                             .ghost()
                                             .icon(IconName::Close)
-                                            .disabled(self.saving || self.groups.len() <= 1)
+                                            .disabled(self.groups.len() <= 1)
                                             .tooltip(crate::tr_args!(
                                                 "删除分组“{}”…",
                                                 "Delete group “{}”…",
@@ -444,14 +438,12 @@ impl ColorLabelsDialog {
                                     .capture_any_mouse_down(
                                         crate::log_coloring_row::ignore_secondary_mouse_down,
                                     )
-                                    .child(
-                                        Input::new(&selected.name).small().disabled(self.saving),
-                                    ),
+                                    .child(Input::new(&selected.name).small()),
                             )
                             .child(
                                 Button::new("coloring-use-group")
                                     .small()
-                                    .disabled(self.saving || selected.id == self.active_group_id)
+                                    .disabled(selected.id == self.active_group_id)
                                     .label(if selected.id == self.active_group_id {
                                         crate::tr!("当前分组", "Current group")
                                     } else {
@@ -466,7 +458,6 @@ impl ColorLabelsDialog {
                             .child(
                                 Button::new("coloring-copy-group")
                                     .small()
-                                    .disabled(self.saving)
                                     .label(crate::tr!("复制", "Duplicate"))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.duplicate_group(window, cx)
@@ -475,7 +466,7 @@ impl ColorLabelsDialog {
                             .child(
                                 Button::new("coloring-reset-group")
                                     .small()
-                                    .disabled(self.saving || selected.preset.is_none())
+                                    .disabled(selected.preset.is_none())
                                     .label(crate::tr!("恢复预置", "Reset preset"))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.restore_group(window, cx)

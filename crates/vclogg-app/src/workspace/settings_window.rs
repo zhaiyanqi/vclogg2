@@ -5,13 +5,12 @@ use gpui_kit::{KeyBinding, WindowBounds, WindowOptions};
 mod macos;
 
 const SETTINGS_CONTEXT: &str = "VCLogg2Settings";
-gpui_kit::actions!(settings_window, [CloseSettings, SaveSettings]);
+gpui_kit::actions!(settings_window, [CloseSettings]);
 
 pub(super) fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("secondary-w", CloseSettings, Some(SETTINGS_CONTEXT)),
         KeyBinding::new("escape", CloseSettings, Some(SETTINGS_CONTEXT)),
-        KeyBinding::new("secondary-s", SaveSettings, Some(SETTINGS_CONTEXT)),
     ]);
 }
 
@@ -20,17 +19,21 @@ pub(super) fn init(cx: &mut App) {
 pub(super) struct SettingsWindow {
     workspace: Entity<Workspace>,
     settings: Entity<SettingsDialog>,
-    original: AppSettings,
-    initial_draft: AppSettings,
-    initial_network: CloudSettings,
-    close_prompt_open: bool,
+    saved_draft: AppSettings,
+    saved_network: CloudSettings,
     last_draft: AppSettings,
-    last_preview: AppSettings,
-    original_history: Vec<String>,
+    saved_history: Vec<String>,
     highlight_baseline: crate::color_labels_dialog::LogColoringConfig,
+    last_highlight: crate::color_labels_dialog::LogColoringConfig,
     focus: FocusHandle,
     saving: bool,
-    pub(super) save_task: Option<Task<()>>,
+    save_pending: bool,
+    closing: bool,
+    quitting: bool,
+    save_error: Option<String>,
+    validation_error: Option<String>,
+    debounce_task: Option<Task<()>>,
+    save_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -160,7 +163,7 @@ impl SettingsWindow {
             )
             .with_highlight_baseline(highlight_baseline.clone(), window, cx)
         });
-        let initial_network = settings.read(cx).network_settings(cx);
+        let initial_network = workspace.read(cx).cloud.settings.clone();
         let initial_draft = settings
             .read(cx)
             .settings(cx)
@@ -173,7 +176,7 @@ impl SettingsWindow {
             &settings,
             window,
             |this, _, event: &SettingsDialogEvent, window, cx| match event {
-                SettingsDialogEvent::DraftChanged => this.preview(window, cx),
+                SettingsDialogEvent::DraftChanged => this.draft_changed(window, cx),
                 SettingsDialogEvent::CategoryChanged(category) => {
                     if *category == SettingsCategory::Highlight {
                         this.settings.update(cx, |settings, cx| {
@@ -183,12 +186,6 @@ impl SettingsWindow {
                     this.workspace.update(cx, |owner, cx| {
                         owner.remember_settings_category(*category, window, cx)
                     });
-                }
-                SettingsDialogEvent::CloudSettings(settings) => {
-                    this.initial_network = settings.clone();
-                    this.workspace.update(cx, |owner, cx| {
-                        owner.save_cloud_settings(settings.clone(), window, cx)
-                    })
                 }
                 SettingsDialogEvent::CloudConnection(connection) => {
                     this.workspace.update(cx, |owner, cx| {
@@ -201,41 +198,34 @@ impl SettingsWindow {
         let observer = cx.observe(&workspace, |_, _, cx| cx.notify());
         let weak = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
-            weak.update(cx, |this, cx| this.request_close(window, cx))
-                .unwrap_or(true)
+            weak.update(cx, |this, cx| {
+                this.request_close(window, cx);
+                false
+            })
+            .unwrap_or(true)
         });
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         Self {
             workspace,
             settings,
-            original: original.clone(),
-            initial_draft,
-            initial_network,
-            close_prompt_open: false,
-            last_draft: original.clone(),
-            last_preview: original,
-            original_history,
+            saved_draft: initial_draft.clone(),
+            saved_network: initial_network,
+            last_draft: initial_draft,
+            saved_history: original_history,
+            last_highlight: highlight_baseline.clone(),
             highlight_baseline,
             focus,
             saving: false,
+            save_pending: false,
+            closing: false,
+            quitting: false,
+            save_error: None,
+            validation_error: None,
+            debounce_task: None,
             save_task: None,
             _subscriptions: vec![subscription, observer],
         }
-    }
-
-    /// Persist a log-window command without accidentally committing the settings preview.
-    pub(super) fn committed_settings(settings: AppSettings, cx: &App) -> AppSettings {
-        let Some(view) = cx
-            .global::<WorkspaceWindowRegistry>()
-            .settings_window
-            .as_ref()
-            .and_then(|(_, view)| view.upgrade())
-        else {
-            return settings;
-        };
-        let view = view.read(cx);
-        merge_changes(&view.last_preview, &settings, &view.original)
     }
 
     fn sync_retained_workspace(&self, cx: &mut App) {
@@ -266,115 +256,216 @@ impl SettingsWindow {
 
     fn busy(&self, cx: &App) -> bool {
         let workspace = self.workspace.read(cx);
-        self.saving || workspace.settings_saving || workspace.color_labels_saving
+        self.saving || self.debounce_task.is_some() || workspace.settings_saving
     }
 
-    fn preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.busy(cx) {
+    fn draft_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.quitting {
             return;
         }
-        let Ok(draft) = self.settings.read(cx).settings(cx) else {
-            return;
-        };
         self.sync_retained_workspace(cx);
-        let current = self.workspace.read(cx).app_settings.clone();
-        // Rebase rollback values when the log window changed a setting independently.
-        self.original = merge_changes(&self.last_preview, &current, &self.original);
-        let next = merge_changes(&self.last_draft, &draft, &current);
-        self.last_draft = draft;
-        self.workspace
-            .update(cx, |owner, cx| owner.preview_app_settings(next, window, cx));
-        self.last_preview = self.workspace.read(cx).app_settings.clone();
+        {
+            let (draft, error) = self
+                .settings
+                .read(cx)
+                .settings_for_autosave(&self.last_draft, cx);
+            self.validation_error = error;
+            let current = self.workspace.read(cx).app_settings.clone();
+            let next = merge_changes(&self.last_draft, &draft, &current);
+            if next != current {
+                self.workspace
+                    .update(cx, |owner, cx| owner.apply_app_settings(next, window, cx));
+            }
+            self.last_draft = draft;
+        }
+        if let Some(editor) = self.settings.read(cx).highlight_editor()
+            && let Ok(config) = editor.read(cx).config(cx)
+        {
+            self.last_highlight = config;
+        }
+        self.last_highlight.highlight_log_levels = self.last_draft.highlight_log_levels;
+        self.save_pending = true;
+        if !self.saving {
+            self.debounce_task = Some(cx.spawn_in(window, async move |this, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(300))
+                    .await;
+                _ = this.update_in(cx, |this, window, cx| this.save(window, cx));
+            }));
+        }
+        cx.notify();
     }
 
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.busy(cx) {
+        self.debounce_task = None;
+        if self.saving || self.quitting {
             return;
         }
-        if self.workspace.read(cx).persistence.store.is_none() {
-            window.notify_message(
-                crate::tr!(
-                    "状态库尚未就绪，请稍后重试",
-                    "Storage is not ready. Try again shortly."
-                ),
-                cx,
-            );
-            return;
-        }
-        self.settings.update(cx, |settings, cx| {
-            settings.ensure_highlight_editor(window, cx)
+        let settings = self.settings.read(cx);
+        let parsed = settings.settings(cx);
+        let highlight = settings
+            .highlight_editor()
+            .map(|editor| editor.read(cx).config(cx));
+        self.validation_error = parsed.as_ref().err().cloned().or_else(|| {
+            highlight
+                .as_ref()
+                .and_then(|result| result.as_ref().err().cloned())
         });
-        let Some(editor) = self.settings.read(cx).highlight_editor() else {
-            return;
-        };
-        if let Err(error) = editor.read(cx).config(cx) {
-            window.notify_message(error, cx);
+        let draft = (self.last_draft != self.saved_draft).then(|| self.last_draft.clone());
+        let network = settings.network_settings(cx);
+        let network = (network != self.saved_network).then_some(network);
+        let history = settings.search_history();
+        let history = (history != self.saved_history).then_some(history);
+        let highlight =
+            (self.last_highlight != self.highlight_baseline).then(|| self.last_highlight.clone());
+        self.save_pending = false;
+        if draft.is_none() && network.is_none() && history.is_none() && highlight.is_none() {
+            self.save_error = None;
+            if self.closing {
+                self.finish_close(window, cx);
+            }
+            cx.notify();
             return;
         }
-        let (draft, history, network) = {
-            let settings = self.settings.read(cx);
-            let draft = match settings.settings(cx) {
-                Ok(draft) => draft,
-                Err(error) => {
-                    window.notify_message(error, cx);
-                    return;
-                }
-            };
-            (
-                draft,
-                settings.search_history(),
-                settings.network_settings(cx),
-            )
+        let Some(store) = self.workspace.read(cx).persistence.store.clone() else {
+            self.save_error = Some(
+                crate::tr!(
+                    "状态库尚未就绪，修改尚未保存。请重试。",
+                    "Storage is not ready. Changes have not been saved. Try again."
+                )
+                .to_owned(),
+            );
+            self.closing = false;
+            cx.notify();
+            return;
         };
         self.sync_retained_workspace(cx);
-        let current = self.workspace.read(cx).app_settings.clone();
-        let draft = merge_changes(&self.last_draft, &draft, &current);
-        let removed = self
-            .original_history
-            .iter()
-            .filter(|query| !history.contains(query))
-            .cloned()
-            .collect::<Vec<_>>();
         self.saving = true;
-        self.focus.focus(window, cx);
-        let (settings_task, cloud_task, history_task) = self.workspace.update(cx, |owner, cx| {
-            owner.save_app_settings(draft, window, cx);
-            owner.save_cloud_settings(network, window, cx);
-            owner.remove_search_history_entries(&removed, window, cx);
-            owner.save_highlight_settings_dialog(
-                editor,
-                self.highlight_baseline.clone(),
-                window,
-                cx,
-            );
-            (
+        self.save_error = None;
+        let tasks = self.workspace.update(cx, |owner, cx| {
+            owner.settings_save_failed = false;
+            if let Some(draft) = &draft {
+                let next = merge_changes(&self.last_draft, draft, &owner.app_settings);
+                owner.save_app_settings(next, window, cx);
+            }
+            let cloud_task = if let Some(network) = &network {
+                owner.save_cloud_settings(network.clone(), window, cx);
+                owner.persistence.state_tasks.pop()
+            } else {
+                None
+            };
+            let history_task = if let Some(history) = &history {
+                let removed = self
+                    .saved_history
+                    .iter()
+                    .filter(|query| !history.contains(query))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                owner.remove_search_history_entries(&removed, window, cx);
+                owner.persistence.search_history_save_task.take()
+            } else {
+                None
+            };
+            if let Some(highlight) = &highlight {
+                owner.autosave_highlight_settings(
+                    highlight.clone(),
+                    self.highlight_baseline.clone(),
+                    window,
+                    cx,
+                );
+            }
+            [
                 owner.persistence.app_settings_save_task.take(),
-                owner.persistence.state_tasks.pop(),
-                owner.persistence.search_history_save_task.take(),
-            )
+                cloud_task,
+                history_task,
+            ]
         });
         self.save_task = Some(cx.spawn_in(window, async move |this, cx| {
-            for task in [settings_task, cloud_task, history_task]
-                .into_iter()
-                .flatten()
-            {
+            for task in tasks.into_iter().flatten() {
                 task.await;
             }
+            let failed = this
+                .update_in(cx, |this, _, cx| {
+                    this.workspace.read(cx).settings_save_failed
+                })
+                .unwrap_or(true);
+            // A batch can partly succeed. Reconcile each acknowledged section before retrying,
+            // so reverting a successfully written field still persists that reversion.
+            let persisted = if failed {
+                cx.background_spawn(async move {
+                    Ok::<_, anyhow::Error>((
+                        store.load_app_settings()?,
+                        store.load_cloud_settings()?,
+                        store.load_search_history()?,
+                        store.load_color_labels()?,
+                    ))
+                })
+                .await
+                .ok()
+            } else {
+                None
+            };
             _ = this.update_in(cx, |this, window, cx| {
                 this.saving = false;
-                if !this.workspace.read(cx).settings_save_failed {
-                    Self::finish_saved(window, cx);
-                } else if let Some(editor) = this.settings.read(cx).highlight_editor() {
-                    editor.update(cx, |editor, cx| {
-                        editor.save_failed(
-                            crate::tr!(
-                                "设置未能全部保存，请重试",
-                                "Some settings could not be saved. Try again."
-                            )
-                            .to_string(),
-                            cx,
+                if let Some(draft) = draft.filter(|draft| {
+                    !failed
+                        || persisted.as_ref().is_some_and(|(saved, _, _, _)| {
+                            merge_changes(&this.saved_draft, draft, saved) == *saved
+                        })
+                }) {
+                    this.saved_draft = draft;
+                }
+                if let Some(network) = network.filter(|network| {
+                    !failed
+                        || persisted
+                            .as_ref()
+                            .is_some_and(|(_, saved, _, _)| network == saved)
+                }) {
+                    this.saved_network = network;
+                }
+                if let Some(history) = history.filter(|history| {
+                    !failed
+                        || persisted.as_ref().is_some_and(|(_, _, saved, _)| {
+                            this.saved_history
+                                .iter()
+                                .filter(|query| !history.contains(query))
+                                .all(|query| !saved.contains(query))
+                        })
+                }) {
+                    this.saved_history = history;
+                }
+                if let Some(highlight) = highlight.filter(|draft| {
+                    !failed
+                        || persisted.as_ref().is_some_and(|(saved, _, _, labels)| {
+                            let saved = crate::color_labels_dialog::LogColoringConfig {
+                                highlight_log_levels: saved.highlight_log_levels,
+                                log_coloring: saved.log_coloring.clone(),
+                                selection_styles: saved.selection_styles.clone(),
+                                keyword_match_styles: saved.keyword_match_styles.clone(),
+                                labels: labels.clone(),
+                            };
+                            highlight_preferences::merge_highlight_changes(
+                                draft,
+                                &this.highlight_baseline,
+                                saved.clone(),
+                            ) == saved
+                        })
+                }) {
+                    this.highlight_baseline = highlight;
+                }
+                if failed {
+                    this.save_error = Some(
+                        crate::tr!(
+                            "修改未能全部保存，请重试。",
+                            "Some changes could not be saved. Try again."
                         )
-                    });
+                        .to_owned(),
+                    );
+                    this.closing = false;
+                } else {
+                    if !this.quitting && (this.save_pending || this.closing) {
+                        this.save(window, cx);
+                    }
                 }
                 cx.notify();
             });
@@ -401,100 +492,61 @@ impl SettingsWindow {
         });
     }
 
-    fn has_unsaved_changes(&self, cx: &App) -> bool {
-        let settings = self.settings.read(cx);
-        settings
-            .settings(cx)
-            .ok()
-            .is_none_or(|draft| draft != self.initial_draft)
-            || settings.search_history() != self.original_history
-            || settings.network_settings(cx) != self.initial_network
-            || settings.highlight_editor().is_some_and(|editor| {
-                editor.read(cx).config(cx).ok().is_none_or(|config| {
-                    config.highlight_log_levels != self.highlight_baseline.highlight_log_levels
-                        || config.log_coloring != self.highlight_baseline.log_coloring
-                        || config.labels != self.highlight_baseline.labels
-                        || config.selection_styles != self.highlight_baseline.selection_styles
-                        || config.keyword_match_styles
-                            != self.highlight_baseline.keyword_match_styles
-                })
-            })
+    fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.saving && self.workspace.read(cx).settings_saving {
+            self.closing = true;
+            return;
+        }
+        self.draft_changed(window, cx);
+        self.closing = true;
+        self.save(window, cx);
     }
 
-    fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.busy(cx) || self.close_prompt_open {
-            return false;
-        }
-        if !self.has_unsaved_changes(cx) {
-            return self.cancel(window, cx);
-        }
-        self.close_prompt_open = true;
-        let view = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, _, cx| {
-            let save = view.clone();
-            let discard = view.clone();
-            let close = view.clone();
-            dialog
-                .title(crate::tr!("保存设置修改？", "Save settings changes?"))
-                .child(crate::tr!(
-                    "设置有未保存的修改。不保存将撤销这些修改。",
-                    "You have unsaved settings changes. Closing without saving will discard them."
-                ))
-                .close_button(false)
-                .overlay_closable(false)
-                .footer(
-                    DialogFooter::new()
-                        .child(crate::dialog_focus::dialog_cancel_action(
-                            "settings-keep-editing-action",
-                            Button::new("settings-keep-editing")
-                                .label(crate::tr!("继续编辑", "Keep editing")),
-                            cx,
-                        ))
-                        .child(
-                            Button::new("settings-discard")
-                                .label(crate::tr!("不保存", "Don't save"))
-                                .on_click(move |_, window, cx| {
-                                    window.close_dialog(cx);
-                                    _ = discard.update(cx, |view, cx| {
-                                        if view.cancel(window, cx) {
-                                            window.remove_window();
-                                        }
-                                    });
-                                }),
-                        )
-                        .child(crate::dialog_focus::dialog_confirm_action(
-                            "settings-save-changes-action",
-                            Button::new("settings-save-changes")
-                                .primary()
-                                .label(crate::tr!("保存", "Save")),
-                            cx,
-                        )),
-                )
-                .on_ok(move |_, window, cx| {
-                    _ = save.update(cx, |view, cx| view.save(window, cx));
-                    true
-                })
-                .on_close(move |_, _, cx| {
-                    _ = close.update(cx, |view, _| view.close_prompt_open = false);
-                })
-        });
-        false
-    }
-
-    fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.busy(cx) {
-            return false;
-        }
-        self.sync_retained_workspace(cx);
-        let current = self.workspace.read(cx).app_settings.clone();
-        // Start with the original, then keep every external change since our last preview.
-        let restored = merge_changes(&self.last_preview, &current, &self.original);
-        self.workspace.update(cx, |owner, cx| {
-            owner.preview_app_settings(restored, window, cx)
-        });
+    fn finish_close(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.persist_size(window, cx);
         cx.global_mut::<WorkspaceWindowRegistry>().settings_window = None;
-        true
+        window.remove_window();
+    }
+
+    pub(super) fn take_quit_save(&mut self, cx: &mut Context<Self>) -> SettingsQuitSave {
+        self.quitting = true;
+        self.debounce_task = None;
+        self.sync_retained_workspace(cx);
+        let editor = self.settings.read(cx);
+        let owner = self.workspace.read(cx);
+        let (draft, _) = editor.settings_for_autosave(&self.last_draft, cx);
+        let settings = merge_changes(&self.last_draft, &draft, &owner.app_settings);
+        let highlight = (self.last_highlight != self.highlight_baseline).then(|| {
+            highlight_preferences::merge_highlight_changes(
+                &self.last_highlight,
+                &self.highlight_baseline,
+                owner.highlight_config(),
+            )
+        });
+        let network = editor.network_settings(cx);
+        let history = editor.search_history();
+        let removed = self
+            .saved_history
+            .iter()
+            .filter(|query| !history.contains(query))
+            .collect::<Vec<_>>();
+        let history = (!removed.is_empty()).then(|| {
+            owner
+                .search_history
+                .iter()
+                .filter(|query| !removed.contains(query))
+                .cloned()
+                .collect()
+        });
+        SettingsQuitSave {
+            store: owner.persistence.store.clone(),
+            settings,
+            highlight,
+            network: (network != self.saved_network).then_some(network),
+            history,
+            previous: self.save_task.take(),
+            _workspace: self.workspace.clone(),
+        }
     }
 
     pub(super) fn refresh_history(window: &Window, cx: &mut App) {
@@ -519,7 +571,7 @@ impl SettingsWindow {
         });
     }
 
-    pub(super) fn finish_saved(window: &mut Window, cx: &mut App) -> bool {
+    pub(super) fn reset_finished(window: &mut Window, cx: &mut App) -> bool {
         let Some((handle, view)) = cx
             .global::<WorkspaceWindowRegistry>()
             .settings_window
@@ -533,12 +585,63 @@ impl SettingsWindow {
         // Save completion runs inside Workspace::update; release it before touching the session.
         cx.defer(move |cx| {
             _ = handle.update(cx, |_, window, cx| {
-                _ = view.update(cx, |this, cx| this.persist_size(window, cx));
-                cx.global_mut::<WorkspaceWindowRegistry>().settings_window = None;
-                window.remove_window();
+                _ = view.update(cx, |this, cx| {
+                    let closing = this.closing;
+                    *this = Self::new(this.workspace.clone(), None, window, cx);
+                    if closing {
+                        this.request_close(window, cx);
+                    }
+                    cx.notify();
+                });
             });
         });
         true
+    }
+}
+
+/// An immutable final batch also covers edits still inside the debounce interval.
+/// It is flushed after existing workspace writes, without starting new foreground tasks.
+pub(super) struct SettingsQuitSave {
+    store: Option<Arc<StateStore>>,
+    settings: AppSettings,
+    highlight: Option<crate::color_labels_dialog::LogColoringConfig>,
+    network: Option<CloudSettings>,
+    history: Option<Vec<String>>,
+    previous: Option<Task<()>>,
+    _workspace: Entity<Workspace>,
+}
+
+impl SettingsQuitSave {
+    pub(super) async fn flush(self, executor: gpui_kit::BackgroundExecutor) {
+        if let Some(previous) = self.previous {
+            previous.await;
+        }
+        let result = executor
+            .spawn(async move {
+                let store = self
+                    .store
+                    .ok_or_else(|| anyhow::anyhow!("Settings storage is not ready"))?;
+                let mut settings = self.settings;
+                store.save_app_settings(settings.clone())?;
+                if let Some(highlight) = self.highlight {
+                    settings.highlight_log_levels = highlight.highlight_log_levels;
+                    settings.log_coloring = highlight.log_coloring;
+                    settings.selection_styles = highlight.selection_styles;
+                    settings.keyword_match_styles = highlight.keyword_match_styles;
+                    store.save_highlight_settings(settings, &highlight.labels)?;
+                }
+                if let Some(network) = self.network {
+                    store.save_cloud_settings(&network)?;
+                }
+                if let Some(history) = self.history {
+                    store.save_search_history(&history)?;
+                }
+                Ok::<_, anyhow::Error>(())
+            })
+            .await;
+        if let Err(error) = result {
+            log::error!("Could not flush settings on quit: {error:#}");
+        }
     }
 }
 
@@ -546,6 +649,7 @@ impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_window_title(crate::tr!("设置", "Settings"));
         let busy = self.busy(cx);
+        let resetting = !self.saving && self.workspace.read(cx).settings_saving;
         v_flex()
             .id("settings-window-content")
             .size_full()
@@ -554,7 +658,7 @@ impl Render for SettingsWindow {
             .text_color(cx.theme().foreground)
             .key_context(SETTINGS_CONTEXT)
             .track_focus(&self.focus)
-            .when(busy, |surface| {
+            .when(resetting, |surface| {
                 surface
                     .capture_any_mouse_down(|_, window, cx| {
                         window.prevent_default();
@@ -566,16 +670,11 @@ impl Render for SettingsWindow {
                     })
             })
             .on_action(cx.listener(|this, _: &CloseSettings, window, cx| {
-                if this.request_close(window, cx) {
-                    window.remove_window();
-                }
+                this.request_close(window, cx);
             }))
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
-                if this.request_close(window, cx) {
-                    window.remove_window();
-                }
+                this.request_close(window, cx);
             }))
-            .on_action(cx.listener(|this, _: &SaveSettings, window, cx| this.save(window, cx)))
             .child(
                 TitleBar::new()
                     .h(px(36.))
@@ -586,9 +685,7 @@ impl Render for SettingsWindow {
                         bar.pl(px(80.) - rems(0.75).to_pixels(window.rem_size()))
                     })
                     .on_close_window(cx.listener(|this, _, window, cx| {
-                        if this.request_close(window, cx) {
-                            window.remove_window();
-                        }
+                        this.request_close(window, cx);
                     }))
                     .child(
                         h_flex()
@@ -614,38 +711,58 @@ impl Render for SettingsWindow {
                             .disabled(busy)
                             .label(crate::tr!("恢复默认设置", "Restore default settings"))
                             .on_click(cx.listener(|this, _, window, cx| {
+                                let current = this.workspace.read(cx).app_settings.clone();
                                 this.workspace.update(cx, |owner, cx| {
-                                    owner.confirm_reset_app_settings(
-                                        this.original.clone(),
-                                        window,
-                                        cx,
-                                    )
+                                    owner.confirm_reset_app_settings(current, window, cx)
                                 });
                             })),
                     )
                     .child(
                         h_flex()
                             .gap_2()
+                            .min_w_0()
                             .child(
-                                Button::new("settings-window-cancel")
-                                    .disabled(busy)
-                                    .label(crate::tr!("取消", "Cancel"))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        if this.request_close(window, cx) {
-                                            window.remove_window();
-                                        }
-                                    })),
-                            )
-                            .child(
-                                Button::new("settings-window-save")
-                                    .primary()
-                                    .disabled(busy)
-                                    .loading(busy)
-                                    .label(crate::tr!("保存", "Save"))
-                                    .on_click(
-                                        cx.listener(|this, _, window, cx| this.save(window, cx)),
+                                div()
+                                    .text_sm()
+                                    .text_color(
+                                        if self.save_error.is_some()
+                                            || self.validation_error.is_some()
+                                        {
+                                            cx.theme().danger
+                                        } else {
+                                            cx.theme().muted_foreground
+                                        },
+                                    )
+                                    .child(
+                                        self.save_error
+                                            .clone()
+                                            .or_else(|| self.validation_error.clone())
+                                            .unwrap_or_else(|| {
+                                                if self.saving || self.debounce_task.is_some() {
+                                                    crate::tr!("正在自动保存…", "Saving changes…")
+                                                        .to_owned()
+                                                } else {
+                                                    crate::tr!(
+                                                        "更改会自动保存",
+                                                        "Changes are saved automatically"
+                                                    )
+                                                    .to_owned()
+                                                }
+                                            }),
                                     ),
-                            ),
+                            )
+                            .when(self.save_error.is_some(), |row| {
+                                row.child(
+                                    Button::new("settings-retry-save")
+                                        .label(crate::tr!("重试", "Retry"))
+                                        .disabled(busy)
+                                        .on_click(
+                                            cx.listener(|this, _, window, cx| {
+                                                this.save(window, cx)
+                                            }),
+                                        ),
+                                )
+                            }),
                     ),
             )
     }
@@ -704,400 +821,4 @@ fn merge_changes(before: &AppSettings, after: &AppSettings, current: &AppSetting
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use gpui_kit::{TestAppContext, component::Root, test::TestWindowExt};
-
-    fn init(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_kit::init(cx);
-            crate::actions::init(cx);
-            Workspace::init_window_registry(cx);
-            crate::notifications::init(cx);
-            crate::app_icon::init(cx);
-            cx.set_global(crate::system_fonts::SystemFonts::new(Arc::new(
-                gpui_kit::NoopTextSystem,
-            )));
-        });
-    }
-
-    fn workspace(
-        cx: &mut TestAppContext,
-        store: Arc<StateStore>,
-    ) -> (AnyWindowHandle, Entity<Workspace>) {
-        let mut owner = None;
-        let window = cx.add_window(|window, cx| {
-            let view = cx.new(|cx| Workspace::new(false, Vec::new(), window, cx));
-            view.update(cx, |view, _| {
-                view.persistence._bootstrap_task = Task::ready(());
-                view.persistence.store = Some(store);
-            });
-            Workspace::register_window(&view, window, cx);
-            owner = Some(view.clone());
-            Root::new(view, window, cx)
-        });
-        (window.into(), owner.unwrap())
-    }
-
-    fn open(
-        cx: &mut TestAppContext,
-        handle: AnyWindowHandle,
-        owner: &Entity<Workspace>,
-    ) -> (AnyWindowHandle, Entity<SettingsWindow>) {
-        cx.update_window(handle, |_, window, cx| {
-            owner.update(cx, |owner, cx| owner.open_settings_dialog(None, window, cx))
-        })
-        .unwrap();
-        cx.run_until_parked();
-        cx.update(|cx| {
-            let (handle, view) = cx
-                .global::<WorkspaceWindowRegistry>()
-                .settings_window
-                .clone()
-                .unwrap();
-            (handle, view.upgrade().unwrap())
-        })
-    }
-
-    #[gpui_kit::test]
-    fn settings_window_activates_without_hidden_window_frame_callbacks(cx: &mut TestAppContext) {
-        init(cx);
-        let directory = tempfile::tempdir().unwrap();
-        let store = Arc::new(StateStore::open(directory.path().join("state.db")).unwrap());
-        let (main, owner) = workspace(cx, store);
-        let (settings, _view) = open(cx, main, &owner);
-        // The test platform does not deliver native display-link callbacks to hidden windows.
-        cx.update(|cx| assert_eq!(cx.active_window(), Some(settings)));
-        cx.update_window(main, |_, window, _| window.activate_window())
-            .unwrap();
-        assert_eq!(open(cx, main, &owner).0, settings);
-        cx.update(|cx| assert_eq!(cx.active_window(), Some(settings)));
-    }
-
-    #[gpui_kit::test]
-    fn settings_window_is_singleton_and_cancel_preserves_log_window_changes(
-        cx: &mut TestAppContext,
-    ) {
-        init(cx);
-        let directory = tempfile::tempdir().unwrap();
-        let store = Arc::new(StateStore::open(directory.path().join("state.db")).unwrap());
-        let (main, owner) = workspace(cx, store.clone());
-        let (other, other_owner) = workspace(cx, store.clone());
-        let (settings, view) = open(cx, main, &owner);
-        assert_ne!(main, settings);
-        assert_eq!(open(cx, other, &other_owner).0, settings);
-        cx.update_window(settings, |_, window, cx| {
-            window.render_frame(cx);
-            window.click("settings-show-full-path", cx);
-        })
-        .unwrap();
-        cx.run_until_parked();
-        cx.update(|cx| {
-            assert!(!owner.read(cx).app_settings.show_full_path);
-            assert!(!other_owner.read(cx).app_settings.show_full_path);
-        });
-        cx.update_window(main, |_, window, cx| {
-            owner.update(cx, |owner, cx| {
-                owner.update_app_setting(|settings| settings.log_font_size = 20, window, cx);
-            })
-        })
-        .unwrap();
-        cx.run_until_parked();
-        cx.update_window(settings, |_, window, cx| {
-            window.render_frame(cx);
-            window.click("settings-window-cancel", cx);
-            window.render_frame(cx);
-            window.click("settings-discard", cx);
-        })
-        .unwrap();
-        cx.run_until_parked();
-        cx.update(|cx| {
-            assert!(owner.read(cx).app_settings.show_full_path);
-            assert_eq!(owner.read(cx).app_settings.log_font_size, 20);
-            assert!(other_owner.read(cx).app_settings.show_full_path);
-            assert!(
-                cx.global::<WorkspaceWindowRegistry>()
-                    .settings_window
-                    .is_none()
-            );
-        });
-        let persisted = store.load_app_settings().unwrap();
-        assert!(
-            persisted.show_full_path,
-            "a log-window command must not persist the preview"
-        );
-        assert_eq!(persisted.log_font_size, 20);
-        drop(view);
-    }
-
-    #[gpui_kit::test]
-    fn settings_window_saves_after_source_window_closes(cx: &mut TestAppContext) {
-        init(cx);
-        let directory = tempfile::tempdir().unwrap();
-        let store = Arc::new(StateStore::open(directory.path().join("state.db")).unwrap());
-        let (main, owner) = workspace(cx, store.clone());
-        let (settings, _view) = open(cx, main, &owner);
-        cx.update_window(main, |_, window, cx| {
-            Workspace::unregister_window(window.window_handle().window_id(), cx);
-            window.remove_window();
-        })
-        .unwrap();
-        cx.update_window(settings, |_, window, cx| {
-            window.render_frame(cx);
-            window.click("settings-show-full-path", cx);
-        })
-        .unwrap();
-        cx.run_until_parked();
-        cx.update_window(settings, |_, window, cx| {
-            window.render_frame(cx);
-            window.click("settings-window-save", cx);
-        })
-        .unwrap();
-        cx.run_until_parked();
-        assert!(!store.load_app_settings().unwrap().show_full_path);
-        cx.update(|cx| {
-            assert!(
-                cx.global::<WorkspaceWindowRegistry>()
-                    .settings_window
-                    .is_none()
-            )
-        });
-    }
-
-    #[gpui_kit::test]
-    fn missing_storage_keeps_draft_for_retry_and_blocks_busy_close(cx: &mut TestAppContext) {
-        init(cx);
-        let directory = tempfile::tempdir().unwrap();
-        let store = Arc::new(StateStore::open(directory.path().join("state.db")).unwrap());
-        let (main, owner) = workspace(cx, store.clone());
-        let (settings, view) = open(cx, main, &owner);
-        cx.update_window(settings, |_, window, cx| {
-            window.render_frame(cx);
-            window.click("settings-show-full-path", cx);
-        })
-        .unwrap();
-        cx.run_until_parked();
-        cx.update(|cx| owner.update(cx, |owner, _| owner.persistence.store = None));
-        cx.update_window(settings, |_, window, cx| {
-            window.render_frame(cx);
-            window.click("settings-window-save", cx);
-            assert!(
-                cx.global::<WorkspaceWindowRegistry>()
-                    .settings_window
-                    .is_some()
-            );
-            assert!(
-                !view
-                    .read(cx)
-                    .settings
-                    .read(cx)
-                    .settings(cx)
-                    .unwrap()
-                    .show_full_path
-            );
-            view.update(cx, |view, cx| {
-                view.saving = true;
-                assert!(!view.cancel(window, cx));
-                view.saving = false;
-            });
-        })
-        .unwrap();
-        cx.update(|cx| owner.update(cx, |owner, _| owner.persistence.store = Some(store.clone())));
-        cx.update_window(settings, |_, window, cx| {
-            window.render_frame(cx);
-            window.press("secondary-s", cx);
-        })
-        .unwrap();
-        cx.run_until_parked();
-        assert!(!store.load_app_settings().unwrap().show_full_path);
-        cx.update(|cx| {
-            assert!(
-                cx.global::<WorkspaceWindowRegistry>()
-                    .settings_window
-                    .is_none()
-            )
-        });
-    }
-
-    #[gpui_kit::test]
-    fn settings_window_escape_rolls_back_preview(cx: &mut TestAppContext) {
-        init(cx);
-        let directory = tempfile::tempdir().unwrap();
-        let store = Arc::new(StateStore::open(directory.path().join("state.db")).unwrap());
-        let (main, owner) = workspace(cx, store);
-        let (settings, _view) = open(cx, main, &owner);
-        cx.update_window(settings, |_, window, cx| {
-            window.render_frame(cx);
-            window.click("settings-show-full-path", cx);
-        })
-        .unwrap();
-        cx.run_until_parked();
-        cx.update_window(settings, |_, window, cx| {
-            window.press("escape", cx);
-            window.render_frame(cx);
-            window.click("settings-discard", cx);
-        })
-        .unwrap();
-        cx.run_until_parked();
-        cx.update(|cx| {
-            assert!(owner.read(cx).app_settings.show_full_path);
-            assert!(
-                cx.global::<WorkspaceWindowRegistry>()
-                    .settings_window
-                    .is_none()
-            );
-        });
-    }
-
-    #[gpui_kit::test]
-    fn settings_shortcut_toggles_window_and_rolls_back_preview(cx: &mut TestAppContext) {
-        init(cx);
-        let directory = tempfile::tempdir().unwrap();
-        let store = Arc::new(StateStore::open(directory.path().join("state.db")).unwrap());
-        let (main, owner) = workspace(cx, store);
-        let defaults = ShortcutSettings::default();
-        let mut shortcuts = defaults.clone();
-        for binding in [defaults.open_settings.as_str(), "Ctrl+Alt+,"] {
-            let previous = shortcuts.clone();
-            shortcuts.open_settings = binding.to_owned();
-            cx.update(|cx| crate::actions::apply_shortcuts(&previous, &shortcuts, cx));
-            let key = crate::actions::shortcut_to_key_binding(binding).unwrap();
-            cx.update_window(main, |_, window, cx| {
-                window.activate_window();
-                window.render_frame(cx);
-                window.press(&key, cx);
-            })
-            .unwrap();
-            cx.run_until_parked();
-            let (settings, view) = cx.update(|cx| {
-                let (handle, view) = cx
-                    .global::<WorkspaceWindowRegistry>()
-                    .settings_window
-                    .clone()
-                    .expect("shortcut opens settings");
-                (handle, view.upgrade().unwrap())
-            });
-            cx.update_window(settings, |_, window, cx| {
-                window.render_frame(cx);
-                window.click("settings-show-full-path", cx);
-            })
-            .unwrap();
-            cx.run_until_parked();
-            cx.update_window(settings, |_, window, cx| {
-                view.update(cx, |view, _| view.saving = true);
-                window.render_frame(cx);
-                window.press(&key, cx);
-                assert!(
-                    cx.global::<WorkspaceWindowRegistry>()
-                        .settings_window
-                        .is_some()
-                );
-                view.update(cx, |view, _| view.saving = false);
-                window.render_frame(cx);
-                window.press(&key, cx);
-                window.render_frame(cx);
-                window.click("settings-discard", cx);
-            })
-            .unwrap();
-            cx.run_until_parked();
-            cx.update(|cx| {
-                assert!(
-                    cx.global::<WorkspaceWindowRegistry>()
-                        .settings_window
-                        .is_none()
-                );
-                assert!(owner.read(cx).app_settings.show_full_path);
-            });
-        }
-    }
-
-    #[gpui_kit::test]
-    fn unsaved_settings_can_keep_editing_then_save(cx: &mut TestAppContext) {
-        init(cx);
-        let directory = tempfile::tempdir().unwrap();
-        let store = Arc::new(StateStore::open(directory.path().join("state.db")).unwrap());
-        let (main, owner) = workspace(cx, store.clone());
-        let (settings, view) = open(cx, main, &owner);
-        cx.update_window(settings, |_, window, cx| {
-            window.render_frame(cx);
-            window.click("settings-show-full-path", cx);
-        })
-        .unwrap();
-        cx.run_until_parked();
-        cx.update_window(settings, |_, window, cx| {
-            window.press("secondary-w", cx);
-            window.render_frame(cx);
-            assert!(window.find("settings-save-changes").visible());
-            window.click("settings-keep-editing", cx);
-            assert!(!view.read(cx).close_prompt_open);
-            assert!(!owner.read(cx).app_settings.show_full_path);
-            window.press("secondary-w", cx);
-            window.render_frame(cx);
-            window.press("escape", cx);
-            assert!(!view.read(cx).close_prompt_open);
-            assert!(view.read(cx).has_unsaved_changes(cx));
-            window.press("secondary-w", cx);
-            window.render_frame(cx);
-            window.click("settings-save-changes", cx);
-        })
-        .unwrap();
-        cx.run_until_parked();
-        assert!(!store.load_app_settings().unwrap().show_full_path);
-        cx.update(|cx| {
-            assert!(
-                cx.global::<WorkspaceWindowRegistry>()
-                    .settings_window
-                    .is_none()
-            )
-        });
-    }
-
-    #[gpui_kit::test]
-    fn unchanged_or_reverted_settings_close_without_prompt(cx: &mut TestAppContext) {
-        init(cx);
-        let directory = tempfile::tempdir().unwrap();
-        let store = Arc::new(StateStore::open(directory.path().join("state.db")).unwrap());
-        let (main, owner) = workspace(cx, store);
-        for revert in [false, true] {
-            let (settings, _) = open(cx, main, &owner);
-            cx.update_window(settings, |_, window, cx| {
-                window.render_frame(cx);
-                if revert {
-                    window.click("settings-show-full-path", cx);
-                    window.click("settings-show-full-path", cx);
-                }
-            })
-            .unwrap();
-            cx.run_until_parked();
-            cx.update_window(settings, |_, window, cx| window.press("escape", cx))
-                .unwrap();
-            cx.run_until_parked();
-            cx.update(|cx| {
-                assert!(
-                    cx.global::<WorkspaceWindowRegistry>()
-                        .settings_window
-                        .is_none()
-                )
-            });
-        }
-    }
-
-    #[test]
-    fn merging_draft_changes_keeps_unrelated_concurrent_values() {
-        let before = AppSettings::default();
-        let after = AppSettings {
-            show_full_path: false,
-            ..before.clone()
-        };
-        let concurrent = AppSettings {
-            log_font_size: 20,
-            ..before.clone()
-        };
-        let merged = merge_changes(&before, &after, &concurrent);
-        assert!(!merged.show_full_path);
-        assert_eq!(merged.log_font_size, 20);
-        let restored = merge_changes(&after, &merged, &before);
-        assert!(restored.show_full_path);
-        assert_eq!(restored.log_font_size, 20);
-    }
-}
+mod tests;

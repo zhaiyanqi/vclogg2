@@ -1,9 +1,48 @@
 use super::*;
+#[cfg(test)]
+use crate::color_labels_dialog::ColorLabelsDialog;
 
 pub(super) struct PendingLogColoring {
     sequence: u64,
     group_id: String,
     enabled: bool,
+}
+
+enum HighlightChange {
+    Quick,
+    Autosave,
+}
+
+pub(super) fn merge_highlight_changes(
+    draft: &crate::color_labels_dialog::LogColoringConfig,
+    baseline: &crate::color_labels_dialog::LogColoringConfig,
+    mut merged: crate::color_labels_dialog::LogColoringConfig,
+) -> crate::color_labels_dialog::LogColoringConfig {
+    let previous_active = merged.log_coloring.active_group_id.clone();
+    merged.log_coloring = draft
+        .log_coloring
+        .merge(&baseline.log_coloring, &merged.log_coloring);
+    if draft.highlight_log_levels != baseline.highlight_log_levels {
+        merged.highlight_log_levels = draft.highlight_log_levels;
+    }
+    if !merged
+        .log_coloring
+        .groups
+        .iter()
+        .any(|group| group.id == previous_active)
+    {
+        merged.highlight_log_levels = false;
+    }
+    if draft.selection_styles != baseline.selection_styles {
+        merged.selection_styles = draft.selection_styles.clone();
+    }
+    if draft.keyword_match_styles != baseline.keyword_match_styles {
+        merged.keyword_match_styles = draft.keyword_match_styles.clone();
+    }
+    if draft.labels != baseline.labels {
+        merged.labels = draft.labels.clone();
+    }
+    merged
 }
 
 impl Workspace {
@@ -54,24 +93,6 @@ impl Workspace {
         }
     }
 
-    pub(super) fn save_highlight_settings_dialog(
-        &mut self,
-        editor: Entity<ColorLabelsDialog>,
-        baseline: crate::color_labels_dialog::LogColoringConfig,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if editor.read(cx).is_saving() {
-            return;
-        }
-        match editor.read(cx).config(cx) {
-            Ok(draft) => {
-                self.commit_highlight_change(draft, baseline, Some(editor), false, window, cx)
-            }
-            Err(error) => editor.update(cx, |editor, cx| editor.save_failed(error, cx)),
-        }
-    }
-
     pub(super) fn set_log_coloring_enabled(
         &mut self,
         enabled: bool,
@@ -81,41 +102,40 @@ impl Workspace {
         let baseline = self.highlight_config();
         let mut draft = baseline.clone();
         draft.highlight_log_levels = enabled;
-        self.commit_highlight_change(draft, baseline, None, false, window, cx);
+        self.commit_highlight_change(draft, baseline, HighlightChange::Quick, window, cx);
+    }
+
+    pub(super) fn autosave_highlight_settings(
+        &mut self,
+        draft: crate::color_labels_dialog::LogColoringConfig,
+        baseline: crate::color_labels_dialog::LogColoringConfig,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.commit_highlight_change(draft, baseline, HighlightChange::Autosave, window, cx);
     }
 
     fn commit_highlight_change(
         &mut self,
         draft: crate::color_labels_dialog::LogColoringConfig,
         baseline: crate::color_labels_dialog::LogColoringConfig,
-        editor: Option<Entity<ColorLabelsDialog>>,
-        select_group: bool,
+        change: HighlightChange,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if editor.is_some() && self.color_labels_saving {
-            return;
-        }
+        let quick = matches!(change, HighlightChange::Quick);
         let Some(store) = self.persistence.store.clone() else {
             let error = crate::tr!(
                 "状态库尚未就绪，请稍后重试",
                 "Storage is not ready. Try again shortly."
             )
             .to_string();
-            if let Some(editor) = editor {
-                editor.update(cx, |editor, cx| editor.save_failed(error, cx));
-            } else {
-                window.notify_message(error, cx);
-            }
+            window.notify_message(error, cx);
             return;
         };
-        let quick_sequence = if editor.is_none() {
+        let quick_sequence = if quick {
             self.log_coloring_request_sequence = self.log_coloring_request_sequence.wrapping_add(1);
-            let group_id = if select_group {
-                draft.log_coloring.active_group_id.clone()
-            } else {
-                self.log_coloring_selection().0.to_owned()
-            };
+            let group_id = self.log_coloring_selection().0.to_owned();
             self.log_coloring_pending = Some(PendingLogColoring {
                 sequence: self.log_coloring_request_sequence,
                 group_id,
@@ -126,12 +146,6 @@ impl Workspace {
         } else {
             None
         };
-        if let Some(editor) = &editor {
-            editor.update(cx, |editor, cx| editor.begin_save(cx));
-            self.color_labels_saving = true;
-            window.refresh();
-            cx.notify();
-        }
         // Quick changes share the save queue without rebuilding the highlight editor.
         // Subsequent group selections stay usable while a previous acknowledgement is pending.
         let previous_save = self.persistence.app_settings_save_task.take();
@@ -150,41 +164,13 @@ impl Workspace {
                 if let Some(previous) = previous_highlight_save {
                     _ = previous.recv().await;
                 }
-                let quick = editor.is_none();
                 let Ok((merged, settings)) = this.update_in(cx, |this, _, _| {
                     let mut merged = this.highlight_config();
                     if quick {
                         // A quick command is explicit even when its opening snapshot already had this value.
                         merged.highlight_log_levels = draft.highlight_log_levels;
-                        if select_group {
-                            merged.log_coloring.active_group_id =
-                                draft.log_coloring.active_group_id.clone();
-                        }
                     } else {
-                        let previous_active = merged.log_coloring.active_group_id.clone();
-                        merged.log_coloring = draft
-                            .log_coloring
-                            .merge(&baseline.log_coloring, &merged.log_coloring);
-                        if draft.highlight_log_levels != baseline.highlight_log_levels {
-                            merged.highlight_log_levels = draft.highlight_log_levels;
-                        }
-                        if !merged
-                            .log_coloring
-                            .groups
-                            .iter()
-                            .any(|group| group.id == previous_active)
-                        {
-                            merged.highlight_log_levels = false;
-                        }
-                        if draft.selection_styles != baseline.selection_styles {
-                            merged.selection_styles = draft.selection_styles.clone();
-                        }
-                        if draft.keyword_match_styles != baseline.keyword_match_styles {
-                            merged.keyword_match_styles = draft.keyword_match_styles.clone();
-                        }
-                        if draft.labels != baseline.labels {
-                            merged.labels = draft.labels.clone();
-                        }
+                        merged = merge_highlight_changes(&draft, &baseline, merged);
                     }
                     if !merged
                         .log_coloring
@@ -222,9 +208,6 @@ impl Workspace {
                     .await;
                 // Publish only acknowledged state. Failure leaves the previous global state intact.
                 _ = this.update_in(cx, |this, window, cx| {
-                    if !quick {
-                        this.color_labels_saving = false;
-                    }
                     if quick_sequence.is_some_and(|sequence| {
                         this.log_coloring_pending
                             .as_ref()
@@ -250,18 +233,14 @@ impl Workspace {
                             }
                         }
                         Err(error) => {
-                            if editor.is_some() {
+                            if !quick {
                                 this.settings_save_failed = true;
                             }
                             let message = crate::tr_args!(
                                 "高亮配置未能保存：{error}",
                                 "Couldn’t save highlight settings: {error}"
                             );
-                            if let Some(editor) = &editor {
-                                editor.update(cx, |editor, cx| editor.save_failed(message, cx));
-                            } else {
-                                window.notify_message(message, cx);
-                            }
+                            window.notify_message(message, cx);
                         }
                     }
                     if !quick {
@@ -346,15 +325,18 @@ mod tests {
                 let content = editor.clone();
                 window.open_dialog(cx, move |dialog, _, _| dialog.child(content.clone()));
                 let baseline = editor.read(cx).config(cx).unwrap();
-                this.save_highlight_settings_dialog(editor, baseline, window, cx);
-                assert!(this.color_labels_saving);
+                this.autosave_highlight_settings(
+                    editor.read(cx).config(cx).unwrap(),
+                    baseline,
+                    window,
+                    cx,
+                );
             });
         })
         .unwrap();
         cx.run_until_parked();
         cx.update_window(window.into(), |_, _, cx| {
             workspace.update(cx, |this, _| {
-                assert!(!this.color_labels_saving);
                 assert!(!this.settings_save_failed);
             });
         })

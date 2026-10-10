@@ -47,7 +47,7 @@ struct ColorLabelDraft {
     _subscriptions: [Subscription; 3],
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct LogColoringConfig {
     pub(crate) keyword_match_styles: crate::keyword_match_style::KeywordMatchStyles,
     pub(crate) selection_styles: crate::selection_style::SelectionStyles,
@@ -75,8 +75,7 @@ impl gpui_kit::Global for HighlightNavigation {}
 pub struct ColorLabelsDialog {
     keyword_match: Entity<crate::keyword_match_style_section::KeywordMatchStyleSection>,
     selection_style: Entity<crate::selection_style_section::SelectionStyleSection>,
-    saving: bool,
-    error: Option<String>,
+    section_subscriptions: Vec<Subscription>,
     active_section: LogColoringSection,
     highlight_log_levels: bool,
     groups: Vec<LogGroupDraft>,
@@ -112,10 +111,12 @@ impl ColorLabelsDialog {
             )
         });
         let mut this = Self {
+            section_subscriptions: vec![
+                cx.observe(&keyword_match, |_, _, cx| cx.notify()),
+                cx.observe(&selection_style, |_, _, cx| cx.notify()),
+            ],
             keyword_match,
             selection_style,
-            saving: false,
-            error: None,
             active_section: cx
                 .try_global::<HighlightNavigation>()
                 .map(|navigation| navigation.last_section)
@@ -154,6 +155,7 @@ impl ColorLabelsDialog {
         self.selection_style = cx.new(|cx| {
             crate::selection_style_section::SelectionStyleSection::new(styles, window, cx)
         });
+        self.observe_sections(cx);
         self
     }
 
@@ -166,30 +168,23 @@ impl ColorLabelsDialog {
         self.keyword_match = cx.new(|cx| {
             crate::keyword_match_style_section::KeywordMatchStyleSection::new(styles, window, cx)
         });
+        self.observe_sections(cx);
         self
     }
 
-    pub(crate) fn is_saving(&self) -> bool {
-        self.saving
+    fn observe_sections(&mut self, cx: &mut Context<Self>) {
+        self.section_subscriptions = vec![
+            cx.observe(&self.keyword_match, |_, _, cx| cx.notify()),
+            cx.observe(&self.selection_style, |_, _, cx| cx.notify()),
+        ];
     }
 
-    pub(crate) fn begin_save(&mut self, cx: &mut Context<Self>) {
-        self.saving = true;
-        self.error = None;
-        self.selection_style
-            .update(cx, |section, cx| section.set_saving(true, cx));
-        self.keyword_match
-            .update(cx, |section, cx| section.set_saving(true, cx));
-        cx.notify();
+    pub(crate) fn is_log_coloring_enabled(&self) -> bool {
+        self.highlight_log_levels
     }
 
-    pub(crate) fn save_failed(&mut self, error: String, cx: &mut Context<Self>) {
-        self.saving = false;
-        self.error = Some(error);
-        self.selection_style
-            .update(cx, |section, cx| section.set_saving(false, cx));
-        self.keyword_match
-            .update(cx, |section, cx| section.set_saving(false, cx));
+    pub(crate) fn set_log_coloring_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.highlight_log_levels = enabled;
         cx.notify();
     }
 
@@ -472,30 +467,11 @@ impl ColorLabelsDialog {
             })
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(
-                Tab::new()
-                    .label(crate::tr!("颜色标签", "Color labels"))
-                    .disabled(self.saving),
-            )
-            .child(
-                Tab::new()
-                    .label(crate::tr!("选中样式", "Selection style"))
-                    .disabled(self.saving),
-            )
-            .child(
-                Tab::new()
-                    .label(crate::tr!("搜索匹配", "Search matches"))
-                    .disabled(self.saving),
-            )
-            .child(
-                Tab::new()
-                    .label(crate::tr!("日志着色", "Log coloring"))
-                    .disabled(self.saving),
-            )
+            .child(Tab::new().label(crate::tr!("颜色标签", "Color labels")))
+            .child(Tab::new().label(crate::tr!("选中样式", "Selection style")))
+            .child(Tab::new().label(crate::tr!("搜索匹配", "Search matches")))
+            .child(Tab::new().label(crate::tr!("日志着色", "Log coloring")))
             .on_click(cx.listener(|this, index: &usize, _, cx| {
-                if this.saving {
-                    return;
-                }
                 this.active_section = match index {
                     0 => LogColoringSection::ColorLabels,
                     1 => LogColoringSection::SelectionStyle,
@@ -512,20 +488,9 @@ impl ColorLabelsDialog {
     fn color_picker(
         &self,
         picker: &Entity<ColorPickerState>,
-        cx: &gpui_kit::App,
+        _cx: &gpui_kit::App,
     ) -> gpui_kit::AnyElement {
-        if self.saving {
-            gpui_kit::base::ColorSwatch::new(
-                ("saving-highlight-color", picker.entity_id()),
-                picker.read(cx).value().unwrap_or(cx.theme().transparent),
-            )
-            .disabled(true)
-            .size_6()
-            .rounded(cx.theme().radius)
-            .into_any_element()
-        } else {
-            ColorPicker::new(picker).small().into_any_element()
-        }
+        ColorPicker::new(picker).small().into_any_element()
     }
 
     fn render_log_rules(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -559,7 +524,7 @@ impl ColorLabelsDialog {
                             .child(
                                 Switch::new("log-coloring-enabled")
                                     .small()
-                                    .disabled(self.saving)
+
                                     .checked(self.highlight_log_levels)
                                     .label(crate::tr!("启用着色", "Enable coloring"))
                                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
@@ -570,7 +535,7 @@ impl ColorLabelsDialog {
                             .child(
                                 Button::new("add-log-level")
                                     .small()
-                                    .disabled(self.saving)
+
                                     .icon(IconName::Plus)
                                     .label(crate::tr!("添加规则", "Add rule"))
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -686,7 +651,7 @@ impl ColorLabelsDialog {
                                     .child(div().min_w_0().flex_1().child(
                                         v_flex().gap_1().child(h_flex().gap_1()
                                             .child(Button::new(format!("rule-mode-{row_id}")).small()
-                                                .disabled(self.saving).label(if row.match_kind == LogRuleMatch::Regex { "Regex" } else { crate::tr!("关键词", "Keyword") })
+                                                .label(if row.match_kind == LogRuleMatch::Regex { "Regex" } else { crate::tr!("关键词", "Keyword") })
                                                 .tooltip(crate::tr!("切换关键词 / 正则匹配", "Switch keyword / regex matching"))
                                                 .on_click(cx.listener({ let id = mode_id.clone(); move |this, _, _, cx| {
                                                     if let Some(row) = this.groups[this.selected_group].rows.iter_mut().find(|row| row.id == id) {
@@ -695,7 +660,7 @@ impl ColorLabelsDialog {
                                                     this.groups[this.selected_group].preview_rule_id = Some(id.clone());
                                                     this.refresh_rule_previews(cx); cx.notify();
                                                 }})))
-                                            .child(div().flex_1().min_w_0().child(Input::new(&row.keyword).small().disabled(self.saving))))
+                                            .child(div().flex_1().min_w_0().child(Input::new(&row.keyword).small())))
                                             .when_some(row.match_error.clone(), |view, error| view.child(div().text_xs().text_color(cx.theme().danger).child(error))),
                                     ))
                                     .child(
@@ -732,7 +697,7 @@ impl ColorLabelsDialog {
                                                 ))
                                                 .small()
                                                 .checked(row.keyword_only)
-                                                .disabled(self.saving)
+
                                                 .aria_label(crate::tr!(
                                                     "仅高亮关键字",
                                                     "Keyword only"
@@ -774,7 +739,7 @@ impl ColorLabelsDialog {
                                         h_flex().w_8().flex_none().justify_end().child(
                                             Button::new(format!("remove-log-level-{remove_id}"))
                                                 .small()
-                                                .disabled(self.saving)
+
                                                 .ghost()
                                                 .icon(IconName::Delete)
                                                 .tooltip(crate::tr!(
@@ -838,7 +803,7 @@ impl ColorLabelsDialog {
                     )
                     .child(
                         Button::new("add-color-label")
-                            .small().disabled(self.saving)
+                            .small()
                             .flex_none()
                             .icon(IconName::Plus)
                             .label(crate::tr!("添加标签", "Add label"))
@@ -949,7 +914,7 @@ impl ColorLabelsDialog {
                                         div()
                                             .min_w_0()
                                             .flex_1()
-                                            .child(Input::new(&row.name).small().disabled(self.saving)),
+                                            .child(Input::new(&row.name).small()),
                                     )
                                     .child(
                                         h_flex()
@@ -987,7 +952,7 @@ impl ColorLabelsDialog {
                                     .child(
                                         h_flex().w_8().flex_none().justify_end().child(
                                             Button::new(format!("remove-color-label-{remove_id}"))
-                                                .small().disabled(self.saving)
+                                                .small()
                                                 .ghost()
                                                 .icon(IconName::Delete)
                                                 .tooltip(crate::tr!(
@@ -1075,15 +1040,6 @@ impl Render for ColorLabelsDialog {
                     self.selection_style.clone().into_any_element()
                 }
                 LogColoringSection::KeywordMatch => self.keyword_match.clone().into_any_element(),
-            })
-            .when_some(self.error.clone(), |content, error| {
-                content.child(
-                    div()
-                        .flex_none()
-                        .text_sm()
-                        .text_color(cx.theme().danger)
-                        .child(error),
-                )
             })
     }
 }
