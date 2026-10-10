@@ -202,6 +202,7 @@ impl Workspace {
         self.cancel_search();
         self.global_search.directory_options = options;
         self.global_search.pending_directory_restore = None;
+        self.refresh_search_input_placeholder(window, cx);
         self.persist_search_tabs(window, cx);
         cx.notify();
     }
@@ -218,6 +219,7 @@ impl Workspace {
             .into_iter()
             .filter(|id| self.documents.iter().any(|tab| tab.id == *id))
             .collect();
+        self.refresh_search_input_placeholder(window, cx);
         self.persist_search_tabs(window, cx);
         cx.notify();
     }

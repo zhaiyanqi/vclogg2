@@ -1159,12 +1159,7 @@ impl Workspace {
         if own_window.is_none() {
             return;
         }
-        self.query.update(cx, |input, cx| {
-            input.set_placeholder(crate::tr!("搜索", "Search"), window, cx);
-        });
-        self.single_line_query.update(cx, |input, cx| {
-            input.set_placeholder(crate::tr!("搜索", "Search"), window, cx);
-        });
+        self.refresh_search_input_placeholder(window, cx);
         self.quick_find.query.update(cx, |input, cx| {
             input.set_placeholder(
                 crate::tr!("在当前视图中查找", "Find in current view"),

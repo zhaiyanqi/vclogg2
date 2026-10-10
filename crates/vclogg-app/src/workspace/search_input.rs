@@ -33,6 +33,48 @@ fn select_last_search_word<M: InputModeKind>(
 }
 
 impl Workspace {
+    pub(super) fn refresh_search_input_placeholder(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let placeholder = match self.global_search.scope {
+            SearchScope::CurrentFile => crate::tr!("搜索", "Search").to_owned(),
+            SearchScope::AllOpenFiles => {
+                let filenames = self
+                    .documents
+                    .iter()
+                    .filter(|tab| self.global_search.selected_documents.contains(&tab.id))
+                    .map(|tab| {
+                        tab.document
+                            .path()
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(crate::tr!("、", ", "));
+                crate::tr_args!("全局搜索：{filenames}", "Global search: {filenames}")
+            }
+            SearchScope::Directory => {
+                let directory = self
+                    .global_search
+                    .directory_options
+                    .directory
+                    .as_ref()
+                    .map(|path| path.to_string_lossy())
+                    .unwrap_or_default();
+                crate::tr_args!("搜索目录：{directory}", "Search directory: {directory}")
+            }
+        };
+        self.query.update(cx, |input, cx| {
+            input.set_placeholder(placeholder.clone(), window, cx);
+        });
+        self.single_line_query.update(cx, |input, cx| {
+            input.set_placeholder(placeholder, window, cx);
+        });
+    }
+
     pub(super) fn search_input_focus_handle(&self, cx: &App) -> FocusHandle {
         if self.search_input_multiline {
             self.query.focus_handle(cx)

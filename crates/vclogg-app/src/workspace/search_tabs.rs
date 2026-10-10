@@ -649,6 +649,7 @@ impl Workspace {
     }
 
     pub(super) fn sync_search_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_search_input_placeholder(window, cx);
         if let Some(tab) = self
             .active_document()
             .filter(|tab| tab.load_state == DocumentLoadState::Ready)
@@ -887,6 +888,7 @@ impl Workspace {
             slot.facade_dirty = false;
         }
         self.search_tabs.syncing = false;
+        self.refresh_search_input_placeholder(window, cx);
         self.bind_active_display_tables(cx);
         Self::refresh_log_surfaces_atomically(
             [

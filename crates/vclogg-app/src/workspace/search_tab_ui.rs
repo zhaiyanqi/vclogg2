@@ -797,6 +797,7 @@ impl Workspace {
                 self.commit_search_tab_activation(next_owner, next_id, window, cx);
             } else {
                 self.global_search.scope = SearchScope::CurrentFile;
+                self.refresh_search_input_placeholder(window, cx);
                 self.global_search.results_visible = false;
                 self.view_state.active_search = None;
                 self.query
