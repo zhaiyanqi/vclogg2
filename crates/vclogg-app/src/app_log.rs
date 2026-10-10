@@ -192,7 +192,7 @@ impl Log for AppLogger {
             "{} {:<5} [{}] {}",
             Local::now().format("%Y-%m-%d %H:%M:%S%.3f%:z"),
             record.level(),
-            record.target(),
+            record_source(record),
             record.args(),
         );
         eprintln!("{line}");
@@ -205,6 +205,21 @@ impl Log for AppLogger {
 }
 
 static LOGGER: OnceLock<AppLogger> = OnceLock::new();
+
+fn record_source(record: &Record<'_>) -> String {
+    let mut source = record.target().to_owned();
+    if let Some(file) = record.file() {
+        if !source.is_empty() {
+            source.push(' ');
+        }
+        source.push_str(file);
+        if let Some(line) = record.line() {
+            source.push(':');
+            source.push_str(&line.to_string());
+        }
+    }
+    source
+}
 
 pub(crate) fn init() {
     let logger = LOGGER.get_or_init(|| AppLogger::new(AppLogLevel::default()));
@@ -240,4 +255,30 @@ pub(crate) fn export(path: &Path) -> anyhow::Result<usize> {
     fs::write(path, text)
         .with_context(|| format!("couldn't write application log to {}", path.display()))?;
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn framework_errors_with_empty_targets_keep_the_call_site() {
+        let record = Record::builder()
+            .target("")
+            .file(Some("gpui/src/window.rs"))
+            .line(Some(42))
+            .build();
+        assert_eq!(record_source(&record), "gpui/src/window.rs:42");
+    }
+
+    #[test]
+    fn sources_preserve_targets_and_optional_location_metadata() {
+        let record = Record::builder().target("gpui_windows::platform").build();
+        assert_eq!(record_source(&record), "gpui_windows::platform");
+        let record = Record::builder()
+            .target("vclogg2")
+            .file(Some("src/main.rs"))
+            .build();
+        assert_eq!(record_source(&record), "vclogg2 src/main.rs");
+    }
 }
