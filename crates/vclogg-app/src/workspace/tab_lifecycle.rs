@@ -916,6 +916,7 @@ impl Workspace {
         .with_search_range(range);
         let result = if let Some((bounds, display_id)) = placement {
             crate::open_workspace_window_at(cx, false, vec![initial], bounds, display_id)
+                .map(|_| ())
         } else {
             crate::open_workspace_window(cx, false, vec![initial])
         };

@@ -49,6 +49,13 @@ impl Workspace {
                 window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
                     if phase.capture() {
                         _ = moving.update(cx, |this, cx| {
+                            if cx
+                                .global::<WorkspaceWindowRegistry>()
+                                .cross_window_tab_drag
+                                .is_some()
+                            {
+                                return;
+                            }
                             if cx.has_active_drag() {
                                 this.move_search_tab_drag(event.position.x, window, cx);
                                 this.move_file_tab_drag(event.position.x, window, cx);
@@ -61,7 +68,13 @@ impl Workspace {
                 window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
                     if phase.capture() && event.button == MouseButton::Left {
                         _ = ending.update(cx, |this, cx| {
-                            this.finish_tab_drag(event.position, window, cx)
+                            if cx
+                                .global::<WorkspaceWindowRegistry>()
+                                .cross_window_tab_drag
+                                .is_none()
+                            {
+                                this.finish_tab_drag(event.position, window, cx);
+                            }
                         });
                     }
                 });
@@ -105,6 +118,14 @@ impl Workspace {
     }
 
     pub(super) fn cancel_tab_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if cx
+            .global::<WorkspaceWindowRegistry>()
+            .cross_window_tab_drag
+            .is_some()
+        {
+            cx.stop_active_drag(window);
+            Self::cancel_cross_window_tab_drag(cx.entity().entity_id(), cx);
+        }
         if self.tab_drag.visual.is_some() || self.tab_drag.flight.is_some() {
             cx.stop_active_drag(window);
             Self::cancel_cross_window_tab_drag(cx.entity().entity_id(), cx);
@@ -115,7 +136,7 @@ impl Workspace {
     pub(super) fn finish_tab_drag(
         &mut self,
         position: Point<Pixels>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(visual) = self.tab_drag.visual.take() else {
@@ -130,20 +151,11 @@ impl Workspace {
                 .slots
                 .get(&(owner, id))
                 .copied(),
-            TabDragKey::File(id) => {
-                // Moving/copying into another window and detaching remain owned by the window registry.
-                if id.document_id().is_some()
-                    && (!Bounds::new(Point::default(), window.bounds().size).contains(&position)
-                        || Self::cross_window_tab_drop_target(position, window, cx).is_some())
-                {
-                    self.clear_tab_drag(cx);
-                    return;
-                }
-                self.tabs
-                    .iter()
-                    .position(|candidate| *candidate == id)
-                    .and_then(|ix| self.tab_drop_layout.borrow().tabs.get(ix).copied())
-            }
+            TabDragKey::File(id) => self
+                .tabs
+                .iter()
+                .position(|candidate| *candidate == id)
+                .and_then(|ix| self.tab_drop_layout.borrow().tabs.get(ix).copied()),
         };
         if cx.reduce_motion() || bounds.is_none() {
             self.clear_tab_drag(cx);

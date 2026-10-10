@@ -289,3 +289,406 @@ fn file_tabs_close_without_delaying_removal(cx: &mut TestAppContext) {
     })
     .unwrap();
 }
+
+fn init_drag_test(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::actions::init(cx);
+        Workspace::init_window_registry(cx);
+        crate::notifications::init(cx);
+        crate::app_icon::init(cx);
+        cx.on_window_closed(|cx, id| Workspace::unregister_window(id, cx))
+            .detach();
+    });
+}
+
+fn drag_workspace(
+    cx: &mut TestAppContext,
+    paths: &[PathBuf],
+    origin: Point<Pixels>,
+) -> (AnyWindowHandle, Entity<Workspace>) {
+    cx.update(|cx| {
+        let handle = crate::open_workspace_window_at(
+            cx,
+            false,
+            Vec::new(),
+            Bounds::new(origin, size(px(1200.), px(800.))),
+            None,
+        )
+        .unwrap();
+        let workspace = cx
+            .global::<WorkspaceWindowRegistry>()
+            .windows
+            .last()
+            .unwrap()
+            .workspace
+            .clone();
+        handle
+            .update(cx, |_, window, cx| {
+                workspace.update(cx, |this, cx| {
+                    this.persistence._bootstrap_task = Task::ready(());
+                    this.persistence.state_tasks.clear();
+                    this._cloud_client_bootstrap_task = Task::ready(());
+                    this.install_documents(
+                        paths
+                            .iter()
+                            .map(|path| {
+                                (
+                                    path.clone(),
+                                    Ok(PreparedDocument {
+                                        document: Arc::new(LogDocument::open(path).unwrap()),
+                                        cached_complete_document: None,
+                                        session: None,
+                                        color_labels_snapshot: None,
+                                        resolved_color_rules: Arc::default(),
+                                        search_result: SearchResult::default(),
+                                        search_range: SearchRange::default(),
+                                        search_matcher: None,
+                                        search_case_sensitive: false,
+                                        search_regex: false,
+                                        warning: None,
+                                        load_state: DocumentLoadState::Ready,
+                                        pending_index_cache: None,
+                                        upgrade_frame: None,
+                                    }),
+                                )
+                            })
+                            .collect(),
+                        paths.first().map(PathBuf::as_path),
+                        &BTreeMap::new(),
+                        None,
+                        true,
+                        window,
+                        cx,
+                    );
+                });
+                window.render_frame(cx);
+            })
+            .unwrap();
+        (handle, workspace)
+    })
+}
+
+fn drag_move(window: &mut Window, position: Point<Pixels>, copy: bool, cx: &mut App) {
+    window.dispatch_event(
+        MouseMoveEvent {
+            position,
+            pressed_button: Some(MouseButton::Left),
+            modifiers: gpui_kit::Modifiers {
+                control: copy,
+                ..Default::default()
+            },
+        }
+        .to_platform_input(),
+        cx,
+    );
+    window.render_frame(cx);
+}
+
+fn start_document_drag(
+    workspace: &Entity<Workspace>,
+    id: u64,
+    window: &mut Window,
+    cx: &mut App,
+) -> Point<Pixels> {
+    let from =
+        workspace.read(cx).tab_drag.file_bounds.borrow()[&WorkspaceTabId::Document(id)].center();
+    window.dispatch_event(
+        MouseDownEvent {
+            position: from,
+            button: MouseButton::Left,
+            modifiers: Default::default(),
+            click_count: 1,
+            first_mouse: false,
+        }
+        .to_platform_input(),
+        cx,
+    );
+    let position = from + point(px(12.), px(0.));
+    drag_move(window, position, false, cx);
+    let preview = window
+        .find(ElementId::from(("document-tab-drag-preview", id)))
+        .bounds();
+    position - preview.origin
+}
+
+#[gpui_kit::test]
+fn document_moves_between_windows_and_detaches_in_one_gesture(cx: &mut TestAppContext) {
+    init_drag_test(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let a = directory.path().join("a.log");
+    let b = directory.path().join("b.log");
+    for path in [&a, &b] {
+        std::fs::write(path, "first\nsecond\nthird\n").unwrap();
+    }
+    let (source_window, source) =
+        drag_workspace(cx, std::slice::from_ref(&a), point(px(0.), px(0.)));
+    let (target_window, target) = drag_workspace(cx, &[b], point(px(1300.), px(0.)));
+    let mut floating_window = None;
+    cx.update_window(source_window, |_, window, cx| {
+        let source_id = source.read(cx).documents[0].id;
+        let original_document = source.read(cx).documents[0].document.clone();
+        source.update(cx, |this, _| {
+            let tab = &mut this.documents[0];
+            tab.file.custom_title = Some("my log".into());
+            tab.view.word_wrap = true;
+            tab.file.marked_rows.insert(1);
+        });
+        let offset = start_document_drag(&source, source_id, window, cx);
+        let target_point = target_window
+            .update(cx, |_, window, cx| {
+                window.render_frame(cx);
+                window.bounds().origin + target.read(cx).tab_drop_layout.borrow().tabs[0].center()
+            })
+            .unwrap();
+        drag_move(window, target_point, false, cx);
+        assert!(
+            source.read(cx).documents.is_empty(),
+            "move immediately, before mouse up"
+        );
+        assert_eq!(target.read(cx).documents.len(), 2);
+        let moved = target.read(cx).active_document().unwrap();
+        assert!(
+            Arc::ptr_eq(&original_document, &moved.document),
+            "reuse the loaded document"
+        );
+        assert_eq!(moved.file.custom_title.as_deref(), Some("my log"));
+        assert!(moved.view.word_wrap);
+        assert!(moved.file.marked_rows.contains(1));
+        let target_id = moved.id;
+        assert_ne!(
+            target_id, source_id,
+            "document ids are local to each workspace"
+        );
+        assert!(cx.has_active_drag());
+        target_window
+            .update(cx, |_, window, cx| {
+                window.render_frame(cx);
+                let preview = window
+                    .find(ElementId::from(("document-tab-drag-preview", target_id)))
+                    .bounds();
+                assert_eq!(
+                    target_point - window.bounds().origin - preview.origin,
+                    offset
+                );
+            })
+            .unwrap();
+        let moved_point = target_point + point(px(45.), px(0.));
+        drag_move(window, moved_point, false, cx);
+        target_window
+            .update(cx, |_, window, cx| {
+                window.render_frame(cx);
+                let preview = window
+                    .find(ElementId::from(("document-tab-drag-preview", target_id)))
+                    .bounds();
+                assert_eq!(
+                    moved_point - window.bounds().origin - preview.origin,
+                    offset,
+                    "same grab point after transfer"
+                );
+            })
+            .unwrap();
+        window.render_frame(cx);
+        let back = source.read(cx).tab_drop_layout.borrow().tabs[0].center();
+        drag_move(window, back, false, cx);
+        assert_eq!(
+            source.read(cx).documents.len(),
+            1,
+            "move back without releasing"
+        );
+        assert_eq!(target.read(cx).documents.len(), 1);
+        assert!(cx.has_active_drag());
+        // A gap between windows creates a floating workspace and keeps the gesture alive.
+        let outside = point(px(500.), px(950.));
+        drag_move(window, outside, false, cx);
+        let registry = cx.global::<WorkspaceWindowRegistry>();
+        assert_eq!(registry.windows.len(), 3);
+        let drag = registry.cross_window_tab_drag.as_ref().unwrap();
+        let floating = drag.target.as_ref().unwrap().window;
+        floating_window = Some(floating);
+        let first_origin = drag.floating.unwrap().origin;
+        assert!(cx.has_active_drag());
+        drag_move(window, outside + point(px(35.), px(25.)), false, cx);
+        let drag = cx
+            .global::<WorkspaceWindowRegistry>()
+            .cross_window_tab_drag
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            drag.floating.unwrap().origin,
+            first_origin + point(px(35.), px(25.))
+        );
+        assert_eq!(
+            cx.global::<WorkspaceWindowRegistry>().windows.len(),
+            3,
+            "do not create another shell"
+        );
+        drag_move(window, target_point, false, cx);
+        assert_eq!(
+            target.read(cx).documents.len(),
+            2,
+            "dock the floating document before release"
+        );
+        assert!(
+            cx.global::<WorkspaceWindowRegistry>()
+                .cross_window_tab_drag
+                .as_ref()
+                .unwrap()
+                .floating
+                .is_none()
+        );
+        let current_id = target.read(cx).active_document().unwrap().id;
+        window.dispatch_event(
+            MouseUpEvent {
+                position: target_point,
+                button: MouseButton::Left,
+                modifiers: Default::default(),
+                click_count: 1,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        assert!(!cx.has_active_drag());
+        assert!(
+            cx.global::<WorkspaceWindowRegistry>()
+                .cross_window_tab_drag
+                .is_none()
+        );
+        assert_eq!(
+            target.read(cx).active_tab_id,
+            WorkspaceTabId::Document(current_id)
+        );
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert!(
+            cx.global::<WorkspaceWindowRegistry>()
+                .windows
+                .iter()
+                .all(|entry| Some(entry.window) != floating_window),
+            "remove the empty floating shell after docking"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn control_drag_copies_once_and_escape_settles_the_current_owner(cx: &mut TestAppContext) {
+    init_drag_test(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("copy.log");
+    std::fs::write(&path, "first\nsecond\n").unwrap();
+    let (handle, source) = drag_workspace(cx, &[path], point(px(0.), px(0.)));
+    let (target_handle, target) = drag_workspace(cx, &[], point(px(1300.), px(0.)));
+    cx.update_window(handle, |_, window, cx| {
+        let id = source.read(cx).documents[0].id;
+        start_document_drag(&source, id, window, cx);
+        let position = target_handle
+            .update(cx, |_, window, cx| {
+                window.bounds().origin + target.read(cx).tab_drop_layout.borrow().tabs[0].center()
+            })
+            .unwrap();
+        drag_move(window, position, true, cx);
+        assert_eq!(source.read(cx).documents.len(), 1);
+        assert_eq!(target.read(cx).documents.len(), 1);
+        drag_move(window, point(px(600.), px(950.)), true, cx);
+        assert!(
+            target.read(cx).documents.is_empty(),
+            "after copying once, move the dragged copy"
+        );
+        assert_eq!(source.read(cx).documents.len(), 1);
+        window.press("escape", cx);
+        assert!(!cx.has_active_drag());
+        assert!(
+            cx.global::<WorkspaceWindowRegistry>()
+                .cross_window_tab_drag
+                .is_none()
+        );
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert_eq!(
+            cx.global::<WorkspaceWindowRegistry>().windows.len(),
+            3,
+            "Escape keeps the last valid window"
+        );
+        assert!(
+            cx.global::<WorkspaceWindowRegistry>()
+                .windows
+                .iter()
+                .all(|entry| entry.workspace.read(cx).tab_drag.file_hidden.is_none())
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn duplicate_target_keeps_both_documents_and_drag_can_be_cancelled(cx: &mut TestAppContext) {
+    init_drag_test(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("same.log");
+    std::fs::write(&path, "first\nsecond\n").unwrap();
+    let (handle, source) = drag_workspace(cx, std::slice::from_ref(&path), point(px(0.), px(0.)));
+    let (target_handle, target) = drag_workspace(cx, &[path], point(px(1300.), px(0.)));
+    cx.update_window(handle, |_, window, cx| {
+        let id = source.read(cx).documents[0].id;
+        let target_document = target.read(cx).documents[0].document.clone();
+        start_document_drag(&source, id, window, cx);
+        let position = target_handle
+            .update(cx, |_, window, cx| {
+                window.bounds().origin + target.read(cx).tab_drop_layout.borrow().tabs[0].center()
+            })
+            .unwrap();
+        drag_move(window, position, false, cx);
+        assert_eq!(source.read(cx).documents.len(), 1);
+        assert_eq!(target.read(cx).documents.len(), 1);
+        assert!(Arc::ptr_eq(
+            &target_document,
+            &target.read(cx).documents[0].document
+        ));
+        assert!(cx.has_active_drag());
+        window.press("escape", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert!(!cx.has_active_drag());
+        assert!(source.read(cx).tab_drag.file_hidden.is_none());
+        assert!(target.read(cx).tab_drag.file_hidden.is_none());
+        assert_eq!(cx.global::<WorkspaceWindowRegistry>().windows.len(), 2);
+    });
+}
+
+#[gpui_kit::test]
+fn closing_pointer_capture_window_settles_transferred_tab(cx: &mut TestAppContext) {
+    init_drag_test(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("close.log");
+    std::fs::write(&path, "first\nsecond\n").unwrap();
+    let (handle, source) = drag_workspace(cx, &[path], point(px(0.), px(0.)));
+    let (target_handle, target) = drag_workspace(cx, &[], point(px(1300.), px(0.)));
+    cx.update_window(handle, |_, window, cx| {
+        let id = source.read(cx).documents[0].id;
+        start_document_drag(&source, id, window, cx);
+        let position = target_handle
+            .update(cx, |_, window, cx| {
+                window.bounds().origin + target.read(cx).tab_drop_layout.borrow().tabs[0].center()
+            })
+            .unwrap();
+        drag_move(window, position, false, cx);
+        assert_eq!(target.read(cx).documents.len(), 1);
+        window.remove_window();
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert!(!cx.has_active_drag());
+        assert!(
+            cx.global::<WorkspaceWindowRegistry>()
+                .cross_window_tab_drag
+                .is_none()
+        );
+        assert!(target.read(cx).tab_drag.file_hidden.is_none());
+        assert_eq!(target.read(cx).documents.len(), 1);
+    });
+}

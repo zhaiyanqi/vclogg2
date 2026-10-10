@@ -420,12 +420,7 @@ struct TabTransferTarget {
     target_ix: Option<usize>,
 }
 
-struct CrossWindowTabDrag {
-    source_window: AnyWindowHandle,
-    source: WeakEntity<Workspace>,
-    document_id: u64,
-    target: Option<CrossWindowDropTarget>,
-}
+use cross_window_tab_drag::CrossWindowTabDrag;
 
 impl Global for WorkspaceWindowRegistry {}
 
@@ -1507,39 +1502,39 @@ impl DraggedTab {
 impl Render for DraggedTab {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _performance_scope = crate::ui_performance::scope("DraggedTab::render");
-        let registry = cx.global::<WorkspaceWindowRegistry>();
-        let target = registry
+        let session = cx
+            .global::<WorkspaceWindowRegistry>()
             .cross_window_tab_drag
-            .as_ref()
-            .and_then(|drag| drag.target.as_ref());
-        let position = if let Some(target) = target {
-            if target.window != window.window_handle() {
+            .as_ref();
+        let (source, tab_id, position) = if let Some(session) = session {
+            let Some(target) = &session.target else {
+                return div().into_any_element();
+            };
+            if target.window != window.window_handle() || session.floating.is_some() {
                 return div().into_any_element();
             }
-            // The source keeps pointer capture, so the target's GPUI mouse position
-            // is stale. Compensate for GPUI's drag-root offset using the tracked point.
-            self.position + target.position - window.mouse_position()
+            (
+                target.workspace.downgrade(),
+                WorkspaceTabId::Document(session.document_id),
+                self.position + target.position - window.mouse_position(),
+            )
         } else {
-            let is_source = registry.windows.iter().any(|entry| {
-                entry.window == window.window_handle()
-                    && entry.workspace.entity_id() == self.source.entity_id()
-            });
-            if !is_source {
-                return div().into_any_element();
-            }
-            self.position
+            (self.source.clone(), self.tab_id, self.position)
         };
-        let content = self
-            .source
+        let content = source
             .update(cx, |source, cx| {
-                source.render_workspace_tab_preview(self.tab_id, self.size, cx)
+                source.render_workspace_tab_preview(tab_id, self.size, cx)
             })
             .unwrap_or_else(|_| div().into_any_element());
         div()
             .relative()
-            .left(position.x - self.position.x)
-            .top(position.y - self.position.y)
-            .child(content)
+            .child(
+                div()
+                    .relative()
+                    .left(position.x - self.position.x)
+                    .top(position.y - self.position.y)
+                    .child(content),
+            )
             .into_any_element()
     }
 }
@@ -1753,6 +1748,7 @@ impl Workspace {}
 
 mod clipboard_paste;
 mod color_commands;
+mod cross_window_tab_drag;
 mod document_commands;
 mod document_editing;
 mod document_lifecycle;

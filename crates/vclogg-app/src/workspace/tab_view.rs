@@ -120,6 +120,13 @@ impl Workspace {
                     );
                     this.move_file_tab_drag(window.mouse_position().x, window, cx);
                 });
+                Self::begin_cross_window_tab_drag(
+                    dragged,
+                    position,
+                    view.read(cx).size,
+                    window,
+                    cx,
+                );
                 view
             })
             .on_drop(cx.listener(|_, _: &DraggedTab, _, _| {}))

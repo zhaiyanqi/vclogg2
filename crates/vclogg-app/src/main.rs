@@ -55,6 +55,7 @@ mod ui_performance;
 mod ui_theme;
 mod virtual_log_lines;
 mod virtual_log_list;
+mod window_drag;
 mod workspace;
 mod workspace_state;
 
@@ -83,6 +84,7 @@ pub(crate) fn open_workspace_window(
         WindowBounds::Maximized(Bounds::centered(None, size(px(1280.), px(800.)), cx)),
         None,
     )
+    .map(|_| ())
 }
 
 pub(crate) fn open_workspace_window_at(
@@ -91,7 +93,7 @@ pub(crate) fn open_workspace_window_at(
     initial_documents: Vec<InitialDocument>,
     bounds: Bounds<Pixels>,
     display_id: Option<DisplayId>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<gpui_kit::AnyWindowHandle> {
     open_workspace_window_with_options(
         cx,
         primary,
@@ -107,7 +109,7 @@ fn open_workspace_window_with_options(
     initial_documents: Vec<InitialDocument>,
     window_bounds: WindowBounds,
     display_id: Option<DisplayId>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<gpui_kit::AnyWindowHandle> {
     let window_options = WindowOptions {
         window_bounds: Some(window_bounds),
         display_id,
@@ -130,7 +132,7 @@ fn open_workspace_window_with_options(
     })?;
     cx.activate(true);
     _ = handle.update(cx, |_, window, _| window.activate_window());
-    Ok(())
+    Ok(handle)
 }
 
 fn handle_external_open_request(request: single_instance::OpenRequest, cx: &mut App) {
