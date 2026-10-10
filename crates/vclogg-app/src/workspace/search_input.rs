@@ -54,17 +54,24 @@ impl Workspace {
                     })
                     .collect::<Vec<_>>()
                     .join(crate::tr!("、", ", "));
-                crate::tr_args!("全局搜索：{filenames}", "Global search: {filenames}")
+                if filenames.is_empty() {
+                    crate::tr!("全局搜索：未选择文件", "Global search: no files selected")
+                        .to_owned()
+                } else {
+                    crate::tr_args!("全局搜索：{filenames}", "Global search: {filenames}")
+                }
             }
             SearchScope::Directory => {
-                let directory = self
-                    .global_search
-                    .directory_options
-                    .directory
-                    .as_ref()
-                    .map(|path| path.to_string_lossy())
-                    .unwrap_or_default();
-                crate::tr_args!("搜索目录：{directory}", "Search directory: {directory}")
+                if let Some(directory) = &self.global_search.directory_options.directory {
+                    let directory = directory.to_string_lossy();
+                    crate::tr_args!("搜索目录：{directory}", "Search directory: {directory}")
+                } else {
+                    crate::tr!(
+                        "目录搜索：未选择目录",
+                        "Directory search: no directory selected"
+                    )
+                    .to_owned()
+                }
             }
         };
         self.query.update(cx, |input, cx| {
