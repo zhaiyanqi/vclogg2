@@ -4,6 +4,7 @@ use crate::{
     log_tags::{RowTag, TagColor, TagPreset, TagStyle, source_digest},
     row_tag_dialog::{RowTagDialog, RowTagDialogEvent, RowTagPreview},
 };
+use gpui_kit::AvailableSpace;
 use std::sync::Weak;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -325,14 +326,40 @@ impl Workspace {
                 None,
             )
             .width;
+        let digest = source_digest(context.text.source());
+        let gap = cx.theme().spacing_tokens().xs;
+        let mut last_tag_end: Option<Pixels> = None;
+        for (_, tag) in tab.file.row_tags.row(context.target.source_row) {
+            if tag.source_digest != digest {
+                continue;
+            }
+            // Measure the same capped component used by the row renderer, including
+            // custom fonts, padding and borders, before appending the new mark.
+            let mut element = div()
+                .max_w(font_size * 24.)
+                .overflow_hidden()
+                .child(
+                    tag.preset()
+                        .render_tag(font_size, self.log_row_height(), cx)
+                        .child(div().min_w_0().truncate().child(tag.label.clone())),
+                )
+                .into_any_element();
+            let measured = element.layout_as_root(
+                size(AvailableSpace::MaxContent, AvailableSpace::MinContent),
+                window,
+                cx,
+            );
+            let end = font_size * (tag.x as f32 / 1000.) + measured.width + gap;
+            last_tag_end = Some(last_tag_end.map_or(end, |previous| previous.max(end)));
+        }
         let draft = RowTag {
             source_row: context.target.source_row,
             label: String::new(),
             color: TagColor::Neutral,
             style: TagStyle::default(),
-            x: position_units(line_end, font_size),
+            x: position_units(last_tag_end.unwrap_or(line_end), font_size),
             y: 0,
-            source_digest: source_digest(context.text.source()),
+            source_digest: digest,
         };
         let id = uuid::Uuid::new_v4().to_string();
         if let Some(preset) = preset {
