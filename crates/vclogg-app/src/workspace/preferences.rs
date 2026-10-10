@@ -1537,17 +1537,6 @@ impl Workspace {
                         return;
                     }
                     workspace.update(cx, |workspace, cx| {
-                        // TextSelection synthesizes wheel events when a drag leaves the
-                        // selection participant's clipped row. Log regions already own drag
-                        // auto-scroll (including the switch to cross-row selection), so letting
-                        // both paths run makes a small in-row drag scroll the viewport.
-                        if workspace
-                            .row_drag_selection
-                            .is_some_and(|drag| drag.owns_region(document_id, region))
-                        {
-                            cx.stop_propagation();
-                            return;
-                        }
                         workspace.cancel_tag_drag(window, cx);
                         if Self::is_log_font_size_wheel(event) {
                             workspace.adjust_log_font_size_from_wheel(event, window, cx);
@@ -1723,6 +1712,16 @@ impl Workspace {
                 WrappedRegion::GlobalResults => self.search_results_viewer.surface.clone(),
             };
             Self::refresh_log_surfaces_atomically([surface], window, cx);
+            if self
+                .row_drag_selection
+                .is_some_and(|drag| drag.owns_region(document_id, region))
+            {
+                // The first frame commits the wheel target and lays out its rows.
+                // Re-hit-test on the following frame, even if the pointer stays still.
+                cx.on_next_frame(window, |this, window, cx| {
+                    this.schedule_row_drag_frame(window, cx);
+                });
+            }
         }
 
         if auto_follow_changed {

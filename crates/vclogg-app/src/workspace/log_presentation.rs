@@ -348,7 +348,16 @@ impl Workspace {
         self.row_drag_frame_scheduled = true;
         cx.on_next_frame(window, |this, window, cx| {
             this.row_drag_frame_scheduled = false;
-            if this.advance_row_drag_selection(cx) {
+            let keep_scrolling = this.advance_row_drag_selection(cx);
+            if this
+                .row_drag_selection
+                .is_some_and(|drag| drag.mode == RowDragMode::Lines)
+            {
+                // The log viewport owns cross-row drag scrolling. End the text
+                // gesture so it cannot synthesize competing wheel events.
+                TextSelection::end(window, cx);
+            }
+            if keep_scrolling {
                 this.schedule_row_drag_frame(window, cx);
             }
         });
@@ -821,6 +830,7 @@ impl Workspace {
                         text_highlights
                     },
                 )
+                .selection_viewport(self.row_drag_bounds.get(&(document_id, region)).copied())
                 .suppress_selection(suppress_text_selection)
                 .word_boundary_characters(self.app_settings.word_boundary_characters.clone());
                 Some(VirtualLogRow::new(
@@ -2669,6 +2679,11 @@ impl Workspace {
                             } else {
                                 text_highlights
                             },
+                        )
+                        .selection_viewport(
+                            self.row_drag_bounds
+                                .get(&(0, WrappedRegion::GlobalResults))
+                                .copied(),
                         )
                         .suppress_selection(suppress_text_selection);
                         Some(VirtualLogRow::new(

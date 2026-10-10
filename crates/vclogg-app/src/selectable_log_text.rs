@@ -625,6 +625,7 @@ pub struct SelectableLogText {
     highlights: Vec<(Range<usize>, gpui_kit::HighlightStyle)>,
     preview_range: Option<Range<usize>>,
     suppress_selection: bool,
+    selection_viewport: Option<Bounds<Pixels>>,
     word_boundary_characters: SharedString,
 }
 
@@ -646,6 +647,7 @@ impl SelectableLogText {
             highlights: Vec::new(),
             preview_range: None,
             suppress_selection: false,
+            selection_viewport: None,
             word_boundary_characters: SharedString::default(),
         }
     }
@@ -664,6 +666,12 @@ impl SelectableLogText {
     /// A passive sample shares the real painter without registering in the window selection scope.
     pub(crate) fn preview_range(mut self, range: Range<usize>) -> Self {
         self.preview_range = Some(range);
+        self
+    }
+
+    /// Selection auto-scroll uses the owning log viewport, not the clipped text cell.
+    pub(crate) fn selection_viewport(mut self, bounds: Option<Bounds<Pixels>>) -> Self {
+        self.selection_viewport = bounds;
         self
     }
 
@@ -1068,8 +1076,12 @@ impl Element for SelectableLogText {
         {
             let _performance_scope =
                 crate::ui_performance::scope("SelectableLogText::register_selection");
+            let mut selection_hitbox = hitbox.clone();
+            if let Some(viewport) = self.selection_viewport {
+                selection_hitbox.content_mask.bounds = viewport;
+            }
             self.selection.handle.register(
-                TextSelectionRegistration::new(hitbox.clone(), bounds)
+                TextSelectionRegistration::new(selection_hitbox, bounds)
                     .with_document_order(self.document_order)
                     .with_text_bounds(vec![text_bounds]),
                 window,

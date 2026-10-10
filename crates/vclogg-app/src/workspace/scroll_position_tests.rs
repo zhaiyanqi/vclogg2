@@ -339,3 +339,184 @@ fn row_drag_only_owns_wheel_events_from_its_log_region() {
     assert!(global_drag.owns_region(99, WrappedRegion::GlobalResults));
     assert!(!global_drag.owns_region(99, WrappedRegion::Results));
 }
+
+#[gpui_kit::test]
+fn wheel_scroll_extends_held_log_row_selection(cx: &mut gpui_kit::TestAppContext) {
+    check_wheel_during_log_selection(cx, false);
+}
+
+#[gpui_kit::test]
+fn wheel_scroll_extends_held_wrapped_log_selection(cx: &mut gpui_kit::TestAppContext) {
+    check_wheel_during_log_selection(cx, true);
+}
+
+fn check_wheel_during_log_selection(cx: &mut gpui_kit::TestAppContext, word_wrap: bool) {
+    use gpui_kit::InputEvent as _;
+    use gpui_kit::test::TestWindowExt as _;
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::actions::init(cx);
+        Workspace::init_window_registry(cx);
+        crate::notifications::init(cx);
+        crate::app_icon::init(cx);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let paths = [directory.path().join("wheel-drag.log")];
+    let prepared = paths
+        .iter()
+        .map(|path| {
+            std::fs::write(
+                path,
+                (0..500)
+                    .map(|i| format!("line {i} selectable text\n"))
+                    .collect::<String>(),
+            )
+            .unwrap();
+            (
+                path.clone(),
+                Ok(PreparedDocument {
+                    document: Arc::new(LogDocument::open(path).unwrap()),
+                    cached_complete_document: None,
+                    session: None,
+                    color_labels_snapshot: None,
+                    resolved_color_rules: Arc::default(),
+                    search_result: SearchResult::default(),
+                    search_range: SearchRange::default(),
+                    search_matcher: None,
+                    search_case_sensitive: false,
+                    search_regex: false,
+                    warning: None,
+                    load_state: DocumentLoadState::Ready,
+                    pending_index_cache: None,
+                    upgrade_frame: None,
+                }),
+            )
+        })
+        .collect();
+    let mut workspace = None;
+    let handle = cx.open_window(size(px(1400.), px(900.)), |window, cx| {
+        let view = cx.new(|cx| Workspace::new(false, Vec::new(), window, cx));
+        view.update(cx, |view, cx| {
+            view.persistence._bootstrap_task = Task::ready(());
+            view.persistence.state_tasks.clear();
+            view._cloud_client_bootstrap_task = Task::ready(());
+            view.install_documents(
+                prepared,
+                Some(&paths[0]),
+                &BTreeMap::new(),
+                None,
+                true,
+                window,
+                cx,
+            );
+        });
+        workspace = Some(view.clone());
+        gpui_kit::component::Root::new(view, window, cx)
+    });
+    let workspace = workspace.unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle.into(), |_, window, cx| {
+        workspace.update(cx, |view, cx| {
+            if view.active_document().unwrap().log_viewport.is_wrapped() != word_wrap {
+                view.toggle_word_wrap(&ToggleWordWrap, window, cx);
+            }
+        });
+        window.render_frame(cx);
+        let document_id = workspace.read(cx).active_document().unwrap().id;
+        let bounds = workspace.read(cx).row_drag_bounds[&(document_id, WrappedRegion::Log)];
+        let start = point(bounds.left() + px(180.), bounds.center().y);
+        window.dispatch_event(
+            MouseDownEvent {
+                position: start,
+                button: MouseButton::Left,
+                click_count: 1,
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+        let pointer = start + point(px(0.), px(60.));
+        window.dispatch_event(
+            MouseMoveEvent {
+                position: pointer,
+                pressed_button: Some(MouseButton::Left),
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+        for _ in 0..3 {
+            window.simulate_next_frame(cx);
+            window.render_frame(cx);
+        }
+        let drag = workspace
+            .read(cx)
+            .row_drag_selection
+            .expect("row drag active");
+        assert_eq!(drag.mode, RowDragMode::Lines);
+        let before = workspace
+            .read(cx)
+            .active_document()
+            .unwrap()
+            .log_viewport
+            .first_visible(500, workspace.read(cx).log_row_height());
+        for delta in [-120., -120.] {
+            window.dispatch_event(
+                ScrollWheelEvent {
+                    position: pointer,
+                    delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(delta))),
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+            for _ in 0..3 {
+                window.simulate_next_frame(cx);
+                window.render_frame(cx);
+            }
+        }
+        let view = workspace.read(cx);
+        let after = view
+            .active_document()
+            .unwrap()
+            .log_viewport
+            .first_visible(500, view.log_row_height());
+        let extended = view.row_drag_selection.unwrap();
+        assert!(after > before, "wheel must scroll while left mouse is held");
+        assert_eq!(extended.start_row, drag.start_row);
+        assert!(
+            extended.target_row > drag.target_row,
+            "stationary pointer extends selection after scrolling"
+        );
+        window.dispatch_event(
+            ScrollWheelEvent {
+                position: pointer,
+                delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(120.))),
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+        for _ in 0..3 {
+            window.simulate_next_frame(cx);
+            window.render_frame(cx);
+        }
+        assert!(
+            workspace.read(cx).row_drag_selection.unwrap().target_row < extended.target_row,
+            "reversing the wheel contracts selection without moving the pointer"
+        );
+        window.dispatch_event(
+            MouseUpEvent {
+                position: pointer,
+                button: MouseButton::Left,
+                click_count: 1,
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+        assert!(workspace.read(cx).row_drag_selection.is_none());
+    })
+    .unwrap();
+}
