@@ -34,6 +34,7 @@ pub(super) struct SettingsWindow {
     validation_error: Option<String>,
     debounce_task: Option<Task<()>>,
     save_task: Option<Task<()>>,
+    saved_status_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -224,6 +225,7 @@ impl SettingsWindow {
             validation_error: None,
             debounce_task: None,
             save_task: None,
+            saved_status_task: None,
             _subscriptions: vec![subscription, observer],
         }
     }
@@ -284,7 +286,18 @@ impl SettingsWindow {
             self.last_highlight = config;
         }
         self.last_highlight.highlight_log_levels = self.last_draft.highlight_log_levels;
-        self.save_pending = true;
+        let settings = self.settings.read(cx);
+        self.save_pending = self.saving
+            || self.last_draft != self.saved_draft
+            || self.last_highlight != self.highlight_baseline
+            || settings.network_settings(cx) != self.saved_network
+            || settings.search_history() != self.saved_history;
+        if !self.save_pending {
+            self.debounce_task = None;
+            cx.notify();
+            return;
+        }
+        self.saved_status_task = None;
         if !self.saving {
             self.debounce_task = Some(cx.spawn_in(window, async move |this, cx| {
                 cx.background_executor()
@@ -341,6 +354,7 @@ impl SettingsWindow {
         };
         self.sync_retained_workspace(cx);
         self.saving = true;
+        self.saved_status_task = None;
         self.save_error = None;
         let tasks = self.workspace.update(cx, |owner, cx| {
             owner.settings_save_failed = false;
@@ -462,15 +476,40 @@ impl SettingsWindow {
                         .to_owned(),
                     );
                     this.closing = false;
-                } else {
-                    if !this.quitting && (this.save_pending || this.closing) {
+                } else if !this.quitting {
+                    if this.save_pending || this.closing {
                         this.save(window, cx);
+                    }
+                    if !this.saving && !this.closing && this.save_error.is_none() {
+                        this.saved_status_task =
+                            Some(cx.spawn_in(window, async move |this, cx| {
+                                cx.background_executor().timer(Duration::from_secs(3)).await;
+                                _ = this.update_in(cx, |this, _, cx| {
+                                    this.saved_status_task = None;
+                                    cx.notify();
+                                });
+                            }));
                     }
                 }
                 cx.notify();
             });
         }));
         cx.notify();
+    }
+
+    fn save_status(&self) -> Option<String> {
+        self.save_error
+            .clone()
+            .or_else(|| self.validation_error.clone())
+            .or_else(|| {
+                if self.saving || self.debounce_task.is_some() {
+                    Some(crate::tr!("正在保存…", "Saving…").to_owned())
+                } else if self.saved_status_task.is_some() {
+                    Some(crate::tr!("已保存", "Saved").to_owned())
+                } else {
+                    None
+                }
+            })
     }
 
     fn persist_size(&self, window: &Window, cx: &mut App) {
@@ -721,36 +760,22 @@ impl Render for SettingsWindow {
                         h_flex()
                             .gap_2()
                             .min_w_0()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(
-                                        if self.save_error.is_some()
-                                            || self.validation_error.is_some()
-                                        {
-                                            cx.theme().danger
-                                        } else {
-                                            cx.theme().muted_foreground
-                                        },
-                                    )
-                                    .child(
-                                        self.save_error
-                                            .clone()
-                                            .or_else(|| self.validation_error.clone())
-                                            .unwrap_or_else(|| {
-                                                if self.saving || self.debounce_task.is_some() {
-                                                    crate::tr!("正在自动保存…", "Saving changes…")
-                                                        .to_owned()
-                                                } else {
-                                                    crate::tr!(
-                                                        "更改会自动保存",
-                                                        "Changes are saved automatically"
-                                                    )
-                                                    .to_owned()
-                                                }
-                                            }),
-                                    ),
-                            )
+                            .when_some(self.save_status(), |row, status| {
+                                row.child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(
+                                            if self.save_error.is_some()
+                                                || self.validation_error.is_some()
+                                            {
+                                                cx.theme().danger
+                                            } else {
+                                                cx.theme().muted_foreground
+                                            },
+                                        )
+                                        .child(status),
+                                )
+                            })
                             .when(self.save_error.is_some(), |row| {
                                 row.child(
                                     Button::new("settings-retry-save")
