@@ -145,12 +145,19 @@ def main():
                 content = f"{missing}: {original}"
             entries[language][category].append(render_entry(content, subject, link))
 
-    output = ["[English](#english) | [简体中文](#简体中文)"]
+    # Release headings have no automatic IDs. GitHub prefixes explicit anchor
+    # names with user-content-; include the tag to avoid collisions on lists.
+    anchor_prefix = f"release-{args.tag.encode('utf-8').hex()}"
+    anchors = {"EN": f"{anchor_prefix}-en", "ZH-CN": f"{anchor_prefix}-zh-cn"}
+    output = [
+        f"[English](#user-content-{anchors['EN']}) | "
+        f"[简体中文](#user-content-{anchors['ZH-CN']})"
+    ]
     for language, heading, empty, heading_index in (
         ("EN", "English", "No commits in this release.", 1),
         ("ZH-CN", "简体中文", "本次发布没有新增提交。", 2),
     ):
-        sections = [f"## {heading}"]
+        sections = [f'<a name="{anchors[language]}"></a>\n\n## {heading}']
         for category in CATEGORIES:
             items = entries[language][category[0]]
             if items:
