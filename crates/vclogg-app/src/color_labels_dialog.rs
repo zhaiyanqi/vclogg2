@@ -59,18 +59,11 @@ pub struct LogColoringConfig {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum LogColoringSection {
     #[default]
-    LogLevels,
     ColorLabels,
     SelectionStyle,
     KeywordMatch,
+    LogLevels,
 }
-
-#[derive(Default)]
-struct HighlightNavigation {
-    last_section: LogColoringSection,
-}
-
-impl gpui_kit::Global for HighlightNavigation {}
 
 pub struct ColorLabelsDialog {
     keyword_match: Entity<crate::keyword_match_style_section::KeywordMatchStyleSection>,
@@ -117,10 +110,7 @@ impl ColorLabelsDialog {
             ],
             keyword_match,
             selection_style,
-            active_section: cx
-                .try_global::<HighlightNavigation>()
-                .map(|navigation| navigation.last_section)
-                .unwrap_or_default(),
+            active_section: LogColoringSection::default(),
             highlight_log_levels,
             groups: Vec::new(),
             selected_group: 0,
@@ -478,9 +468,6 @@ impl ColorLabelsDialog {
                     2 => LogColoringSection::KeywordMatch,
                     _ => LogColoringSection::LogLevels,
                 };
-                cx.set_global(HighlightNavigation {
-                    last_section: this.active_section,
-                });
                 cx.notify();
             }))
     }
@@ -1069,6 +1056,10 @@ mod tests {
         let popup_input = picker.read_with(cx, |picker, _| picker.hex_input().clone());
 
         cx.update(|window, cx| {
+            dialog.update(cx, |dialog, cx| {
+                dialog.active_section = LogColoringSection::LogLevels;
+                cx.notify();
+            });
             picker.update(cx, |picker, cx| picker.set_open(true, cx));
             // Render the restored featured palette, including duplicate theme
             // colors: each slot must have a distinct accessibility identity.

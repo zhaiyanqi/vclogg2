@@ -251,6 +251,7 @@ fn highlight_changes_are_saved_without_locking_the_editor(cx: &mut TestAppContex
             editor.select_category(SettingsCategory::Highlight, window, cx)
         });
         window.render_frame(cx);
+        window.within("log-coloring-tabs").click(3usize, cx);
         window.click("log-coloring-enabled", cx);
     })
     .unwrap();
