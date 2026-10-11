@@ -1,0 +1,2054 @@
+{
+  "f8ed3cb4b414de8a6eec57333ecd9fb9df474ffe": {
+    "EN": "fix: update highlight setting priority",
+    "ZH-CN": "更新高亮设置的优先级"
+  },
+  "adcbbbf4b76e5f08add0f82fb08dd0b76da85842": {
+    "EN": "fix: unify title bar background across macOS window controls",
+    "ZH-CN": "统一 macOS 窗口控制按钮区域的标题栏背景"
+  },
+  "267f2c5b15d834ed5bcc0c71f5365af4b1c64414": {
+    "EN": "Polish settings window appearance and save feedback",
+    "ZH-CN": "优化设置窗口外观和保存反馈"
+  },
+  "0174a4b571ae6dd1c78b2ac868a6cbcb01a69911": {
+    "EN": "fix: hide settings save status after three seconds",
+    "ZH-CN": "三秒后隐藏设置保存状态"
+  },
+  "a2c24d9d87d33de776f94b2fa041331279f96d5a": {
+    "EN": "fix(windows): defer native window moves to avoid reentrant borrows",
+    "ZH-CN": "延后 Windows 原生窗口移动，避免重入借用"
+  },
+  "c0f8108e63f2204c23c07942a63bf9bc51145694": {
+    "EN": "fix: serialize concurrent window session writes",
+    "ZH-CN": "串行处理并发的窗口会话写入"
+  },
+  "808a43d14a9b76af41f532118d695b4343e0b198": {
+    "EN": "feat: automatically apply and save settings changes",
+    "ZH-CN": "自动应用并保存设置更改"
+  },
+  "bde964c9ad264134f1d9758fbda470f66d021699": {
+    "EN": "fix(logging): preserve source locations in application logs",
+    "ZH-CN": "在应用日志中保留源代码位置信息"
+  },
+  "8ab3ac64429ab261cc1d06343414a52790f45b6f": {
+    "EN": "fix: transfer dragged tabs on entering destination window",
+    "ZH-CN": "拖动标签进入目标窗口时转移标签"
+  },
+  "0f6f01b3697368bb89e84c7947306e59aea37d84": {
+    "EN": "fix: allow text marks to overlap after positioning",
+    "ZH-CN": "允许文本标记定位后相互重叠"
+  },
+  "87162e4607511fea6fcd6da568385ef13f6c356c": {
+    "EN": "feat: keep tab dragging continuous across windows",
+    "ZH-CN": "保持跨窗口拖动标签的连续性"
+  },
+  "55f4532dd7341b7b68c4be357b69690456aa16a1": {
+    "EN": "fix: prompt to save unsaved settings before closing",
+    "ZH-CN": "关闭前提示保存尚未保存的设置"
+  },
+  "e08af7fc80593cd8cace552160af6d1c5438d9b9": {
+    "EN": "fix: avoid layout during text mark keyboard actions",
+    "ZH-CN": "避免文本标记键盘操作触发布局"
+  },
+  "baed4e121ae6bb5a384afae7e2819720f2f3daef": {
+    "EN": "fix: append text marks in order without overlap",
+    "ZH-CN": "按顺序追加文本标记，避免重叠"
+  },
+  "b2b832809e848094f8961aa048751fa8339c2634": {
+    "EN": "fix: show empty search target placeholders",
+    "ZH-CN": "显示空搜索目标的占位提示"
+  },
+  "a46f8573b1c15ad51aa719503bfa7cfa4fd94b2b": {
+    "EN": "Refine search toolbar spacing and square button sizing",
+    "ZH-CN": "优化搜索工具栏间距和方形按钮尺寸"
+  },
+  "55b47ba30b8ddb5871b747e70f2576f3e284281f": {
+    "EN": "fix: place new text marks at visible line end",
+    "ZH-CN": "将新文本标记放在可见行的末尾"
+  },
+  "aea6992fc235308d26c119bfaf01121d2cb73e75": {
+    "EN": "fix: show search targets in search input placeholders",
+    "ZH-CN": "在搜索输入框占位提示中显示搜索目标"
+  },
+  "670d63e4bc3686b7f5bb7d037d93b615daa56fb4": {
+    "EN": "fix: allow wheel scrolling during log row selection",
+    "ZH-CN": "选择日志行时允许滚轮滚动"
+  },
+  "453c7909a45e263b697b334f23689d6c3dd5589b": {
+    "EN": "fix: keep workspace shadows below notification sheet",
+    "ZH-CN": "将工作区阴影保持在通知面板下方"
+  },
+  "52a398e37793670587f339a33d3dbfc98dfb6edb": {
+    "EN": "fix: remove unused ripgrep from release packages",
+    "ZH-CN": "从发布包中移除未使用的 ripgrep"
+  },
+  "b14c8db4862c2495816d63bde34c80210a793e05": {
+    "EN": "fix: remove tab opening animations while keeping close transitions",
+    "ZH-CN": "移除标签打开动画，保留关闭过渡效果"
+  },
+  "21c94de08b7c1830c9709efade8c226a488027cb": {
+    "EN": "fix: show settings window immediately without animation",
+    "ZH-CN": "立即显示设置窗口，不播放动画"
+  },
+  "f78a18eea8dcc9eef33d8d36aed7005d598d6228": {
+    "EN": "feat: animate file tab opening and closing",
+    "ZH-CN": "为文件标签的打开和关闭添加动画"
+  },
+  "47df27da8fe97d2b2f855b77dcf0221fd1d2d438": {
+    "EN": "fix: use 150ms cubic-bezier alpha entrance for settings",
+    "ZH-CN": "为设置窗口使用 150 毫秒的三次贝塞尔透明度入场动画"
+  },
+  "7aedc950d0f26057e6059e15c373f3b9f41c3b85": {
+    "EN": "feat: close file when its last search tab closes",
+    "ZH-CN": "关闭文件的最后一个搜索标签时关闭该文件"
+  },
+  "84c270d791787aa0d4246e01770591e7148da2c8": {
+    "EN": "fix: start settings entrance on first visible frame",
+    "ZH-CN": "在首个可见帧启动设置窗口入场动画"
+  },
+  "5050e654974b38e070de3c3f875f75d1986a5f03": {
+    "EN": "feat: refine search tab spacing and transitions",
+    "ZH-CN": "优化搜索标签间距和过渡效果"
+  },
+  "d9d29806b6c28eead27aa240fc5322cc3b624b52": {
+    "EN": "fix: unify settings entrance animation across platforms",
+    "ZH-CN": "统一各平台的设置窗口入场动画"
+  },
+  "2eca69faa9765145ed6c9eeba3b1764b40368349": {
+    "EN": "feat: add fixed collapse toggle to search tab bar",
+    "ZH-CN": "在搜索标签栏添加固定的折叠开关"
+  },
+  "457a9eb506b11f96b4cadc731e3864e67f3fc6a6": {
+    "EN": "fix: refine settings entrance with compositor scale and fade",
+    "ZH-CN": "使用合成器缩放和淡入优化设置窗口入场效果"
+  },
+  "ce6bf56ae90191cfc1d259b30e55a2b5b010de69": {
+    "EN": "fix: preserve search tab order and add searchable tab list controls",
+    "ZH-CN": "保留搜索标签顺序，并添加可搜索的标签列表控件"
+  },
+  "1b304dc437f29dbd0eabbb582e59715bf51e553d": {
+    "EN": "fix: release completed tasks and obsolete workspace state",
+    "ZH-CN": "释放已完成的任务和过时的工作区状态"
+  },
+  "98af6459c01435baafce6e7b2d60a661f78fa8a1": {
+    "EN": "fix: scope search panel expansion to workspace tabs",
+    "ZH-CN": "按工作区标签分别管理搜索面板展开状态"
+  },
+  "3165a8bb78f492858803f2c8e02adc23363df256": {
+    "EN": "Use timestamped search tab titles and widen labels",
+    "ZH-CN": "在搜索标签标题中使用时间戳，并加宽标签"
+  },
+  "e137b742aacacb262746ae4018e3b5fcc1389050": {
+    "EN": "fix: animate settings window and toggle it with shortcut",
+    "ZH-CN": "为设置窗口添加动画，并支持快捷键切换"
+  },
+  "5e3f792d8d0e007ecfc392e4d1e16afa72556190": {
+    "EN": "fix: collapse shared search panel on startup",
+    "ZH-CN": "启动时折叠共享搜索面板"
+  },
+  "3d22eaa4af532b16bd83e914708758c094b259da": {
+    "EN": "fix: align empty tab file action buttons",
+    "ZH-CN": "对齐空白标签页的文件操作按钮"
+  },
+  "4eaefb58cd9bbcad4d9f04cec14112814847c687": {
+    "EN": "fix: extend notification sidebar to full window height",
+    "ZH-CN": "将通知侧栏延伸至窗口全高"
+  },
+  "4fab950d0bb49c664ffd1402b8710285c0a84be8": {
+    "EN": "fix: display status bar encoding as static text",
+    "ZH-CN": "将状态栏编码显示为静态文本"
+  },
+  "69d15ee7663d701519f3ec570f507bb359d1e074": {
+    "EN": "fix: prevent closing the last single-file search tab",
+    "ZH-CN": "防止关闭最后一个单文件搜索标签"
+  },
+  "c2a22b48d44613ce468c336b3504180e1722e76c": {
+    "EN": "feat: unify search tabs and animate tab dragging",
+    "ZH-CN": "统一搜索标签，并为标签拖动添加动画"
+  },
+  "f2e60a2119382203a540318b542e71b20a7dae9c": {
+    "EN": "fix: prevent breadcrumb context menu focus crash",
+    "ZH-CN": "修复面包屑右键菜单引发的焦点崩溃"
+  },
+  "1fd320591fd9d0ee703a4e55fa04143bc3a163a9": {
+    "EN": "fix: integrate settings title bar and reliably show its window",
+    "ZH-CN": "整合设置标题栏，确保设置窗口可靠显示"
+  },
+  "67e595528c329941bb3155fe2c578fe0d59efc31": {
+    "EN": "fix: show settings window after its first frame",
+    "ZH-CN": "在首帧完成后显示设置窗口"
+  },
+  "d288f5332b26dc52b129d081e9554921dd2ad7b0": {
+    "EN": "fix: hide search toolbar shadow when collapsed",
+    "ZH-CN": "折叠时隐藏搜索工具栏阴影"
+  },
+  "66c9594216e7f0cce5b3443c0443d8c566b308dd": {
+    "EN": "fix: update editor font zoom on each frame",
+    "ZH-CN": "逐帧更新编辑器字体缩放"
+  },
+  "cb8da67b71c3bdedebacc8c945728f388aefb1cf": {
+    "EN": "fix: match search panel toggle style to clear button",
+    "ZH-CN": "使搜索面板切换按钮与清空按钮样式一致"
+  },
+  "75db82c213be529ddb5f29887e655b50fec42105": {
+    "EN": "feat: open settings in a standalone window",
+    "ZH-CN": "在独立窗口中打开设置"
+  },
+  "0ed55f14e8e4d7798a9914fa67ba7b4bc3f55c23": {
+    "EN": "fix: control search panel visibility and expansion",
+    "ZH-CN": "控制搜索面板的可见性和展开状态"
+  },
+  "298a8a2738f6812cc99b872798c404ace5101841": {
+    "EN": "fix: reduce blocking work when opening settings",
+    "ZH-CN": "减少打开设置时的阻塞操作"
+  },
+  "a9dee5ce56691d66c88a41ba9acb379770b54434": {
+    "EN": "fix: resize settings dialog from all edges and corners",
+    "ZH-CN": "支持从所有边缘和角落调整设置对话框大小"
+  },
+  "d2bd8f4542f44e5a9eb24af5e0423ce5e2c53d3d": {
+    "EN": "feat: allow resizing settings dialog and remember its size",
+    "ZH-CN": "允许调整设置对话框大小并记住尺寸"
+  },
+  "63cd31d9fe57f32c03b7271a7a89f83ad01e845d": {
+    "EN": "Reduce platform icon assets and trim unused dependencies",
+    "ZH-CN": "精简平台图标资源，移除未使用的依赖"
+  },
+  "15d9bf3b602733897eed75d3759f780b5aa94d4b": {
+    "EN": "Move scrolling and interaction settings into General",
+    "ZH-CN": "将滚动和交互设置移入常规设置"
+  },
+  "fe5ff4a545d8806715d2c29eb0f2ccb8aac29df3": {
+    "EN": "Remove redundant history settings heading",
+    "ZH-CN": "移除多余的历史设置标题"
+  },
+  "9cca559caad032fb289edb9295b0e96aeffd3f5c": {
+    "EN": "Fix reopening highlight settings after asynchronous save",
+    "ZH-CN": "修复异步保存后重新打开高亮设置的问题"
+  },
+  "1acb2295034c16c0ac36d52c521c4a48a5d211b3": {
+    "EN": "Move highlight configuration into settings and refine navigation",
+    "ZH-CN": "将高亮配置移入设置，并优化导航"
+  },
+  "fba07aed3ac297aa6187320c0fca8739006cf0ec": {
+    "EN": "Unify file and search history in settings",
+    "ZH-CN": "在设置中统一管理文件历史和搜索历史"
+  },
+  "1bb135b10acb383c2a13161201fc7ef709a2b7d9": {
+    "EN": "Remove workspace sidebars and AI functionality",
+    "ZH-CN": "移除工作区侧栏和 AI 功能"
+  },
+  "202ef228abd523eeb215fffb076f8df8f512fd9e": {
+    "EN": "fix(search): separate overlapping regex highlights from matching",
+    "ZH-CN": "将重叠正则表达式高亮与匹配逻辑分离"
+  },
+  "ff3c8eb9aedfcb923461e9005d7e8c878272ea36": {
+    "EN": "feat(ai): move modes into composer menu and consolidate access status",
+    "ZH-CN": "将 AI 模式移入输入菜单，并整合访问状态"
+  },
+  "f637ec0d71b2ae62d0769cff9ab6ae45283dd937": {
+    "EN": "fix(search): highlight overlapping literal keyword matches",
+    "ZH-CN": "高亮重叠的字面关键词匹配"
+  },
+  "ab0902263f6de215ac405fb030458c1285d7151f": {
+    "EN": "feat(ai): fade streamed replies and avoid animation-driven remeasurement",
+    "ZH-CN": "为流式 AI 回复添加淡入效果，避免动画触发重新测量"
+  },
+  "349d3eb8dd3d547d32e97da54550cbe6acddaea7": {
+    "EN": "feat(ai): remember command approvals and expose revocation controls",
+    "ZH-CN": "记住 AI 命令授权，并提供撤销控件"
+  },
+  "70e674068fa2952f1fefbb1fe697e0c392b874ad": {
+    "EN": "feat(data): persist exact command approvals by working directory",
+    "ZH-CN": "按工作目录持久化精确命令授权"
+  },
+  "8359daabfc4cabea25b90134090df65ba6607815": {
+    "EN": "feat(ai): add searchable conversation browser with pin and archive controls",
+    "ZH-CN": "添加可搜索的 AI 对话浏览器，支持置顶和归档"
+  },
+  "a66b2b69ae105fcfb90f5e3971239b473bdb5005": {
+    "EN": "feat(ai): add workflow modes, task plans and editable follow-up queues",
+    "ZH-CN": "添加 AI 工作模式、任务计划和可编辑的后续消息队列"
+  },
+  "19381edcc3739c28f7fc45c6cb423a5565ca5a9c": {
+    "EN": "feat(data): persist searchable pinned and archived AI conversations",
+    "ZH-CN": "持久化支持搜索、置顶和归档的 AI 对话"
+  },
+  "88ad7ed9b4b744f9a50f2b668db66c4ffed702b5": {
+    "EN": "fix(ai): preserve model selection and background interaction boundaries",
+    "ZH-CN": "保留模型选择，并维护后台交互边界"
+  },
+  "f7fbab63e9c7d5045d9c5902ff24fe2811d4a8a7": {
+    "EN": "feat(ai): add conversation branching, rename, export, and per-session controls",
+    "ZH-CN": "为 AI 对话添加分支、重命名、导出和独立会话控制"
+  },
+  "77451b6ba867d410e8e705a99a1498da9213b581": {
+    "EN": "feat(ai): isolate concurrent runs and allow next-turn configuration",
+    "ZH-CN": "隔离并发 AI 运行，并允许配置下一轮对话"
+  },
+  "a843fc08ceae6a647f07272a28f2337de40efe92": {
+    "EN": "refactor(ai): retain independent conversation sessions behind sidebar tabs",
+    "ZH-CN": "在侧栏标签下保留独立的 AI 对话会话"
+  },
+  "909aeb489b0870fae3001e74b1d105e0581f58d5": {
+    "EN": "fix: restore actions in the multi-tab search file dialog",
+    "ZH-CN": "恢复多标签搜索文件对话框中的操作"
+  },
+  "2a2791c9ecc65317dd3518f4f0f04bf96825504a": {
+    "EN": "feat: keep long AI code blocks within a scrollable viewport",
+    "ZH-CN": "将较长的 AI 代码块限制在可滚动视口内"
+  },
+  "cfa4a31c9e3fb4bf7f7e14ba649c4ec8ee678a2c": {
+    "EN": "refactor: synchronize log colors through Theme::update",
+    "ZH-CN": "通过 Theme::update 同步日志颜色"
+  },
+  "7ce9f99d7105081c9601fce7234d69a31e878122": {
+    "EN": "feat: use native color fields and restore the featured palette",
+    "ZH-CN": "使用原生颜色字段，并恢复精选调色板"
+  },
+  "76c1e3646eb1614f47a02ae69ee6cf20ee02555e": {
+    "EN": "test: cover Root overlays and notification policy after GPUI upgrade",
+    "ZH-CN": "补充 GPUI 升级后的 Root 浮层和通知策略测试"
+  },
+  "e19032af13605b0fc91938817c42319620a54913": {
+    "EN": "build: upgrade gpui-kit to 0.7.1 and migrate window hosting",
+    "ZH-CN": "将 gpui-kit 升级至 0.7.1，并迁移窗口托管方式"
+  },
+  "56448b669912aa1d80653209e89084533dd1b1c4": {
+    "EN": "feat: highlight filter name and pinyin suggestion matches",
+    "ZH-CN": "高亮筛选器名称和拼音建议中的匹配内容"
+  },
+  "b2d074553fe01b9cfd5acafe9410634c37aa9fb8": {
+    "EN": "feat: support filter names and pinyin in search suggestions",
+    "ZH-CN": "在搜索建议中支持筛选器名称和拼音"
+  },
+  "b6c1e357283ee2fba5447074cb5ea73fb2a1ce4c": {
+    "EN": "fix: synchronize search matching options across windows and scopes",
+    "ZH-CN": "跨窗口和搜索范围同步搜索匹配选项"
+  },
+  "657aba79d71091d3831f851cae676b93f0177794": {
+    "EN": "fix: preserve result row anchors when repeating searches",
+    "ZH-CN": "重复搜索时保留结果行锚点"
+  },
+  "60aabf80882456fa0cc637d47b6a7483fb38e0f2": {
+    "EN": "fix(linux): bridge XIM decoding to upstream Chinese input fix",
+    "ZH-CN": "将 XIM 解码衔接到上游中文输入修复"
+  },
+  "82f0225a2f609519929acf211298365e0112d568": {
+    "EN": "fix: restore search trailing-space double-click selection",
+    "ZH-CN": "恢复双击选择搜索内容末尾空格的行为"
+  },
+  "4b6a2c5929d705a7adab75c180278c0c7f2b669a": {
+    "EN": "feat: support auto-growing multiline search input",
+    "ZH-CN": "支持高度自动增长的多行搜索输入框"
+  },
+  "6823f798493bdf69c2297b004ee6ddbf3cbe0f84": {
+    "EN": "fix: search input remove line height",
+    "ZH-CN": "移除搜索输入框的行高设置"
+  },
+  "531ef7f753e8c41ed5a431744bce703896920d86": {
+    "EN": "fix(ai): separate output workspace from source projects",
+    "ZH-CN": "将 AI 输出工作区与源代码项目分离"
+  },
+  "631d88cc1567ba0214015347e0fda328cd69c3be": {
+    "EN": "refactor(ai): unify tool catalog, permissions, and workflows",
+    "ZH-CN": "统一 AI 工具目录、权限和工作流程"
+  },
+  "051f72c22053d747191b2a51e70e9ca16015d39a": {
+    "EN": "feat(ai): add shell execution and unify VCLogg tools",
+    "ZH-CN": "添加 Shell 执行能力，并统一 VCLogg 工具"
+  },
+  "64f6aeb4f5122c5486e8bef6161c573aea938456": {
+    "EN": "fix: restore Linux application icons",
+    "ZH-CN": "恢复 Linux 应用图标"
+  },
+  "4737cd61b30a39e89fc33b2522452dd92da8d929": {
+    "EN": "fix: prevent log drag selection scrolling",
+    "ZH-CN": "防止日志拖动选择引发滚动"
+  },
+  "0f41a020323ab0608001fa61e09936fa622c6d73": {
+    "EN": "fix(build): patch block future incompatibility",
+    "ZH-CN": "修复 block 依赖的未来兼容性问题"
+  },
+  "d7c474d68e61e6febfa0e4a9b189814745327483": {
+    "EN": "fix directory dialog and dynamic AI source scope",
+    "ZH-CN": "修复目录对话框和动态 AI 源代码范围"
+  },
+  "6bcc9e36d990f018eb96250bd646b97bba144433": {
+    "EN": "fix: restore log text drag selection",
+    "ZH-CN": "恢复日志文本拖动选择"
+  },
+  "db60c4b2258513a82dcc75ab5375053b28958158": {
+    "EN": "feat(ai): defer and localize tool definitions",
+    "ZH-CN": "延迟加载并本地化 AI 工具定义"
+  },
+  "51a9f8e4d81942e2c9843a567ba33e7df1b5ab7c": {
+    "EN": "feat(ai): expand analysis tools and workflows",
+    "ZH-CN": "扩展 AI 分析工具和工作流程"
+  },
+  "af7330f8ff29591316964d6106b22c61ae5e37a2": {
+    "EN": "fix: restore horizontal log scrollbar dragging",
+    "ZH-CN": "恢复日志水平滚动条拖动"
+  },
+  "5f5b9926b1a9759469fa8718f14ac0ba6466d642": {
+    "EN": "fix: bundle ripgrep for source search",
+    "ZH-CN": "为源代码搜索打包 ripgrep"
+  },
+  "e27831aee258196f1fdc1ec3f4b8fcde2a0deb47": {
+    "EN": "Add editor save shortcut",
+    "ZH-CN": "添加编辑器保存快捷键"
+  },
+  "48e2b193f9af257daac9bcee53c701a5f6c9c6eb": {
+    "EN": "Fix save paths for open files and atomic exports",
+    "ZH-CN": "修复已打开文件的保存路径和原子导出"
+  },
+  "920bdb11854b7ad4c590cd530c593ee8cf4324a9": {
+    "EN": "Coalesce editor font zoom updates",
+    "ZH-CN": "合并编辑器字体缩放更新"
+  },
+  "3c1c89c2be5c5114292ffe2766fb9087b3bb01ac": {
+    "EN": "fix: register edit message icon in app assets",
+    "ZH-CN": "在应用资源中注册编辑消息图标"
+  },
+  "355f610cd428a864d69d18c69c9079a3c2265313": {
+    "EN": "Preserve anchor row height when entering edit mode",
+    "ZH-CN": "进入编辑模式时保留锚点行高度"
+  },
+  "beabcc2b1f07d52d96cbd0e5bb1b286efacaba9b": {
+    "EN": "Show file names in AI log jump labels",
+    "ZH-CN": "在 AI 日志跳转标签中显示文件名"
+  },
+  "973191ddd1e2a5e2c299b7aa16c936da4b399b54": {
+    "EN": "Select anchor line when entering edit mode",
+    "ZH-CN": "进入编辑模式时选中锚点行"
+  },
+  "1d34031919b533a304e255c9abfcdd323c3e15cb": {
+    "EN": "Sync editor font size with log zoom",
+    "ZH-CN": "将编辑器字号与日志缩放同步"
+  },
+  "1b7e4d99f238a8e9a7e66f5b0dcdb392a421e581": {
+    "EN": "style: use icons for user message actions",
+    "ZH-CN": "为用户消息操作使用图标"
+  },
+  "41f323492e70030e71f5e8c1ff1436bc8d9f8446": {
+    "EN": "fix: set default search toolbar height to 30px",
+    "ZH-CN": "将搜索工具栏默认高度设为 30 像素"
+  },
+  "9c290c25628c53c95aa0ad0bf978f3a51ca1c7c6": {
+    "EN": "fix: restore default settings and repair legacy shortcut column",
+    "ZH-CN": "恢复默认设置，并修复旧版快捷键列"
+  },
+  "b2f6b93ffdaa1e0f839b19a5eafb6116b481b7dc": {
+    "EN": "fix: preserve earlier AI answers while a new run is active",
+    "ZH-CN": "新的 AI 任务运行时保留先前的回答"
+  },
+  "8a349a461842e9e7b086accf8905a737926d28ff": {
+    "EN": "refactor: keep AI activity inside compact thinking section",
+    "ZH-CN": "将 AI 活动集中在紧凑的思考区域内"
+  },
+  "f50ece04736f45aa1b540d46ecbe11ad3ec61d2d": {
+    "EN": "Add edit shortcut and editable clipboard paste",
+    "ZH-CN": "添加编辑快捷键和可编辑的剪贴板粘贴"
+  },
+  "b2708a2f065dd1da5d7bb186e377dd4bb3839af5": {
+    "EN": "Merge pull request #1 from zhaiyanqi/dev",
+    "ZH-CN": "合并来自 zhaiyanqi/dev 的拉取请求 #1"
+  },
+  "fe717c0a5127fe0010a50c6b80bfbd1bc701ff55": {
+    "EN": "fix: match editing tab icon size",
+    "ZH-CN": "统一编辑标签的图标尺寸"
+  },
+  "375cae5f5045fabd1668b62b4ea47fa176d31549": {
+    "EN": "fix: confirm unsaved edits when closing tabs",
+    "ZH-CN": "关闭标签时确认尚未保存的编辑"
+  },
+  "0abcfb6b097ed33fb1752b0a9e64f7b95f645564": {
+    "EN": "feat: open clipboard text as a temporary file",
+    "ZH-CN": "将剪贴板文本作为临时文件打开"
+  },
+  "17e7e798b8cd391aff0bb0cd7a0a22866eac61d1": {
+    "EN": "fix: keep file tree scrollbars in sidebar viewport",
+    "ZH-CN": "将文件树滚动条限制在侧栏视口内"
+  },
+  "9bd4225b9209f94d72a9ee54ebf25b44c66e1a5a": {
+    "EN": "feat: add log editing and unsaved file drafts",
+    "ZH-CN": "添加日志编辑和未保存文件草稿"
+  },
+  "f2cfae6079ae4c4a3f68c1449208e13bb46584e7": {
+    "EN": "fix: lower sidebar collapse threshold to 4rem",
+    "ZH-CN": "将侧栏折叠阈值降低至 4rem"
+  },
+  "050b2569902520bc6230ed6234057b010c036807": {
+    "EN": "Fix log text selection crossing into AI sidebar",
+    "ZH-CN": "修复日志文本选择跨入 AI 侧栏的问题"
+  },
+  "5235441cb7430ccf0a987feff8684949b19f0d9a": {
+    "EN": "feat: collapse sidebar during narrow divider drag",
+    "ZH-CN": "拖动分隔条使侧栏变窄时折叠侧栏"
+  },
+  "9205764f328eaa881ee146f7d5dd837d5935e503": {
+    "EN": "fix: release conversation lease before sending queued follow-up",
+    "ZH-CN": "发送排队的后续消息前释放对话租约"
+  },
+  "1f657945a06aa0807aa530ea13e02e4bb8f021b1": {
+    "EN": "fix: show AI tool activity while reasoning is collapsed",
+    "ZH-CN": "思考区域折叠时仍显示 AI 工具活动"
+  },
+  "2f93cf0240194cd2f155f39f6db48b761b9332c6": {
+    "EN": "fix: keep AI tool summary test after production items",
+    "ZH-CN": "将 AI 工具摘要测试放在生产代码之后"
+  },
+  "2dcdc0cbecd1498fadb8e8120a63a9b9d386c179": {
+    "EN": "feat: inspect and select AI run context before sending",
+    "ZH-CN": "支持在发送前查看并选择 AI 运行上下文"
+  },
+  "84d9c64318dae4cf259f9e554ac85a94aa0afe54": {
+    "EN": "feat: summarize AI tool results in expandable cards",
+    "ZH-CN": "使用可展开卡片汇总 AI 工具结果"
+  },
+  "f741da3145fd330ab1c27d84c506ae4af54ee0f5": {
+    "EN": "feat: add copy edit and regenerate actions to AI messages",
+    "ZH-CN": "为 AI 消息添加复制、编辑和重新生成操作"
+  },
+  "62eaa9568957cd978847ae5cc146aba3ee93bf28": {
+    "EN": "feat: queue and steer AI follow-up messages during a run",
+    "ZH-CN": "支持 AI 运行过程中排队和调整后续消息"
+  },
+  "2cf7b5555ee9296043cb2c6c8d657cf386ada7d2": {
+    "EN": "test: cover AI conversation tab closing order",
+    "ZH-CN": "补充 AI 对话标签关闭顺序测试"
+  },
+  "5b85f7b25c8f901ebb5c2526e04709199a683f2a": {
+    "EN": "fix: scroll bar drag problem",
+    "ZH-CN": "修复滚动条拖动问题"
+  },
+  "59c97e4f7d146e20bf5eb7ccea87639b822f00c0": {
+    "EN": "fix: preserve clickable log citations in AI conversations",
+    "ZH-CN": "保留 AI 对话中可点击的日志引用"
+  },
+  "fd55a38e29f9dd951ee0d98b8069491ebbfb73ad": {
+    "EN": "fix: run model metadata discovery on Tokio runtime",
+    "ZH-CN": "在 Tokio 运行时上发现模型元数据"
+  },
+  "cfea572589400292f4b40c424d50edae46f919ad": {
+    "EN": "fix: allow Windows dev package version fallback",
+    "ZH-CN": "允许 Windows 开发包回退版本号"
+  },
+  "0dc4676fab62e0a44c6d311896c45aba4f66ddf0": {
+    "EN": "ci: install ripgrep for source workspace tests",
+    "ZH-CN": "为源代码工作区测试安装 ripgrep"
+  },
+  "94a524d8d657b6c3ab19fec4e8d9bccfa9bc279e": {
+    "EN": "feat: add context management and source navigation tools",
+    "ZH-CN": "添加上下文管理和源代码导航工具"
+  },
+  "4305e96a30eadd644fb8b0f4b8b393705d2a2132": {
+    "EN": "feat: add ai project setting and rg tools",
+    "ZH-CN": "添加 AI 项目设置和 rg 工具"
+  },
+  "2a326f681d79ba1351de9c1b2cb75cb6f1192194": {
+    "EN": "Fix stale sidebar resize state panic",
+    "ZH-CN": "修复过时的侧栏尺寸调整状态引发的崩溃"
+  },
+  "7b291a47efdbd5485d22673ee6280615fb902d62": {
+    "EN": "Update GPUI skill lockfile",
+    "ZH-CN": "更新 GPUI 技能锁定文件"
+  },
+  "ed2a8bfefe835343402d35ce69e9843343260c8d": {
+    "EN": "Import dialog interactive element trait",
+    "ZH-CN": "导入对话框交互元素 trait"
+  },
+  "12866eb08505d5c144726a3029a40d23816bcab7": {
+    "EN": "Use gpui-kit empty state in sidebar panels",
+    "ZH-CN": "在侧栏面板中使用 gpui-kit 空状态组件"
+  },
+  "405d1276ea51688b91ebfeef41155c73e189a0e4": {
+    "EN": "Use gpui-kit dialog actions for custom footers",
+    "ZH-CN": "为自定义页脚使用 gpui-kit 对话框操作"
+  },
+  "f91623636eb2490fa8f3e988a7396c86f9a6e9ad": {
+    "EN": "Use gpui-kit dialog buttons for search settings",
+    "ZH-CN": "为搜索设置使用 gpui-kit 对话框按钮"
+  },
+  "2b35f7073261836bbb720060a699c2e4fb134f37": {
+    "EN": "Migrate application to gpui-kit 0.6.4",
+    "ZH-CN": "将应用迁移至 gpui-kit 0.6.4"
+  },
+  "cf2a3bcce4a176e05cad88d38b3e4317334b4413": {
+    "EN": "refactor: remove vendored dependency patches",
+    "ZH-CN": "移除随项目分发的依赖补丁"
+  },
+  "02e60f702f600509e322bb97ef77e352f3c505db": {
+    "EN": "feat: ai panel click jump source file",
+    "ZH-CN": "支持从 AI 面板点击跳转到源文件"
+  },
+  "0034a6e2a34ad93c80a4fdda8e326addefc6fdca": {
+    "EN": "fix: rename add to AI chat text to add to chat",
+    "ZH-CN": "将“添加到 AI 聊天”文案改为“添加到聊天”"
+  },
+  "5b0c130fa06b624a5ff63fbc8a92f80b0298c3c2": {
+    "EN": "feat: remove separator and modify txt of right menu",
+    "ZH-CN": "移除右键菜单分隔线并修改文案"
+  },
+  "dbc01089310b55509de13ece7c2579d892842e2a": {
+    "EN": "wiki-repo",
+    "ZH-CN": "Wiki 仓库更新"
+  },
+  "fde07f5625492101d4b70fc39dcc793349d339f6": {
+    "EN": "wiki",
+    "ZH-CN": "Wiki 更新"
+  },
+  "96c4dc4a450b447aea28edf8cb2a9dd21fb8fa7f": {
+    "EN": "Fix AI attachment workflow test expectations",
+    "ZH-CN": "修正 AI 附件工作流测试的预期"
+  },
+  "13481998ef262881456fb4e2aa91430c6e98a63e": {
+    "EN": "Update AI workspace and panel tests for current behavior",
+    "ZH-CN": "更新 AI 工作区和面板测试以匹配当前行为"
+  },
+  "dddb8929a5c7b09c7099cfdbb74af5f37916f45d": {
+    "EN": "Stop tool calls when request budget is exhausted",
+    "ZH-CN": "请求预算耗尽时停止工具调用"
+  },
+  "b9e35c2bb179b84700d93b2df01a4c8e827b4b21": {
+    "EN": "Simplify discovery scan error handling",
+    "ZH-CN": "简化发现扫描的错误处理"
+  },
+  "17bf49d45cfa04676ba55fc32fd8d302a4c1570d": {
+    "EN": "Add MCP, memory settings, and shared AI workflows",
+    "ZH-CN": "添加 MCP、记忆设置和共享 AI 工作流程"
+  },
+  "7bae2a49db1a32b660eb4deaa87228beec195f7c": {
+    "EN": "Refine sidebar navigation and log coloring workflows",
+    "ZH-CN": "优化侧栏导航和日志着色工作流程"
+  },
+  "e1f7075397b3ea56e837c42ce4914d2e5182ceee": {
+    "EN": "Render AI text selections with white glyphs on blue",
+    "ZH-CN": "将 AI 文本选区显示为蓝底白字"
+  },
+  "93abe8728e4cedd08773aa4b2369b7a2b6c41eab": {
+    "EN": "Fix AI transcript drag selection and thinking alignment",
+    "ZH-CN": "修复 AI 对话记录拖动选择和思考内容对齐"
+  },
+  "da2ad4b9c80303a065980c31b69d09610f6aaa51": {
+    "EN": "Simplify AI chat bubbles and collapsible analysis",
+    "ZH-CN": "简化 AI 聊天气泡和可折叠分析区域"
+  },
+  "257a27f965cbb8529228ec2295d613c40522aaea": {
+    "EN": "Connect AI conversations to log analysis actions",
+    "ZH-CN": "将 AI 对话与日志分析操作连接"
+  },
+  "2bf04fd27eda13f7cc7470db23958658eff0ae5f": {
+    "EN": "Fix Go to line selection and focus restoration",
+    "ZH-CN": "修复跳转到行的选择行为和焦点恢复"
+  },
+  "84687806ab32ff0a14fff77efd22cc387b424e5a": {
+    "EN": "Use MessageScroller for streaming AI conversations",
+    "ZH-CN": "使用 MessageScroller 展示流式 AI 对话"
+  },
+  "9561e1300719d613a84211580442566c6d8bcfa1": {
+    "EN": "fix: allow AI chat when the selected search directory is unavailable",
+    "ZH-CN": "所选搜索目录不可用时仍允许 AI 聊天"
+  },
+  "70bb1a438ab21e130d1f1e345cd01f68bdffc0db": {
+    "EN": "fix: preserve AI reasoning streams and expose request failures",
+    "ZH-CN": "保留 AI 推理流，并显示请求失败信息"
+  },
+  "e0982926563f0c36c98110ee7314ca7150d5e41e": {
+    "EN": "feat: add local AI log analysis agent and sidebar",
+    "ZH-CN": "添加本地 AI 日志分析代理和侧栏"
+  },
+  "74b7b1ad51ed0c511b0dbcbf2bedc2aed80a9dfd": {
+    "EN": "Fix Clippy errors in file tree and document refresh search",
+    "ZH-CN": "修复文件树和文档刷新搜索中的 Clippy 错误"
+  },
+  "6544deb0e86c76cd79db3709e8e3116f46af9add": {
+    "EN": "Refine log viewer interactions and presentation state",
+    "ZH-CN": "优化日志查看器交互和呈现状态"
+  },
+  "c282d19dc07106ce06e8e7b42420aea210746c19": {
+    "EN": "feat: add current-file marks sidebar navigation",
+    "ZH-CN": "添加当前文件标记的侧栏导航"
+  },
+  "daedd913bbd537d82a71e0846acfb8dccd468998": {
+    "EN": "feat: add log coloring groups and presets",
+    "ZH-CN": "添加日志着色分组和预设"
+  },
+  "fdb044a5efe09cb7eacd84f7880b83b29d5f475c": {
+    "EN": "Support horizontal scrolling in the sidebar file tree",
+    "ZH-CN": "支持侧栏文件树水平滚动"
+  },
+  "48ddc59fe8d3f2825c8d1b1d268e0a81b57bd3a0": {
+    "EN": "fix: avoid focus changes during vertical tab menu prepaint",
+    "ZH-CN": "避免在垂直标签菜单预绘制期间改变焦点"
+  },
+  "83d86e2197f05bf1ab6e0dfb4747d01d83de85db": {
+    "EN": "Keep vertical tab mode when switching sidebar panels",
+    "ZH-CN": "切换侧栏面板时保留垂直标签模式"
+  },
+  "759c1f3bf47b2f50f44077f8ff631f96795cd79e": {
+    "EN": "Refactor sidebar file tree and breadcrumb navigation",
+    "ZH-CN": "重构侧栏文件树和面包屑导航"
+  },
+  "7b6da812e6f14a0a4dfa0ed84a2db0fcec455f1d": {
+    "EN": "fix: show search panel on blank workspace tabs",
+    "ZH-CN": "在空白工作区标签中显示搜索面板"
+  },
+  "5cad5aed16f47dd0866951506761f92449d722b4": {
+    "EN": "Move file metadata from toolbar to status bar",
+    "ZH-CN": "将文件元数据从工具栏移入状态栏"
+  },
+  "37f4cb4d1e427cba08880723e4f0455d16b40c0e": {
+    "EN": "ci: exclude server checksum manifest from release artifacts",
+    "ZH-CN": "从发布产物中排除服务端校验和清单"
+  },
+  "4a1de3af1f8d2f85a783aff5b3a3ba210dd55377": {
+    "EN": "Add movable vertical tabs with animated selection",
+    "ZH-CN": "添加可移动的垂直标签和选择动画"
+  },
+  "af43f1b78546c3a2229bbb7a07037e0fb718a27a": {
+    "EN": "Refine sidebar sizing, row layout and Lucide icons",
+    "ZH-CN": "优化侧栏尺寸、行布局和 Lucide 图标"
+  },
+  "e0938b8665279585ed331744ba9392a20bac5cf6": {
+    "EN": "Add configurable sidebars and asynchronous log navigation",
+    "ZH-CN": "添加可配置侧栏和异步日志导航"
+  },
+  "00df4a7a58d8f00ba4ca68359590a3477b6223bf": {
+    "EN": "Add persistent horizontal scrollbar visibility option",
+    "ZH-CN": "添加可持久化的水平滚动条可见性选项"
+  },
+  "5d01a8bd75c785f21dd71065e790d7bab026affa": {
+    "EN": "Unify tab and search toolbar sizing and shadows",
+    "ZH-CN": "统一标签和搜索工具栏的尺寸与阴影"
+  },
+  "e6b8b4f6cf3e06dc3ad1d6947750f995a427b8b7": {
+    "EN": "Fix disabled horizontal scrollbar appearance",
+    "ZH-CN": "修复禁用状态的水平滚动条外观"
+  },
+  "344950fa54dbc6b6cafa91d855f78c7381cc25d9": {
+    "EN": "Refine log scrollbars and content edge shadows",
+    "ZH-CN": "优化日志滚动条和内容边缘阴影"
+  },
+  "30142791ab75e97abc9dcc1400f298d9f5f2d14b": {
+    "EN": "fix: enable follow end when scrolling to file bottom",
+    "ZH-CN": "滚动到文件底部时启用跟随末尾"
+  },
+  "0ed892c08070d4be73fabc2beb67e888818ab041": {
+    "EN": "fix: correct search input selection and suggestion triggers",
+    "ZH-CN": "修正搜索输入框的选择和建议触发行为"
+  },
+  "191e47519182d8c6b4d8aff212abad39e986c740": {
+    "EN": "Fix embedded admin assets for normalized source line endings",
+    "ZH-CN": "修复源文件换行规范化后的内嵌管理界面资源"
+  },
+  "6769cd15faba9393a81439b93c7fe7d51c60746a": {
+    "EN": "Fix cloud filter editing and add server release packages",
+    "ZH-CN": "修复云端筛选器编辑，并添加服务端发布包"
+  },
+  "8dec263fb68096c7a51d992f77695855d7f16c41": {
+    "EN": "Prepare search tab frames before activation",
+    "ZH-CN": "激活搜索标签前准备其帧内容"
+  },
+  "827a8a49f3e14c451582e7feb9d479386919a114": {
+    "EN": "Preserve loaded session baseline during document resume",
+    "ZH-CN": "恢复文档时保留已加载的会话基线"
+  },
+  "e0c75ab4b2dcf38b170f1bd3e0265c1dc8dd12bd": {
+    "EN": "Refactor application architecture and remove obsolete code",
+    "ZH-CN": "重构应用架构并移除过时代码"
+  },
+  "bf1a4934df87142d2d6eb8bb69220ad73378df76": {
+    "EN": "feat: add selected row text color setting",
+    "ZH-CN": "添加选中行文字颜色设置"
+  },
+  "07cc9c8c08bdcd6f7f2a0d6d0cbbe67cbab9fc05": {
+    "EN": "refactor: simplify toolbar breadcrumbs and add address bar border",
+    "ZH-CN": "简化工具栏面包屑，并为地址栏添加边框"
+  },
+  "54bf444b23933ac5da1306348be8a2bd31311408": {
+    "EN": "Open folders with the configured directory command",
+    "ZH-CN": "使用配置的目录命令打开文件夹"
+  },
+  "bfe598ccca43142977ea0d8489259f620c785e1a": {
+    "EN": "feat: add toolbar path breadcrumbs and directory actions",
+    "ZH-CN": "添加工具栏路径面包屑和目录操作"
+  },
+  "c53e1d8bfba1ee983d78b3c882fced7828483de5": {
+    "EN": "fix: select quick find rows and wrap navigation at boundaries",
+    "ZH-CN": "选中快速查找结果行，并在边界循环导航"
+  },
+  "eeb395f13752c01ba6b0f6f232f96e531ef4841a": {
+    "EN": "fix: close overlays and clear file drop feedback on drop",
+    "ZH-CN": "文件放下时关闭浮层并清除拖放反馈"
+  },
+  "47fab7e5ef99467fee218b83d55a938d3c734b6c": {
+    "EN": "docs: clarify VCLogg branding and log viewer search copy",
+    "ZH-CN": "明确 VCLogg 品牌和日志查看器搜索文案"
+  },
+  "55dd638bd15b7ca2d6ffa712411578f31fc12e8c": {
+    "EN": "fix(macos): restore window control hover and localize native menus",
+    "ZH-CN": "恢复 macOS 窗口控制按钮悬停效果，并本地化原生菜单"
+  },
+  "549bdbefaa0f16e68f2d5d496f2652fe37d8f18e": {
+    "EN": "fix(macos): keep native window controls visible in fullscreen",
+    "ZH-CN": "在 macOS 全屏模式下保持原生窗口控制按钮可见"
+  },
+  "1a31262228309611c871c1786b5da90247b38362": {
+    "EN": "docs: migrate project documentation to GitHub Wiki",
+    "ZH-CN": "将项目文档迁移到 GitHub Wiki"
+  },
+  "65fa1d4fa7f44984825fa84758515a03d2157aeb": {
+    "EN": "feat: add English-default website with Chinese language switch",
+    "ZH-CN": "添加默认英文、支持中文切换的网站"
+  },
+  "8dd352d61a58db805536853c54866389f8f95514": {
+    "EN": "chore: keep AI workspace files local and improve site SEO",
+    "ZH-CN": "将 AI 工作区文件保留在本地，并改进网站 SEO"
+  },
+  "2facb1abb41f617b5759e5ec8fab3a27ad25c09f": {
+    "EN": "docs: consolidate documentation and simplify bilingual READMEs",
+    "ZH-CN": "整合文档并简化双语 README"
+  },
+  "cda4d269d88e8594c6f7246d0d1ff79348c4dca4": {
+    "EN": "docs: add Google site verification file",
+    "ZH-CN": "添加 Google 网站验证文件"
+  },
+  "a8d7a06ea033a0d45be85382549865e16987a58c": {
+    "EN": "Remove UI performance profiler stack capture",
+    "ZH-CN": "移除 UI 性能分析器的堆栈捕获"
+  },
+  "cb493883896551a0650d83b1d501b74e59e1ecce": {
+    "EN": "Add keyword-only log level highlighting",
+    "ZH-CN": "添加仅针对关键词的日志级别高亮"
+  },
+  "ae335cd77ffd53a67820614e71a8ad5ab64636cb": {
+    "EN": "Add persisted notification enable toggle",
+    "ZH-CN": "添加可持久化的通知启用开关"
+  },
+  "d4d467a31f8ba8d425998702052ba45ccb5e3e16": {
+    "EN": "Store cloud sessions in local files",
+    "ZH-CN": "将云端会话存储在本地文件中"
+  },
+  "547676daf086cc15724e0545f7c09b23e016e613": {
+    "EN": "Focus search input when clicking its frame padding",
+    "ZH-CN": "点击搜索输入框内边距时聚焦输入框"
+  },
+  "22ede25e4128986574aff21efa23fe4d8565a71d": {
+    "EN": "fix: follow tab drags across windows and accept drops anywhere",
+    "ZH-CN": "跟随跨窗口标签拖动，并支持在任意位置接收放下的标签"
+  },
+  "5a59f472f0b10699fc9e8e64ceb6a665825463a7": {
+    "EN": "fix: correct color clearing scopes in search results",
+    "ZH-CN": "修正搜索结果中的颜色清除范围"
+  },
+  "c2028962e493c00282f45c612a6df8ea45e7f09d": {
+    "EN": "Fix shortcut capture and reduce excluded search text contrast",
+    "ZH-CN": "修复快捷键捕获，并降低被排除搜索文本的对比度"
+  },
+  "75b66f81aabd07622bb3941e67a8f0f3981ab43f": {
+    "EN": "Persist resizable predefined filter popover size",
+    "ZH-CN": "持久化可调整大小的预定义筛选器弹出框尺寸"
+  },
+  "e2aab405849c1c3499492b372041ef2a6e4ceb14": {
+    "EN": "feat(search): add per-file search limits and dim excluded rows",
+    "ZH-CN": "添加每文件搜索数量限制，并弱化被排除的行"
+  },
+  "d7e9c9f20ae5898a22e70c57b264b674b00a3dde": {
+    "EN": "feat(ui): configure search match highlighting styles",
+    "ZH-CN": "支持配置搜索匹配高亮样式"
+  },
+  "1e68e3f90517e5a28b3dcf926fc394055485b7a7": {
+    "EN": "fix: prevent duplicate settings dialogs",
+    "ZH-CN": "防止重复打开设置对话框"
+  },
+  "b21936bcf9b2aa4151695c38eaba13c651ac705c": {
+    "EN": "Correct Windows release artifact architecture names",
+    "ZH-CN": "修正 Windows 发布产物的架构名称"
+  },
+  "48c4c706626f39cc2cea18672a47aa338b6a1b59": {
+    "EN": "Add Windows installer packaging and data-directory routing",
+    "ZH-CN": "添加 Windows 安装程序打包和数据目录路由"
+  },
+  "8963966a595962bedc4fdd874504fc016ad96c12": {
+    "EN": "Enable std support for raw-window-handle",
+    "ZH-CN": "为 raw-window-handle 启用 std 支持"
+  },
+  "8d083c6a9fb25415b019b28ca5572035c7a99753": {
+    "EN": "Add configurable application icons",
+    "ZH-CN": "添加可配置的应用图标"
+  },
+  "b0ccf14478ddf41f47f384e590463c0d5a95d24e": {
+    "EN": "feat(marks): add configurable new mark shortcut",
+    "ZH-CN": "添加可配置的新建标记快捷键"
+  },
+  "9679446e2a7b42a0666fdf3422ce076bbf010534": {
+    "EN": "Standardize release notes heading",
+    "ZH-CN": "统一发布记录标题"
+  },
+  "64ef2687a5f08a8321b674ccf54d7df8fff20920": {
+    "EN": "Support system font discovery and path copying",
+    "ZH-CN": "支持系统字体发现和路径复制"
+  },
+  "b92d26af0bd9859451c5877107447c29f89766d2": {
+    "EN": "feat(marks): add editor defaults fonts and history deletion",
+    "ZH-CN": "添加标记编辑器默认值、字体和历史删除功能"
+  },
+  "af9e56ad2c8be466d6c2dadf66a1dec907040ddf": {
+    "EN": "fix(marks): match editor size to management dialogs",
+    "ZH-CN": "使标记编辑器尺寸与管理对话框一致"
+  },
+  "c87be0c66cdb6e0bf0c33afddc68b8394c79db27": {
+    "EN": "feat(marks): add vertical centering with horizontal-only dragging",
+    "ZH-CN": "为标记添加垂直居中和仅水平方向拖动"
+  },
+  "ad71f1b060a00f3e53744a4a5a228abd86e542d1": {
+    "EN": "fix(marks): keep preview positions temporary and clear file marks",
+    "ZH-CN": "保持标记预览位置为临时状态，并支持清除文件标记"
+  },
+  "4b3ec15ea118e13ca5f5a18f27c90b72c7137915": {
+    "EN": "feat(marks): rename tag UI and add transparency with text deduplication",
+    "ZH-CN": "重命名标签界面，并添加透明度和文本去重"
+  },
+  "b83f2f4d9a6dd7d9b5fb4eb854531ad575b78ff6": {
+    "EN": "fix(tags): share log text rendering and enable preview dragging",
+    "ZH-CN": "共享日志文本渲染，并启用标签预览拖动"
+  },
+  "1177e85d29a65cc84fcdc819e2abf9e89ea2f5c8": {
+    "EN": "fix(tags): reuse last appearance for new tags",
+    "ZH-CN": "为新标签复用上次的外观"
+  },
+  "5a92cce6ed86c0a0ee144a1c31c5ce8121971b7e": {
+    "EN": "fix(tags): refine history list and log row preview",
+    "ZH-CN": "优化标签历史列表和日志行预览"
+  },
+  "c7396f9fc35416fe8250d514fd6a6e1684247093": {
+    "EN": "feat(logs): add reusable row tags with dialog editing",
+    "ZH-CN": "添加可复用的行标签及对话框编辑功能"
+  },
+  "8fdf1a435cb7ace494abe1866cc766504a007b96": {
+    "EN": "fix(search): remove progress and temporary match preview UI",
+    "ZH-CN": "移除搜索进度和临时匹配预览界面"
+  },
+  "200a02ac1721883b1cbdcc82a5cbab32beaa5081": {
+    "EN": "feat(settings): add independent search input sizing",
+    "ZH-CN": "添加独立的搜索输入框尺寸设置"
+  },
+  "fe49f48466e9ded1950528c679d5758f32beb0e5": {
+    "EN": "perf(search): stop limited scans after an ordered result prefix",
+    "ZH-CN": "获取按序排列的前若干结果后停止限量扫描"
+  },
+  "5149e6cff7d876a7f10cf19c613bdf5be9bd7598": {
+    "EN": "perf(search): batch UTF-16 decoding and reuse transcoding buffers",
+    "ZH-CN": "批量解码 UTF-16，并复用转码缓冲区"
+  },
+  "694a50a16ce484e22b607cf60afc41caf014244e": {
+    "EN": "feat(search): show throttled progress and bounded match previews",
+    "ZH-CN": "显示节流后的搜索进度和有数量限制的匹配预览"
+  },
+  "3191f9f28c16d6cc337d7e294f3bb4b2d82e5ee8": {
+    "EN": "perf(search): cache bounded results with source snapshot validation",
+    "ZH-CN": "缓存限量搜索结果，并验证源快照"
+  },
+  "6fbedd5e92567564037d1402e66a07d44d44130b": {
+    "EN": "perf(search): avoid repeated long-line tails during combined indexing",
+    "ZH-CN": "合并索引时避免重复处理长行尾部"
+  },
+  "67bf36f2cf73d40decc53e178d66c93c55b1244d": {
+    "EN": "perf(search): share source indexes for dense result projections",
+    "ZH-CN": "为密集结果投影共享源索引"
+  },
+  "0a8bcdb138ffc8bab138f958b95c08cb14fc2a3b": {
+    "EN": "perf(search): decouple directory scheduling and index persistence",
+    "ZH-CN": "解耦目录调度和索引持久化"
+  },
+  "128289e8461b0f5b933da8271ef516776fa363ab": {
+    "EN": "perf(search): isolate regex execution caches per scan task",
+    "ZH-CN": "按扫描任务隔离正则表达式执行缓存"
+  },
+  "65f33c18d0cf1d4f1130392302042074c03311ff": {
+    "EN": "perf(search): partition scan tasks by source byte blocks",
+    "ZH-CN": "按源文件字节块划分扫描任务"
+  },
+  "2b1d16098d078b68a133af9bb6df2106bc48537b": {
+    "EN": "perf(search): reuse source blocks across line boundaries",
+    "ZH-CN": "跨行边界复用源数据块"
+  },
+  "3d1e537bc4f77c7545b175d0423a4ec462ac2ce4": {
+    "EN": "Prevent cursor from hiding in the application",
+    "ZH-CN": "防止应用内光标隐藏"
+  },
+  "6e3167e8ece6488a9d3cd186105f408f67808c97": {
+    "EN": "Preserve search button accessibility labels",
+    "ZH-CN": "保留搜索按钮的无障碍标签"
+  },
+  "4d297269121d03c7db3238c110bc9980a8428430": {
+    "EN": "Persist search toolbar sizing and preserve selection across group toggl",
+    "ZH-CN": "持久化搜索工具栏尺寸，并在分组切换时保留选区"
+  },
+  "9e3bb1cbc17082c1ce350d2fac3fed664c5ab16a": {
+    "EN": "Preserve log selections across refreshes and patch input layout",
+    "ZH-CN": "刷新时保留日志选区，并修复输入框布局"
+  },
+  "e2a50c4c1c0ba20d6ca0e42a9e9653ec68f25ea7": {
+    "EN": "Add cancellable log refresh with head-tail validation",
+    "ZH-CN": "添加支持取消和首尾校验的日志刷新"
+  },
+  "05bdab9c8fc6006eed737257f1e19d7a43a47051": {
+    "EN": "Add foreground file watching and dynamic log refresh",
+    "ZH-CN": "添加前台文件监听和动态日志刷新"
+  },
+  "1aa1fbd83cd42caf9598da360c65df6726f828c6": {
+    "EN": "fix: preserve search result viewport on refresh and expansion",
+    "ZH-CN": "刷新和展开时保留搜索结果视口"
+  },
+  "8bd347c49ef13b995678ca5b98016b0b81a428c4": {
+    "EN": "fix(viewer): unify active row ownership in virtual log lists",
+    "ZH-CN": "统一虚拟日志列表中活动行的状态归属"
+  },
+  "86b79a7f4f3a759fc4bdddbbde278bf474cd11a0": {
+    "EN": "feat(ui): integrate selection styles into highlight settings",
+    "ZH-CN": "将选区样式整合到高亮设置"
+  },
+  "dfd181638f97e112c0073dd300b15b46ead09e09": {
+    "EN": "fix(ui): remove settings buttons from search scope menu",
+    "ZH-CN": "移除搜索范围菜单中的设置按钮"
+  },
+  "8bb2d95f864b024498202f5ef42449bce5088b00": {
+    "EN": "fix(viewer): synchronize viewport reads and scrolling",
+    "ZH-CN": "同步视口读取与滚动"
+  },
+  "2c10e629d19bb4fe85bee4ddd224f946d878d463": {
+    "EN": "ui: reduce search toolbar control height",
+    "ZH-CN": "降低搜索工具栏控件高度"
+  },
+  "fae3b3679187ba3e8e06669d1cc0b1b46715055e": {
+    "EN": "fix(workspace): preserve active file opening tasks",
+    "ZH-CN": "保留仍在进行的活动文件打开任务"
+  },
+  "1c8055d2a24f6b93fb8d93ab894a0c8e4a823524": {
+    "EN": "fix(ui): restore highlight options and constrain settings scrolling",
+    "ZH-CN": "恢复高亮选项，并限制设置区域滚动"
+  },
+  "26291cfedc698f70066f90b4726fed07fd8a608d": {
+    "EN": "fix(ui): rename updates menu to check for updates",
+    "ZH-CN": "将更新菜单重命名为“检查更新”"
+  },
+  "9a7ee519bb003b0a785d6f8fb1a97b69cf57a01c": {
+    "EN": "refactor(ui): align GPUI state ownership and history rendering",
+    "ZH-CN": "调整 GPUI 状态归属和历史记录渲染"
+  },
+  "9f30a201bd996ccb296e0c7f868be3794d6177e5": {
+    "EN": "docs(ui): document actual layout controls",
+    "ZH-CN": "记录实际的 UI 布局控件"
+  },
+  "8bf25820c1690d8c8b0bb4575ed5d18cf3d4b268": {
+    "EN": "fix(ui): keep log wheel scrolling responsive",
+    "ZH-CN": "保持日志滚轮滚动响应及时"
+  },
+  "60d0bf296bd89e040f16ca55b0a3aa8fe9b55225": {
+    "EN": "feat(ui): add dynamic virtual log lists",
+    "ZH-CN": "添加动态虚拟日志列表"
+  },
+  "b4ecf900334accbb28a438872269abc9fdf7ccd5": {
+    "EN": "fix(ui): align default search input height",
+    "ZH-CN": "统一搜索输入框默认高度"
+  },
+  "6116266a7ec2bab83a459aba92c5bd4678d7aab4": {
+    "EN": "fix(ui): make dialog actions resilient to stale focus",
+    "ZH-CN": "使对话框操作能够应对过时的焦点状态"
+  },
+  "63faf161c807dcd643b7497406320c33749427c1": {
+    "EN": "fix(ui): restore dialog focus after color selection",
+    "ZH-CN": "选择颜色后恢复对话框焦点"
+  },
+  "0bbfb338d51e8396855cf04307f258b7aebb0cc2": {
+    "EN": "style: refine log coloring editor layout",
+    "ZH-CN": "优化日志着色编辑器布局"
+  },
+  "6b5480d925110650bdd76a03017d402ed6f76479": {
+    "EN": "feat: make log coloring configurable",
+    "ZH-CN": "支持配置日志着色"
+  },
+  "a77a4b764d920272f1e73b12dc641d745a60fed6": {
+    "EN": "docs: require explicit approval for GUI debugging",
+    "ZH-CN": "要求 GUI 调试获得明确授权"
+  },
+  "037dc906ae520a36b973b5e864e2f9a91e468ca0": {
+    "EN": "fix(ui): stabilize search input focus on Windows",
+    "ZH-CN": "稳定 Windows 上的搜索输入框焦点"
+  },
+  "f9dd8e23420cc02e082bc9e1caa7b0e70f7678ff": {
+    "EN": "fix(ui): restore filter dialog footer rounding",
+    "ZH-CN": "恢复筛选器对话框页脚圆角"
+  },
+  "6db5bf056d0285a428db9e18eff727cd366bbef1": {
+    "EN": "feat: add theme-specific log colors",
+    "ZH-CN": "添加按主题区分的日志颜色"
+  },
+  "df10a1c9362aeb03d696e3f457d5a03440260290": {
+    "EN": "fix(ui): keep search input baseline stable",
+    "ZH-CN": "保持搜索输入框基线稳定"
+  },
+  "40d645424330bd5265e73ffd82483e962175627c": {
+    "EN": "fix(ui): tighten predefined filter dialog footer",
+    "ZH-CN": "收紧预定义筛选器对话框页脚布局"
+  },
+  "173a368b109443b243a3d0a5bb45724e998795c6": {
+    "EN": "fix: preserve selected search viewport anchor",
+    "ZH-CN": "保留选中的搜索视口锚点"
+  },
+  "5bc591cea7cc71345834cb117f8bfe2f0a62c28c": {
+    "EN": "fix(ui): keep file drop overlay above search groups",
+    "ZH-CN": "将文件拖放浮层保持在搜索分组上方"
+  },
+  "1a28b1afe7f77173fd21e80ea83cbe7be8e14633": {
+    "EN": "docs: align UI layout with current rendering structure",
+    "ZH-CN": "使 UI 布局文档与当前渲染结构一致"
+  },
+  "4a36e607c66115d828965f39e36de13b57090fec": {
+    "EN": "ci: make checks manually triggered",
+    "ZH-CN": "将检查改为手动触发"
+  },
+  "93d6f6f1db986c1ea462c0c297b445bdae1e5ac0": {
+    "EN": "Unify search options and reload changed sources",
+    "ZH-CN": "统一搜索选项，并重新加载已变化的源文件"
+  },
+  "75367a8712951925273136ddbac550eba37639f2": {
+    "EN": "Refine predefined filters dialog sizing and animation",
+    "ZH-CN": "优化预定义筛选器对话框尺寸和动画"
+  },
+  "412a9ab9418ba51abd27a7667ea5e54272c26e45": {
+    "EN": "fix(search): restore results and honor clicked row",
+    "ZH-CN": "恢复搜索结果，并正确处理点击的行"
+  },
+  "311e973398e11c10d2825be3d5667262f9bedaa5": {
+    "EN": "Resynchronize controls after restoring the active document",
+    "ZH-CN": "恢复活动文档后重新同步控件"
+  },
+  "126eb8fc3f0598b8c0425fd76a92ad419603a4b8": {
+    "EN": "fix(open): restore saved search with ready document",
+    "ZH-CN": "在文档就绪后恢复已保存的搜索"
+  },
+  "22a4100058bd290fd5214c6b36f4b0a3e0724304": {
+    "EN": "Defer directory result activation until target frame is ready",
+    "ZH-CN": "目标帧就绪后再激活目录搜索结果"
+  },
+  "f643ae8904a626e303bf436c1b5c53c7732b5c52": {
+    "EN": "fix(core): verify Unix search source content",
+    "ZH-CN": "验证 Unix 搜索源文件内容"
+  },
+  "b0458512e5c676eaab44bb794f21df97a5fa3291": {
+    "EN": "perf(search): scan uncached directory files while indexing",
+    "ZH-CN": "建立索引时扫描未缓存的目录文件"
+  },
+  "728c7261cfa80eaacc329f979ba41adb1c3fac77": {
+    "EN": "perf(open): defer restored search until document is ready",
+    "ZH-CN": "文档就绪后再恢复搜索"
+  },
+  "5e8be0fc9bafb658e282f1796a19f5dfe32aa500": {
+    "EN": "perf(open): reuse parsed index cache during preview",
+    "ZH-CN": "预览时复用已解析的索引缓存"
+  },
+  "74463f383e9d5b2d8c5a6c019b036c3dd5bd8063": {
+    "EN": "docs: add application-focused README hero",
+    "ZH-CN": "添加突出应用本身的 README 主视觉"
+  },
+  "722dec51ed1b7e31d941c5a068b6f8e3949be76d": {
+    "EN": "perf(core): avoid redundant search block hashing",
+    "ZH-CN": "避免重复计算搜索数据块哈希"
+  },
+  "de8b77af31a2e72fe33dafca4dc05be6207dd1b2": {
+    "EN": "perf(core): parallelize UTF-8 line indexing",
+    "ZH-CN": "并行建立 UTF-8 行索引"
+  },
+  "e809ab35a9e508b8b50f67cee3c77bba9e8c8bb1": {
+    "EN": "fix(ui): prevent metadata text clipping",
+    "ZH-CN": "防止元数据文本被裁切"
+  },
+  "0900916e5a8426f6564b988a2fcdff72604d357f": {
+    "EN": "fix(ui): preserve new-tab row layout",
+    "ZH-CN": "保留新标签页的行布局"
+  },
+  "b6ed69319b23a0120ce804323533c6887ae8112d": {
+    "EN": "build(macos): distribute app as DMG",
+    "ZH-CN": "使用 DMG 分发 macOS 应用"
+  },
+  "3da9780b5c26fd280c8dbfcd5311d1546ebbe6a7": {
+    "EN": "fix(ui): prevent new-tab file name clipping",
+    "ZH-CN": "防止新标签页文件名被裁切"
+  },
+  "0e26c461fd171704ec450aca49bab0ae9a8bd19a": {
+    "EN": "fix(ui): avoid blocking when disabling word wrap",
+    "ZH-CN": "关闭自动换行时避免阻塞"
+  },
+  "45ae33a9f75ad2ece7f385fcdcd7099be5ba743e": {
+    "EN": "docs: reorganize README and documentation index",
+    "ZH-CN": "重组 README 和文档索引"
+  },
+  "13de0a9d7d4ad48ee8bc494a1e5d9af71578d35f": {
+    "EN": "Restore log text selection colors",
+    "ZH-CN": "恢复日志文本选择颜色"
+  },
+  "36fc6b618dcb50a024c0935764f489692908f19d": {
+    "EN": "feat(web): redesign GitHub Pages experience",
+    "ZH-CN": "重新设计 GitHub Pages 网站体验"
+  },
+  "2ae88344a55a9b6412205dd329bce98850bf644a": {
+    "EN": "Improve log text multi-click selection",
+    "ZH-CN": "改进日志文本多次点击选择"
+  },
+  "3d401ebca09d892ec6a5875607e2ab70368c2414": {
+    "EN": "fix(platform): keep Windows data portable and logs read-only",
+    "ZH-CN": "保持 Windows 数据可便携，并以只读方式访问日志"
+  },
+  "8de329d6d7d10d82a7ce760692c7e247f7c00c9f": {
+    "EN": "fix(viewer): preserve anchors during font changes",
+    "ZH-CN": "字体变化时保留锚点"
+  },
+  "b685ed444080cc0164af0a31593cd7f117ca5f52": {
+    "EN": "fix(viewer): retain search scope state without navigation",
+    "ZH-CN": "保留搜索范围状态而不触发导航"
+  },
+  "4805440753119915a358a74111a99bedea85fd70": {
+    "EN": "fix(viewer): switch search scopes atomically",
+    "ZH-CN": "以原子方式切换搜索范围"
+  },
+  "5fa8822cf72ccdac462a5209ab28666430c5ab2e": {
+    "EN": "Generate release notes from tagged commit history",
+    "ZH-CN": "根据标签提交历史生成发布记录"
+  },
+  "4d17b396110725262d065b80bdbbf290659b07a3": {
+    "EN": "fix(viewer): swap log and result lists atomically",
+    "ZH-CN": "以原子方式交换日志列表和结果列表"
+  },
+  "a826e44e39568484dc5412dbcfbfd5ae702644ca": {
+    "EN": "fix(viewer): switch result jumps atomically",
+    "ZH-CN": "以原子方式切换结果跳转"
+  },
+  "bad93b1316dac6c411bda665f28eff8bd0df4c53": {
+    "EN": "Add grep fallback to architecture checks",
+    "ZH-CN": "为架构检查添加 grep 回退方案"
+  },
+  "87771f907a868993856c72d74f9d5f3afb7e4b76": {
+    "EN": "Fix search scope switch flicker",
+    "ZH-CN": "修复搜索范围切换时的闪烁"
+  },
+  "7e528ab64ec37a458e4568b89ad16927fc9d0623": {
+    "EN": "Propagate color rules across global search results",
+    "ZH-CN": "将颜色规则传播到全局搜索结果"
+  },
+  "5733d55859b4b6c0a002b92d7c04a080a10d8651": {
+    "EN": "Refactor virtualized log and result row loading",
+    "ZH-CN": "重构虚拟化日志和结果行加载"
+  },
+  "292dec86ff310199215ce16129c32656ed3e7687": {
+    "EN": "build(architecture): guard workspace capabilities",
+    "ZH-CN": "检查工作区能力边界"
+  },
+  "373fd971f13b7254d9db674eed83065c05b4f437": {
+    "EN": "refactor(app): isolate document commands",
+    "ZH-CN": "分离文档命令"
+  },
+  "68d3abe1f33416b694f29725a9f6807b9d6cece8": {
+    "EN": "refactor(app): isolate document lifecycle",
+    "ZH-CN": "分离文档生命周期管理"
+  },
+  "ee55c2c80222387a7831e542d0820d7db05cb892": {
+    "EN": "refactor(app): isolate workspace preferences",
+    "ZH-CN": "分离工作区偏好设置"
+  },
+  "50a7cb2c7eca31b734d58b13b9a2279db4e31c41": {
+    "EN": "refactor(app): isolate document opening",
+    "ZH-CN": "分离文档打开逻辑"
+  },
+  "7f016fdedb1a5f18eb9f0acb688741c12a8e1ac7": {
+    "EN": "refactor(app): isolate log presentation",
+    "ZH-CN": "分离日志呈现逻辑"
+  },
+  "4eb8e72b88b2279d71c5b5a946bdcf563a0035d1": {
+    "EN": "refactor(app): isolate workspace shell rendering",
+    "ZH-CN": "分离工作区外壳渲染"
+  },
+  "b8516ceda4b77ef8b76b3dcac43e510680a65e9e": {
+    "EN": "refactor(app): isolate viewport orchestration",
+    "ZH-CN": "分离视口编排逻辑"
+  },
+  "f07187f71a4a14ce0a4c072d5af9a4e0926a9710": {
+    "EN": "refactor(app): isolate search orchestration",
+    "ZH-CN": "分离搜索编排逻辑"
+  },
+  "9ee30696b528b672a26c2ce55f01b4ef71a49279": {
+    "EN": "refactor(app): isolate quick find orchestration",
+    "ZH-CN": "分离快速查找编排逻辑"
+  },
+  "38ef9efd76045b89438b50d0bf8cd9a6b5b0dfcc": {
+    "EN": "refactor(app): isolate tab lifecycle orchestration",
+    "ZH-CN": "分离标签生命周期编排逻辑"
+  },
+  "8b6cbc61105c4da6e511e46e3a2035643784acf1": {
+    "EN": "refactor(app): isolate result export orchestration",
+    "ZH-CN": "分离结果导出编排逻辑"
+  },
+  "a1cdce3784015e29723ab812b1d31c005e6084b9": {
+    "EN": "refactor(core): isolate index cache format",
+    "ZH-CN": "分离索引缓存格式"
+  },
+  "f04f6b5f0ae8ab63cb3f2fc53979c3ede17f6203": {
+    "EN": "refactor(data): own SQLite state storage",
+    "ZH-CN": "由数据层管理 SQLite 状态存储"
+  },
+  "675e3f673631d1088be2ec548f38acd1c917e4d4": {
+    "EN": "refactor(data): own persisted UI records",
+    "ZH-CN": "由数据层管理持久化 UI 记录"
+  },
+  "b03022ba1a50c2b61cbf1345df3a73e89d9dadd6": {
+    "EN": "refactor(data): own file session recovery",
+    "ZH-CN": "由数据层管理文件会话恢复"
+  },
+  "a968c595e4b965053bb7d24463ab953e309bb491": {
+    "EN": "refactor(data): own file history repository",
+    "ZH-CN": "由数据层管理文件历史仓库"
+  },
+  "88abbf4c09e0ddc244e4d1634773ca4e77903008": {
+    "EN": "refactor(app): isolate workspace window registry",
+    "ZH-CN": "分离工作区窗口注册表"
+  },
+  "9a239d4c3ac47742ff8f2967b306208e3545fcbf": {
+    "EN": "refactor(app): split workspace document tasks",
+    "ZH-CN": "拆分工作区文档任务"
+  },
+  "274567db6a055647f02f85aee253cdff51b3b283": {
+    "EN": "docs(skills): map core data app ownership",
+    "ZH-CN": "记录核心层、数据层和应用层的职责归属"
+  },
+  "f829332f44143d7093af5013a3ee8d1e807cba05": {
+    "EN": "refactor(data): own persistence query records",
+    "ZH-CN": "由数据层管理持久化查询记录"
+  },
+  "393fbdc63099b1ca5226d597105bbeb93cbf186a": {
+    "EN": "refactor(core): separate compressed result sets",
+    "ZH-CN": "分离压缩结果集"
+  },
+  "7974dc5d3cc0892fb904447174d6584bd974c265": {
+    "EN": "refactor(data): own persisted path codec",
+    "ZH-CN": "由数据层管理持久化路径编解码"
+  },
+  "b1fb74534f9cd191c51d5d7869a3df14cafced5d": {
+    "EN": "build(architecture): enforce layer boundaries",
+    "ZH-CN": "强制遵守架构分层边界"
+  },
+  "be9c4604dd6fca491ed08099af4a2fef91df4d2e": {
+    "EN": "refactor(data): own index cache lifecycle",
+    "ZH-CN": "由数据层管理索引缓存生命周期"
+  },
+  "78969acc691695a8180227ebe38eb449290344b0": {
+    "EN": "Preserve active rows across projection updates",
+    "ZH-CN": "结果投影更新时保留活动行"
+  },
+  "d9ed9ccf852ab31d74b4812f0cea0dcee80c2014": {
+    "EN": "Coalesce log scroll targets and preserve wrapped row heights",
+    "ZH-CN": "合并日志滚动目标，并保留换行行高"
+  },
+  "973bdcf25035858c1b3f2bda4e61b1e0f97f4f43": {
+    "EN": "fix: atomically replace virtual log frames",
+    "ZH-CN": "以原子方式替换虚拟日志帧"
+  },
+  "fd46edf49e26caebd8b5f042c806c24a0c5edeb7": {
+    "EN": "feat(web): add GitHub Pages product site",
+    "ZH-CN": "添加 GitHub Pages 产品网站"
+  },
+  "ea10ab987e9e851a972613c055247dad5c49c2d9": {
+    "EN": "fix(windows): restore taskbar preview icon",
+    "ZH-CN": "恢复 Windows 任务栏预览图标"
+  },
+  "3d75037ab0bb3b35b706f01ab0d723bd701d460b": {
+    "EN": "ci: label unsigned Windows release packages",
+    "ZH-CN": "标明未签名的 Windows 发布包"
+  },
+  "f23c98b8f5fbe194ddcaa35605758218f6ad5ffb": {
+    "EN": "fix(viewer): preserve search results across file opens",
+    "ZH-CN": "打开文件时保留搜索结果"
+  },
+  "f8a7c664263bf57385bc709cd60329af516b55d9": {
+    "EN": "ci: require signed Windows release artifacts",
+    "ZH-CN": "要求 Windows 发布产物具有签名"
+  },
+  "c6cab9f6eac5cba8f92a082eeb090f64c3ffb9e7": {
+    "EN": "fix(viewer): refresh tab surfaces atomically",
+    "ZH-CN": "以原子方式刷新标签显示内容"
+  },
+  "17d79769f880446921ba4c8b636075e532deb1dd": {
+    "EN": "feat: simplify updates and make release signing optional",
+    "ZH-CN": "简化更新，并将发布签名改为可选"
+  },
+  "cc762c950ea8c3d16f00a4a9462c694b534bdfdc": {
+    "EN": "fix(viewer): refresh word-wrap mode atomically",
+    "ZH-CN": "以原子方式刷新自动换行模式"
+  },
+  "61917846aba83a5146337cfa8a3af5af40156221": {
+    "EN": "fix(viewer): avoid blank frame on result jumps",
+    "ZH-CN": "避免结果跳转时出现空白帧"
+  },
+  "cb20335d9c17c0f987ba4c13ca3d3083a5ed3eab": {
+    "EN": "perf(viewer): release hidden decoded rows",
+    "ZH-CN": "释放隐藏行的已解码数据"
+  },
+  "28452fd49cf6cf60619c2547b08fb2daad349c2a": {
+    "EN": "test(core): isolate parallel search fixtures",
+    "ZH-CN": "隔离并行搜索测试的数据环境"
+  },
+  "7c6c5e67bc340ddd25a310eea2b8b1ea846286ac": {
+    "EN": "perf(viewer): cancel stale visible reads",
+    "ZH-CN": "取消过时的可见区域读取"
+  },
+  "9a2dbe78db270b5ca5b8b54724143a71c1c92428": {
+    "EN": "fix(windows): replace PowerShell update helper",
+    "ZH-CN": "替换 Windows PowerShell 更新辅助程序"
+  },
+  "d9c2494b1c26129a23e9bf7863c99478c9750835": {
+    "EN": "fix(core): retry transient source reads",
+    "ZH-CN": "重试临时性源数据读取失败"
+  },
+  "594c54b0e7d565a3009386d9304194c6c4df3173": {
+    "EN": "perf(viewer): reset visible task ownership",
+    "ZH-CN": "重置可见区域任务的归属"
+  },
+  "490bf120ad44ae59508169b665b36a08bf69a236": {
+    "EN": "fix(viewer): expose unavailable source rows",
+    "ZH-CN": "显示不可用的源数据行"
+  },
+  "94c5e46b75a1bf5d54e4de50118188bc09eb077e": {
+    "EN": "fix(viewer): budget decoded visible rows",
+    "ZH-CN": "限制已解码可见行的资源用量"
+  },
+  "a4308543c478ea5be0d2586aa99f3a9c5bb9c288": {
+    "EN": "perf(core): reuse verified blocks for line tasks",
+    "ZH-CN": "为行任务复用已验证的数据块"
+  },
+  "d365b7cf2f61585dd725aae863f77a2176df5d11": {
+    "EN": "perf(viewer): load visible previews asynchronously",
+    "ZH-CN": "异步加载可见区域预览"
+  },
+  "0f116765dd85c30c2b5f4cc202e21eba72c41f0d": {
+    "EN": "fix(core): stream appended snapshot refresh",
+    "ZH-CN": "流式刷新追加内容的快照"
+  },
+  "3e3a40d07262c3d16eeee5b6d78aed47f191d2dc": {
+    "EN": "fix(core): stream uncached line indexing",
+    "ZH-CN": "流式建立未缓存的行索引"
+  },
+  "b41b0a68265d0ee2f0c3eac4f9fbc0cdac9ee119": {
+    "EN": "build(release): derive version from git tags",
+    "ZH-CN": "从 Git 标签推导发布版本号"
+  },
+  "c951ffb5394be779258201c45d701832b42856dc": {
+    "EN": "fix(export): hydrate sparse timestamp sources",
+    "ZH-CN": "为稀疏时间戳源补充导出所需数据"
+  },
+  "22e2d2203f3238b6943cedc86870ba15c8dde22d": {
+    "EN": "perf(search): sparsify directory result indexes",
+    "ZH-CN": "使用稀疏目录搜索结果索引"
+  },
+  "e3a30167826c1f80a4749284b784cc3643bfb6a4": {
+    "EN": "perf(search): avoid retaining directory source blocks",
+    "ZH-CN": "避免保留目录源数据块"
+  },
+  "79e762b2fe8dc58cc6e90ad3766864bf0a5632f6": {
+    "EN": "fix(search): bound directory source handles",
+    "ZH-CN": "限制目录源文件句柄数量"
+  },
+  "c9a25a93226b1574291e62703c0cb7ae69747aa8": {
+    "EN": "fix(export): abort stale timestamp scans",
+    "ZH-CN": "中止过时的时间戳扫描"
+  },
+  "d3d9126a6b5ee788f4d21bbad603e1573cf92495": {
+    "EN": "fix(viewer): report stale quick find sources",
+    "ZH-CN": "报告过时的快速查找源文件"
+  },
+  "6ae766da11c08e5b63d636e40099c3b3e964b762": {
+    "EN": "fix(viewer): abort partial line operations",
+    "ZH-CN": "中止不完整的行操作"
+  },
+  "e278193eb251e4eff3ce7f02cc0c9d03200e1254": {
+    "EN": "fix(search): reject changed source snapshots",
+    "ZH-CN": "拒绝已变化的搜索源快照"
+  },
+  "d2897e3c9021c6ab92cdd176458a3c5d7ca46114": {
+    "EN": "fix(core): verify on-demand source reads",
+    "ZH-CN": "验证按需读取的源数据"
+  },
+  "1436d58ea27f3b6c4206590ba37f7256012c8a93": {
+    "EN": "fix(viewer): preserve selection across group collapse",
+    "ZH-CN": "分组折叠时保留选区"
+  },
+  "cfc6a794d4e398e7bea1bb1b5805d3cf263887dc": {
+    "EN": "perf(viewer): resolve label changes off thread",
+    "ZH-CN": "在后台线程解析标签变更"
+  },
+  "22e04e8d235a6090b80b665e43ee9b976273bf9d": {
+    "EN": "perf(viewer): prepare restored color rules off thread",
+    "ZH-CN": "在后台线程准备恢复的颜色规则"
+  },
+  "465d182dfef8ac942f560ff57fdd4d23046c71b6": {
+    "EN": "perf(viewer): cache global result summary",
+    "ZH-CN": "缓存全局结果摘要"
+  },
+  "5708b799104c0c410975708e18cde9212e671a06": {
+    "EN": "perf(viewer): cache global result count",
+    "ZH-CN": "缓存全局结果数量"
+  },
+  "c281758af0f94be9314b9afec20ca3e72294411f": {
+    "EN": "perf(viewer): build color rule updates off thread",
+    "ZH-CN": "在后台线程构建颜色规则更新"
+  },
+  "7fb7812cfefcfb1fd74a0a5b4d8f20edc4ae4601": {
+    "EN": "perf(viewer): prepare color targets off thread",
+    "ZH-CN": "在后台线程准备颜色目标"
+  },
+  "d1d2db4879887272bb94099936f483b06d0710f5": {
+    "EN": "perf(viewer): avoid decoding rows for color menu",
+    "ZH-CN": "避免为颜色菜单解码日志行"
+  },
+  "dc2be1e20bf409e17d6ec7a7bfba09bcad4fbe5a": {
+    "EN": "perf(viewer): compress global select all",
+    "ZH-CN": "使用压缩表示处理全局全选"
+  },
+  "61888a8ab7e02d38679a7418eaf0d06ffff8e89a": {
+    "EN": "perf(viewer): cache selected row count",
+    "ZH-CN": "缓存选中行数量"
+  },
+  "262431ddcf45d2e270ecc8c764eff6580e2e61aa": {
+    "EN": "perf(viewer): cache visible line severity",
+    "ZH-CN": "缓存可见行的日志级别"
+  },
+  "1526b2537a7400cc859e0de5f9e1aad6c85100dd": {
+    "EN": "perf(viewer): sweep visible row highlights",
+    "ZH-CN": "以扫描方式处理可见行高亮"
+  },
+  "eb721f0f694d4a1197798c2814144efda6625624": {
+    "EN": "perf(viewer): batch case-sensitive color rules",
+    "ZH-CN": "批量处理区分大小写的颜色规则"
+  },
+  "d249540c3d20f61f02c6f1ba6d62cca11c5a2912": {
+    "EN": "fix(viewer): cancel superseded line copies",
+    "ZH-CN": "取消已被新操作取代的行复制任务"
+  },
+  "23fd1881cf75cda5eecadd9f8c65ae3246694ebc": {
+    "EN": "perf(viewer): build copied log lines off thread",
+    "ZH-CN": "在后台线程构建待复制的日志行"
+  },
+  "e9334f619128634c46584ac5768c293a2a126f52": {
+    "EN": "perf(viewer): sweep global selection ranges once",
+    "ZH-CN": "单次扫描全局选区范围"
+  },
+  "d7ee921c4dd96feb566bcbd8791c5de6bf737602": {
+    "EN": "perf(viewer): binary search row selection ranges",
+    "ZH-CN": "通过二分查找定位行选区范围"
+  },
+  "efa421a2bdadf8684eedacb26dea5827902c5e75": {
+    "EN": "perf(viewer): index selectable global result groups",
+    "ZH-CN": "为可选择的全局结果分组建立索引"
+  },
+  "0210e1f493af2dadf183f0329bda33e007afb3d1": {
+    "EN": "perf(viewer): keep result commands compressed",
+    "ZH-CN": "保持结果命令的数据压缩表示"
+  },
+  "65824377af4d5c8eb818026a72c3c478f2e0f8a2": {
+    "EN": "fix(search): stop scheduling cancelled directory files",
+    "ZH-CN": "停止调度已取消的目录文件搜索"
+  },
+  "c32335f5e02f8fd935131faf2988d92f99aeece2": {
+    "EN": "fix(state): preserve windows runtime path identity",
+    "ZH-CN": "保留 Windows 运行时路径标识"
+  },
+  "e722c7d9834f6c149c540cee1ec00e95cb182cbe": {
+    "EN": "perf(viewer): cache global result column extent",
+    "ZH-CN": "缓存全局结果列宽范围"
+  },
+  "1807e7b5b61827df9a83933b9e643f6d6d6ea7b6": {
+    "EN": "perf(state): persist result selections compressed",
+    "ZH-CN": "以压缩形式持久化结果选区"
+  },
+  "fa63ed4035bf8195db9f12f7992d30346696d230": {
+    "EN": "fix(state): preserve search context path identity",
+    "ZH-CN": "保留搜索上下文的路径标识"
+  },
+  "0435970e0a10c4a57e048e3916cb54043616acd0": {
+    "EN": "perf(state): persist marked rows compressed",
+    "ZH-CN": "以压缩形式持久化已标记行"
+  },
+  "e754d512763685fbb92594c55b0f91a67d68ee1a": {
+    "EN": "chore: bump version to 2.0.6",
+    "ZH-CN": "将版本号升级至 2.0.6"
+  },
+  "5dbf8a4cca6079e968530f799c7fce53ba7a197d": {
+    "EN": "perf(viewer): sparsify tab coordinate mapping",
+    "ZH-CN": "使用稀疏标签坐标映射"
+  },
+  "cc6efbde02d756891591abbd1257d346c3de0e72": {
+    "EN": "fix(state): preserve non-unicode file paths",
+    "ZH-CN": "保留非 Unicode 文件路径"
+  },
+  "d7c4d087fbf8ce1424b3ceb45dc4ad0fe5754ac4": {
+    "EN": "perf(core): build line offsets at compact width",
+    "ZH-CN": "使用紧凑位宽构建行偏移"
+  },
+  "e2529cbecd0504176d632f9f7f3c072f064d4123": {
+    "EN": "fix(core): preserve exact index cache path identity",
+    "ZH-CN": "保留索引缓存的精确路径标识"
+  },
+  "d05520016e8ea1da6f51a4357f13b0333639e3ce": {
+    "EN": "perf(viewer): keep bulk mark actions compressed",
+    "ZH-CN": "以压缩形式处理批量标记操作"
+  },
+  "06a37a68bda16bd7aa9c315fa4187d77633091d5": {
+    "EN": "perf(state): avoid expanding mark sets on save",
+    "ZH-CN": "保存时避免展开标记集合"
+  },
+  "10ac665d93bc283074ce85a1a2ae85d6c3f62597": {
+    "EN": "docs: record sparse row storage architecture",
+    "ZH-CN": "记录稀疏行存储架构"
+  },
+  "94b7fa4c539016d94a7e3ed9897e8fb34df6906d": {
+    "EN": "refactor(viewer): compress marked row state",
+    "ZH-CN": "压缩已标记行状态"
+  },
+  "ed1246e985f1854a39447227fa969d995d0434bd": {
+    "EN": "perf(core): compact in-memory line offsets",
+    "ZH-CN": "压缩内存中的行偏移"
+  },
+  "807979384b24fd77c53ce84e3a8465e64b26d06a": {
+    "EN": "perf(viewer): make wrapped lists sparsely virtual",
+    "ZH-CN": "对自动换行列表采用稀疏虚拟化"
+  },
+  "379b09160fad415a7be6729b64f83e1143780296": {
+    "EN": "perf(viewer): keep selection migration compressed",
+    "ZH-CN": "在选区迁移期间保持压缩表示"
+  },
+  "d9fe52ab604e148af22b0ec0f9f509fe2132f8d2": {
+    "EN": "fix(search): cancel directory index construction",
+    "ZH-CN": "支持取消目录索引构建"
+  },
+  "a8b558c03106284b15a4416d2501adf627490734": {
+    "EN": "perf(search): skip needless directory indexing",
+    "ZH-CN": "跳过不必要的目录索引构建"
+  },
+  "5b0fcd73ac4de49f74dd8d22f20578819ef24a1f": {
+    "EN": "perf(search): skip unused progress accounting",
+    "ZH-CN": "跳过未使用的进度统计"
+  },
+  "21a59b67871e7f96975b1cbba3b600405db46986": {
+    "EN": "perf(export): avoid repeated timestamp scans",
+    "ZH-CN": "避免导出时重复扫描时间戳"
+  },
+  "772abf269ccfa91b95435ce54ff00a1823c1a044": {
+    "EN": "fix(viewer): bound preview column width",
+    "ZH-CN": "限制预览列宽"
+  },
+  "43cd5e0c49d7020156f360b62975978e4a2f2019": {
+    "EN": "fix(core): bound cached preview bytes",
+    "ZH-CN": "限制预览缓存的字节数"
+  },
+  "fd65218d8c6a2a58ced6f02656275412b4497611": {
+    "EN": "fix(search): canonicalize selection after group reorder",
+    "ZH-CN": "分组重新排序后规范化选区"
+  },
+  "d0d62a5151f983ba1e0dbbb0d4886cc29fa4df3c": {
+    "EN": "perf(search): avoid duplicate selection state writes",
+    "ZH-CN": "避免重复写入搜索选区状态"
+  },
+  "54bf263f90647c25a51581f9393b5a830b226e10": {
+    "EN": "refactor(viewer): avoid duplicate selection saves",
+    "ZH-CN": "避免重复保存选区"
+  },
+  "9156e2ad3953fe0745500958e9ca17de62cd62de": {
+    "EN": "fix(viewer): persist virtual row selection state",
+    "ZH-CN": "持久化虚拟行选区状态"
+  },
+  "f7861c096d487b75a37ecd1160a1b10cfd24ece6": {
+    "EN": "fix(search): cancel directory enumeration promptly",
+    "ZH-CN": "及时取消目录枚举"
+  },
+  "21c79f7c408ebb09e6be62ebbbabec8fdbb57e9a": {
+    "EN": "fix(workspace): debounce checkpoints per document",
+    "ZH-CN": "按文档对检查点保存进行防抖"
+  },
+  "6b0ff7c8e251cb909f749e96177941edbcc2f35f": {
+    "EN": "fix(viewer): validate visible cache row identity",
+    "ZH-CN": "验证可见区域缓存的行标识"
+  },
+  "da83c0a67abfb7f398d13e1366d38d65e170d805": {
+    "EN": "fix(viewer): clear stale geometry on source replace",
+    "ZH-CN": "替换源文件时清除过时的布局几何信息"
+  },
+  "544230d0cd1de5eaa1f103e3fe3dab9726064f88": {
+    "EN": "fix(search): remap wrapped heights on group toggle",
+    "ZH-CN": "切换分组时重新映射换行行高"
+  },
+  "0f78274f7a9a3b62e12cc9176b6e409e054c4c5f": {
+    "EN": "fix(viewer): checkpoint local result selection",
+    "ZH-CN": "保存本地结果选区检查点"
+  },
+  "d2b6c3a827e356ec4dba0c08767cb2d88d0fd158": {
+    "EN": "fix(search): persist mark-driven projections",
+    "ZH-CN": "持久化由标记驱动的结果投影"
+  },
+  "8ae6c15b01a8c442450e67644eed8d5c7a1bfd45": {
+    "EN": "fix(workspace): checkpoint completed opens",
+    "ZH-CN": "为已完成的文件打开操作保存检查点"
+  },
+  "74b1599841c3c2427025cce771dd536422642bc4": {
+    "EN": "fix(workspace): persist tab close projections",
+    "ZH-CN": "持久化标签关闭后的投影状态"
+  },
+  "8375f2f3ea6cca97952aeca53cf11007a36caf58": {
+    "EN": "fix(workspace): unify document open identity",
+    "ZH-CN": "统一文档打开标识"
+  },
+  "b62f9b6251701e4bbc35ff667f4eba812681e41d": {
+    "EN": "v2.0.5",
+    "ZH-CN": "更新至 v2.0.5"
+  },
+  "fbbbf1d0234c28f43ae63a6ff3a3510b9e5b5484": {
+    "EN": "fix(search): map directory marks through snapshots",
+    "ZH-CN": "通过快照映射目录标记"
+  },
+  "976bda439bbeb888f1a931dcb80e60268000ccd0": {
+    "EN": "fix(search): reject stale directory result jumps",
+    "ZH-CN": "拒绝跳转到过时的目录搜索结果"
+  },
+  "549f3a447b3d4398cc95170186640bc5319b1caa": {
+    "EN": "fix(search): expire results when participants change",
+    "ZH-CN": "参与搜索的文件发生变化时使结果失效"
+  },
+  "624a3f26aa43567a7a7bdcf75eb9961b11b7ae25": {
+    "EN": "fix(search): invalidate all-open results on membership growth",
+    "ZH-CN": "已打开文件集合扩展时使全文件搜索结果失效"
+  },
+  "d3846cefd8ee4e50e1dda461467a6b86aa675dad": {
+    "EN": "fix(search): refresh directory presentation after reload",
+    "ZH-CN": "重新加载后刷新目录呈现状态"
+  },
+  "4a0eab8872afe0a3c968a268fc50c547a9bc0f4b": {
+    "EN": "fix(viewer): normalize restored result visibility",
+    "ZH-CN": "规范化恢复后的结果可见性"
+  },
+  "a29ee57b9db08800db52b3258d6b716ff751bc8a": {
+    "EN": "fix(viewer): leave hidden result regions inactive",
+    "ZH-CN": "保持隐藏结果区域处于非活动状态"
+  },
+  "059f23b0f42e18c10db05db2c23ff897e5751218": {
+    "EN": "fix(search): invalidate all-open results on reload",
+    "ZH-CN": "重新加载时使全部已打开文件的搜索结果失效"
+  },
+  "807512ed3f6233c8f2c9e12afa5182dc4bebd35f": {
+    "EN": "refactor(search): share persisted result path matching",
+    "ZH-CN": "共享持久化结果的路径匹配逻辑"
+  },
+  "de7a50b4564760d23e32bcccaedbd482b5d39ae0": {
+    "EN": "fix(search): preserve file preferences by path identity",
+    "ZH-CN": "按路径标识保留文件偏好设置"
+  },
+  "2d26d278e546f398b7b2d4055f63814d5af54717": {
+    "EN": "refactor(search): unify workspace path identity",
+    "ZH-CN": "统一工作区路径标识"
+  },
+  "e05b8749aec7eb3575ef4988f7ed2bb8e9ecd025": {
+    "EN": "fix(viewer): restrict line reads to virtual windows",
+    "ZH-CN": "将行读取限制在虚拟视口范围内"
+  },
+  "0fa371485217fbeef8bc0e2a598c5f7e839c89bb": {
+    "EN": "perf(viewer): index viewport anchors by row key",
+    "ZH-CN": "按行键为视口锚点建立索引"
+  },
+  "6adc930728d523629cd253d0680d5456ae799d22": {
+    "EN": "fix(search): invalidate results on document addition",
+    "ZH-CN": "添加文档时使搜索结果失效"
+  },
+  "ae559210d03afa171086a878d4b610827442de6b": {
+    "EN": "fix(search): cancel directory work on tab removal",
+    "ZH-CN": "移除标签时取消目录任务"
+  },
+  "9b45686b544e06294086baf282646dd3b80d0a04": {
+    "EN": "fix(search): capture viewport at result install",
+    "ZH-CN": "安装结果时记录视口"
+  },
+  "50b0933b53061ab59b22e8f688c4c16ffbacf068": {
+    "EN": "fix(search): expire stale quick find matches",
+    "ZH-CN": "使过时的快速查找匹配失效"
+  },
+  "e07fb5cc972d51ec81b2dcb59b97daf655f26489": {
+    "EN": "fix(search): reject stale quick find rows",
+    "ZH-CN": "拒绝过时的快速查找行"
+  },
+  "251e74b8c5f58f12ec0c34a875d31f09e623108b": {
+    "EN": "fix(viewer): map result source rows before navigation",
+    "ZH-CN": "导航前映射结果对应的源文件行"
+  },
+  "31394b880c9c02afbcdda4a225d59371e46ff504": {
+    "EN": "fix(search): gate result state by source snapshot",
+    "ZH-CN": "按源快照约束结果状态"
+  },
+  "eb989e32a4a61bb0b24a703577839b72c8e0570d": {
+    "EN": "refactor(search): export installed result projections",
+    "ZH-CN": "导出已安装的结果投影"
+  },
+  "c894613a133c517880c1dbaad6f4b3fa1c529d00": {
+    "EN": "fix(search): isolate stale directory result state",
+    "ZH-CN": "隔离过时的目录结果状态"
+  },
+  "70838ef6f2fe33c2f6b5a9ccc19e59dcad63e5c7": {
+    "EN": "fix(search): invalidate open results after reload",
+    "ZH-CN": "重新加载后使已打开文件的搜索结果失效"
+  },
+  "0e72ab85b2ad278622e49e681462be701ac54933": {
+    "EN": "fix(viewer): use one result row height source",
+    "ZH-CN": "为结果行高使用统一数据来源"
+  },
+  "e832cc4218d546bd2a660c94508b2d4369630d1d": {
+    "EN": "fix(search): stabilize directory result ordering",
+    "ZH-CN": "稳定目录结果排序"
+  },
+  "cbef0c8c91d7edb133225b0b63e660b397a053c1": {
+    "EN": "refactor(viewer): install result presentation atomically",
+    "ZH-CN": "以原子方式安装结果呈现状态"
+  },
+  "f4f816cd38d982042a6ce94d4844864261ade320": {
+    "EN": "perf(search): update open group titles in place",
+    "ZH-CN": "就地更新已打开文件分组标题"
+  },
+  "fd9c29a611146e464032dda6c06f7cf45f13564d": {
+    "EN": "perf(search): update global color rules in place",
+    "ZH-CN": "就地更新全局颜色规则"
+  },
+  "f6d8c90ea110680a16be969bf435a6d5d20c3b2b": {
+    "EN": "perf(search): update global presentation directly",
+    "ZH-CN": "直接更新全局呈现状态"
+  },
+  "bdee4f72ad689250927447cecc38c34930e2c364": {
+    "EN": "refactor(search): separate groups from match highlighting",
+    "ZH-CN": "将分组与匹配高亮分离"
+  },
+  "2db311516335da944fdc9c7a3f2e73f3938fc782": {
+    "EN": "perf(search): avoid no-op result snapshot copies",
+    "ZH-CN": "避免复制未变化的结果快照"
+  },
+  "a85fadda7f44d487beca7bcbc3c3dab05bbbc4c8": {
+    "EN": "refactor(search): source open result titles from tabs",
+    "ZH-CN": "从标签获取已打开文件的结果标题"
+  },
+  "d1ef6b953b61943440f9046f6327c6aac87dea76": {
+    "EN": "perf(search): restore only selected global rows",
+    "ZH-CN": "仅恢复选中的全局结果行"
+  },
+  "d4f17692708ecc76a8909902e3aa19d16dee36eb": {
+    "EN": "fix(search): prepare rows after group layout changes",
+    "ZH-CN": "分组布局变化后重新准备行"
+  },
+  "1d83ebac3e562b2c1ee5679b87271466984c82b8": {
+    "EN": "perf(search): index open documents on completion",
+    "ZH-CN": "在打开完成后为文档建立索引"
+  },
+  "f0e477a111f77613eabe759c18891d9c7d192e8d": {
+    "EN": "fix(search): prune closed documents from retained context",
+    "ZH-CN": "从保留的上下文中移除已关闭文档"
+  },
+  "13e8fce5092560f5d8f7fb173e6188901fe60150": {
+    "EN": "perf(search): share retained result snapshots",
+    "ZH-CN": "共享保留的结果快照"
+  },
+  "2602cccce671dffe85cbabadf3ea968ea072e5ba": {
+    "EN": "perf(search): skip presentation-only viewport remaps",
+    "ZH-CN": "仅呈现变化时跳过视口重新映射"
+  },
+  "c60253a1f83a87bcb6ef423c8bbd0d59d1246f23": {
+    "EN": "perf(viewer): skip unchanged result viewport remaps",
+    "ZH-CN": "跳过未变化的结果视口重新映射"
+  },
+  "3c964495254fcc8af16f888e850398507d83eec6": {
+    "EN": "perf(viewer): preserve equivalent result projections",
+    "ZH-CN": "保留等价的结果投影"
+  },
+  "e3da01f025a3df62eea8f91d718977188c1005ec": {
+    "EN": "perf(search): separate projection and presentation refresh",
+    "ZH-CN": "分离投影刷新与呈现刷新"
+  },
+  "c40d8f2c3182fac7e6d9fbac117494a334776e09": {
+    "EN": "perf(search): bound directory result identities",
+    "ZH-CN": "限制目录结果标识的资源用量"
+  },
+  "de497e72168b5d2ebf68690e222d1512e6bcc80c": {
+    "EN": "fix(viewer): reprepare visible rows after projection changes",
+    "ZH-CN": "投影变化后重新准备可见行"
+  },
+  "da088741c0ca56d6f5bf843527b59713155c7b89": {
+    "EN": "perf(search): index open documents by path",
+    "ZH-CN": "按路径为已打开文档建立索引"
+  },
+  "f9eb38053405545ba55f22fab292f1c2d97d3dae": {
+    "EN": "refactor(search): centralize global result installation",
+    "ZH-CN": "集中管理全局结果安装"
+  },
+  "2b4279a77716bbd0208d4e859fc4889269b5392d": {
+    "EN": "fix(search): cancel requests when semantics change",
+    "ZH-CN": "搜索语义变化时取消请求"
+  },
+  "f4d6cd8b8d338f54464cd051a643ef065d541f00": {
+    "EN": "refactor(search): separate result identity from order",
+    "ZH-CN": "将结果标识与排序分离"
+  },
+  "2896181aa9f94a3c4e3fdb6dd51efa7e061929a0": {
+    "EN": "perf(viewer): share marked row snapshots",
+    "ZH-CN": "共享已标记行快照"
+  },
+  "dc12584b03c0d0d58823924bafac76ca317a4f92": {
+    "EN": "perf(viewer): isolate visible line cache writes",
+    "ZH-CN": "隔离可见行缓存写入"
+  },
+  "0359b5f809e011d7c3925cdc381baf9d12ac1864": {
+    "EN": "perf(search): index global result groups by identity",
+    "ZH-CN": "按标识为全局结果分组建立索引"
+  },
+  "0ddaf35fb1bd4430002750e3c06725fb7ca61f19": {
+    "EN": "refactor(search): make result projection authoritative",
+    "ZH-CN": "将结果投影作为权威状态来源"
+  },
+  "e1c61c818809b94e8ebb1f4ef97f2340977c7b87": {
+    "EN": "refactor(search): separate global result state roles",
+    "ZH-CN": "分离全局结果状态的职责"
+  },
+  "8d035cd620af5fb83d7b1e8617c59f93c31649e1": {
+    "EN": "fix(search): stabilize directory result identities",
+    "ZH-CN": "稳定目录结果标识"
+  },
+  "6808cd1a3b1db96e1e5d85c38d90a8c90e06fb9a": {
+    "EN": "refactor(search): centralize operation lifecycle",
+    "ZH-CN": "集中管理搜索操作生命周期"
+  },
+  "84a922d3a721d541bed104e9f21af650885df7c8": {
+    "EN": "refactor(viewer): seal viewport geometry backends",
+    "ZH-CN": "封装视口几何后端"
+  },
+  "d31a5c2fa62c76ecea4dcd350a117e82cfdcd824": {
+    "EN": "fix(viewer): keep table cell text on preview cache",
+    "ZH-CN": "让表格单元格文本继续使用预览缓存"
+  },
+  "819b7a596fb5e243905f70077b229be6594eb01a": {
+    "EN": "refactor(workspace): extract feature state controllers",
+    "ZH-CN": "提取工作区功能状态控制器"
+  },
+  "176de02cd89860a3c191abf171547de7e6b19f9b": {
+    "EN": "refactor(viewer): unify viewport behavior across row layouts",
+    "ZH-CN": "统一不同行布局下的视口行为"
+  },
+  "bb2301db9550ec2e67077d22d4cd217d656ab8c6": {
+    "EN": "refactor(viewer): preserve projection state by row identity",
+    "ZH-CN": "按行标识保留投影状态"
+  },
+  "5b197d8077f2a1f851eeee6a76c86de81fb02598": {
+    "EN": "refactor(viewer): separate row state ownership",
+    "ZH-CN": "分离行状态的归属"
+  },
+  "f964249705703b00a9a80648408cfb92c06d1bec": {
+    "EN": "perf(viewer): bound visible line previews by bytes",
+    "ZH-CN": "按字节数限制可见行预览"
+  },
+  "625ba7b9917cbe9c2ea0fa180c037864dc9b65fe": {
+    "EN": "fix(viewer): invalidate wrapped measurements by layout identity",
+    "ZH-CN": "按布局标识使换行测量缓存失效"
+  },
+  "ea931d3bb7fb48d62ba95a4dd46158b8b51b54bb": {
+    "EN": "perf(viewer): virtualize log line caching for 2.0.4",
+    "ZH-CN": "为 2.0.4 虚拟化日志行缓存"
+  },
+  "e89238eeca3458860fbc79e28e29a833239bf807": {
+    "EN": "fix(search): preserve selection in large result sets",
+    "ZH-CN": "在大规模结果集中保留选区"
+  },
+  "299be70764940bde5dab948e8830c4d63ceb32aa": {
+    "EN": "fix(search): resolve labels for opened directory results",
+    "ZH-CN": "为已打开的目录搜索结果解析标签"
+  },
+  "19197d4859f96efeafb1e991e93e074e2ae5d4ea": {
+    "EN": "fix(build): patch block future incompatibility",
+    "ZH-CN": "修复 block 依赖的未来兼容性问题"
+  },
+  "db1ccc47621238b7361e89b56988f35912261fd9": {
+    "EN": "fix(ui): refine fullscreen and scrollbar layout",
+    "ZH-CN": "优化全屏和滚动条布局"
+  },
+  "15941875c0bc0bd97e08ea19d7de01b5460fbddd": {
+    "EN": "fix(ui): restore search panel resize hot zone",
+    "ZH-CN": "恢复搜索面板尺寸调整热区"
+  },
+  "b4601aad3e6890f6f0caab486af041701da62985": {
+    "EN": "fix(ui): align horizontal scrollbar background",
+    "ZH-CN": "对齐水平滚动条背景"
+  },
+  "a0549092c70965d32c015d2983821e6a2617d9b8": {
+    "EN": "version2.0.2",
+    "ZH-CN": "更新至 2.0.2 版本"
+  },
+  "994a5d6823020eb886966eb40c2bf41e9399d4fe": {
+    "EN": "fix: prevent pointer events leaking through overlays",
+    "ZH-CN": "防止指针事件穿透浮层"
+  },
+  "4ac54094c120bfeec38f3221e12b768d48bb1479": {
+    "EN": "fix(search): restore result text selection",
+    "ZH-CN": "恢复搜索结果文本选择"
+  },
+  "07dc4ec6a50ffd2248f8b498aee363ba7ee1faa3": {
+    "EN": "fix(updater): trust system certificate roots",
+    "ZH-CN": "让更新程序信任系统根证书"
+  },
+  "03ae757cd44fc73a20e56d699253e3cd4cc19c2a": {
+    "EN": "fix(ci): specify repository when publishing releases",
+    "ZH-CN": "发布 Release 时明确指定仓库"
+  },
+  "068ff2609c01248e05207f92cd716f8c6a45ccc1": {
+    "EN": "chore(release): prepare v2.0.1",
+    "ZH-CN": "准备 v2.0.1 发布"
+  },
+  "f7fa5b274289dcd48fd474274c013e952f69b781": {
+    "EN": "ci: split checks from release builds",
+    "ZH-CN": "将检查与发布构建分离"
+  },
+  "3ca20b088b44921a78072eaf904ab61d363929ee": {
+    "EN": "fix(scroll): preserve line scrolling direction at bottom",
+    "ZH-CN": "在底部保留逐行滚动方向"
+  },
+  "a4a6d7a319943045c43a5e56306177f0e958f517": {
+    "EN": "fix(search): highlight quick find matches across views",
+    "ZH-CN": "跨视图高亮快速查找匹配"
+  },
+  "e9cf006a42cbd58e6c6ec46d2044a2147087984d": {
+    "EN": "fix(i18n): prevent menu clipping and localize search hints",
+    "ZH-CN": "防止菜单裁切，并本地化搜索提示"
+  },
+  "8fc3a3b1601e57630bccd298546fb944b2a8266a": {
+    "EN": "fix(ui): remove submitted results checkmark",
+    "ZH-CN": "移除已提交搜索结果的勾选标记"
+  },
+  "72c629790a97d9c056acca75130682ce99165b71": {
+    "EN": "feat(updater): add GitHub Releases update channel",
+    "ZH-CN": "添加 GitHub Releases 更新渠道"
+  },
+  "2d4c50b3d68ff2570b496bfb15d7550e0c0409e5": {
+    "EN": "ci(release): publish tag artifacts to GitHub Releases",
+    "ZH-CN": "将标签构建产物发布到 GitHub Releases"
+  },
+  "5647add1b55127db7e1482defb6849f43471ec5f": {
+    "EN": "fix(windows): satisfy clippy for IPC decoding",
+    "ZH-CN": "修复 Windows IPC 解码相关的 Clippy 检查问题"
+  },
+  "ddb80f1db2da628706815f3c9f4d2625443c5272": {
+    "EN": "feat(platform): unify Windows macOS and Linux support",
+    "ZH-CN": "统一 Windows、macOS 和 Linux 平台支持"
+  },
+  "c84f7d0d6b05e1b692c84977834b0eca05128f91": {
+    "EN": "Initial commit",
+    "ZH-CN": "初始提交"
+  }
+}
