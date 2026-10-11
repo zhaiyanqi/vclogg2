@@ -171,7 +171,10 @@ fn storage_failure_keeps_changes_and_allows_retry(cx: &mut TestAppContext) {
     })
     .unwrap();
     settle(cx);
-    cx.update(|cx| assert!(view.read(cx).save_error.is_some()));
+    cx.update(|cx| {
+        assert!(view.read(cx).save_error.is_some());
+        assert_eq!(view.read(cx).save_status(), view.read(cx).save_error);
+    });
     cx.update_window(settings, |_, window, cx| window.press("escape", cx))
         .unwrap();
     cx.run_until_parked();
@@ -190,7 +193,10 @@ fn storage_failure_keeps_changes_and_allows_retry(cx: &mut TestAppContext) {
     .unwrap();
     cx.run_until_parked();
     assert!(!store.load_app_settings().unwrap().show_full_path);
-    cx.update(|cx| assert!(view.read(cx).save_error.is_none()));
+    cx.update(|cx| {
+        assert!(view.read(cx).save_error.is_none());
+        assert!(view.read(cx).save_status().is_none());
+    });
 }
 
 #[gpui_kit::test]
@@ -384,11 +390,11 @@ fn clearing_search_history_requires_confirmation_then_autosaves(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
-fn save_status_is_transient_and_new_edits_restart_its_lifetime(cx: &mut TestAppContext) {
+fn normal_autosave_does_not_show_status(cx: &mut TestAppContext) {
     init(cx);
     let directory = tempfile::tempdir().unwrap();
     let store = Arc::new(StateStore::open(directory.path().join("state.db")).unwrap());
-    let (main, owner) = workspace(cx, store);
+    let (main, owner) = workspace(cx, store.clone());
     let (settings, view) = open(cx, main, &owner);
     cx.update(|cx| assert!(view.read(cx).save_status().is_none()));
     cx.update_window(settings, |_, window, cx| {
@@ -398,41 +404,16 @@ fn save_status_is_transient_and_new_edits_restart_its_lifetime(cx: &mut TestAppC
     .unwrap();
     cx.run_until_parked();
     cx.update(|cx| {
-        assert_eq!(
-            view.read(cx).save_status().as_deref(),
-            Some(crate::tr!("正在保存…", "Saving…"))
-        )
+        assert!(view.read(cx).debounce_task.is_some());
+        assert!(view.read(cx).save_status().is_none());
     });
-    settle(cx);
-    cx.update(|cx| {
-        assert_eq!(
-            view.read(cx).save_status().as_deref(),
-            Some(crate::tr!("已保存", "Saved"))
-        )
-    });
-    cx.background_executor.advance_clock(Duration::from_secs(2));
-    cx.run_until_parked();
-    cx.update(|cx| assert!(view.read(cx).save_status().is_some()));
     cx.update_window(settings, |_, window, cx| {
-        window.render_frame(cx);
-        window.click("settings-show-full-path", cx);
+        view.update(cx, |view, cx| view.save(window, cx));
+        assert!(view.read(cx).saving);
+        assert!(view.read(cx).save_status().is_none());
     })
     .unwrap();
     settle(cx);
-    cx.background_executor.advance_clock(Duration::from_secs(2));
-    cx.run_until_parked();
-    cx.update(|cx| {
-        assert_eq!(
-            view.read(cx).save_status().as_deref(),
-            Some(crate::tr!("已保存", "Saved"))
-        )
-    });
-    cx.background_executor
-        .advance_clock(Duration::from_millis(800));
-    cx.run_until_parked();
-    cx.update(|cx| assert!(view.read(cx).save_status().is_some()));
-    cx.background_executor
-        .advance_clock(Duration::from_millis(300));
-    cx.run_until_parked();
+    assert!(!store.load_app_settings().unwrap().show_full_path);
     cx.update(|cx| assert!(view.read(cx).save_status().is_none()));
 }

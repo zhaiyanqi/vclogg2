@@ -34,7 +34,6 @@ pub(super) struct SettingsWindow {
     validation_error: Option<String>,
     debounce_task: Option<Task<()>>,
     save_task: Option<Task<()>>,
-    saved_status_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -225,7 +224,6 @@ impl SettingsWindow {
             validation_error: None,
             debounce_task: None,
             save_task: None,
-            saved_status_task: None,
             _subscriptions: vec![subscription, observer],
         }
     }
@@ -297,7 +295,6 @@ impl SettingsWindow {
             cx.notify();
             return;
         }
-        self.saved_status_task = None;
         if !self.saving {
             self.debounce_task = Some(cx.spawn_in(window, async move |this, cx| {
                 cx.background_executor()
@@ -354,7 +351,6 @@ impl SettingsWindow {
         };
         self.sync_retained_workspace(cx);
         self.saving = true;
-        self.saved_status_task = None;
         self.save_error = None;
         let tasks = self.workspace.update(cx, |owner, cx| {
             owner.settings_save_failed = false;
@@ -476,20 +472,8 @@ impl SettingsWindow {
                         .to_owned(),
                     );
                     this.closing = false;
-                } else if !this.quitting {
-                    if this.save_pending || this.closing {
-                        this.save(window, cx);
-                    }
-                    if !this.saving && !this.closing && this.save_error.is_none() {
-                        this.saved_status_task =
-                            Some(cx.spawn_in(window, async move |this, cx| {
-                                cx.background_executor().timer(Duration::from_secs(3)).await;
-                                _ = this.update_in(cx, |this, _, cx| {
-                                    this.saved_status_task = None;
-                                    cx.notify();
-                                });
-                            }));
-                    }
+                } else if !this.quitting && (this.save_pending || this.closing) {
+                    this.save(window, cx);
                 }
                 cx.notify();
             });
@@ -501,15 +485,6 @@ impl SettingsWindow {
         self.save_error
             .clone()
             .or_else(|| self.validation_error.clone())
-            .or_else(|| {
-                if self.saving || self.debounce_task.is_some() {
-                    Some(crate::tr!("正在保存…", "Saving…").to_owned())
-                } else if self.saved_status_task.is_some() {
-                    Some(crate::tr!("已保存", "Saved").to_owned())
-                } else {
-                    None
-                }
-            })
     }
 
     fn persist_size(&self, window: &Window, cx: &mut App) {
@@ -715,22 +690,29 @@ impl Render for SettingsWindow {
                 this.request_close(window, cx);
             }))
             .child(
-                TitleBar::new()
-                    .h(px(36.))
-                    .border_b_0()
-                    .bg(cx.theme().background)
-                    .when(cfg!(target_os = "macos") && window.is_fullscreen(), |bar| {
-                        // Keep the native controls' lane, accounting for TitleBar's fullscreen inset.
-                        bar.pl(px(80.) - rems(0.75).to_pixels(window.rem_size()))
-                    })
-                    .on_close_window(cx.listener(|this, _, window, cx| {
-                        this.request_close(window, cx);
-                    }))
+                div()
+                    .relative()
+                    .flex_shrink_0()
+                    .child(
+                        TitleBar::new()
+                            .h(px(36.))
+                            .border_b_0()
+                            .bg(cx.theme().background)
+                            .when(cfg!(target_os = "macos") && window.is_fullscreen(), |bar| {
+                                // Keep the native controls' lane, accounting for TitleBar's fullscreen inset.
+                                bar.pl(px(80.) - rems(0.75).to_pixels(window.rem_size()))
+                            })
+                            .on_close_window(cx.listener(|this, _, window, cx| {
+                                this.request_close(window, cx);
+                            })),
+                    )
+                    // Center against the full window, independent of platform control insets.
                     .child(
                         h_flex()
-                            .h_full()
-                            .flex_1()
+                            .absolute()
+                            .inset_0()
                             .items_center()
+                            .justify_center()
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(crate::tr!("设置", "Settings")),
@@ -762,18 +744,7 @@ impl Render for SettingsWindow {
                             .min_w_0()
                             .when_some(self.save_status(), |row, status| {
                                 row.child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(
-                                            if self.save_error.is_some()
-                                                || self.validation_error.is_some()
-                                            {
-                                                cx.theme().danger
-                                            } else {
-                                                cx.theme().muted_foreground
-                                            },
-                                        )
-                                        .child(status),
+                                    div().text_sm().text_color(cx.theme().danger).child(status),
                                 )
                             })
                             .when(self.save_error.is_some(), |row| {
