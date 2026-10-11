@@ -657,7 +657,7 @@ impl Workspace {
             });
 
         let colors = ui_theme::palette(cx);
-        TitleBar::new()
+        let title_bar = TitleBar::new()
             .when(cfg!(target_os = "macos") && window.is_fullscreen(), |bar| {
                 // The native controls retain their 80-point lane in fullscreen.
                 // TitleBar adds pl_3 internally there; keep the total inset unchanged.
@@ -665,15 +665,13 @@ impl Workspace {
             })
             .h(px(36.))
             .border_b_0()
-            .bg(ui_theme::header_material(&colors))
+            .bg(gpui_kit::transparent_black())
             .child(
                 h_flex()
                     .relative()
                     .w_full()
                     .h_full()
                     .items_center()
-                    .child(ui_theme::glass_sheen_layer(&colors))
-                    .child(ui_theme::material_highlight_line(&colors))
                     .child(
                         div()
                             .absolute()
@@ -702,7 +700,19 @@ impl Workspace {
                             .child(favorite_menu)
                             .child(help_menu),
                     ),
-            )
+            );
+
+        // Paint the material across the whole bar, including TitleBar's native
+        // controls inset. A sheen inside the menu content leaves a visible seam
+        // at the edge of the traffic-light lane, especially in dark mode.
+        div()
+            .relative()
+            .w_full()
+            .flex_shrink_0()
+            .bg(ui_theme::header_material(&colors))
+            .child(ui_theme::glass_sheen_layer(&colors))
+            .child(ui_theme::material_highlight_line(&colors))
+            .child(title_bar)
     }
 
     pub(super) fn render_file_toolbar(
