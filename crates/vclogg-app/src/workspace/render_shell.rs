@@ -103,8 +103,6 @@ impl Workspace {
         let show_horizontal_scrollbar = self.app_settings.show_horizontal_scrollbar;
         let highlight_log_levels = self.log_coloring_selection().1;
         let highlight_matches = self.app_settings.highlight_matches;
-        let case_sensitive = self.case_sensitive;
-        let regex = self.regex;
         let tab_count = self.tabs.len();
         let active_encoding = self.active_document().map(|tab| {
             (
@@ -470,14 +468,6 @@ impl Workspace {
                                 cx,
                             );
                         });
-                    let toggle_case =
-                        window.listener_for(&highlight_workspace, |this, _, window, cx| {
-                            this.toggle_case_sensitive(&ToggleCaseSensitive, window, cx);
-                        });
-                    let toggle_regex =
-                        window.listener_for(&highlight_workspace, |this, _, window, cx| {
-                            this.toggle_regex(&ToggleRegex, window, cx);
-                        });
                     let clear_highlight =
                         window.listener_for(&highlight_workspace, |this, _, window, cx| {
                             this.clear_search(window, cx);
@@ -514,20 +504,6 @@ impl Workspace {
                             .on_click(manage_labels),
                     )
                     .separator()
-                    .item(
-                        PopupMenuItem::new(crate::tr!("搜索时区分大小写", "Case-sensitive search"))
-                            .action(Box::new(ToggleCaseSensitive))
-                            .checked(case_sensitive)
-                            .disabled(!has_document)
-                            .on_click(toggle_case),
-                    )
-                    .item(
-                        PopupMenuItem::new(crate::tr!("使用正则表达式", "Use regular expressions"))
-                            .action(Box::new(ToggleRegex))
-                            .checked(regex)
-                            .disabled(!has_document)
-                            .on_click(toggle_regex),
-                    )
                     .item(
                         PopupMenuItem::new(crate::tr!("清除搜索高亮", "Clear search highlighting"))
                             .action(Box::new(ClearSearch))
