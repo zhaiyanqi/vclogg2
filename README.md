@@ -50,6 +50,8 @@ Detailed documentation is maintained in the [GitHub Wiki](https://github.com/zha
 
 Issues and pull requests are welcome.
 
+Commits use an English Conventional Commit title and matching `English:` / `中文:` body sections. Enable the [commit template](.gitmessage) with `git config --local commit.template .gitmessage`. Release notes group changes by type within separate English and Simplified Chinese sections.
+
 ## Acknowledgments
 
 Thanks to [klogg](https://github.com/variar/klogg) for inspiring work on high-performance log browsing and search, and to the Rust and [GPUI Kit](https://gpui-kit.com) communities.

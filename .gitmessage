@@ -1,0 +1,23 @@
+<type>(<scope>): <short English summary>
+
+English:
+<Describe the change and why it matters.>
+
+中文:
+<用中文说明相同的改动及其原因。>
+
+# Replace all <placeholders> before committing. / 提交前替换所有占位内容。
+# Types: feat, fix, perf, refactor, docs, build, ci, test, style, chore, revert
+# Scope is optional, e.g. fix(search): preserve selection after refresh
+# 标题采用英文祈使句；scope 可省略；一次提交聚焦一项改动。
+# Both bodies describe the same change. Add paragraphs or bullets as needed.
+# 两种语言内容应对应；简单改动各写一句，复杂改动再补充原因和影响。
+# Breaking changes: add ! before : and explain migration in BOTH languages.
+# 不兼容变更使用 type(scope)!:，在双语正文中说明影响和迁移方式。
+# Optional footers follow one blank line; remove unused footer examples.
+# 可选页脚放在正文后的空行下方；不要保留无用示例。
+# BREAKING CHANGE: <English compatibility and migration notes>
+# Refs: #123
+# Closes: #123
+# Enable locally / 本仓库启用: git config --local commit.template .gitmessage
+# Reference: https://www.conventionalcommits.org/en/v1.0.0/

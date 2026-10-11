@@ -1,11 +1,31 @@
 #!/usr/bin/env python3
-"""Generate bilingual release notes from EN: and ZH-CN: commit sections."""
+"""Generate categorized bilingual release notes from commit messages."""
 
 import argparse
 import json
 import re
 import subprocess
 from pathlib import Path
+
+
+CONVENTIONAL = re.compile(
+    r"^(?P<type>[a-z]+)(?:\((?P<scope>[^)]+)\))?(?P<breaking>!)?:\s+(?P<summary>.+)$",
+    re.IGNORECASE,
+)
+LANGUAGE_MARKER = re.compile(r"(English|中文|EN|ZH-CN):\s*(.*)", re.IGNORECASE)
+FOOTER = re.compile(
+    r"^(?:BREAKING[ -]CHANGE|Refs|Closes|Fixes|Resolves|[A-Za-z-]+-by)(?:: | #)"
+)
+CATEGORIES = (
+    ("breaking", "⚠️ Breaking Changes", "⚠️ 不兼容变更"),
+    ("feat", "✨ Features", "✨ 新增功能"),
+    ("fix", "🐛 Bug Fixes", "🐛 问题修复"),
+    ("perf", "⚡ Performance", "⚡ 性能优化"),
+    ("refactor", "♻️ Refactoring", "♻️ 代码重构"),
+    ("docs", "📝 Documentation", "📝 文档更新"),
+    ("maintenance", "🔧 Maintenance", "🔧 工程维护"),
+    ("other", "📦 Other Changes", "📦 其他变更"),
+)
 
 
 def git(*args):
@@ -17,15 +37,45 @@ def git(*args):
 def translations(message):
     sections = {"EN": [], "ZH-CN": []}
     language = None
-    for line in message.splitlines():
-        marker = re.fullmatch(r"(EN|ZH-CN):\s*(.*)", line, re.IGNORECASE)
+    for line in message.splitlines()[1:]:
+        marker = LANGUAGE_MARKER.fullmatch(line)
         if marker:
-            language = marker[1].upper()
+            language = "EN" if marker[1].upper() in ("EN", "ENGLISH") else "ZH-CN"
             if marker[2]:
                 sections[language].append(marker[2])
+        elif FOOTER.match(line):
+            language = None
         elif language:
             sections[language].append(line)
     return {key: "\n".join(lines).strip() for key, lines in sections.items()}
+
+
+def category_for(subject, message):
+    conventional = CONVENTIONAL.fullmatch(subject)
+    if (conventional and conventional["breaking"]) or re.search(
+        r"^BREAKING[ -]CHANGE: ", message, re.MULTILINE
+    ):
+        return "breaking"
+    kind = conventional["type"].lower() if conventional else "other"
+    if kind in ("build", "ci", "chore", "style", "test"):
+        return "maintenance"
+    if kind == "revert":
+        return "fix"
+    return kind if kind in {category[0] for category in CATEGORIES} else "other"
+
+
+def render_entry(content, subject, link):
+    lines = content.splitlines()
+    first = re.sub(r"^[-*] ", "", lines[0])
+    summary = CONVENTIONAL.fullmatch(first)
+    if summary:
+        first = summary["summary"]
+    conventional = CONVENTIONAL.fullmatch(subject)
+    scope = f"**{conventional['scope']}:** " if conventional and conventional["scope"] else ""
+    entry = f"- {scope}{first} ({link})"
+    if len(lines) > 1:
+        entry += "\n" + "\n".join(f"  {line}" for line in lines[1:])
+    return entry
 
 
 def main():
@@ -74,13 +124,14 @@ def main():
     if len(fields) % 3:
         raise ValueError("Unexpected git log record format")
 
-    entries = {"EN": [], "ZH-CN": []}
+    entries = {language: {key: [] for key, _, _ in CATEGORIES} for language in ("EN", "ZH-CN")}
     for index in range(0, len(fields), 3):
         commit, short_commit, message = fields[index:index + 3]
         sections = translations(message)
         for language in sections:
             sections[language] = sections[language] or catalog.get(commit, {}).get(language, "")
         subject = message.strip().splitlines()[0] if message.strip() else short_commit
+        category = category_for(subject, message)
         link = f"[{short_commit}](https://github.com/{args.repository}/commit/{commit})"
         for language, missing in (
             ("EN", "English translation unavailable; original message"),
@@ -92,22 +143,27 @@ def main():
                     raise ValueError(f"Missing {language} translation for {commit}")
                 original = sections["EN"] or sections["ZH-CN"] or subject
                 content = f"{missing}: {original}"
-            lines = content.splitlines()
-            entry = f"- {lines[0]} ({link})"
-            if len(lines) > 1:
-                entry += "\n" + "\n".join(f"  {line}" for line in lines[1:])
-            entries[language].append(entry)
+            entries[language][category].append(render_entry(content, subject, link))
 
-    output = []
-    for language, heading, empty in (
-        ("EN", "Changelog (English)", "No commits in this release."),
-        ("ZH-CN", "更新记录（简体中文）", "本次发布没有新增提交。"),
+    output = ["[English](#english) | [简体中文](#简体中文)"]
+    for language, heading, empty, heading_index in (
+        ("EN", "English", "No commits in this release.", 1),
+        ("ZH-CN", "简体中文", "本次发布没有新增提交。", 2),
     ):
-        output.append(f"## {heading}\n\n" + ("\n".join(entries[language]) or empty))
+        sections = [f"## {heading}"]
+        for category in CATEGORIES:
+            items = entries[language][category[0]]
+            if items:
+                sections.append(f"### {category[heading_index]}\n\n" + "\n".join(items))
+        if len(sections) == 1:
+            sections.append(empty)
+        if language == "ZH-CN":
+            output.append("---")
+        output.append("\n\n".join(sections))
     if previous_tag:
         output.append(
-            f"**Full Changelog / 完整变更记录**: "
-            f"https://github.com/{args.repository}/compare/{previous_tag}...{args.tag}"
+            f"---\n\n[Full Changelog / 完整变更记录]"
+            f"(https://github.com/{args.repository}/compare/{previous_tag}...{args.tag})"
         )
     args.output.write_text("\n\n".join(output) + "\n", encoding="utf-8")
 

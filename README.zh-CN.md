@@ -50,6 +50,8 @@ VCLogg2（VCLogg）是免费开源的大文件日志查看器（log viewer），
 
 欢迎提交 Issue 和 Pull Request。
 
+提交信息使用英文 Conventional Commit 标题，正文通过 `English:` / `中文:` 提供对应的双语说明。运行 `git config --local commit.template .gitmessage` 启用[提交模板](.gitmessage)。发布记录分为英文和简体中文两个区域，并按变更类型分组。
+
 ## 致谢
 
 参见[英文 README](README.md#acknowledgments)。

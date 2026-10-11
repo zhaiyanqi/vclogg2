@@ -55,16 +55,19 @@
 
 9. **及时提交与双语提交信息**
    - 修改代码后，完成与改动范围相符且符合本规则的检查，及时提交本次任务相关的改动，不混入无关改动；未经要求不自动推送。
-   - Commit message 必须同时提供含义一致的英文和中文说明：首行为英文标题，正文使用独立的 `EN:` 和 `ZH-CN:` 段落，支持多行内容。
+   - Commit message 使用 `.gitmessage` 模板：首行为英文 Conventional Commit 标题 `type(scope): summary`（scope 可选），正文使用 `English:` 和 `中文:` 两段，提供含义一致的改动和原因。简单改动各写一句，复杂改动可增加段落或列表。使用 `git config --local commit.template .gitmessage` 在本仓库启用模板。
+   - 类型使用 `feat`、`fix`、`perf`、`refactor`、`docs`、`build`、`ci`、`test`、`style`、`chore`、`revert`；不兼容变更在冒号前加 `!`，并在两种语言正文中说明影响及迁移方式。`BREAKING CHANGE:`、`Refs:`、`Closes:` 等可选页脚与正文空一行，不混入译文。
    - GitHub Release 从完整 commit message 提取上述两段，分别生成英文和中文提交记录；历史提交可使用 `scripts/commit-translations.json` 中按完整提交 SHA 保存、经核对的英中译文，无需重写 Git 历史。两处均缺少某语言时保留原文并标明缺少翻译，不自动编造译文。
+   - Release 使用语言导航、英文区和简体中文区；各区按不兼容变更、新增功能、问题修复、性能优化、代码重构、文档更新、工程维护和其他变更分组，仅显示非空分组。条目去掉类型前缀、保留 scope 和提交链接，两种语言的分类及顺序一致。保留完整变更比较链接；旧版 `EN:` / `ZH-CN:` 正文继续兼容，无法分类的历史标题放入“其他变更”。
+   - 样式依据：[Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) 的标题/正文/页脚结构，以及 [Ant Design](https://github.com/ant-design/ant-design/releases)、[FluentRead](https://github.com/FluentRead/FluentRead/releases) 的双语分区和分组发布记录；双语段落名称为本项目约定，并非通用标准。
    - 格式示例：
 
      ```text
-     fix: preserve log selection after refresh
+     fix(search): preserve selection after refresh
 
-     EN:
-     Preserve log selection after refreshing the file.
+     English:
+     Preserve the selected log rows when refreshing the file.
 
-     ZH-CN:
-     刷新文件后保留日志选区。
+     中文:
+     刷新文件时保留已选中的日志行。
      ```
