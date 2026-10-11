@@ -9,7 +9,7 @@ VCLogg2（VCLogg）是免费开源的大文件日志查看器（log viewer），
 [![CI (manual)](https://img.shields.io/github/actions/workflow/status/zhaiyanqi/vclogg2/ci.yml?branch=main&label=CI%20%28manual%29)](https://github.com/zhaiyanqi/vclogg2/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/github/license/zhaiyanqi/vclogg2)](LICENSE)
 
-[项目主页](https://zhaiyanqi.github.io/vclogg2/) · [下载](https://github.com/zhaiyanqi/vclogg2/releases/latest) · [Wiki 文档](https://github.com/zhaiyanqi/vclogg2/wiki) · [English](README.md)
+[项目主页](https://zhaiyanqi.github.io/vclogg2/) · [下载](https://github.com/zhaiyanqi/vclogg2/releases/latest) · [Wiki 文档](wiki/zh-CN/Home.md) · [English](README.md)
 
 ![VCLogg2：海量日志，信号清晰](doc/assets/readme-hero-zh-CN.jpg)
 
@@ -31,22 +31,22 @@ VCLogg2（VCLogg）是免费开源的大文件日志查看器（log viewer），
 | macOS 15 · Apple Silicon | DMG | 将 `VCLogg2.app` 拖入 Applications |
 | Linux · x86_64（Ubuntu 22.04） | tar.gz | 解压后运行 `./Install-VCLogg2-linux.sh --launch` |
 
-数据目录见[安装与升级](https://github.com/zhaiyanqi/vclogg2/wiki/Installation)，签名说明见[构建与发布](https://github.com/zhaiyanqi/vclogg2/wiki/Build-and-Release)。当前 macOS 包使用临时签名，尚未公证。
+数据目录见[安装与升级](wiki/zh-CN/Installation.md)，签名说明见[构建与发布](wiki/zh-CN/Build-and-Release.md)。当前 macOS 包使用临时签名，尚未公证。
 
 ## 从源码构建
 
-[源码构建指南](https://github.com/zhaiyanqi/vclogg2/wiki/Building)提供 Rust 与平台依赖、完整环境配置、Debug/Release 命令和验证说明。构建与打包脚本统一保留在 `scripts/`，使用仓库中的 `Cargo.lock`。
+[源码构建指南](wiki/zh-CN/Building.md)提供 Rust 与平台依赖、完整环境配置、Debug/Release 命令和验证说明。构建与打包脚本统一保留在 `scripts/`，使用仓库中的 `Cargo.lock`。
 
 可选的云端过滤器服务端位于 [`server/`](server/README.md)。标签发布会附带 Windows/Linux 服务端包；本地通过 `scripts/package-server-release.sh` 或 `scripts/package-server-release.ps1` 打包。
 
 ## 文档与贡献
 
-详细文档统一维护在 [GitHub Wiki](https://github.com/zhaiyanqi/vclogg2/wiki)。
+详细文档以中英双语统一维护在主仓库 [wiki/](wiki/README.md)，并通过 mdBook 与官网一起发布。
 
-- [快速上手](https://github.com/zhaiyanqi/vclogg2/wiki/Getting-Started) · [界面导览](https://github.com/zhaiyanqi/vclogg2/wiki/Interface) · [键盘快捷键](https://github.com/zhaiyanqi/vclogg2/wiki/Keyboard-Shortcuts)
-- [搜索与过滤](https://github.com/zhaiyanqi/vclogg2/wiki/Search-and-Filters) · [动态日志](https://github.com/zhaiyanqi/vclogg2/wiki/Live-Logs) · [设置](https://github.com/zhaiyanqi/vclogg2/wiki/Settings)
-- [项目概况](https://github.com/zhaiyanqi/vclogg2/wiki/Project-Overview) · [技术栈](https://github.com/zhaiyanqi/vclogg2/wiki/Technology-Stack) · [架构](https://github.com/zhaiyanqi/vclogg2/wiki/Architecture)
-- [贡献指南](https://github.com/zhaiyanqi/vclogg2/wiki/Contributing) · [常见问题](https://github.com/zhaiyanqi/vclogg2/wiki/Troubleshooting) · [全部文档](https://github.com/zhaiyanqi/vclogg2/wiki)
+- [快速上手](wiki/zh-CN/Getting-Started.md) · [界面导览](wiki/zh-CN/Interface.md) · [键盘快捷键](wiki/zh-CN/Keyboard-Shortcuts.md)
+- [搜索与过滤](wiki/zh-CN/Search-and-Filters.md) · [动态日志](wiki/zh-CN/Live-Logs.md) · [设置](wiki/zh-CN/Settings.md)
+- [项目概况](wiki/zh-CN/Project-Overview.md) · [技术栈](wiki/zh-CN/Technology-Stack.md) · [架构](wiki/zh-CN/Architecture.md)
+- [贡献指南](wiki/zh-CN/Contributing.md) · [常见问题](wiki/zh-CN/Troubleshooting.md) · [全部文档](wiki/zh-CN/Home.md)
 
 欢迎提交 Issue 和 Pull Request。
 

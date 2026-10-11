@@ -1,0 +1,13 @@
+[book]
+title = "VCLogg2 Documentation"
+authors = ["VCLogg2 contributors"]
+language = "en"
+src = "."
+
+[build]
+create-missing = false
+
+[output.html]
+git-repository-url = "https://github.com/zhaiyanqi/vclogg2"
+edit-url-template = "https://github.com/zhaiyanqi/vclogg2/edit/main/wiki/en/{path}"
+site-url = "/vclogg2/wiki/en/"

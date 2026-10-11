@@ -41,7 +41,7 @@ powershell -ExecutionPolicy Bypass -File scripts/package-server-release.ps1
 
 每个包只包含可执行文件、配置示例、README、LICENSE 和 VERSION；不包含运行数据、账户配置、密钥或依赖目录。Node.js、Vue 和 Element Plus 只参与构建，不是服务器运行时依赖。Linux 解压后先执行 `chmod +x vclogg-server`，以兼容 Windows 本机构建包的文件权限。
 
-推送 `v*` 标签时，仓库的 `Multiplatform Release Build` 会将这些包与桌面包发布至同一个 GitHub Release。手动运行可选择 `all`、`desktop` 或 `server`，只上传 Actions Artifacts。详细依赖安装、命令及发布规则见 [Building](https://github.com/zhaiyanqi/vclogg2/wiki/Building) 和 [Build-and-Release](https://github.com/zhaiyanqi/vclogg2/wiki/Build-and-Release)。本地脚本只打包，不上传或部署。
+推送 `v*` 标签时，仓库的 `Multiplatform Release Build` 会将这些包与桌面包发布至同一个 GitHub Release。手动运行可选择 `all`、`desktop` 或 `server`，只上传 Actions Artifacts。详细依赖安装、命令及发布规则见 [Building](https://github.com/zhaiyanqi/vclogg2/blob/main/wiki/zh-CN/Building.md) 和 [Build-and-Release](https://github.com/zhaiyanqi/vclogg2/blob/main/wiki/zh-CN/Build-and-Release.md)。本地脚本只打包，不上传或部署。
 
 原入口仍可使用：在 `server/` 中执行 `pnpm run build`，或运行 `server/scripts/build-server.bat`，都会转到统一发布打包逻辑。完整 Windows 校验入口为 `server/scripts/verify.ps1`。
 
@@ -133,6 +133,10 @@ Compress-Archive -LiteralPath (Join-Path $releaseDirectory 'latest.yml'),$instal
 关键词管理把查看、编辑、状态变更和导出拆分为独立权限。管理员编辑必须携带列表中的基础修订，过期修订返回 `409 revision_conflict`。过滤器以 UUID 区分身份，同名同内容但 UUID 不同的记录可以并存；管理列表显示短 UUID，编辑页显示完整 UUID。具有 `filters.export` 权限的管理员可按当前搜索和状态筛选导出 JSON 或带 UTF-8 BOM 的 CSV，导出操作会记录格式、筛选条件和条目数量审计。
 
 仅当服务器只能通过可信反向代理访问时，才可设置 `trusted_proxy: true`。启用后，服务器会接受 `X-Forwarded-Proto: https`，并为管理与客户端 Cookie 设置 `Secure`。
+
+## 当前 VCLogg2 桌面端兼容性
+
+以下签名和系统凭据库说明描述原有签名客户端协议，不代表当前 VCLogg2 Rust 桌面实现。当前桌面端首次注册无内置签名，Cookie/CSRF 保存为本地私有会话文件，不使用系统钥匙串；默认启用签名鉴权的本服务可能拒绝该客户端注册。同仓库打包或提供公钥不会自动补齐客户端协议。生产部署前应统一鉴权实现，关闭 `client_auth` 仅用于隔离开发环境。详见[当前云端文档](https://github.com/zhaiyanqi/vclogg2/blob/main/wiki/zh-CN/Cloud-Filters.md)。
 
 ## 客户端授权与 Cookie
 

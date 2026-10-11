@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="920" viewBox="0 0 1440 920">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#18212f" flood-opacity="0.12"/>
+    </filter>
+    <style>
+      text { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+      .title { font-size: 28px; font-weight: 700; fill: #18212f; }
+      .subtitle { font-size: 14px; fill: #5f6b7a; }
+      .panel-title { font-size: 18px; font-weight: 700; }
+      .label { font-size: 13px; font-weight: 600; }
+      .meta { font-size: 12px; }
+      .mono { font-family: "Cascadia Mono", "Consolas", monospace; font-size: 12px; }
+    </style>
+  </defs>
+
+  <rect width="1440" height="920" fill="#f2f4f7"/>
+  <text x="40" y="52" class="title">VCLogg2 界面优化验收板</text>
+  <text x="40" y="80" class="subtitle">主题语义色 · 控件状态 · 搜索高亮 · 默认颜色标签 · 字号间距 · 160ms 动效规格</text>
+
+  <g filter="url(#shadow)">
+    <rect x="40" y="110" width="660" height="360" rx="16" fill="#f8fafc"/>
+    <rect x="740" y="110" width="660" height="360" rx="16" fill="#0f141b"/>
+  </g>
+
+  <text x="72" y="150" class="panel-title" fill="#18212f">晨雾浅色</text>
+  <text x="72" y="174" class="meta" fill="#5f6b7a">背景 #F8FAFC · 前景 #18212F · 主色 #2F6FED</text>
+  <text x="772" y="150" class="panel-title" fill="#e6edf5">深海夜色</text>
+  <text x="772" y="174" class="meta" fill="#9aa8b7">背景 #0F141B · 前景 #E6EDF5 · 主色 #6EA8FE</text>
+
+  <g>
+    <rect x="72" y="202" width="128" height="68" rx="8" fill="#ffffff" stroke="#d9e1ea"/>
+    <text x="88" y="229" class="label" fill="#18212f">静止</text>
+    <text x="88" y="252" class="meta" fill="#5f6b7a">边界清楚</text>
+
+    <rect x="216" y="202" width="128" height="68" rx="8" fill="#eff5fc" stroke="#d9e1ea"/>
+    <text x="232" y="229" class="label" fill="#18212f">悬停</text>
+    <text x="232" y="252" class="meta" fill="#5f6b7a">弱蓝反馈</text>
+
+    <rect x="360" y="202" width="128" height="68" rx="8" fill="#dceaff" stroke="#7aa7e8" stroke-width="2"/>
+    <text x="376" y="229" class="label" fill="#183b6b">选中</text>
+    <text x="376" y="252" class="meta" fill="#183b6b">持续状态</text>
+
+    <rect x="504" y="202" width="128" height="68" rx="8" fill="#ffffff" stroke="#2f6fed" stroke-width="3"/>
+    <text x="520" y="229" class="label" fill="#18212f">控件聚焦</text>
+    <text x="520" y="252" class="meta" fill="#5f6b7a">局部焦点环</text>
+  </g>
+
+  <g>
+    <rect x="72" y="294" width="560" height="42" rx="6" fill="#ffffff" stroke="#d9e1ea"/>
+    <rect x="150" y="304" width="104" height="22" rx="3" fill="#c9d9fb"/>
+    <text x="88" y="320" class="mono" fill="#18212f">文本选区  connection reset by peer</text>
+    <rect x="72" y="348" width="560" height="42" rx="6" fill="#ffffff" stroke="#d9e1ea"/>
+    <rect x="239" y="358" width="72" height="22" rx="3" fill="#f3e4c8"/>
+    <text x="88" y="374" class="mono" fill="#18212f">普通搜索  request timeout after 30s</text>
+    <rect x="72" y="402" width="560" height="42" rx="6" fill="#ffffff" stroke="#d9e1ea"/>
+    <rect x="239" y="412" width="72" height="22" rx="3" fill="#e6c787"/>
+    <text x="88" y="428" class="mono" fill="#18212f">页内查找  request timeout after 30s</text>
+  </g>
+
+  <g>
+    <rect x="772" y="202" width="128" height="68" rx="8" fill="#1c2632" stroke="#2b3542"/>
+    <text x="788" y="229" class="label" fill="#e6edf5">静止</text>
+    <text x="788" y="252" class="meta" fill="#9aa8b7">边界清楚</text>
+
+    <rect x="916" y="202" width="128" height="68" rx="8" fill="#1b293a" stroke="#2b3542"/>
+    <text x="932" y="229" class="label" fill="#e6edf5">悬停</text>
+    <text x="932" y="252" class="meta" fill="#9aa8b7">弱蓝反馈</text>
+
+    <rect x="1060" y="202" width="128" height="68" rx="8" fill="#203a5d" stroke="#4f87c7" stroke-width="2"/>
+    <text x="1076" y="229" class="label" fill="#dcebff">选中</text>
+    <text x="1076" y="252" class="meta" fill="#dcebff">持续状态</text>
+
+    <rect x="1204" y="202" width="128" height="68" rx="8" fill="#1c2632" stroke="#6ea8fe" stroke-width="3"/>
+    <text x="1220" y="229" class="label" fill="#e6edf5">控件聚焦</text>
+    <text x="1220" y="252" class="meta" fill="#9aa8b7">局部焦点环</text>
+  </g>
+
+  <g>
+    <rect x="772" y="294" width="560" height="42" rx="6" fill="#18212c" stroke="#2b3542"/>
+    <rect x="850" y="304" width="104" height="22" rx="3" fill="#33567d"/>
+    <text x="788" y="320" class="mono" fill="#e6edf5">文本选区  connection reset by peer</text>
+    <rect x="772" y="348" width="560" height="42" rx="6" fill="#18212c" stroke="#2b3542"/>
+    <rect x="939" y="358" width="72" height="22" rx="3" fill="#574d35"/>
+    <text x="788" y="374" class="mono" fill="#e6edf5">普通搜索  request timeout after 30s</text>
+    <rect x="772" y="402" width="560" height="42" rx="6" fill="#18212c" stroke="#2b3542"/>
+    <rect x="939" y="412" width="72" height="22" rx="3" fill="#8c7440"/>
+    <text x="788" y="428" class="mono" fill="#e6edf5">页内查找  request timeout after 30s</text>
+  </g>
+
+  <rect x="40" y="500" width="1360" height="380" rx="16" fill="#ffffff" filter="url(#shadow)"/>
+  <text x="72" y="544" class="panel-title" fill="#18212f">默认 10 色标签</text>
+  <text x="72" y="568" class="meta" fill="#5f6b7a">定性调色板强调相互区分；用户已保存的自定义颜色不会被覆盖</text>
+
+  <g>
+    <rect x="72" y="596" width="244" height="58" rx="10" fill="#4e79a7"/><text x="92" y="622" class="label" fill="#ffffff">01 海蓝</text><text x="92" y="642" class="meta" fill="#ffffff">#4E79A7</text>
+    <rect x="332" y="596" width="244" height="58" rx="10" fill="#f28e2b"/><text x="352" y="622" class="label" fill="#18212f">02 琥珀</text><text x="352" y="642" class="meta" fill="#18212f">#F28E2B</text>
+    <rect x="592" y="596" width="244" height="58" rx="10" fill="#e15759"/><text x="612" y="622" class="label" fill="#ffffff">03 珊瑚</text><text x="612" y="642" class="meta" fill="#ffffff">#E15759</text>
+    <rect x="852" y="596" width="244" height="58" rx="10" fill="#76b7b2"/><text x="872" y="622" class="label" fill="#18212f">04 青瓷</text><text x="872" y="642" class="meta" fill="#18212f">#76B7B2</text>
+    <rect x="1112" y="596" width="244" height="58" rx="10" fill="#59a14f"/><text x="1132" y="622" class="label" fill="#ffffff">05 草绿</text><text x="1132" y="642" class="meta" fill="#ffffff">#59A14F</text>
+
+    <rect x="72" y="670" width="244" height="58" rx="10" fill="#edc948"/><text x="92" y="696" class="label" fill="#18212f">06 金黄</text><text x="92" y="716" class="meta" fill="#18212f">#EDC948</text>
+    <rect x="332" y="670" width="244" height="58" rx="10" fill="#b07aa1"/><text x="352" y="696" class="label" fill="#ffffff">07 紫藤</text><text x="352" y="716" class="meta" fill="#ffffff">#B07AA1</text>
+    <rect x="592" y="670" width="244" height="58" rx="10" fill="#ff9da7"/><text x="612" y="696" class="label" fill="#18212f">08 樱粉</text><text x="612" y="716" class="meta" fill="#18212f">#FF9DA7</text>
+    <rect x="852" y="670" width="244" height="58" rx="10" fill="#9c755f"/><text x="872" y="696" class="label" fill="#ffffff">09 栗棕</text><text x="872" y="716" class="meta" fill="#ffffff">#9C755F</text>
+    <rect x="1112" y="670" width="244" height="58" rx="10" fill="#6f63c2"/><text x="1132" y="696" class="label" fill="#ffffff">10 靛紫</text><text x="1132" y="716" class="meta" fill="#ffffff">#6F63C2</text>
+  </g>
+
+  <text x="72" y="772" class="label" fill="#18212f">排版</text>
+  <text x="132" y="772" style="font-size:18px;font-weight:700;fill:#18212f">标题 18</text>
+  <text x="246" y="772" style="font-size:14px;fill:#18212f">正文/控件 14</text>
+  <text x="370" y="772" style="font-size:12px;fill:#5f6b7a">辅助信息 12</text>
+  <text x="510" y="772" class="meta" fill="#5f6b7a">全局 rem 基准 15px · 日志等宽字体保持独立设置</text>
+
+  <text x="72" y="816" class="label" fill="#18212f">间距</text>
+  <rect x="132" y="803" width="4" height="20" rx="2" fill="#2f6fed"/><text x="143" y="817" class="meta" fill="#5f6b7a">4</text>
+  <rect x="178" y="803" width="8" height="20" rx="2" fill="#2f6fed"/><text x="193" y="817" class="meta" fill="#5f6b7a">8</text>
+  <rect x="228" y="803" width="12" height="20" rx="2" fill="#2f6fed"/><text x="247" y="817" class="meta" fill="#5f6b7a">12</text>
+  <rect x="290" y="803" width="16" height="20" rx="2" fill="#2f6fed"/><text x="313" y="817" class="meta" fill="#5f6b7a">16</text>
+  <rect x="362" y="803" width="24" height="20" rx="2" fill="#2f6fed"/><text x="393" y="817" class="meta" fill="#5f6b7a">24</text>
+
+  <text x="510" y="816" class="label" fill="#18212f">动效</text>
+  <circle cx="572" cy="812" r="6" fill="#2f6fed"/>
+  <path d="M590 812 H690" stroke="#7aa7e8" stroke-width="3" stroke-linecap="round"/>
+  <path d="M690 812 l-10 -7 v14 z" fill="#2f6fed"/>
+  <text x="708" y="817" class="meta" fill="#5f6b7a">160ms · ease-out · 透明度 + 8px 空间位移 · 无循环 / 无弹跳</text>
+
+  <text x="72" y="854" class="meta" fill="#5f6b7a">此图是实现规格对照板，不是真实窗口截图；真实验收步骤见 doc/ui-polish-acceptance.md。</text>
+</svg>

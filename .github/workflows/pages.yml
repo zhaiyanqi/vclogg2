@@ -5,36 +5,68 @@ on:
     branches: [main]
     paths:
       - "doc/**"
+      - "wiki/**"
+      - "scripts/build-docs.py"
+      - ".github/workflows/pages.yml"
+  pull_request:
+    paths:
+      - "doc/**"
+      - "wiki/**"
+      - "scripts/build-docs.py"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
+  group: pages-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
   cancel-in-progress: true
 
 jobs:
-  deploy:
-    name: Publish website
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  build:
+    name: Build website and bilingual wiki
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
+      - name: Install pinned mdBook
+        env:
+          MDBOOK_VERSION: "0.4.52"
+          MDBOOK_SHA256: "c0b903f01dd8f4edc644372ad2b80b1fdddd12552d37b6a098657cbd8eddd768"
+        run: |
+          curl --fail --location --retry 3 \
+            "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+            --output "$RUNNER_TEMP/mdbook.tar.gz"
+          echo "${MDBOOK_SHA256}  $RUNNER_TEMP/mdbook.tar.gz" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/mdbook-bin"
+          tar -xzf "$RUNNER_TEMP/mdbook.tar.gz" -C "$RUNNER_TEMP/mdbook-bin" mdbook
+          echo "$RUNNER_TEMP/mdbook-bin" >> "$GITHUB_PATH"
+
+      - name: Validate and build documentation
+        run: python3 scripts/build-docs.py
 
       - name: Upload website artifact
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v4
         with:
-          path: doc
+          path: _site
+
+  deploy:
+    name: Publish website and wiki
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
 
       - name: Deploy GitHub Pages
         id: deployment

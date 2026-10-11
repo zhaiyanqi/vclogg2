@@ -9,7 +9,7 @@ Open log files produced by your application's logger, search across files with k
 [![CI (manual)](https://img.shields.io/github/actions/workflow/status/zhaiyanqi/vclogg2/ci.yml?branch=main&label=CI%20%28manual%29)](https://github.com/zhaiyanqi/vclogg2/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/github/license/zhaiyanqi/vclogg2)](LICENSE)
 
-[Website](https://zhaiyanqi.github.io/vclogg2/) · [Download](https://github.com/zhaiyanqi/vclogg2/releases/latest) · [Wiki](https://github.com/zhaiyanqi/vclogg2/wiki) · [简体中文](README.zh-CN.md)
+[Website](https://zhaiyanqi.github.io/vclogg2/) · [Download](https://github.com/zhaiyanqi/vclogg2/releases/latest) · [Wiki](wiki/en/Home.md) · [简体中文](README.zh-CN.md)
 
 ![VCLogg2: Clear signals in large logs](doc/assets/readme-hero.jpg)
 
@@ -31,22 +31,22 @@ Get the [latest release](https://github.com/zhaiyanqi/vclogg2/releases/latest) f
 | macOS 15 · Apple Silicon | DMG | Drag `VCLogg2.app` into Applications |
 | Linux · x86_64 (Ubuntu 22.04) | tar.gz | Extract and run `./Install-VCLogg2-linux.sh --launch` |
 
-See [installation](https://github.com/zhaiyanqi/vclogg2/wiki/Installation) for data locations and [build and release notes](https://github.com/zhaiyanqi/vclogg2/wiki/Build-and-Release) for signing details. Current macOS packages use ad-hoc signing without notarization.
+See [installation](wiki/en/Installation.md) for data locations and [build and release notes](wiki/en/Build-and-Release.md) for signing details. Current macOS packages use ad-hoc signing without notarization.
 
 ## Build from source
 
-See the [source build guide](https://github.com/zhaiyanqi/vclogg2/wiki/Building) for Rust and platform prerequisites, environment setup, Debug/Release commands, and validation. Build and packaging scripts are maintained in `scripts/` and use the committed `Cargo.lock`.
+See the [source build guide](wiki/en/Building.md) for Rust and platform prerequisites, environment setup, Debug/Release commands, and validation. Build and packaging scripts are maintained in `scripts/` and use the committed `Cargo.lock`.
 
 The optional cloud filter server lives in [`server/`](server/README.md). Its Windows/Linux packages are included in tagged releases; local packaging uses `scripts/package-server-release.sh` or `scripts/package-server-release.ps1`.
 
 ## Documentation & contributing
 
-Detailed documentation is maintained in the [GitHub Wiki](https://github.com/zhaiyanqi/vclogg2/wiki), primarily in Chinese.
+Detailed documentation is maintained in the main repository’s [wiki/](wiki/README.md), in English and Simplified Chinese, and published with the website using mdBook.
 
-- [Quick start](https://github.com/zhaiyanqi/vclogg2/wiki/Getting-Started) · [Interface](https://github.com/zhaiyanqi/vclogg2/wiki/Interface) · [Keyboard shortcuts](https://github.com/zhaiyanqi/vclogg2/wiki/Keyboard-Shortcuts)
-- [Search & filters](https://github.com/zhaiyanqi/vclogg2/wiki/Search-and-Filters) · [Live logs](https://github.com/zhaiyanqi/vclogg2/wiki/Live-Logs) · [Settings](https://github.com/zhaiyanqi/vclogg2/wiki/Settings)
-- [Project overview](https://github.com/zhaiyanqi/vclogg2/wiki/Project-Overview) · [Technology stack](https://github.com/zhaiyanqi/vclogg2/wiki/Technology-Stack) · [Architecture](https://github.com/zhaiyanqi/vclogg2/wiki/Architecture)
-- [Contributing](https://github.com/zhaiyanqi/vclogg2/wiki/Contributing) · [Troubleshooting](https://github.com/zhaiyanqi/vclogg2/wiki/Troubleshooting) · [All documents](https://github.com/zhaiyanqi/vclogg2/wiki)
+- [Quick start](wiki/en/Getting-Started.md) · [Interface](wiki/en/Interface.md) · [Keyboard shortcuts](wiki/en/Keyboard-Shortcuts.md)
+- [Search & filters](wiki/en/Search-and-Filters.md) · [Live logs](wiki/en/Live-Logs.md) · [Settings](wiki/en/Settings.md)
+- [Project overview](wiki/en/Project-Overview.md) · [Technology stack](wiki/en/Technology-Stack.md) · [Architecture](wiki/en/Architecture.md)
+- [Contributing](wiki/en/Contributing.md) · [Troubleshooting](wiki/en/Troubleshooting.md) · [All documents](wiki/en/Home.md)
 
 Issues and pull requests are welcome.
 
