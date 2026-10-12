@@ -67,3 +67,14 @@ WorkspaceBody [A004] (reference)
 ```
 
 A806/A807 document the explicit editor branches previously absent from the Wiki registry. Keep these IDs when their placement changes. Source ownership: `workspace/render_shell.rs`, `tab_view.rs`, `search_tab_ui.rs`, `settings_window.rs`, `document_editing.rs`, and `settings_dialog.rs` under `crates/vclogg-app/src/` (workspace files under `workspace/`).
+
+The text tag context menu reuses existing semantic IDs and is composed in `workspace/row_tags.rs` for the log body, local results and global results:
+
+```text
+Text tag context menu
+├─ Edit mark… [A569] — open the tag editor
+├─ Delete mark [A572] — remove the selected text tag
+└─ Clear all marks [A601] — remove all text tags in the owning file, including invisible rows; retain row marks, reuse history and other files’ tags
+```
+
+A601 also remains in the row’s “Text mark” submenu; it is disabled when there are no tags, the document is stale, a file is opening or the state store is unavailable.

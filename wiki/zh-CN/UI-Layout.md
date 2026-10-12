@@ -67,3 +67,14 @@ WorkspaceBody [A004]（引用）
 ```
 
 A806/A807 用于已实现的显式编辑器，后续移动时保留编号。源码归属为 `crates/vclogg-app/src/` 下的 `workspace/render_shell.rs`、`tab_view.rs`、`search_tab_ui.rs`、`settings_window.rs`、`document_editing.rs` 与 `settings_dialog.rs`（工作区文件位于 `workspace/`）。
+
+文字标记自身的右键菜单复用现有语义编号，由 `workspace/row_tags.rs` 生成，正文、当前结果和全局结果共用：
+
+```text
+文字标记右键菜单
+├─ 编辑标记… [A569] — 打开标记编辑弹窗
+├─ 删除标记 [A572] — 删除当前文字标记
+└─ 清除所有标记 [A601] — 清除所属文件全部文字标记，包括不可见行；保留行标记、复用历史和其他文件标记
+```
+
+A601 同时保留在日志行的“文字标记”子菜单内；无文字标记、文档已失效、正在打开文件或状态库不可用时禁用。

@@ -843,7 +843,7 @@ impl Workspace {
         workspace: Entity<Self>,
         menu_target: TagMenuTarget,
         window: &mut Window,
-        _: &mut Context<PopupMenu>,
+        cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
         let TagMenuTarget {
             target,
@@ -852,6 +852,16 @@ impl Workspace {
             text,
         } = menu_target;
         let edit_id = id.clone();
+        let clear_document = document.clone();
+        let this = workspace.read(cx);
+        let can_clear = this.open_task.is_none()
+            && this.persistence.store.is_some()
+            && this.tag_target_is_current(target, &document)
+            && this
+                .documents
+                .iter()
+                .find(|tab| tab.id == target.document_id)
+                .is_some_and(|tab| !tab.file.row_tags.is_empty());
         menu.item(
             PopupMenuItem::new(crate::tr!("编辑标记…", "Edit mark…")).on_click(
                 window.listener_for(&workspace, move |this, _, window, cx| {
@@ -885,6 +895,13 @@ impl Workspace {
                     this.delete_row_tag(target, &id, window, cx);
                 }),
             ),
+        )
+        .item(
+            PopupMenuItem::new(crate::tr!("清除所有标记", "Clear all marks"))
+                .disabled(!can_clear)
+                .on_click(window.listener_for(&workspace, move |this, _, window, cx| {
+                    this.clear_document_row_tags(target, &clear_document, window, cx);
+                })),
         )
     }
 

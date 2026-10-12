@@ -12,4 +12,4 @@ Transparency ranges from 0% opaque to 100% transparent and combines with color a
 
 History reuses complete styles and deduplicates by exact case-sensitive text, newest-first. Deleting a history entry affects reuse only, not existing annotations or the current draft; successful deletion is immediate and is not undone by canceling the dialog. Every added tag is an independent instance.
 
-The row context menu can clear all text tags belonging to that file, including invisible rows, while retaining ordinary row marks and reuse history. Tags persist separately from source text and are excluded from search, copy and exports. Source-line digest validation prevents attaching an old tag to changed content.
+Both the row context menu and the text tag’s own context menu offer “Clear all marks” (below “Delete mark” in the tag menu) to clear all text tags belonging to that file, including invisible rows, while retaining ordinary row marks and reuse history. Tags persist separately from source text and are excluded from search, copy and exports. Source-line digest validation prevents attaching an old tag to changed content.
