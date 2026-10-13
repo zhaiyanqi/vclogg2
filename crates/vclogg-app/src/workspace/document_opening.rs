@@ -257,6 +257,13 @@ impl Workspace {
         }
         self.pending_external_paths.extend(new_paths);
         self.open_queued_external_paths_if_idle(window, cx);
+        // Activation clears the installation's reveal request. Reapply it after
+        // dispatch so external opens reveal both new and already-open file tabs.
+        if !paths.is_empty() {
+            self.pending_document_tab_reveal
+                .set(self.active_tab_id.document_id());
+            cx.notify();
+        }
     }
 
     pub(super) fn open_queued_external_paths_if_idle(
