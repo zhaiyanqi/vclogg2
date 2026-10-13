@@ -20,3 +20,5 @@ Panic reports include build/platform/thread/source location/backtrace; normal st
 Exit all processes sharing the root before backup/migration, then copy the full data directory. Do not copy only a live SQLite main file and omit WAL. Storage settings can clear rebuildable indices; history cleanup protects open, pinned or annotated/marked records. Temporary-file cleanup validates application ownership and current use.
 
 Before sharing diagnostics, inspect paths, searches, filters and log snippets for private content. Never attach raw cloud session files, Cookie/CSRF values, release credentials or an unreviewed state database.
+
+Update checks contact the public website only when requested. Version metadata, success time and failure backoff are stored in SQLite; no log content is sent. New versions or failed checks open GitHub Releases in the browser. See [update checks](Build-and-Release.md#update-checks).

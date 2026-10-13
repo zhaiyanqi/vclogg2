@@ -601,8 +601,8 @@ impl Workspace {
             .dropdown_menu(move |menu, window, cx| {
                 let menu =
                     Self::popup_menu_with_workspace_action_context(menu, &help_workspace, cx);
-                let open_releases = window.listener_for(&help_workspace, |_, _, _, cx| {
-                    cx.open_url(GITHUB_RELEASES_URL);
+                let check_updates = window.listener_for(&help_workspace, |this, _, window, cx| {
+                    this.check_for_updates(window, cx);
                 });
                 let about = window.listener_for(&help_workspace, |this, _, window, cx| {
                     this.open_settings_dialog(Some(SettingsCategory::About), window, cx);
@@ -618,7 +618,7 @@ impl Workspace {
                 )
                 .item(
                     PopupMenuItem::new(crate::tr!("检查更新", "Check for updates"))
-                        .on_click(open_releases),
+                        .on_click(check_updates),
                 )
                 .separator()
                 .item(

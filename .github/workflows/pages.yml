@@ -7,14 +7,22 @@ on:
       - "doc/**"
       - "wiki/**"
       - "scripts/build-docs.py"
+      - "scripts/generate-update-manifest.py"
       - ".github/workflows/pages.yml"
   pull_request:
     paths:
       - "doc/**"
       - "wiki/**"
       - "scripts/build-docs.py"
+      - "scripts/generate-update-manifest.py"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
+  release:
+    types: [published, edited, deleted]
+  # Releases created by GITHUB_TOKEN do not trigger release workflows.
+  workflow_run:
+    workflows: ["Multiplatform Release Build"]
+    types: [completed]
 
 permissions:
   contents: read
@@ -25,11 +33,14 @@ concurrency:
 
 jobs:
   build:
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     name: Build website and bilingual wiki
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.ref || 'main' }}
 
       - name: Install pinned mdBook
         env:
@@ -47,15 +58,23 @@ jobs:
       - name: Validate and build documentation
         run: python3 scripts/build-docs.py
 
+      - name: Generate stable release update manifest
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases/latest" > "$RUNNER_TEMP/latest-release.json"
+          python3 scripts/generate-update-manifest.py "$RUNNER_TEMP/latest-release.json" _site/latest.json
+
       - name: Upload website artifact
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v4
         with:
           path: _site
 
   deploy:
     name: Publish website and wiki
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request'
     needs: build
     permissions:
       pages: write

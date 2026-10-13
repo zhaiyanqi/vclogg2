@@ -114,14 +114,16 @@ Windows x64 产物输出位于 `dist/windows-x86_64/`：
 - 终端参数和多文件拖放；macOS 声明文档类型，Linux 安装器注册 desktop/MIME，Windows 两种包不主动注册文件关联；
 - 仅对应用自有临时结果提供系统废纸篓清理，普通浏览不写源日志，显式编辑保存除外；
 - 平台强文件身份索引缓存：Windows 使用卷/文件标识与 USN，macOS/Linux 使用设备号、inode 与 ctime；
-- “帮助 → 检查更新”统一在系统浏览器中打开项目 GitHub Releases 页面；
+- “帮助 → 检查更新”读取官网版本清单，新版或检查失败时打开 GitHub Releases；
 - 相同日志查看、搜索、导出、会话、云端过滤器和多窗口行为。
 
 macOS 默认快捷键主修饰键为 `Command`，Windows/Linux 为 `Ctrl`。这是原生交互约定，不是功能裁剪。
 
 ## 版本发布与更新入口
 
-客户端不访问 GitHub Releases API，不检查版本，不下载发布包，也不启动独立安装助手。“帮助 → 检查更新”直接调用系统 URL 打开能力访问 `https://github.com/zhaiyanqi/vclogg2/releases`。菜单中的“关于 ver.<版本>”使用当前可执行文件的构建版本，方便用户在下载前自行核对。
+“帮助 → 检查更新”读取官网 `https://zhaiyanqi.github.io/vclogg2/latest.json`，按 SemVer 比较稳定版本。发现新版时打开对应 Release 下载页面；网络、HTTP 或清单校验失败时打开 Releases 首页；没有新版时显示检查结果。成功结果缓存 24 小时，失败按 1、2、4、8、16、32、60 分钟退避，之后保持 60 分钟；退避期间点击只打开 Releases，不重新请求官网。缓存与退避状态保存在本地 SQLite，跨重启有效；存储不可用时保留进程内缓存。多个窗口共享进行中的检查。连接超时 5 秒、请求总超时 10 秒，不立即重试。仅用户点击触发，不在启动时联网，不自动下载或安装。
+
+Pages 部署在 `_site/latest.json` 生成清单，使用工作流令牌读取 GitHub 最新正式 Release，校验稳定版标签、发布时间、官方链接和四种桌面安装包；不把 main 的占位版本或预发布版写入清单。生成失败则不部署，保留上一份官网。Release 发布、编辑、删除，以及标签发布构建成功后会重新部署官网；后者使用 `workflow_run`，覆盖 `GITHUB_TOKEN` 创建 Release 不触发普通 Release 事件的情况。仅部署端访问 Releases API，客户端无须令牌。
 
 发布正式版本前，提交并推送干净的 `main`，创建指向当前提交的 `v<SemVer>` 标签，然后执行：
 

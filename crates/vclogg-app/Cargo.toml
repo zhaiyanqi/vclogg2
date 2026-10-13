@@ -29,6 +29,7 @@ reqwest.workspace = true
 rayon.workspace = true
 regex = "1.11"
 rfd = "0.15.4"
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

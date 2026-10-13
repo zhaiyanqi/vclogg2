@@ -510,6 +510,15 @@ impl StateStore {
         self.repository.reset_app_settings()
     }
 
+    pub(crate) fn load_update_check_cache(&self) -> Result<Option<String>> {
+        self.repository.load_ui_value("updates.check_cache.v1")
+    }
+
+    pub(crate) fn save_update_check_cache(&self, json: &str) -> Result<()> {
+        self.repository
+            .save_ui_value("updates.check_cache.v1", json)
+    }
+
     pub fn load_last_settings_category(&self) -> Result<Option<String>> {
         self.repository.load_ui_value("settings.active_category")
     }

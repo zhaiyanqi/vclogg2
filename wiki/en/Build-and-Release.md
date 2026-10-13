@@ -36,10 +36,16 @@ The helper requires clean main equal to origin/main, checks the tag, runs `scrip
 
 Release notes derive English/Chinese sections from complete commit messages, with historical translations in `scripts/commit-translations.json`. Categories, ordering, commit links and a comparison link are preserved across languages. See [Contributing](Contributing.md).
 
+## Update checks
+
+**Help → Check for updates** reads `https://zhaiyanqi.github.io/vclogg2/latest.json` and compares stable releases using SemVer. A newer release opens its download page; network, HTTP or manifest-validation failure opens the Releases index; otherwise the app reports no newer release. Successful checks are cached for 24 hours. Failures back off for 1, 2, 4, 8, 16, 32, then 60 minutes, capped at 60 minutes thereafter; clicks during backoff open Releases without another website request. Cache and backoff state persist in local SQLite across restarts, with an in-process fallback if storage is unavailable. Windows share an in-flight check. Connection timeout is 5 seconds and total request timeout is 10 seconds, with no immediate retry. Checks only run on user request, never at startup, and do not download or install packages.
+
+Pages generates `_site/latest.json` using the workflow token to read the latest published stable GitHub Release. It validates the stable tag, publication time, official URL and all four desktop packages; main’s placeholder version and prereleases are excluded. Generation failure prevents deployment and preserves the previous website. Release publication, edits and deletion trigger deployment, as does a successful tag release build via `workflow_run` (covering releases created by `GITHUB_TOKEN`). Only deployment calls the Releases API; clients need no token.
+
 ## Server packaging
 
 Use `--version v2.2.14` / `-Version v2.2.14` to override version and `--client-key-file /path/to/client-public-key.json` / `-ClientKeyFile` for an optional **public** key descriptor. `VCLOGG_CLIENT_KEY_ID` and `VCLOGG_CLIENT_PUBLIC_KEY` are equivalent paired inputs. Packages contain executable, example config, README, LICENSE and VERSION, not runtime databases or private keys. The admin UI and migrations are embedded; Node.js is a build-time dependency.
 
-Server support for update feeds does not mean this desktop client uses them. Current Help → Check for updates opens GitHub Releases only. The server's signed-registration default also needs reconciliation with the current unsigned desktop registration; see [Cloud filters](Cloud-Filters.md).
+Server support for update feeds does not mean this desktop client uses them. Desktop checks use the static website manifest described above. The server's signed-registration default also needs reconciliation with the current unsigned desktop registration; see [Cloud filters](Cloud-Filters.md).
 
 Source: [release workflow](https://github.com/zhaiyanqi/vclogg2/blob/main/.github/workflows/release-build.yml), [scripts](https://github.com/zhaiyanqi/vclogg2/tree/main/scripts).

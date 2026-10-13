@@ -14,7 +14,7 @@
 | Cloud registration fails | Check server URL/TLS and desktop/server authentication compatibility; same-repository builds do not guarantee compatibility |
 | Windows startup reports a data-path error | Inspect `vclogg2-data-dir.txt` and directory permissions; there is deliberately no silent fallback |
 | History cannot be deleted | Open, pinned or marked/annotated records are protected |
-| “Check for updates” opens a browser | This is the current behavior, not automatic installation |
+| “Check for updates” opens a browser | A newer version or failed check opens Releases; cached failures back off up to 60 minutes. No automatic installation |
 
 For a bug report include version, platform, reproduction steps, file size/encoding and a sanitized minimal sample if possible. Export application logs through Settings → Advanced when relevant; review logs and crash reports before sharing. Do not attach cloud session JSON or unreviewed SQLite state.
 

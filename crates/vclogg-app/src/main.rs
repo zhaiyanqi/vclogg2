@@ -53,6 +53,7 @@ mod system_fonts;
 mod tab_resume;
 mod ui_performance;
 mod ui_theme;
+mod update_check;
 mod virtual_log_lines;
 mod virtual_log_list;
 mod window_drag;
