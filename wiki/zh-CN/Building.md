@@ -217,11 +217,15 @@ Windows 使用 `./target/release/vclogg2.exe`，Debug 同样支持。`--trace-st
 
 手动及冷启动录制都自动保存在应用缓存的 `traces` 子目录，名称包含时间和 UUID。macOS/Linux 使用系统 cache 下的 `VCLogg2/traces`（Debug 数据隔离时位于隔离缓存根）；Windows 使用配置的数据根下的 `cache/traces`。“设置 → 高级 → 性能录制 → 打开目录”可在录制期间打开该目录。
 
-独立写入线程开始时保存快照，此后每次写完等待 1 秒再保存；事件量大或磁盘忙时更新间隔会延长。每次先生成完整 Chrome Trace Event JSON，再原子替换同一会话文件，停止时补写最终快照。不弹出保存对话框。实时文件是完整快照，不是逐事件追加，写入不依赖 UI 线程响应。强制退出后可使用最后已发布的快照，最后一个周期的数据及尚未完成的写入不保证保存。文件不会自动删除。
+独立写入线程按最多 2048 条新事件分批排序、编码并增量写入同一 JSON 文件，排空后等待约 250 ms；磁盘忙时会延长。停止只处理剩余事件、未完成 scope 和最终摘要，同步并关闭文件，不再重写历史事件。文件不会自动删除。
+
+新文件是顶层 JSON **事件数组**（format_version=2），旧文件的 `{"traceEvents":[...]}` 对象仍可在 Perfetto 打开。每批只覆盖末尾一个 `]` 并追加新事件及新的 `]`，已写事件不改动。批次完成后为合法 JSON；写到一半崩溃时，Perfetto 的数组解析器可读取截断前的完整事件，即使末尾事件或 `]` 不完整。此容错针对 Perfetto，普通严格 JSON 解析器可能拒绝崩溃留下的文件。每批调用 sync_data；未采集、仍在内存或未完整写出的尾部事件不保证保留，不承诺断电或存储故障下的数据安全。参见 [Perfetto JSON 格式](https://perfetto.dev/docs/getting-started/other-formats) 与[数组截断解析实现](https://github.com/google/perfetto/blob/main/src/trace_processor/importers/json/json_trace_tokenizer.cc)。
 
 手动录制使用“开始录制 / 停止录制”；写入失败自动重试并提示，停止后的失败数据可“重试保存”，或“放弃重试”释放内存；已保存的文件不会因此删除。冷启动按时自动停止；设置已打开时同样显示写入错误，并在最终失败时保留数据供重试。终端也报告冷启动最终保存结果。
 
-使用 [Perfetto UI](https://ui.perfetto.dev/) 打开 JSON。先查看 `Startup.*`，再看 `Document.*`、`Search.*`、`Tab.*`、`Viewport.*`、`Settings.apply` 及控件耗时。快照时尚未完成的应用 scope 标记为 `incomplete=true`。最多保留 200,000 条完成事件及 4,096 个活动 scope；达到容量后继续更新快照及丢失计数，不无限增长内存。`Recording summary.recording` 区分录制中快照与已停止快照，`lost_events` 报告丢失。
+使用 [Perfetto UI](https://ui.perfetto.dev/) 打开 JSON。先查看 `Startup.*`，再看 `Document.*`、`Search.*`、`Tab.*`、`Viewport.*`、`Settings.apply` 及控件耗时。录制期间约每秒追加 `Recording checkpoint`（recording=true）及活跃应用 scope 的瞬时观测（类别 `Application active scopes`、active_scope_id、original_ts_us、elapsed_us、incomplete=true）。这些观测不能累加计作执行耗时；正式完成区间通过 active_scope_id 关联。停止时才将仍未完成的 scope 写为截断的 X 区间，并追加 `Recording summary`（recording=false）。崩溃文件没有最终摘要时使用最后一条 checkpoint。
+
+最多保留 200,000 条完成事件及 4,096 个活动 scope，达到容量后继续写摘要和丢失计数；执行片段和活跃观测合计上限为 404,096，metadata/周期摘要不计入此上限。`lost_events` 报告采集及导出丢失，不重复加上 omitted_export_segments。摘要仅代表写入时的计数。
 
 每个实际 Rust 线程对应一条轨道：主线程 `GPUI UI / Main`，其他线程 `Background`。事件参数 `thread_role` / `source_thread` 保留身份，tid 是导出映射而非 OS ID。交叉区间在同轨道分段衔接，保留 source_event、continued、split、original_duration_us；帧延迟为携带 elapsed_us 的瞬时标记。导出最多 404,096 个事件片段，超限待导出部分计入 omitted_export_segments 和 lost_events。
 

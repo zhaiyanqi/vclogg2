@@ -1,15 +1,14 @@
-//! Periodic complete snapshots keep the last published JSON readable after a hang.
+//! A single writer appends batches; stopping only drains the remaining events.
 use super::*;
 
-const SAVE_INTERVAL: Duration = Duration::from_secs(1);
+const SAVE_INTERVAL: Duration = Duration::from_millis(250);
 
 pub(super) fn save(capture: &Capture) -> anyhow::Result<u64> {
-    let directory = capture
-        .path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("Missing trace directory"))?;
-    std::fs::create_dir_all(directory)?;
-    export_trace(capture, &capture.path)
+    capture
+        .stream
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .save(capture, true)
 }
 
 pub(super) struct Writer {
@@ -25,7 +24,11 @@ impl Writer {
             .spawn(move || {
                 let mut stopping = false;
                 loop {
-                    let result = save(&capture);
+                    let result = capture
+                        .stream
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .save(&capture, stopping);
                     *capture
                         .write_error
                         .lock()
@@ -58,7 +61,7 @@ impl Writer {
 
 impl Drop for Writer {
     fn drop(&mut self) {
-        // Even a failed collector spawn requests a final snapshot; never join on the UI.
+        // Even a failed collector spawn requests a final drain; never join on the UI.
         _ = self.stop.send(());
     }
 }

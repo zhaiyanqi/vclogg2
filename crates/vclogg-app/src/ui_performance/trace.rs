@@ -1,9 +1,10 @@
 //! Application-owned, bounded Chrome Trace recording; no framework source patches.
 mod live;
 pub(crate) mod startup;
+mod stream;
 use std::{
     collections::HashMap,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -48,6 +49,7 @@ struct Slice {
     start: Instant,
     end: Instant,
     incomplete: bool,
+    scope_id: Option<u64>,
 }
 
 struct Capture {
@@ -59,6 +61,7 @@ struct Capture {
     slices: Mutex<Vec<Arc<Slice>>>,
     path: PathBuf,
     write_error: Mutex<Option<String>>,
+    stream: Mutex<stream::Stream>,
     lost: AtomicU64,
     active: Mutex<HashMap<u64, Slice>>,
     next_id: AtomicU64,
@@ -80,6 +83,7 @@ impl Capture {
                 uuid::Uuid::new_v4()
             )),
             write_error: Mutex::new(None),
+            stream: Mutex::new(stream::Stream::default()),
             lost: AtomicU64::new(0),
             active: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
@@ -100,6 +104,7 @@ impl Capture {
             start: at,
             end: at,
             incomplete: false,
+            scope_id: None,
         });
     }
 
@@ -149,6 +154,7 @@ pub(crate) fn scope(name: &'static str) -> Scope {
                         start,
                         end: start,
                         incomplete: true,
+                        scope_id: Some(id),
                     },
                 );
                 true
@@ -567,8 +573,8 @@ impl Render for Recorder {
         v_flex().gap_2().p_3().border_1().border_color(cx.theme().border).rounded(cx.theme().radius)
             .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("性能录制", "Performance recording")))
             .child(div().text_sm().text_color(cx.theme().muted_foreground).child(crate::tr!(
-                "录制期间约每秒保存到缓存目录，可用 Perfetto 打开。最多保留 20 万条事件，超出部分标记为丢失。",
-                "Save to the cache folder about once per second while recording. Open the JSON in Perfetto. Up to 200,000 events are retained; excess events are reported as lost."
+                "录制期间持续写入缓存目录，停止时仅写完剩余事件。异常退出后已写入的事件仍可用 Perfetto 打开。最多记录 20 万条事件。",
+                "Events are written to the cache folder while recording. Stopping drains remaining events. Perfetto can open written events after a crash. Up to 200,000 events are recorded."
             )))
             .child(h_flex().gap_2().flex_wrap()
                 .child(Button::new("trace-start").small().outline().label(crate::tr!("开始录制", "Start recording"))
@@ -636,6 +642,7 @@ fn collect(
                             start,
                             end: frame.presentation.present_end,
                             incomplete: false,
+                            scope_id: None,
                         });
                     }
                     continue;
@@ -681,6 +688,7 @@ fn collect(
                             start,
                             end: signal.handled_at,
                             incomplete: false,
+                            scope_id: None,
                         });
                     }
                     continue;
@@ -733,6 +741,7 @@ fn collect(
                 start: event.start_time(),
                 end: event.end_time(),
                 incomplete: false,
+                scope_id: None,
             });
         }
         for thread in profiler::get_all_timings(gpui_kit::TasksIncluded::OnlyCompleted) {
@@ -752,6 +761,7 @@ fn collect(
                     start: task.start,
                     end: task.end.0,
                     incomplete: false,
+                    scope_id: None,
                 });
             }
             *cursor = thread.total_pushed;
@@ -771,142 +781,11 @@ fn collect(
                         start: task.start,
                         end: task.end.0,
                         incomplete: true,
+                        scope_id: None,
                     });
                 }
             }
             break;
         }
     }
-}
-
-fn export_trace(capture: &Capture, path: &Path) -> anyhow::Result<u64> {
-    use std::io::Write as _;
-    let stopped_at = capture
-        .end
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .unwrap_or_else(Instant::now);
-    let slices = {
-        let active = capture.active.lock().unwrap_or_else(|e| e.into_inner());
-        let mut slices = capture
-            .slices
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        slices.extend(active.values().cloned().map(|mut slice| {
-            slice.end = stopped_at;
-            Arc::new(slice)
-        }));
-        slices
-    };
-    // One exported tid per actual Rust thread, regardless of event category.
-    // Process starts chronologically (outer intervals first for equal starts).
-    // Crossing intervals are split at parent boundaries and continued on the same
-    // thread, so Chrome synchronous slices remain properly nested without fake threads.
-    use std::{cmp::Reverse, collections::BinaryHeap};
-    let mut pending = BinaryHeap::new();
-    for (index, slice) in slices.iter().enumerate() {
-        if slice.start < stopped_at && slice.end > capture.start {
-            pending.push((
-                Reverse(slice.start.max(capture.start)),
-                slice.end.min(stopped_at),
-                Reverse(index),
-            ));
-        }
-    }
-    let mut tracks: HashMap<ThreadId, (usize, Vec<Instant>)> = HashMap::new();
-    let mut next_tid = 2;
-    let mut events = Vec::with_capacity(slices.len() + 16);
-    // Keep even an empty capture's UI identity explicit; never create a summary thread.
-    events.push(json!({"ph":"M", "name":"thread_name", "pid":1, "tid":1,
-        "args":{"name":format!("GPUI UI / Main · {:?}", capture.ui_thread)}}));
-    tracks.insert(capture.ui_thread, (1, Vec::new()));
-    let mut exported_segments = 0;
-    const MAX_EXPORT_SEGMENTS: usize = MAX_EVENTS * 2 + MAX_ACTIVE_SCOPES;
-    while exported_segments < MAX_EXPORT_SEGMENTS {
-        let Some((Reverse(start), end, Reverse(index))) = pending.pop() else {
-            break;
-        };
-        let slice = &slices[index];
-        let thread_role = if slice.thread == capture.ui_thread {
-            "ui"
-        } else {
-            "background"
-        };
-        let (tid, stack) = tracks.entry(slice.thread).or_insert_with(|| {
-            let tid = next_tid;
-            next_tid += 1;
-            events.push(json!({"ph":"M", "name":"thread_name", "pid":1, "tid":tid,
-                "args":{"name":format!("Background · {:?}", slice.thread)}}));
-            (tid, Vec::new())
-        });
-        while stack.last().is_some_and(|last| *last <= start) {
-            stack.pop();
-        }
-        let original_start = slice.start.max(capture.start);
-        let original_end = slice.end.min(stopped_at);
-        let mut args =
-            json!({"thread_role":thread_role,"source_thread":format!("{:?}", slice.thread)});
-        exported_segments += 1;
-        // Frame latency describes waiting, not synchronous execution on the UI thread.
-        // Keep it as a marker with its full measured interval in the details.
-        if start == end || slice.category == "GPUI frame latency" {
-            args["elapsed_us"] = json!(
-                original_end
-                    .saturating_duration_since(original_start)
-                    .as_secs_f64()
-                    * 1_000_000.
-            );
-            events.push(json!({"ph":"i", "s":"t", "name":slice.name, "cat":slice.category, "pid":1, "tid":*tid,
-                "ts":start.duration_since(capture.start).as_secs_f64() * 1_000_000., "args":args}));
-            continue;
-        }
-        let segment_end = stack
-            .last()
-            .copied()
-            .map_or(end, |parent_end| end.min(parent_end));
-        if segment_end < end {
-            pending.push((Reverse(segment_end), end, Reverse(index)));
-        }
-        stack.push(segment_end);
-        args["incomplete"] = json!(slice.incomplete || slice.end > stopped_at);
-        args["source_event"] = json!(index);
-        args["continued"] = json!(start > original_start);
-        args["split"] = json!(start > original_start || segment_end < original_end);
-        args["original_ts_us"] =
-            json!(original_start.duration_since(capture.start).as_secs_f64() * 1_000_000.);
-        args["original_duration_us"] = json!(
-            original_end
-                .saturating_duration_since(original_start)
-                .as_secs_f64()
-                * 1_000_000.
-        );
-        events.push(
-            json!({"ph":"X", "name":slice.name, "cat":slice.category, "pid":1, "tid":*tid,
-            "ts":start.duration_since(capture.start).as_secs_f64() * 1_000_000.,
-            "dur":segment_end.duration_since(start).as_secs_f64() * 1_000_000., "args":args}),
-        );
-    }
-    let omitted_export_segments = pending.len();
-    let lost = capture
-        .lost
-        .load(Ordering::Relaxed)
-        .saturating_add(omitted_export_segments as u64);
-    events.push(json!({"ph":"M", "name":"process_name", "pid":1, "args":{"name":"VCLogg2"}}));
-    events.push(json!({"ph":"i", "s":"t", "name":"Recording summary", "pid":1, "tid":1, "ts":0,
-        "args":{"ui_thread":format!("{:?}", capture.ui_thread),"ui_track_prefix":"GPUI UI / Main","recording":capture.accepting.load(Ordering::Relaxed),"omitted_export_segments":omitted_export_segments,"export_segment_limit":MAX_EXPORT_SEGMENTS,"lost_events":lost,"limit":MAX_EVENTS,"includes_active_scopes":true,"active_scope_limit":MAX_ACTIVE_SCOPES,"duration_ms":stopped_at.duration_since(capture.start).as_secs_f64()*1000.,"build":if cfg!(debug_assertions) {"Debug"} else {"Release"},"version":env!("CARGO_PKG_VERSION"),"tracks":"One track per source Rust thread. Crossing scopes continue as split segments; frame latency is an instant with elapsed_us. Durations are wall time, not CPU samples or GPU timings"}}));
-    // Serialize on the worker and replace the destination only after the whole file is written.
-    let parent = path
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let mut output = tempfile::NamedTempFile::new_in(parent)?;
-    serde_json::to_writer(
-        output.as_file_mut(),
-        &json!({"traceEvents":events,"displayTimeUnit":"ms"}),
-    )?;
-    output.flush()?;
-    output.as_file().sync_all()?;
-    output.persist(path).map_err(|error| error.error)?;
-    Ok(lost)
 }

@@ -83,8 +83,8 @@ Performance recording is in Settings → Advanced, retaining its existing node I
 
 ```text
 Performance recording [A808] — application Recorder; recording and saving continue after Settings closes
-├─ Start recording [A809] — create a trace cache file, update snapshots about once per second
-├─ Stop recording [A810] — stop collection and save the final snapshot, without a path dialog
+├─ Start recording [A809] — create a trace cache file, append new events in background batches
+├─ Stop recording [A810] — stop collection, drain remaining events and close the file, without a path dialog
 ├─ Retry save [A811] — retry a failed final save to the same cache path
 ├─ Dismiss retry [A812] — release retained data without deleting saved files
 └─ Open folder [A813] — open the trace cache directory, including during recording
