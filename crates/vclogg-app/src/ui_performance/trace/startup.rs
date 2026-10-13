@@ -70,6 +70,7 @@ impl Arguments {
             return Ok(None);
         };
         let capture = Arc::new(Capture {
+            ui_thread: thread::current().id(),
             start: Instant::now(),
             accepting: AtomicBool::new(true),
             end: Mutex::new(None),
@@ -79,7 +80,7 @@ impl Arguments {
             next_id: AtomicU64::new(1),
         });
         let deadline = capture.start + self.duration;
-        let foreground = thread::current().id();
+        let foreground = capture.ui_thread;
         let was_enabled = profiler::trace_enabled();
         profiler::set_trace_enabled(true);
         let (stop, receiver) = mpsc::channel();

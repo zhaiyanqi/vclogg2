@@ -214,3 +214,7 @@ Windows 使用 `./target/release/vclogg2.exe`；Debug 可执行文件同样支�
 使用 [Perfetto UI](https://ui.perfetto.dev/) 打开 JSON。先查看 `Startup.*` 初始化节点，再看 `Document.*`、`Search.*`、`Tab.*`、`Viewport.*`、`Settings.apply` 及已有控件耗时；停止时仍未结束的应用节点会裁剪到录制边界，带 `incomplete=true`。同时导出 GPUI 任务 poll、输入、Action、Draw、Present、帧等待与跳帧标记。任务位置是 spawn 位置，不是采样调用栈；帧等待和跨轨重叠不能相加作为 CPU 耗时，未埋点内部逻辑仍需继续定位。
 
 最多保留 200,000 条已完成事件和 4,096 个活动 scope；`Recording summary` 中的 `lost_events` 表示缓冲覆盖、竞争或容量超限造成的丢失。冷启动录制期间“设置 → 高级”会显示自动录制状态并禁用重复开始。手动录制仍使用“开始录制 / 停止并导出 trace”。
+
+导出的 UI 轨道统一以 `GPUI UI / Main` 开头，其他线程以 `Background` 开头；手动录制与冷启动录制均保存实际主线程的 Rust ThreadId，不按线程名称或导出线程猜测。每个事件的 `thread_role` / `source_thread` 和 `Recording summary.ui_thread` 可用于核对归属。同一 UI 线程按类别和重叠关系拆成多个显示轨道，并不表示多个 UI 线程，JSON 中的 tid 是显示轨道编号而非系统线程 ID。
+
+GPUI 的前台任务与输入、布局、绘制共享 UI 线程，`cx.spawn` 不会自动移到后台。优先检查 `GPUI UI / Main` 下的 Draw、Application、GPUI tasks 和输入长区间，再关联帧延迟。区间记录经过时间，包含阻塞等待，不是 CPU 采样；空白区间也不能单独证明 UI 空闲或卡顿。后台 CPU/锁/内存争用、GPU 或呈现延迟仍可能造成可感知卡顿；本 trace 不含系统调度及 GPU 执行时间。

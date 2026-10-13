@@ -50,6 +50,8 @@ struct Slice {
 }
 
 struct Capture {
+    // Captured on the GPUI foreground, never inferred from worker names or export thread.
+    ui_thread: ThreadId,
     start: Instant,
     accepting: AtomicBool,
     end: Mutex<Option<Instant>>,
@@ -239,6 +241,7 @@ impl Recorder {
             return;
         }
         let capture = Arc::new(Capture {
+            ui_thread: thread::current().id(),
             start: Instant::now(),
             accepting: AtomicBool::new(true),
             end: Mutex::new(None),
@@ -248,7 +251,7 @@ impl Recorder {
             next_id: AtomicU64::new(1),
         });
         let collector = cx.foreground_journal().collector();
-        let foreground = thread::current().id();
+        let foreground = capture.ui_thread;
         let task_cursors = profiler::get_all_timings(gpui_kit::TasksIncluded::OnlyCompleted)
             .into_iter()
             .map(|thread| (thread.thread_id, thread.total_pushed))
@@ -635,6 +638,13 @@ fn export_trace(capture: &Capture, path: &Path) -> anyhow::Result<u64> {
         if slice.start >= stopped_at || slice.end <= capture.start {
             continue;
         }
+        let ui_thread = slice.thread == capture.ui_thread;
+        let thread_role = if ui_thread { "ui" } else { "background" };
+        let thread_label = if ui_thread {
+            "GPUI UI / Main"
+        } else {
+            "Background"
+        };
         let start = slice.start.max(capture.start);
         let end = slice.end.min(stopped_at);
         let lanes = tracks.entry((slice.thread, slice.category)).or_default();
@@ -651,7 +661,7 @@ fn export_trace(capture: &Capture, path: &Path) -> anyhow::Result<u64> {
             next_tid += 1;
             let lane_ix = lanes.len();
             events.push(json!({"ph":"M", "name":"thread_name", "pid":1, "tid":tid,
-                "args":{"name":format!("{:?} · {} · {}", slice.thread, slice.category, lane_ix + 1)}}));
+                "args":{"name":format!("{} · {} · lane {} · {:?}", thread_label, slice.category, lane_ix + 1, slice.thread)}}));
             lanes.push((tid, Vec::new()));
             lane_ix
         });
@@ -659,19 +669,20 @@ fn export_trace(capture: &Capture, path: &Path) -> anyhow::Result<u64> {
         stack.push(end);
         if start == end {
             events.push(json!({"ph":"i", "s":"t", "name":slice.name, "cat":slice.category, "pid":1, "tid":*tid,
-                "ts":start.duration_since(capture.start).as_secs_f64() * 1_000_000.}));
+                "ts":start.duration_since(capture.start).as_secs_f64() * 1_000_000.,
+                "args":{"thread_role":thread_role,"source_thread":format!("{:?}", slice.thread)}}));
             continue;
         }
         events.push(
             json!({"ph":"X", "name":slice.name, "cat":slice.category, "pid":1, "tid":*tid,
             "ts":start.duration_since(capture.start).as_secs_f64() * 1_000_000.,
-            "dur":end.saturating_duration_since(start).as_secs_f64() * 1_000_000., "args":{"incomplete":slice.incomplete || slice.end > stopped_at}}),
+            "dur":end.saturating_duration_since(start).as_secs_f64() * 1_000_000., "args":{"incomplete":slice.incomplete || slice.end > stopped_at,"thread_role":thread_role,"source_thread":format!("{:?}", slice.thread)}}),
         );
     }
     let lost = capture.lost.load(Ordering::Relaxed);
     events.push(json!({"ph":"M", "name":"process_name", "pid":1, "args":{"name":"VCLogg2"}}));
     events.push(json!({"ph":"i", "s":"g", "name":"Recording summary", "pid":1, "tid":0, "ts":0,
-        "args":{"lost_events":lost,"limit":MAX_EVENTS,"includes_active_scopes":true,"active_scope_limit":MAX_ACTIVE_SCOPES,"duration_ms":stopped_at.duration_since(capture.start).as_secs_f64()*1000.,"build":if cfg!(debug_assertions) {"Debug"} else {"Release"},"version":env!("CARGO_PKG_VERSION"),"tracks":"Thread and category; overlapping tracks are not additive CPU time"}}));
+        "args":{"ui_thread":format!("{:?}", capture.ui_thread),"ui_track_prefix":"GPUI UI / Main","lost_events":lost,"limit":MAX_EVENTS,"includes_active_scopes":true,"active_scope_limit":MAX_ACTIVE_SCOPES,"duration_ms":stopped_at.duration_since(capture.start).as_secs_f64()*1000.,"build":if cfg!(debug_assertions) {"Debug"} else {"Release"},"version":env!("CARGO_PKG_VERSION"),"tracks":"Synthetic lanes grouped by source Rust thread and category; GPUI UI / Main identifies the foreground thread. Durations are wall time, not CPU samples or GPU timings; overlapping tracks are not additive"}}));
     // Serialize on the worker and replace the destination only after the whole file is written.
     let parent = path
         .parent()
