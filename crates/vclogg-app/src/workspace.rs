@@ -2655,13 +2655,6 @@ impl Render for Workspace {
             .global::<WorkspaceWindowRegistry>()
             .previous_window(window.window_handle())
             .is_some();
-        let file_drop_title = crate::tr!("松开以打开日志", "Release to open logs");
-        let file_drop_description = crate::tr!(
-            "支持文件和文件夹，文件夹内文件按名称打开（不含子文件夹）",
-            "Drop files or folders; folder files open by name (no subfolders)"
-        );
-        let drop_overlay_top = window.rem_size() * 0.5;
-        let drop_enter_travel = window.rem_size() * 0.5;
         let colors = ui_theme::palette(cx);
         let element = v_flex()
             .id("vclogg2-workspace")
@@ -2766,48 +2759,6 @@ impl Render for Workspace {
             )
             .child(self.status_surface.clone())
             .child(self.render_file_drop_observer(cx))
-            .when(self.file_drop_paths.is_some(), |this| {
-                this.child(render_shell::deferred_workspace_overlay(
-                    div()
-                        .id("file-drop-overlay")
-                        .absolute()
-                        .right_2()
-                        .bottom_2()
-                        .left_2()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(cx.theme().radius_lg)
-                        .border_2()
-                        .border_dashed()
-                        .border_color(cx.theme().primary)
-                        .bg(cx.theme().popover.opacity(0.65))
-                        .text_color(cx.theme().popover_foreground)
-                        .child(
-                            v_flex()
-                                .items_center()
-                                .gap_2()
-                                .child(Icon::new(IconName::FolderOpen).size_8())
-                                .child(div().text_lg().font_semibold().child(file_drop_title))
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(file_drop_description),
-                                ),
-                        )
-                        .with_animation(
-                            "file-drop-overlay-enter",
-                            Animation::new(TRANSIENT_SURFACE_ENTER_DURATION)
-                                .with_easing(ease_out_cubic),
-                            move |overlay, delta| {
-                                overlay
-                                    .top(drop_overlay_top - drop_enter_travel * (1. - delta))
-                                    .opacity(delta)
-                            },
-                        ),
-                ))
-            })
             // Kit's Root paints the overlays after this content. Keep the barrier
             // here so their pointer events cannot bubble into the log views.
             .child(crate::modal_event_layer::render_foreground_pointer_barrier());

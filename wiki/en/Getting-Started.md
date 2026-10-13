@@ -9,7 +9,7 @@
 5. Press **M** in a log region to mark selected rows; **N** adds a text tag to one source line. Use **Save…** in results to export the committed set.
 6. Enable **Follow tail** to stay at the newest line of the actively monitored file. Scrolling back can turn following off.
 
-You can drop files and folders together. Each folder’s immediate files open in ascending filename order; subfolders are excluded. New tabs preserve that order even when loading finishes out of order. Duplicate paths use the existing tab. The drop hint has a translucent background so the workspace remains visible.
+You can drop files and folders together. Each folder’s immediate files open in ascending filename order; subfolders are excluded. New tabs preserve that order even when loading finishes out of order. Duplicate paths use the existing tab. Dragging shows no overlay; release to open the files.
 
 File tabs and search tabs have different responsibilities: one file can have several independent queries. The search-tab **+** menu creates current-file, global or directory searches. Settings open with **Ctrl+, / ⌘,**.
 
