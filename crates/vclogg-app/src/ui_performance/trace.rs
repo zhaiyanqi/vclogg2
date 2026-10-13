@@ -626,63 +626,102 @@ fn export_trace(capture: &Capture, path: &Path) -> anyhow::Result<u64> {
                 slice
             }),
     );
-    let mut ordered = slices.iter().collect::<Vec<_>>();
-    ordered.sort_by(|a, b| a.start.cmp(&b.start).then_with(|| b.end.cmp(&a.end)));
-    // Chrome synchronous slices must nest. Async scopes can cross, so assign those
-    // intervals separate lanes instead of emitting invalid overlapping X events.
-    type Lanes = Vec<(usize, Vec<Instant>)>;
-    let mut tracks: HashMap<(ThreadId, &'static str), Lanes> = HashMap::new();
-    let mut next_tid = 1;
-    let mut events = Vec::with_capacity(ordered.len() + 16);
-    for slice in ordered {
-        if slice.start >= stopped_at || slice.end <= capture.start {
-            continue;
+    // One exported tid per actual Rust thread, regardless of event category.
+    // Process starts chronologically (outer intervals first for equal starts).
+    // Crossing intervals are split at parent boundaries and continued on the same
+    // thread, so Chrome synchronous slices remain properly nested without fake threads.
+    use std::{cmp::Reverse, collections::BinaryHeap};
+    let mut pending = BinaryHeap::new();
+    for (index, slice) in slices.iter().enumerate() {
+        if slice.start < stopped_at && slice.end > capture.start {
+            pending.push((
+                Reverse(slice.start.max(capture.start)),
+                slice.end.min(stopped_at),
+                Reverse(index),
+            ));
         }
-        let ui_thread = slice.thread == capture.ui_thread;
-        let thread_role = if ui_thread { "ui" } else { "background" };
-        let thread_label = if ui_thread {
-            "GPUI UI / Main"
-        } else {
-            "Background"
+    }
+    let mut tracks: HashMap<ThreadId, (usize, Vec<Instant>)> = HashMap::new();
+    let mut next_tid = 2;
+    let mut events = Vec::with_capacity(slices.len() + 16);
+    // Keep even an empty capture's UI identity explicit; never create a summary thread.
+    events.push(json!({"ph":"M", "name":"thread_name", "pid":1, "tid":1,
+        "args":{"name":format!("GPUI UI / Main · {:?}", capture.ui_thread)}}));
+    tracks.insert(capture.ui_thread, (1, Vec::new()));
+    let mut exported_segments = 0;
+    const MAX_EXPORT_SEGMENTS: usize = MAX_EVENTS * 2 + MAX_ACTIVE_SCOPES;
+    while exported_segments < MAX_EXPORT_SEGMENTS {
+        let Some((Reverse(start), end, Reverse(index))) = pending.pop() else {
+            break;
         };
-        let start = slice.start.max(capture.start);
-        let end = slice.end.min(stopped_at);
-        let lanes = tracks.entry((slice.thread, slice.category)).or_default();
-        for (_, stack) in lanes.iter_mut() {
-            while stack.last().is_some_and(|last| *last <= start) {
-                stack.pop();
-            }
-        }
-        let lane_ix = lanes
-            .iter()
-            .position(|(_, stack)| stack.last().is_none_or(|parent_end| end <= *parent_end));
-        let lane_ix = lane_ix.unwrap_or_else(|| {
+        let slice = &slices[index];
+        let thread_role = if slice.thread == capture.ui_thread {
+            "ui"
+        } else {
+            "background"
+        };
+        let (tid, stack) = tracks.entry(slice.thread).or_insert_with(|| {
             let tid = next_tid;
             next_tid += 1;
-            let lane_ix = lanes.len();
             events.push(json!({"ph":"M", "name":"thread_name", "pid":1, "tid":tid,
-                "args":{"name":format!("{} · {} · lane {} · {:?}", thread_label, slice.category, lane_ix + 1, slice.thread)}}));
-            lanes.push((tid, Vec::new()));
-            lane_ix
+                "args":{"name":format!("Background · {:?}", slice.thread)}}));
+            (tid, Vec::new())
         });
-        let (tid, stack) = &mut lanes[lane_ix];
-        stack.push(end);
-        if start == end {
+        while stack.last().is_some_and(|last| *last <= start) {
+            stack.pop();
+        }
+        let original_start = slice.start.max(capture.start);
+        let original_end = slice.end.min(stopped_at);
+        let mut args =
+            json!({"thread_role":thread_role,"source_thread":format!("{:?}", slice.thread)});
+        exported_segments += 1;
+        // Frame latency describes waiting, not synchronous execution on the UI thread.
+        // Keep it as a marker with its full measured interval in the details.
+        if start == end || slice.category == "GPUI frame latency" {
+            args["elapsed_us"] = json!(
+                original_end
+                    .saturating_duration_since(original_start)
+                    .as_secs_f64()
+                    * 1_000_000.
+            );
             events.push(json!({"ph":"i", "s":"t", "name":slice.name, "cat":slice.category, "pid":1, "tid":*tid,
-                "ts":start.duration_since(capture.start).as_secs_f64() * 1_000_000.,
-                "args":{"thread_role":thread_role,"source_thread":format!("{:?}", slice.thread)}}));
+                "ts":start.duration_since(capture.start).as_secs_f64() * 1_000_000., "args":args}));
             continue;
         }
+        let segment_end = stack
+            .last()
+            .copied()
+            .map_or(end, |parent_end| end.min(parent_end));
+        if segment_end < end {
+            pending.push((Reverse(segment_end), end, Reverse(index)));
+        }
+        stack.push(segment_end);
+        args["incomplete"] = json!(slice.incomplete || slice.end > stopped_at);
+        args["source_event"] = json!(index);
+        args["continued"] = json!(start > original_start);
+        args["split"] = json!(start > original_start || segment_end < original_end);
+        args["original_ts_us"] =
+            json!(original_start.duration_since(capture.start).as_secs_f64() * 1_000_000.);
+        args["original_duration_us"] = json!(
+            original_end
+                .saturating_duration_since(original_start)
+                .as_secs_f64()
+                * 1_000_000.
+        );
         events.push(
             json!({"ph":"X", "name":slice.name, "cat":slice.category, "pid":1, "tid":*tid,
             "ts":start.duration_since(capture.start).as_secs_f64() * 1_000_000.,
-            "dur":end.saturating_duration_since(start).as_secs_f64() * 1_000_000., "args":{"incomplete":slice.incomplete || slice.end > stopped_at,"thread_role":thread_role,"source_thread":format!("{:?}", slice.thread)}}),
+            "dur":segment_end.duration_since(start).as_secs_f64() * 1_000_000., "args":args}),
         );
     }
-    let lost = capture.lost.load(Ordering::Relaxed);
+    let omitted_export_segments = pending.len();
+    let lost = capture
+        .lost
+        .load(Ordering::Relaxed)
+        .saturating_add(omitted_export_segments as u64);
     events.push(json!({"ph":"M", "name":"process_name", "pid":1, "args":{"name":"VCLogg2"}}));
-    events.push(json!({"ph":"i", "s":"g", "name":"Recording summary", "pid":1, "tid":0, "ts":0,
-        "args":{"ui_thread":format!("{:?}", capture.ui_thread),"ui_track_prefix":"GPUI UI / Main","lost_events":lost,"limit":MAX_EVENTS,"includes_active_scopes":true,"active_scope_limit":MAX_ACTIVE_SCOPES,"duration_ms":stopped_at.duration_since(capture.start).as_secs_f64()*1000.,"build":if cfg!(debug_assertions) {"Debug"} else {"Release"},"version":env!("CARGO_PKG_VERSION"),"tracks":"Synthetic lanes grouped by source Rust thread and category; GPUI UI / Main identifies the foreground thread. Durations are wall time, not CPU samples or GPU timings; overlapping tracks are not additive"}}));
+    events.push(json!({"ph":"i", "s":"t", "name":"Recording summary", "pid":1, "tid":1, "ts":0,
+        "args":{"ui_thread":format!("{:?}", capture.ui_thread),"ui_track_prefix":"GPUI UI / Main","omitted_export_segments":omitted_export_segments,"export_segment_limit":MAX_EXPORT_SEGMENTS,"lost_events":lost,"limit":MAX_EVENTS,"includes_active_scopes":true,"active_scope_limit":MAX_ACTIVE_SCOPES,"duration_ms":stopped_at.duration_since(capture.start).as_secs_f64()*1000.,"build":if cfg!(debug_assertions) {"Debug"} else {"Release"},"version":env!("CARGO_PKG_VERSION"),"tracks":"One track per source Rust thread. Crossing scopes continue as split segments; frame latency is an instant with elapsed_us. Durations are wall time, not CPU samples or GPU timings"}}));
     // Serialize on the worker and replace the destination only after the whole file is written.
     let parent = path
         .parent()
