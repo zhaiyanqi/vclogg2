@@ -44,7 +44,10 @@ impl Workspace {
         false
     }
 
-    fn open_external_paths_in_last_active_window(paths: &[PathBuf], cx: &mut App) -> bool {
+    pub(super) fn open_external_paths_in_last_active_window(
+        paths: &[PathBuf],
+        cx: &mut App,
+    ) -> bool {
         let _trace = crate::ui_performance::trace::scope("ExternalOpen.dispatch_after_activation");
         if paths.is_empty() {
             return false;
