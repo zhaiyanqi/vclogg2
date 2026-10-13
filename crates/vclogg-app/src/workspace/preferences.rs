@@ -1187,6 +1187,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let _trace = crate::ui_performance::trace::scope("Settings.apply");
         self.pending_editor_font_zoom = None;
         if preserve_highlights {
             // General settings drafts do not own the independently committed highlight styles.

@@ -56,6 +56,7 @@ impl<K> VisibleLineLoadRequest<K> {
         self,
         mut load: impl FnMut(&K, usize) -> Option<LinePreview>,
     ) -> VisibleLineLoadResult<K> {
+        let _trace = crate::ui_performance::trace::scope("Viewport.load_lines");
         let mut lines = Vec::with_capacity(self.keys.len());
         for ((key, source_limit), retained_limit) in self
             .keys
@@ -135,6 +136,7 @@ impl<K> StagedVisibleLineLoadRequest<K> {
         cancellation: Option<&AtomicBool>,
         load: &mut impl FnMut(&K, usize) -> Option<LinePreview>,
     ) -> StagedVisibleLineLoadResult<K> {
+        let _trace = crate::ui_performance::trace::scope("Viewport.load_staged_lines");
         let lines = self
             .keys
             .into_iter()
@@ -506,6 +508,7 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
         key_for_row: impl FnMut(usize) -> Option<K>,
         mut can_reuse: impl FnMut(&K) -> bool,
     ) -> StagedVisibleLineLoadRequest<K> {
+        let _trace = crate::ui_performance::trace::scope("Viewport.prepare_replacement");
         let (window, priority_keys) = self.visible_window(visible_range, row_count, key_for_row);
         let byte_budget = self.max_cache_retained_bytes.get();
         let mut reserved_bytes = 0usize;
@@ -550,6 +553,7 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
     }
 
     pub(crate) fn install_staged(&self, staged: StagedVisibleLineLoadResult<K>) {
+        let _trace = crate::ui_performance::trace::scope("Viewport.install_staged_lines");
         if let Some(cancellation) = self.load_cancellation.borrow_mut().take() {
             cancellation.store(true, Ordering::Release);
         }
@@ -587,6 +591,7 @@ impl<K: Clone + Ord> VisibleLineStore<K> {
     }
 
     pub(crate) fn install_loaded(&self, loaded: VisibleLineLoadResult<K>) -> bool {
+        let _trace = crate::ui_performance::trace::scope("Viewport.install_lines");
         if loaded.revision != self.revision.get() {
             return false;
         }

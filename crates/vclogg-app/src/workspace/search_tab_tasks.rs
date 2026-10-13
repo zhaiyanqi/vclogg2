@@ -35,6 +35,7 @@ enum SearchTabOutput {
 
 impl SearchTabJob {
     fn run(&self, cancellation: &SearchCancellation) -> Result<SearchTabOutput> {
+        let _trace = crate::ui_performance::trace::scope("Search.execute_tab");
         match &self.input {
             SearchTabInput::File(document) => {
                 let matcher = SearchMatcher::new(&self.query)?;
@@ -59,6 +60,7 @@ impl SearchTabJob {
                 let results = targets
                     .par_iter()
                     .map(|(_, title, path, document)| {
+                        let _trace = crate::ui_performance::trace::scope("Search.open_document");
                         match search_result_cache().search_in_range(
                             document,
                             &self.query,
@@ -377,6 +379,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let _trace = crate::ui_performance::trace::scope("Search.install_tab_result");
         let Some(mut state) = self.search_tabs.state(job.owner, job.id).cloned() else {
             return;
         };
@@ -502,6 +505,7 @@ impl Workspace {
         results: GlobalSearchResults,
         matcher: Option<SearchMatcher>,
     ) -> SearchSessionState {
+        let _trace = crate::ui_performance::trace::scope("Search.result_context");
         let key = |key: &PersistedSearchRowKey| {
             self.global_document_id_for_path(&results, &key.path)
                 .map(|id| match key.source_row {

@@ -20,6 +20,7 @@ fn search_path_snapshot(
     cancellation: &SearchCancellation,
     range: SearchRange,
 ) -> Result<Option<(Arc<LogDocument>, SearchResult)>> {
+    let _trace = crate::ui_performance::trace::scope("Search.path_snapshot");
     if cancellation.is_cancelled() {
         return Ok(None);
     }
@@ -95,6 +96,7 @@ pub(super) fn run_directory_search(
     cancellation: SearchCancellation,
     ranges: search_limits::FileSearchRanges,
 ) -> Result<DirectorySearchRun> {
+    let _trace = crate::ui_performance::trace::scope("Search.directory");
     let matcher = SearchMatcher::new(&query)?;
     let Some(enumeration) = enumerate_directory_search_paths(&options, &cancellation)? else {
         return Ok(DirectorySearchRun {
@@ -192,6 +194,7 @@ pub(super) fn run_persisted_all_open_search_in_ranges(
     cancellation: SearchCancellation,
     ranges: search_limits::FileSearchRanges,
 ) -> Result<(bool, Vec<DirectorySearchResult>, Option<SearchMatcher>)> {
+    let _trace = crate::ui_performance::trace::scope("Search.all_open");
     let matcher = SearchMatcher::new(&query)?;
     let outcomes = prepare_paths_bounded_while(
         deduplicate_paths(paths),
@@ -235,6 +238,7 @@ pub(super) fn directory_search_scan_paths(
     query_has_matcher: bool,
     open_document_paths: &BTreeSet<PathMatchKey>,
 ) -> Vec<PathBuf> {
+    let _trace = crate::ui_performance::trace::scope("Search.scan_paths");
     if query_has_matcher {
         return paths;
     }
@@ -249,6 +253,7 @@ pub(super) fn collect_log_lines_for_clipboard(
     include_line_number: bool,
     cancellation: &SearchCancellation,
 ) -> DocumentLineTask<CopiedLogLines> {
+    let _trace = crate::ui_performance::trace::scope("Clipboard.read_lines");
     let mut text = String::new();
     let mut count = 0_usize;
     let mut first_source_row = None;
@@ -323,6 +328,7 @@ pub(super) fn prepare_color_rule_update(
     input: ColorRuleUpdateInput,
     cancellation: &SearchCancellation,
 ) -> DocumentLineTask<PreparedColorRuleUpdate> {
+    let _trace = crate::ui_performance::trace::scope("Color.prepare_rules");
     let ColorRuleUpdateInput {
         target,
         collect_keywords,
@@ -648,9 +654,11 @@ pub(super) fn prepare_document_in_range(
     color_labels: &[ColorLabel],
     range: SearchRange,
 ) -> Result<PreparedDocument> {
+    let _trace = crate::ui_performance::trace::scope("Document.prepare");
     let (document, pending_index_cache) = match cached_complete_document {
         Some(document) => (document, None),
         None => {
+            let _trace = crate::ui_performance::trace::scope("Document.open_and_index");
             let (document, pending_index_cache) =
                 if let Some(cache_dir) = crate::app_paths::index_cache_dir() {
                     LogDocument::open_with_index_cache(path, cache_dir)?
@@ -664,6 +672,7 @@ pub(super) fn prepare_document_in_range(
     let session = if session_override.is_some() {
         session_override
     } else {
+        let _trace = crate::ui_performance::trace::scope("Document.load_session");
         match store.map(|store| store.load_session(path)).transpose() {
             Ok(session) => session.flatten(),
             Err(error) => {
@@ -742,6 +751,7 @@ pub(super) fn prepare_document_in_range(
 pub(super) fn load_document_upgrade_frames(
     jobs: Vec<DocumentUpgradeLoadJob>,
 ) -> Vec<PreparedDocumentUpgradeFrame> {
+    let _trace = crate::ui_performance::trace::scope("Document.upgrade_frames");
     jobs.into_iter()
         .map(|job| {
             let mut reader = LinePreviewReader::default();
@@ -790,6 +800,7 @@ pub(super) fn prepare_document_shell(
     case_sensitive: bool,
     regex: bool,
 ) -> PreparedDocument {
+    let _trace = crate::ui_performance::trace::scope("Document.shell");
     PreparedDocument {
         document: Arc::new(LogDocument::placeholder(path)),
         cached_complete_document: None,
@@ -822,6 +833,7 @@ pub(super) fn search_reloaded_document_in_range(
     cancellation: &SearchCancellation,
     range: SearchRange,
 ) -> Result<SearchResult> {
+    let _trace = crate::ui_performance::trace::scope("Search.reloaded_document");
     let run = match kind {
         DocumentRefreshKind::Appended => search_appended_with_compiled_matcher_in_range(
             document,
@@ -856,6 +868,7 @@ pub(super) fn prepare_document_preview(
     search_options: SearchPreparationOptions,
     color_labels: &[ColorLabel],
 ) -> Result<PreparedDocument> {
+    let _trace = crate::ui_performance::trace::scope("Document.preview");
     let mut warning = None;
     let session = if session_override.is_some() {
         session_override
@@ -948,6 +961,7 @@ pub(super) fn compute_result_rows(
     search_result: Option<&SearchResult>,
     marked_rows: &CompressedRows,
 ) -> CompressedRows {
+    let _trace = crate::ui_performance::trace::scope("Search.compute_rows");
     let matched_rows = search_result
         .map(|result| result.line_indices.clone())
         .unwrap_or_default();
@@ -966,6 +980,7 @@ pub(super) fn group_result_rows_by_document(
     rows: &BTreeMap<u64, CompressedRows>,
     mut resolve_document_id: impl FnMut(u64, &CompressedRows) -> Option<u64>,
 ) -> Option<BTreeMap<u64, CompressedRows>> {
+    let _trace = crate::ui_performance::trace::scope("Search.group_rows");
     let mut by_document = BTreeMap::<u64, CompressedRows>::new();
     for (&result_document_id, rows) in rows {
         if rows.is_empty() {

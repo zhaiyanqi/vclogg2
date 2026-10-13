@@ -156,6 +156,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let _trace = crate::ui_performance::trace::scope("Viewport.commit_local_results");
         let Some(tab_ix) = self
             .documents
             .iter()
@@ -417,6 +418,7 @@ impl Workspace {
         region: WrappedRegion,
         cx: &mut Context<Self>,
     ) {
+        let _trace = crate::ui_performance::trace::scope("Viewport.refresh_lines");
         self.invalidate_log_scroll_frame((document_id, region));
         if region == WrappedRegion::GlobalResults {
             self.global_table.update(cx, |table, cx| {
@@ -442,6 +444,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let _trace = crate::ui_performance::trace::scope("Viewport.refresh_surfaces");
         for surface in surfaces {
             surface.update(cx, |_, cx| cx.notify());
         }
@@ -506,6 +509,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        let _trace = crate::ui_performance::trace::scope("Viewport.commit_group");
         let applied = self.global_table.update(cx, |table, cx| {
             if !table
                 .delegate_mut()
@@ -702,6 +706,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let _trace = crate::ui_performance::trace::scope("Viewport.toggle_wrap");
         self.cancel_tag_drag(window, cx);
         let toggles_from_global_results = self.active_log_region == LogRegion::GlobalResults
             && self.global_search.results_visible

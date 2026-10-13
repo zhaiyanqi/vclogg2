@@ -48,3 +48,9 @@ app 组合 core/data；core 不依赖 data/app，data 不依赖 app。core/data 
 可选 Go 服务独立构建。其默认签名鉴权不自动兼容当前桌面客户端的无签名注册，见[云端过滤器](Cloud-Filters.md)。
 
 源码：[工作区模块](https://github.com/zhaiyanqi/vclogg2/tree/main/crates/vclogg-app/src/workspace)、[core](https://github.com/zhaiyanqi/vclogg2/tree/main/crates/vclogg-core/src)、[状态仓储](https://github.com/zhaiyanqi/vclogg2/blob/main/crates/vclogg-data/src/state_repository.rs)。
+
+## 性能 trace
+
+`ui_performance/trace.rs` 保留应用级 Recorder；`trace/startup.rs` 在 `main` 的平台初始化之前解析并启动命令行录制，再在 GPUI 初始化回调中接入 foreground journal。独立线程每 50 ms 排空 journal 与任务缓冲，以统一 Instant 基准导出 Chrome Trace Event JSON。冷启动到时自动落盘；手动录制停止后选择保存位置，取消或失败保留数据供重试。
+
+应用 scope 在进入时登记线程与起点，退出时记录完成事件；停止冻结时保留尚在执行的 scope，并补取 GPUI 边界任务快照，以 `incomplete` 标识。事件和活动 scope 分别限制为 200,000 / 4,096，丢失数量写入摘要。跳帧、空闲、挂起和短 poll 聚合用瞬时事件表示；dirty-to-present 和回调投递延迟使用独立类别，不冒充 CPU 工作。应用埋点覆盖启动、文件准备/索引、搜索执行与结果安装、标签激活、可见行加载和设置应用，未录制时新增 scope 不读取时钟。参见[冷启动参数](Building.md#冷启动性能录制)。

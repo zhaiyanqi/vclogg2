@@ -5,6 +5,7 @@ impl Workspace {
     /// projection. Global and directory searches therefore highlight the opened file with the
     /// same matcher as the lower result projection.
     pub(super) fn refresh_active_log_search_presentation(&mut self, cx: &mut Context<Self>) {
+        let _trace = crate::ui_performance::trace::scope("Search.refresh_presentation");
         let Some(active_ix) = self.active_ix else {
             return;
         };
@@ -229,6 +230,7 @@ impl Workspace {
         scope: SearchScope,
         context: &SearchSessionState,
     ) -> Vec<GlobalSearchGroup> {
+        let _trace = crate::ui_performance::trace::scope("Search.build_groups");
         match scope {
             SearchScope::AllOpenFiles if context.initialized => {
                 let open_documents_by_path = self
@@ -583,6 +585,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let _trace = crate::ui_performance::trace::scope("Search.commit_results");
         let valid = {
             let table = self.global_table.read(cx);
             table.delegate().content_revision() == prepared.expected_content_revision
@@ -1946,6 +1949,7 @@ impl Workspace {
         document_id: u64,
         replacement: ReloadGlobalSearch,
     ) {
+        let _trace = crate::ui_performance::trace::scope("Search.install_reload");
         if self.global_search.scope == SearchScope::AllOpenFiles {
             self.search_ranges.completed(
                 replacement.document.path(),

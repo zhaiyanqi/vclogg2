@@ -31,6 +31,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let _trace = crate::ui_performance::trace::scope("Tab.prepare_search_activation");
         self.cancel_search_tab_activation();
         let Some(state) = self.search_tabs.state(owner, id).cloned() else {
             return;
@@ -96,6 +97,7 @@ impl Workspace {
             let worker_cancel = cancellation.clone();
             let frame = cx
                 .background_spawn(async move {
+                    let _trace = crate::ui_performance::trace::scope("Tab.prepare_search_frame");
                     if let Some((document_id, document, result, marks)) = local {
                         let rows = compute_result_rows(
                             ResultMode::from_database(state.saved.context.result_mode),

@@ -78,3 +78,5 @@ Text tag context menu
 ```
 
 A601 also remains in the row’s “Text mark” submenu; it is disabled when there are no tags, the document is stale, a file is opening or the state store is unavailable.
+
+Performance recording in Settings → Advanced provides start, stop/export, retry export and discard actions. During [cold-start capture](Building.md#cold-start-performance-capture), this area shows automatic recording status and disables duplicate starts and manual stopping. When timed collection stops, manual recording becomes available again; the automatic export uses the command-line destination.

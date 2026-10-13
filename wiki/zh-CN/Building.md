@@ -198,3 +198,19 @@ choco install ripgrep --yes --no-progress
 # 安装后重新打开终端，使 PATH 生效
 rg --version
 ```
+
+## 冷启动性能录制
+
+先退出所有 VCLogg2 实例，再运行已有的可执行文件（以下命令不会编译）：
+
+```sh
+./target/release/vclogg2 --trace-startup ./startup-trace.json --trace-duration 15
+```
+
+Windows 使用 `./target/release/vclogg2.exe`；Debug 可执行文件同样支持这些参数。`--trace-startup` 指定 JSON 文件，父目录必须已存在；`--trace-duration` 为 1–600 的整数秒，省略时为 15 秒。可在参数后追加要打开的日志路径，含空格时加引号；以 `--` 分隔后，后续参数均作为文件路径。
+
+录制在平台、字体、状态库和窗口初始化前开启。独立采集线程到时自动停止并原子写入指定文件（会替换同名文件），无需在界面点击停止；UI 卡住时也不依赖 UI 线程来触发导出。`main` 提前返回会尽早导出，强制结束进程或崩溃中止不能保证落盘。若已有实例运行，本次启动仍按原规则转发打开请求，无法录制已有进程的启动。
+
+使用 [Perfetto UI](https://ui.perfetto.dev/) 打开 JSON。先查看 `Startup.*` 初始化节点，再看 `Document.*`、`Search.*`、`Tab.*`、`Viewport.*`、`Settings.apply` 及已有控件耗时；停止时仍未结束的应用节点会裁剪到录制边界，带 `incomplete=true`。同时导出 GPUI 任务 poll、输入、Action、Draw、Present、帧等待与跳帧标记。任务位置是 spawn 位置，不是采样调用栈；帧等待和跨轨重叠不能相加作为 CPU 耗时，未埋点内部逻辑仍需继续定位。
+
+最多保留 200,000 条已完成事件和 4,096 个活动 scope；`Recording summary` 中的 `lost_events` 表示缓冲覆盖、竞争或容量超限造成的丢失。冷启动录制期间“设置 → 高级”会显示自动录制状态并禁用重复开始。手动录制仍使用“开始录制 / 停止并导出 trace”。

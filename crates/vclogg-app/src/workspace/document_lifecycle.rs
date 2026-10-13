@@ -308,6 +308,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let _trace = crate::ui_performance::trace::scope("Document.install");
         self.capture_active_search_tab(cx);
         let adds_document = opened.iter().any(|(path, result)| {
             result.is_ok()
@@ -833,6 +834,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let _trace = crate::ui_performance::trace::scope("Document.install_completed");
         let mut accepted = Vec::new();
         for (path, result) in opened {
             if let Some(expected_id) = path_buf_map_get(opening_ids, &path).copied() {
@@ -1164,6 +1166,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        let _trace = crate::ui_performance::trace::scope("Document.install_upgrade");
         let upgrade_frame = prepared.upgrade_frame.take();
         let pending_log_jump = resolved_prepared_search_jump(
             upgrade_frame.as_ref().and_then(|frame| frame.log_jump),
@@ -1555,6 +1558,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let _trace = crate::ui_performance::trace::scope("Document.commit_reload");
         let plan = prepared.plan;
         let Some(tab_ix) = self
             .documents

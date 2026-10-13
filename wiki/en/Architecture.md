@@ -48,3 +48,9 @@ Ordinary browsing and annotations do not write source logs. Explicit [editing](E
 The optional Go server is built independently. Its default signature requirement is not automatically compatible with the current desktop client's unsigned registration; see [cloud filters](Cloud-Filters.md).
 
 Source: [workspace modules](https://github.com/zhaiyanqi/vclogg2/tree/main/crates/vclogg-app/src/workspace), [core](https://github.com/zhaiyanqi/vclogg2/tree/main/crates/vclogg-core/src), [data repository](https://github.com/zhaiyanqi/vclogg2/blob/main/crates/vclogg-data/src/state_repository.rs).
+
+## Performance traces
+
+`ui_performance/trace.rs` retains the application Recorder. `trace/startup.rs` parses capture options before platform initialization in `main`, then attaches the foreground journal in GPUI's initialization callback. An independent thread drains journal and task buffers every 50 ms and exports Chrome Trace Event JSON on a shared Instant timeline. Cold-start capture saves automatically at its deadline; manual capture prompts for a path after stopping and retains data if saving fails or is cancelled.
+
+Application scopes register their starting thread and timestamp on entry. Completion moves them into the event buffer; freezing preserves active scopes and adds a GPUI boundary-task snapshot marked `incomplete`. Completed events and active scopes are bounded at 200,000 / 4,096, with losses in the summary. Skips, idle, power transitions and aggregated short polls use instant events; dirty-to-present and callback delivery latency use separate categories rather than CPU-work slices. Application scopes cover startup, document preparation/indexing, search execution/publication, tab activation, visible-line loading and settings application. New scopes do not read the clock when capture is inactive. See [cold-start options](Building.md#cold-start-performance-capture).

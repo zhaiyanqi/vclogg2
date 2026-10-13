@@ -1793,6 +1793,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let _trace = crate::ui_performance::trace::scope("Startup.workspace");
         window.set_window_title(crate::tr!("新标签页 — VCLogg2", "New tab — VCLogg2"));
         let (initial_app_settings, initial_search_options) = Self::initial_search_settings(cx);
         let query = cx.new(|cx| {
@@ -2062,6 +2063,7 @@ impl Workspace {
         let cloud_client_bootstrap_task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
+                    let _trace = crate::ui_performance::trace::scope("Startup.cloud_client");
                     let client = CloudClient::open_default().map_err(|error| error.to_string())?;
                     let connection = client.saved_connection().ok().flatten();
                     Ok::<_, String>((client, connection))
@@ -2079,26 +2081,33 @@ impl Workspace {
                 cx.notify();
             });
         });
-        let index_cache_cleanup_task = (!INDEX_CACHE_CLEANUP_SCHEDULED
-            .swap(true, Ordering::AcqRel))
-        .then(|| {
-            cx.spawn(async move |_, cx| {
-                cx.background_executor().timer(Duration::from_secs(2)).await;
-                let Some(directory) = crate::app_paths::index_cache_dir() else {
-                    return;
-                };
-                if let Err(error) = cx
-                    .background_spawn(async move { vclogg_data::cleanup_index_cache(directory) })
-                    .await
-                {
-                    log::warn!("索引缓存自动维护失败：{error:#}");
-                }
-            })
-        });
+        let index_cache_cleanup_task =
+            (!INDEX_CACHE_CLEANUP_SCHEDULED.swap(true, Ordering::AcqRel)).then(|| {
+                cx.spawn(async move |_, cx| {
+                    cx.background_executor().timer(Duration::from_secs(2)).await;
+                    let Some(directory) = crate::app_paths::index_cache_dir() else {
+                        return;
+                    };
+                    if let Err(error) = cx
+                        .background_spawn(async move {
+                            let _trace =
+                                crate::ui_performance::trace::scope("Startup.cleanup_index_cache");
+                            vclogg_data::cleanup_index_cache(directory)
+                        })
+                        .await
+                    {
+                        log::warn!("索引缓存自动维护失败：{error:#}");
+                    }
+                })
+            });
         let state_bootstrap_task = cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
-                    let store = Arc::new(StateStore::open_default()?);
+                    let _trace = crate::ui_performance::trace::scope("Startup.load_state");
+                    let store = {
+                        let _trace = crate::ui_performance::trace::scope("Startup.open_state_store");
+                        Arc::new(StateStore::open_default()?)
+                    };
                     let recent_files = store.recent_files(8)?;
                     let pinned_files = store.pinned_files()?;
                     let last_workspace_files = store.last_workspace()?;
@@ -2140,6 +2149,7 @@ impl Workspace {
                 .await;
 
             _ = this.update_in(cx, |this, window, cx| {
+                let _trace = crate::ui_performance::trace::scope("Startup.install_state");
                 match result {
                     Ok((
                         store,

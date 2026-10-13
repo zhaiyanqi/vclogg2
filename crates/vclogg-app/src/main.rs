@@ -110,6 +110,7 @@ fn open_workspace_window_with_options(
     window_bounds: WindowBounds,
     display_id: Option<DisplayId>,
 ) -> anyhow::Result<gpui_kit::AnyWindowHandle> {
+    let _scope = ui_performance::trace::scope("Startup.open_workspace_window");
     let window_options = WindowOptions {
         window_bounds: Some(window_bounds),
         display_id,
@@ -169,9 +170,30 @@ fn external_request_listener(
 }
 
 fn main() {
-    app_log::init();
+    let arguments = match ui_performance::trace::startup::Arguments::parse() {
+        Ok(arguments) => arguments,
+        Err(error) => {
+            eprintln!("{error:#}");
+            std::process::exit(2);
+        }
+    };
+    let cold_trace = match arguments.begin() {
+        Ok(trace) => trace,
+        Err(error) => {
+            eprintln!("Could not start startup trace: {error:#}");
+            std::process::exit(1);
+        }
+    };
+    let startup_scope = ui_performance::trace::scope("Startup.bootstrap");
+    {
+        let _scope = ui_performance::trace::scope("Startup.logging");
+        app_log::init();
+    }
     #[cfg(windows)]
-    if let Err(error) = app_paths::initialize_windows_data_directory() {
+    if let Err(error) = {
+        let _trace = ui_performance::trace::scope("Startup.data_directory");
+        app_paths::initialize_windows_data_directory()
+    } {
         use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
 
         log::error!("VCLogg2 数据目录初始化失败：{error}");
@@ -189,22 +211,36 @@ fn main() {
                 MB_OK | MB_ICONERROR,
             );
         }
+        drop(cold_trace);
         std::process::exit(1);
     }
     app_paths::log_development_override();
     crash_report::install_panic_hook();
     log::info!("VCLogg2 {} starting", build_info::VERSION);
 
-    let initial_paths = single_instance::command_line_paths();
-    let primary_instance = match single_instance::acquire_or_forward(&initial_paths) {
+    let initial_paths = single_instance::command_line_paths(arguments.paths);
+    let primary_instance = match {
+        let _scope = ui_performance::trace::scope("Startup.single_instance");
+        single_instance::acquire_or_forward(&initial_paths)
+    } {
         Ok(single_instance::Startup::Primary(instance)) => instance,
-        Ok(single_instance::Startup::Forwarded) => return,
+        Ok(single_instance::Startup::Forwarded) => {
+            if cold_trace.is_some() {
+                eprintln!(
+                    "An existing VCLogg2 instance received the request; quit it first to capture a cold start."
+                );
+            }
+            return;
+        }
         Err(error) => {
             log::error!("VCLogg2 单实例初始化失败：{error:#}");
             return;
         }
     };
-    let forwarded_requests = match primary_instance.start_listener() {
+    let forwarded_requests = match {
+        let _trace = ui_performance::trace::scope("Startup.instance_listener");
+        primary_instance.start_listener()
+    } {
         Ok(receiver) => receiver,
         Err(error) => {
             log::error!("VCLogg2 单实例监听失败：{error:#}");
@@ -217,9 +253,18 @@ fn main() {
         .collect::<Vec<_>>();
     #[cfg(target_os = "macos")]
     i18n::initialize_native_language();
-    let platform = gpui_kit::platform::current_platform(false);
-    let system_fonts = system_fonts::SystemFonts::new(platform.text_system());
-    let app = Application::with_platform(platform).with_assets(app_assets::Assets);
+    let platform = {
+        let _scope = ui_performance::trace::scope("Startup.platform");
+        gpui_kit::platform::current_platform(false)
+    };
+    let system_fonts = {
+        let _scope = ui_performance::trace::scope("Startup.fonts");
+        system_fonts::SystemFonts::new(platform.text_system())
+    };
+    let app = {
+        let _scope = ui_performance::trace::scope("Startup.application");
+        Application::with_platform(platform).with_assets(app_assets::Assets)
+    };
     let (platform_open_sender, platform_open_receiver) = async_channel::unbounded();
     app.on_open_urls(move |urls| {
         let paths = urls
@@ -245,17 +290,34 @@ fn main() {
         }
     });
 
+    let trace_attachment = cold_trace
+        .as_ref()
+        .map(ui_performance::trace::startup::StartupTrace::attachment);
+    drop(startup_scope);
     app.run(move |cx| {
+        if let Some(attachment) = trace_attachment {
+            _ = attachment.send(cx.foreground_journal().collector());
+        }
+        let _scope = ui_performance::trace::scope("Startup.initialize_services");
         ui_performance::init_ui_thread();
         ui_performance::start_framework_monitor(cx);
-        gpui_kit::init(cx);
+        {
+            let _trace = ui_performance::trace::scope("Startup.gpui_kit");
+            gpui_kit::init(cx);
+        }
         notifications::init(cx);
         cx.set_global(system_fonts);
         cx.set_cursor_hide_mode(CursorHideMode::Never);
-        ui_theme::apply_product_theme(ThemeMode::Light, cx);
+        {
+            let _trace = ui_performance::trace::scope("Startup.theme");
+            ui_theme::apply_product_theme(ThemeMode::Light, cx);
+        }
         actions::init(cx);
         Workspace::init_window_registry(cx);
-        app_icon::init(cx);
+        {
+            let _trace = ui_performance::trace::scope("Startup.app_icon");
+            app_icon::init(cx);
+        }
         let mut request_tasks = vec![external_request_listener(platform_open_receiver, cx)];
         if let Some(receiver) = forwarded_requests {
             request_tasks.push(external_request_listener(receiver, cx));

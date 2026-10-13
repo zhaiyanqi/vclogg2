@@ -21,13 +21,13 @@ pub(crate) struct PrimaryInstance {
     server: unix::ServerSocket,
 }
 
-pub(crate) fn command_line_paths() -> Vec<PathBuf> {
+pub(crate) fn command_line_paths(arguments: Vec<std::ffi::OsString>) -> Vec<PathBuf> {
     let working_directory = std::env::current_dir().ok();
     let mut seen = BTreeSet::new();
     let mut paths = Vec::new();
 
-    for argument in std::env::args_os().skip(1) {
-        if argument.is_empty() || argument.to_string_lossy().starts_with('-') {
+    for argument in arguments {
+        if argument.is_empty() {
             continue;
         }
         let path = PathBuf::from(argument);

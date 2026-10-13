@@ -128,3 +128,19 @@ node --version
 Packaging installs frozen pnpm dependencies, typechecks and rebuilds the embedded admin UI, then builds Windows/Linux amd64 with `CGO_ENABLED=0`, `-mod=readonly`, `-trimpath` and stripped symbols. Optional verification commands are `pnpm --dir server run typecheck`, `go -C server vet ./...` and `go -C server test ./...`; Windows `server/scripts/verify.ps1` also performs real builds/resource consistency checks.
 
 See [release packaging](Build-and-Release.md) and [documentation-only builds](Documentation.md).
+
+## Cold-start performance capture
+
+Quit all VCLogg2 instances, then launch an existing executable (this command does not build):
+
+```sh
+./target/release/vclogg2 --trace-startup ./startup-trace.json --trace-duration 15
+```
+
+Use `./target/release/vclogg2.exe` on Windows. Debug executables support the same options. `--trace-startup` selects the JSON output file; its parent directory must exist. `--trace-duration` accepts an integer from 1 to 600 seconds and defaults to 15. Append log paths to open, quoting paths with spaces; everything after `--` is treated as a file path.
+
+Capture starts before platform, font, storage and window initialization. An independent collector stops at the deadline and atomically writes the file, replacing an existing destination. Export does not require a responsive UI. An early return from `main` flushes sooner; forced termination or an aborting crash may prevent export. If another instance is running, normal request forwarding still applies and cannot capture that existing process's startup.
+
+Open the JSON in [Perfetto UI](https://ui.perfetto.dev/). Start with `Startup.*`, then inspect `Document.*`, `Search.*`, `Tab.*`, `Viewport.*`, `Settings.apply` and existing control timings. Application scopes still running at the capture boundary are clipped and marked `incomplete=true`. GPUI task polls, input, actions, drawing, presentation, frame latency and skipped-frame markers are included. Task locations identify spawn sites, not sampled call stacks. Latency tracks and overlapping categories are not additive CPU time; uninstrumented internals may require further investigation.
+
+The capture retains up to 200,000 completed events plus 4,096 active scopes. `Recording summary.lost_events` reports buffer overwrites, contention and capacity loss. During cold-start capture, Settings → Advanced shows automatic recording status and disables duplicate starts. Manual capture continues to use Start recording / Stop and export trace.

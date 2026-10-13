@@ -92,6 +92,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let _trace = crate::ui_performance::trace::scope("Tab.activate_workspace");
         self.activate_workspace_tab_with_log_jump(tab_id, None, window, cx);
     }
 
@@ -336,6 +337,7 @@ impl Workspace {
     }
 
     pub(super) fn activate_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let _trace = crate::ui_performance::trace::scope("Tab.activate_file");
         if ix >= self.documents.len() {
             return;
         }
