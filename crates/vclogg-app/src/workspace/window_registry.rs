@@ -16,24 +16,37 @@ impl Workspace {
         let candidates = cx
             .global::<WorkspaceWindowRegistry>()
             .windows_by_recent_focus();
-        for candidate in candidates {
-            let workspace = candidate.workspace.clone();
-            let paths = paths.to_vec();
-            if candidate
-                .window
-                .update(cx, move |_, window, cx| {
-                    workspace.update(cx, |workspace, cx| {
-                        workspace.enqueue_external_paths(paths, window, cx)
-                    });
-                    cx.activate(true);
-                    window.activate_window();
-                })
-                .is_ok()
-            {
-                return true;
+        let mut handled = false;
+        for path in paths {
+            let owner = candidates.iter().find(|candidate| {
+                candidate
+                    .workspace
+                    .read(cx)
+                    .documents
+                    .iter()
+                    .any(|tab| paths_match(tab.document.path(), path))
+            });
+            let targets = owner.into_iter().chain(candidates.iter());
+            for candidate in targets {
+                let workspace = candidate.workspace.clone();
+                let path = path.clone();
+                if candidate
+                    .window
+                    .update(cx, move |_, window, cx| {
+                        cx.activate(true);
+                        window.activate_window();
+                        workspace.update(cx, |workspace, cx| {
+                            workspace.enqueue_external_paths(vec![path], window, cx)
+                        });
+                    })
+                    .is_ok()
+                {
+                    handled = true;
+                    break;
+                }
             }
         }
-        false
+        handled
     }
 
     pub(crate) fn register_window(workspace: &Entity<Self>, window: &mut Window, cx: &mut App) {

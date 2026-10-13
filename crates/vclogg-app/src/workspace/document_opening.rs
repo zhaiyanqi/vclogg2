@@ -216,16 +216,31 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        for path in paths {
-            if !path.as_os_str().is_empty()
-                && !self
-                    .pending_external_paths
+        let paths = deduplicate_paths(
+            paths
+                .into_iter()
+                .filter(|path| !path.as_os_str().is_empty()),
+        );
+        let new_paths = paths
+            .iter()
+            .filter(|path| {
+                !self
+                    .documents
                     .iter()
-                    .any(|queued| paths_match(queued, &path))
-            {
-                self.pending_external_paths.push(path);
-            }
+                    .any(|tab| paths_match(tab.document.path(), path))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        // Publish placeholders even while another file or the state store is loading.
+        self.show_opening_paths(&new_paths, window, cx);
+        if let Some(ix) = paths.last().and_then(|path| {
+            self.documents
+                .iter()
+                .position(|tab| paths_match(tab.document.path(), path))
+        }) {
+            self.activate_tab(ix, window, cx);
         }
+        self.pending_external_paths.extend(new_paths);
         self.open_queued_external_paths_if_idle(window, cx);
     }
 
@@ -234,11 +249,161 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.open_task.is_some() || self.pending_external_paths.is_empty() {
+        if self.history_loading || self.open_task.is_some() {
             return;
         }
+        if !self.pending_initial_documents.is_empty() {
+            let initial_documents = std::mem::take(&mut self.pending_initial_documents);
+            self.resume_initial_documents(initial_documents, window, cx);
+            return;
+        }
+        if self.pending_external_paths.is_empty() {
+            return;
+        }
+        let selected_tab = self.active_tab_id;
         let paths = std::mem::take(&mut self.pending_external_paths);
-        self.begin_open_paths(paths, window, cx);
+        let active_path = self
+            .active_document()
+            .map(|tab| tab.document.path().to_path_buf());
+        self.begin_open_paths_with_sessions(
+            paths,
+            active_path,
+            OpenDocumentOverrides::default(),
+            false,
+            window,
+            cx,
+        );
+        if self.tabs.contains(&selected_tab) && self.active_tab_id != selected_tab {
+            self.activate_workspace_tab(selected_tab, window, cx);
+        }
+    }
+
+    pub(super) fn show_initial_document_shells(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.pending_initial_documents.is_empty() {
+            return;
+        }
+        let mut shells = Vec::new();
+        let mut target_indices = BTreeMap::new();
+        for initial in &self.pending_initial_documents {
+            if initial.transient {
+                self.transient_paths.insert(path_match_key(&initial.path));
+            }
+            if let Some(range) = initial.search_range {
+                self.search_ranges.set(&initial.path, range);
+            }
+            if let Some(target_ix) = initial.target_ix {
+                path_buf_map_insert(&mut target_indices, initial.path.clone(), target_ix);
+            }
+            shells.push((
+                initial.path.clone(),
+                Ok(prepare_document_shell(
+                    &initial.path,
+                    initial.session.clone(),
+                    self.app_settings.default_case_sensitive,
+                    self.app_settings.default_use_regex,
+                )),
+            ));
+        }
+        let replacement = match self.active_tab_id {
+            WorkspaceTabId::New(id)
+                if self
+                    .pending_initial_documents
+                    .iter()
+                    .all(|initial| initial.replace_new_tab) =>
+            {
+                Some(id)
+            }
+            _ => None,
+        };
+        let active_path = self
+            .pending_initial_documents
+            .last()
+            .map(|initial| initial.path.clone());
+        self.install_documents(
+            shells,
+            active_path.as_deref(),
+            &target_indices,
+            replacement,
+            false,
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn show_opening_paths(
+        &mut self,
+        paths: &[PathBuf],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if paths.is_empty() {
+            return;
+        }
+        let replacement = match self.active_tab_id {
+            WorkspaceTabId::New(id) if !self.new_file_drafts.contains_key(&id) => Some(id),
+            _ => None,
+        };
+        let shells = paths
+            .iter()
+            .map(|path| {
+                (
+                    path.clone(),
+                    Ok(prepare_document_shell(
+                        path,
+                        None,
+                        self.app_settings.default_case_sensitive,
+                        self.app_settings.default_use_regex,
+                    )),
+                )
+            })
+            .collect();
+        self.install_documents(
+            shells,
+            paths.last().map(PathBuf::as_path),
+            &BTreeMap::new(),
+            replacement,
+            false,
+            window,
+            cx,
+        );
+    }
+
+    fn resume_initial_documents(
+        &mut self,
+        initial_documents: Vec<InitialDocument>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Closing a startup placeholder must not reopen it after state restoration.
+        let initial_documents = initial_documents
+            .into_iter()
+            .filter_map(|mut initial| {
+                if self
+                    .documents
+                    .iter()
+                    .any(|tab| paths_match(tab.document.path(), &initial.path))
+                {
+                    // The placeholder already consumed any replaceable new tab.
+                    initial.replace_new_tab = false;
+                    Some(initial)
+                } else {
+                    if let Some(completion) = initial.move_completion.take() {
+                        completion.finish(false, cx);
+                    }
+                    None
+                }
+            })
+            .collect();
+        let selected_tab = self.active_tab_id;
+        self.begin_open_initial_documents(initial_documents, window, cx);
+        if self.tabs.contains(&selected_tab) && self.active_tab_id != selected_tab {
+            self.activate_workspace_tab(selected_tab, window, cx);
+        }
+        self.open_queued_external_paths_if_idle(window, cx);
     }
 
     pub(super) fn begin_open_initial_documents(
@@ -422,7 +587,18 @@ impl Workspace {
         let color_labels = self.color_labels.clone();
         let search_ranges = self.search_ranges.clone();
 
+        // Frame callbacks run before drawing. Let the opening shell reach the
+        // screen before starting session reads, previews, or indexing.
+        let (ready, presented) = async_channel::bounded(1);
+        window.on_next_frame(move |window, _| {
+            window.on_next_frame(move |_, _| {
+                _ = ready.try_send(());
+            });
+        });
         self.open_task = Some(cx.spawn_in(window, async move |this, cx| {
+            if presented.recv().await.is_err() {
+                return;
+            }
             let restore_paths = paths.clone();
             let restore_store = state_store.clone();
             let (sessions, fallback_store, effective_search_result_limit) = cx
@@ -510,15 +686,30 @@ impl Workspace {
                         })
                     })
                     .collect();
+                let preserve_selection = this.pending_directory_group_activation.is_none()
+                    && this.pending_search_result_jump.is_none();
+                let selected_path = if preserve_selection {
+                    this.active_document()
+                        .map(|tab| tab.document.path().to_path_buf())
+                } else {
+                    active_path.clone()
+                };
+                let selected_tab = this.active_tab_id;
                 this.install_documents(
                     previews,
-                    active_path.as_deref(),
+                    selected_path.as_deref(),
                     &target_indices,
                     None,
                     false,
                     window,
                     cx,
                 );
+                if preserve_selection
+                    && this.tabs.contains(&selected_tab)
+                    && this.active_tab_id != selected_tab
+                {
+                    this.activate_workspace_tab(selected_tab, window, cx);
+                }
             });
 
             let full_paths = paths.clone();
@@ -555,14 +746,29 @@ impl Workspace {
             }
 
             _ = this.update_in(cx, |this, window, cx| {
+                let preserve_selection = this.pending_directory_group_activation.is_none()
+                    && this.pending_search_result_jump.is_none();
+                let selected_path = if preserve_selection {
+                    this.active_document()
+                        .map(|tab| tab.document.path().to_path_buf())
+                } else {
+                    active_path.clone()
+                };
+                let selected_tab = this.active_tab_id;
                 this.install_completed_documents(
                     opened,
-                    active_path.as_deref(),
+                    selected_path.as_deref(),
                     &target_indices,
                     &opening_ids,
                     window,
                     cx,
                 );
+                if preserve_selection
+                    && this.tabs.contains(&selected_tab)
+                    && this.active_tab_id != selected_tab
+                {
+                    this.activate_workspace_tab(selected_tab, window, cx);
+                }
                 this.open_task = None;
                 this.maybe_restore_persisted_search(window, cx);
                 for (path, completion) in move_completions {

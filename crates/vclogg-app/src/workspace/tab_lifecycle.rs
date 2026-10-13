@@ -681,6 +681,21 @@ impl Workspace {
         self.tabs.retain(|tab_id| !ids.contains(tab_id));
         self.new_file_drafts
             .retain(|id, _| !ids.contains(&WorkspaceTabId::New(*id)));
+        self.pending_initial_documents.retain_mut(|initial| {
+            let closing = self.documents.iter().any(|tab| {
+                document_ids.contains(&tab.id) && paths_match(tab.document.path(), &initial.path)
+            });
+            if closing && let Some(completion) = initial.move_completion.take() {
+                completion.finish(false, cx);
+            }
+            !closing
+        });
+        self.pending_external_paths.retain(|path| {
+            !self
+                .documents
+                .iter()
+                .any(|tab| document_ids.contains(&tab.id) && paths_match(tab.document.path(), path))
+        });
         self.documents.retain(|tab| !document_ids.contains(&tab.id));
         self.row_drag_bounds
             .retain(|(tab_id, _), _| !document_ids.contains(tab_id));

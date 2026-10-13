@@ -1689,6 +1689,7 @@ pub struct Workspace {
     open_task: Option<Task<()>>,
     file_refresh_task: Option<FileRefreshTask>,
     pending_external_paths: Vec<PathBuf>,
+    pending_initial_documents: Vec<InitialDocument>,
     result_export_task: Option<Task<()>>,
     result_export_operation: Option<ResultExportOperation>,
     line_copy_task: Option<Task<()>>,
@@ -2320,7 +2321,7 @@ impl Workspace {
                         );
                     }
                 }
-                this.begin_open_initial_documents(initial_documents, window, cx);
+                this.open_queued_external_paths_if_idle(window, cx);
                 this.maybe_restore_persisted_search(window, cx);
                 cx.notify();
             });
@@ -2330,7 +2331,7 @@ impl Workspace {
             persistence.state_tasks.push(task, cx);
         }
 
-        Self {
+        let mut workspace = Self {
             primary_window,
             focus_handle,
             status_surface,
@@ -2392,6 +2393,7 @@ impl Workspace {
             open_task: None,
             file_refresh_task: None,
             pending_external_paths: Vec::new(),
+            pending_initial_documents: initial_documents,
             result_export_task: None,
             result_export_operation: None,
             line_copy_task: None,
@@ -2443,7 +2445,9 @@ impl Workspace {
             _subscriptions: subscriptions,
             history_dialog_subscription: None,
             predefined_filters_dialog_subscription: None,
-        }
+        };
+        workspace.show_initial_document_shells(window, cx);
+        workspace
     }
 
     fn active_document(&self) -> Option<&DocumentTab> {
