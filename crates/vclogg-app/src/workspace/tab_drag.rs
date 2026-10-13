@@ -3,6 +3,7 @@ use super::search_tabs::{SearchTabId, SearchTabOwner};
 use super::*;
 use gpui_kit::AnyView;
 use gpui_kit::base::TestSupportExt as _;
+use std::time::Instant;
 
 const FRAME: Duration = Duration::from_millis(16);
 const FRAMES: u32 = 10;
@@ -24,7 +25,7 @@ pub(super) struct TabFlight {
     visual: TabDragVisual,
     from: Point<Pixels>,
     to: Point<Pixels>,
-    progress: f32,
+    started_at: Instant,
 }
 
 #[derive(Default)]
@@ -157,44 +158,45 @@ impl Workspace {
                 .position(|candidate| *candidate == id)
                 .and_then(|ix| self.tab_drop_layout.borrow().tabs.get(ix).copied()),
         };
-        if cx.reduce_motion() || bounds.is_none() {
+        let Some(bounds) = bounds else {
             self.clear_tab_drag(cx);
             return;
-        }
+        };
+        let started_at = cx.background_executor().now();
         self.tab_drag.flight = Some(TabFlight {
             from: position - visual.cursor_offset,
-            to: bounds.unwrap().origin,
+            to: bounds.origin,
             visual,
-            progress: 0.,
+            started_at,
         });
         self.tab_drag.flight_task = Some(cx.spawn(async move |this, cx| {
-            for frame in 1..=FRAMES {
-                cx.background_executor().timer(FRAME).await;
-                if this
-                    .update(cx, |this, cx| {
-                        if frame == FRAMES {
-                            this.tab_drag.flight = None;
-                            this.tab_drag.file_hidden = None;
-                            this.search_tabs.hidden_drag = None;
-                        } else if let Some(flight) = &mut this.tab_drag.flight {
-                            flight.progress = ease_out_cubic(frame as f32 / FRAMES as f32);
-                        }
-                        cx.notify();
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
+            let elapsed = cx.background_executor().now() - started_at;
+            cx.background_executor()
+                .timer(ANIMATION_DURATION.saturating_sub(elapsed))
+                .await;
+            _ = this.update(cx, |this, cx| {
+                this.tab_drag.flight = None;
+                this.tab_drag.file_hidden = None;
+                this.search_tabs.hidden_drag = None;
+                this.tab_drag.flight_task = None;
+                cx.notify();
+            });
         }));
         cx.notify();
     }
 
-    pub(super) fn render_tab_flight(&self) -> AnyElement {
+    pub(super) fn render_tab_flight(&self, window: &Window, cx: &App) -> AnyElement {
         let Some(flight) = &self.tab_drag.flight else {
             return div().into_any_element();
         };
-        let position = flight.from + (flight.to - flight.from) * flight.progress;
+        let elapsed = cx.background_executor().now() - flight.started_at;
+        if elapsed < ANIMATION_DURATION {
+            // Follow display frames instead of quantizing the flight into timer ticks.
+            window.request_animation_frame();
+        }
+        let progress =
+            ease_out_cubic((elapsed.as_secs_f32() / ANIMATION_DURATION.as_secs_f32()).min(1.));
+        let position = flight.from + (flight.to - flight.from) * progress;
         super::render_shell::deferred_workspace_overlay(
             div()
                 .id("tab-return-flight")

@@ -2668,7 +2668,7 @@ impl Render for Workspace {
             .capture_key_down(cx.listener(Self::cancel_tag_gesture))
             .child(self.render_tag_gesture_observer(cx))
             .child(self.render_tab_drag_observer(cx))
-            .child(self.render_tab_flight())
+            .child(self.render_tab_flight(window, cx))
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" {
                     this.cancel_tab_drag(window, cx);
