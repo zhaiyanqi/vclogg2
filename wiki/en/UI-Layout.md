@@ -108,3 +108,12 @@ Root overlays [A041] (reference)
 The website manifest includes the full release body. Empty or legacy notes show an explicit fallback message. Failed checks continue to open the Releases index.
 
 The update dialog immediately shows “Checking for updates” [A819], independent of notification settings, and replaces its content with the result. Close or Escape dismisses it while pending; background work may finish caching, but will not reopen the dialog or launch the browser after dismissal.
+
+```text
+Release notes dialog [A814] (reference)
+├─ Version and status [A815] — installed/latest versions, release count, cache and partial-history notice
+├─ Breaking changes and migration requirements [A820] — important notes from all selected releases, always visible
+├─ Release notes [A816] — grouped by descending version
+│  └─ Version disclosure button [A821] — stable version identity; newest three initially expanded
+└─ View full release history [A822] — open the Releases index
+```

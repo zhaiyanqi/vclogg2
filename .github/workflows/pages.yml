@@ -63,7 +63,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/releases/latest" > "$RUNNER_TEMP/latest-release.json"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/latest-release.json"
           python3 scripts/generate-update-manifest.py "$RUNNER_TEMP/latest-release.json" _site/latest.json
 
       - name: Upload website artifact

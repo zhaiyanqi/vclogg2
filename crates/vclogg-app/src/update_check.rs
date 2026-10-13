@@ -16,7 +16,7 @@ use crate::state_store::StateStore;
 pub(crate) const RELEASES_URL: &str = "https://github.com/zhaiyanqi/vclogg2/releases";
 const MANIFEST_URL: &str = "https://zhaiyanqi.github.io/vclogg2/latest.json";
 const CACHE_SECONDS: u64 = 24 * 60 * 60;
-const MAX_BODY_BYTES: u64 = 1024 * 1024;
+const MAX_BODY_BYTES: u64 = 8 * 1024 * 1024;
 static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static CACHE: Mutex<Option<CheckCache>> = Mutex::new(None);
 
@@ -38,34 +38,31 @@ impl Drop for CheckGuard {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-pub(crate) struct Manifest {
-    schema_version: u32,
+pub(crate) struct ReleaseRecord {
     version: String,
     published_at: String,
     download_url: String,
     #[serde(default)]
     release_notes: String,
+    #[serde(default)]
+    important_notes: String,
 }
 
-impl Manifest {
+impl ReleaseRecord {
     pub(crate) fn release_version(&self) -> &str {
         &self.version
     }
     pub(crate) fn published_at(&self) -> &str {
         &self.published_at
     }
-    pub(crate) fn download_url(&self) -> &str {
-        &self.download_url
-    }
     pub(crate) fn release_notes(&self) -> &str {
         &self.release_notes
     }
+    pub(crate) fn important_notes(&self) -> &str {
+        &self.important_notes
+    }
 
     fn version(&self) -> Result<semver::Version> {
-        ensure!(
-            self.schema_version == 1,
-            "Unsupported update manifest schema"
-        );
         let version = semver::Version::parse(&self.version)?;
         ensure!(
             version.pre.is_empty(),
@@ -77,6 +74,95 @@ impl Manifest {
         );
         chrono::DateTime::parse_from_rfc3339(&self.published_at)?;
         Ok(version)
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub(crate) struct Manifest {
+    schema_version: u32,
+    #[serde(flatten)]
+    latest: ReleaseRecord,
+    #[serde(default)]
+    releases: Vec<ReleaseRecord>,
+    #[serde(default)]
+    history_complete: bool,
+}
+
+impl Manifest {
+    pub(crate) fn release_version(&self) -> &str {
+        self.latest.release_version()
+    }
+    pub(crate) fn published_at(&self) -> &str {
+        self.latest.published_at()
+    }
+    pub(crate) fn download_url(&self) -> &str {
+        &self.latest.download_url
+    }
+
+    pub(crate) fn upgrade_releases(&self) -> Vec<&ReleaseRecord> {
+        let current = semver::Version::parse(crate::build_info::VERSION)
+            .expect("build version was validated before displaying the manifest");
+        let selected: Vec<_> = self
+            .releases
+            .iter()
+            .filter(|release| {
+                release
+                    .version()
+                    .is_ok_and(|version| version.cmp_precedence(&current).is_gt())
+            })
+            .collect();
+        if selected.is_empty() {
+            vec![&self.latest]
+        } else {
+            selected
+        }
+    }
+
+    pub(crate) fn history_is_partial(&self) -> bool {
+        let current = semver::Version::parse(crate::build_info::VERSION)
+            .expect("build version was validated before displaying the manifest");
+        !self.history_complete
+            && self
+                .releases
+                .last()
+                .unwrap_or(&self.latest)
+                .version()
+                .is_ok_and(|oldest| oldest.cmp_precedence(&current).is_gt())
+    }
+
+    fn version(&self) -> Result<semver::Version> {
+        ensure!(
+            self.schema_version == 1,
+            "Unsupported update manifest schema"
+        );
+        let latest = self.latest.version()?;
+        ensure!(
+            self.releases.len() <= 30,
+            "Too many releases in update manifest"
+        );
+        if let Some(first) = self.releases.first() {
+            ensure!(
+                first.version == self.latest.version
+                    && first.download_url == self.latest.download_url,
+                "Latest release disagrees with history"
+            );
+        }
+        let mut previous = None;
+        for release in &self.releases {
+            let version = release.version()?;
+            if let Some(previous) = previous {
+                ensure!(
+                    version.cmp_precedence(&previous).is_lt(),
+                    "Release history must be unique and descending"
+                );
+            }
+            previous = Some(version);
+        }
+        ensure!(
+            !self.history_complete || !self.releases.is_empty(),
+            "Missing complete history"
+        );
+        Ok(latest)
     }
 }
 

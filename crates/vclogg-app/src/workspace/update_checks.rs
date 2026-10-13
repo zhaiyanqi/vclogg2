@@ -5,6 +5,7 @@ use gpui_kit::component::{dialog::Dialog, text::TextView};
 struct UpdateCheckDialogState {
     outcome: Option<CheckOutcome>,
     dismissed: bool,
+    expanded_versions: std::collections::HashSet<String>,
 }
 
 impl Workspace {
@@ -16,6 +17,7 @@ impl Workspace {
         let dialog_state = cx.new(|_| UpdateCheckDialogState {
             outcome: None,
             dismissed: false,
+            expanded_versions: Default::default(),
         });
         open_update_check_dialog(dialog_state.clone(), window, cx);
         let store = self.persistence.store.clone();
@@ -36,6 +38,14 @@ impl Workspace {
                     }
                     let unavailable = matches!(&outcome, CheckOutcome::Unavailable);
                     dialog_state.update(cx, |state, cx| {
+                        if let CheckOutcome::Success { manifest, .. } = &outcome {
+                            state.expanded_versions = manifest
+                                .upgrade_releases()
+                                .into_iter()
+                                .take(3)
+                                .map(|release| release.release_version().to_owned())
+                                .collect();
+                        }
                         state.outcome = Some(outcome);
                         cx.notify();
                     });
@@ -71,7 +81,7 @@ fn open_update_check_dialog(
                 manifest,
                 is_newer,
                 cached,
-            }) => release_notes_dialog(dialog, &manifest, is_newer, cached, window, cx),
+            }) => release_notes_dialog(dialog, &manifest, is_newer, cached, &state, window, cx),
             outcome => dialog
                 .child(if outcome.is_none() {
                     crate::tr!(
@@ -102,6 +112,7 @@ fn release_notes_dialog(
     manifest: &Manifest,
     is_newer: bool,
     cached: bool,
+    state: &Entity<UpdateCheckDialogState>,
     window: &mut Window,
     cx: &mut App,
 ) -> Dialog {
@@ -113,15 +124,85 @@ fn release_notes_dialog(
         "当前版本：{current} · 发布日期：{published}",
         "Installed: {current} · Published: {published}"
     );
-    let notes: SharedString = if manifest.release_notes().trim().is_empty() {
-        crate::tr!(
-            "此版本未提供更新说明，可打开下载页面查看。",
-            "No release notes were provided. Open the download page for details."
+    let releases = manifest.upgrade_releases();
+    let count = releases.len();
+    let partial = manifest.history_is_partial();
+    let summary = if partial {
+        crate::tr_args!(
+            "显示 {count} 个版本的部分更新记录",
+            "Showing partial history for {count} releases"
         )
-        .into()
+    } else if is_newer {
+        crate::tr_args!(
+            "跨越 {count} 个稳定版本",
+            "Upgrading across {count} stable releases"
+        )
     } else {
-        manifest.release_notes().to_owned().into()
+        crate::tr!("未发现更新的稳定版本", "No newer stable release").to_string()
     };
+    let mut important = String::new();
+    for release in &releases {
+        if !release.important_notes().trim().is_empty() {
+            important.push_str(&format!(
+                "## {}\n\n{}\n\n",
+                release.release_version(),
+                release.important_notes()
+            ));
+        }
+    }
+    let expanded = state.read(cx).expanded_versions.clone();
+    let entries: Vec<AnyElement> = releases
+        .into_iter()
+        .map(|release| {
+            let version = release.release_version().to_owned();
+            let is_open = expanded.contains(&version);
+            let toggle_state = state.clone();
+            let toggle_version = version.clone();
+            let label = format!(
+                "{} {} · {}",
+                if is_open { "▾" } else { "▸" },
+                version,
+                release.published_at()
+            );
+            let notes: SharedString = if release.release_notes().trim().is_empty() {
+                crate::tr!(
+                    "此版本未提供更新说明，可打开下载页面查看。",
+                    "No release notes were provided. Open the download page for details."
+                )
+                .into()
+            } else {
+                release.release_notes().to_owned().into()
+            };
+            v_flex()
+                .gap_2()
+                .child(
+                    Button::new(SharedString::from(format!(
+                        "update-release-toggle-{version}"
+                    )))
+                    .label(label)
+                    .on_click(move |_, window, cx| {
+                        toggle_state.update(cx, |state, cx| {
+                            if !state.expanded_versions.remove(&toggle_version) {
+                                state.expanded_versions.insert(toggle_version.clone());
+                            }
+                            cx.notify();
+                        });
+                        window.refresh();
+                    }),
+                )
+                .when(is_open, |this| {
+                    this.child(
+                        TextView::markdown(
+                            SharedString::from(format!("update-release-notes-{version}")),
+                            notes,
+                        )
+                        .selectable(true)
+                        .scrollable(false),
+                    )
+                })
+                .into_any_element()
+        })
+        .collect();
     let url = manifest.download_url().to_owned();
     dialog
         .title(title)
@@ -132,11 +213,7 @@ fn release_notes_dialog(
         .child(
             v_flex()
                 .gap_3()
-                .child(if is_newer {
-                    crate::tr!("发现新版本", "A new version is available")
-                } else {
-                    crate::tr!("未发现更新的稳定版本", "No newer stable release")
-                })
+                .child(summary)
                 .child(details.clone())
                 .when(cached, |this| {
                     this.child(crate::tr!(
@@ -144,11 +221,18 @@ fn release_notes_dialog(
                         "Showing a check cached within the last 24 hours"
                     ))
                 })
-                .child(
-                    TextView::markdown("update-release-notes", notes.clone())
-                        .selectable(true)
-                        .scrollable(false),
-                ),
+                .when(partial, |this| this.child(crate::tr!(
+                    "当前版本早于清单覆盖范围，以下不是完整升级记录。",
+                    "Your version predates the available history; these notes do not cover the entire upgrade."
+                )))
+                .when(!important.is_empty(), |this| this
+                    .child(crate::tr!("不兼容变更与迁移要求", "Breaking changes and migration requirements"))
+                    .child(TextView::markdown("update-important-notes", important)
+                        .selectable(true).scrollable(false)))
+                .children(entries)
+                .child(Button::new("update-all-releases")
+                    .label(crate::tr!("查看完整发布历史", "View full release history"))
+                    .on_click(|_, _, cx| cx.open_url(RELEASES_URL))),
         )
         .footer(
             DialogFooter::new()

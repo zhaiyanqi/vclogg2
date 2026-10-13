@@ -51,3 +51,11 @@ Server support for update feeds does not mean this desktop client uses them. Des
 Source: [release workflow](https://github.com/zhaiyanqi/vclogg2/blob/main/.github/workflows/release-build.yml), [scripts](https://github.com/zhaiyanqi/vclogg2/tree/main/scripts).
 
 Clicking Check for updates immediately shows a pending dialog regardless of notification settings; success replaces its content with release notes. If dismissed while pending, background work only completes caching and does not show results or open the browser.
+
+## Cross-version release history
+
+Deployment paginates through GitHub releases, excludes drafts, prereleases and non-stable SemVer tags, and retains the highest 30 stable versions in descending SemVer order. The latest release still requires all four desktop packages. The manifest preserves legacy top-level fields and adds `releases` and `history_complete`. Clients validate ordering, duplicate versions, URLs and the 30-entry limit, with an 8 MiB response limit. Oversized or invalid manifests stop deployment rather than truncating notes.
+
+One client request supplies all available releases newer than the installed version through the latest version. The newest three are expanded initially; every version can be expanded or collapsed independently. Up-to-date or newer installed builds show only the latest release. Versions older than the retained history get an explicit partial-history notice and a View full release history action; legacy single-version feeds also receive conservative coverage notices.
+
+Breaking changes and migration requirements from every selected release remain visible outside collapsible version sections. Authors must use Breaking Changes / 不兼容变更 and Migration / 迁移 headings. Generation preserves these sections and conservatively collects complete paragraphs or list blocks containing related keywords, without rewriting or summarizing them. Requirements absent from the published notes cannot be inferred; release authors must record them explicitly.
