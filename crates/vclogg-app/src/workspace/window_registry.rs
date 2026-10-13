@@ -22,17 +22,22 @@ impl Workspace {
                     // Yield a presented frame, not just a call to the native activation API.
                     window.on_next_frame(move |window, _| {
                         window.on_next_frame(move |_, cx| {
-                            if !paths.is_empty()
-                                && !Self::open_external_paths_in_last_active_window(&paths, cx)
-                            {
-                                let documents =
-                                    paths.into_iter().map(InitialDocument::from_path).collect();
-                                if let Err(error) =
-                                    crate::open_workspace_window(cx, false, documents)
+                            // Frame callbacks hold this window's mutable lease. Route only
+                            // after GPUI returns it to App, otherwise handle.update fails
+                            // and incorrectly treats the existing window as unavailable.
+                            cx.defer(move |cx| {
+                                if !paths.is_empty()
+                                    && !Self::open_external_paths_in_last_active_window(&paths, cx)
                                 {
-                                    log::error!("外部文件未能在 VCLogg2 中打开：{error:#}");
+                                    let documents =
+                                        paths.into_iter().map(InitialDocument::from_path).collect();
+                                    if let Err(error) =
+                                        crate::open_workspace_window(cx, false, documents)
+                                    {
+                                        log::error!("外部文件未能在 VCLogg2 中打开：{error:#}");
+                                    }
                                 }
-                            }
+                            });
                         });
                     });
                 })
