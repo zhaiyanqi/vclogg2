@@ -35,7 +35,7 @@ App composes core and data. Core does not depend on data/app; data does not depe
 
 Paths in the first seven rows are under `crates/vclogg-app/src/`; unqualified capability filenames are under `workspace/`.
 
-File-association requests activate the window that already owns the file, or use the last active window for a new file. New files immediately receive loading tabs, including during startup state restoration or another file load. File preparation begins after the loading shell has been presented; the shared loader remains bounded and preserves session restoration. Closing a queued tab cancels its pending open, and background completion preserves the current tab unless an explicit search navigation is pending.
+File-association and command-line requests first foreground the last active window and yield a presented frame before looking up file ownership or changing tabs. An already-open file then activates its owning window, which also presents before document handling. A cold start presents the empty workspace before installing initial file tabs. Reopening the application without paths activates its existing window. New files immediately receive loading tabs, including during startup state restoration or another file load. File preparation begins after the loading shell has been presented; the shared loader remains bounded and preserves session restoration. Closing a queued tab cancels its pending open, and background completion preserves the current tab unless an explicit search navigation is pending.
 
 ## Data and state
 

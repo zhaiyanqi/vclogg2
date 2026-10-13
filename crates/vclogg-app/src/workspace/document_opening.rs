@@ -1,6 +1,21 @@
 use super::*;
 
 impl Workspace {
+    pub(crate) fn open_initial_documents_after_activation(
+        &mut self,
+        documents: Vec<InitialDocument>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.on_next_frame(window, move |_, window, cx| {
+            cx.on_next_frame(window, move |this, window, cx| {
+                this.pending_initial_documents.extend(documents);
+                this.show_initial_document_shells(window, cx);
+                this.open_queued_external_paths_if_idle(window, cx);
+            });
+        });
+    }
+
     pub(super) fn open_files_in_directory(
         &mut self,
         directory: PathBuf,

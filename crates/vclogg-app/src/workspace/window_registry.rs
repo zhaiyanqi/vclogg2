@@ -6,10 +6,46 @@ impl Workspace {
         settings_window::init(cx);
     }
 
-    pub(crate) fn open_external_paths_in_last_active_window(
-        paths: &[PathBuf],
-        cx: &mut App,
-    ) -> bool {
+    /// Foreground the application before inspecting files or changing document state.
+    pub(crate) fn activate_for_external_open(paths: Vec<PathBuf>, cx: &mut App) -> bool {
+        let _trace = crate::ui_performance::trace::scope("ExternalOpen.activate");
+        let candidates = cx
+            .global::<WorkspaceWindowRegistry>()
+            .windows_by_recent_focus();
+        for candidate in candidates {
+            let paths = paths.clone();
+            if candidate
+                .window
+                .update(cx, move |_, window, cx| {
+                    cx.activate(true);
+                    window.activate_window();
+                    // Yield a presented frame, not just a call to the native activation API.
+                    window.on_next_frame(move |window, _| {
+                        window.on_next_frame(move |_, cx| {
+                            if !paths.is_empty()
+                                && !Self::open_external_paths_in_last_active_window(&paths, cx)
+                            {
+                                let documents =
+                                    paths.into_iter().map(InitialDocument::from_path).collect();
+                                if let Err(error) =
+                                    crate::open_workspace_window(cx, false, documents)
+                                {
+                                    log::error!("外部文件未能在 VCLogg2 中打开：{error:#}");
+                                }
+                            }
+                        });
+                    });
+                })
+                .is_ok()
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn open_external_paths_in_last_active_window(paths: &[PathBuf], cx: &mut App) -> bool {
+        let _trace = crate::ui_performance::trace::scope("ExternalOpen.dispatch_after_activation");
         if paths.is_empty() {
             return false;
         }
@@ -35,8 +71,14 @@ impl Workspace {
                     .update(cx, move |_, window, cx| {
                         cx.activate(true);
                         window.activate_window();
-                        workspace.update(cx, |workspace, cx| {
-                            workspace.enqueue_external_paths(vec![path], window, cx)
+                        let workspace = workspace.downgrade();
+                        // The owning window can differ from the one initially foregrounded.
+                        window.on_next_frame(move |window, _| {
+                            window.on_next_frame(move |window, cx| {
+                                _ = workspace.update(cx, |workspace, cx| {
+                                    workspace.enqueue_external_paths(vec![path], window, cx)
+                                });
+                            });
                         });
                     })
                     .is_ok()

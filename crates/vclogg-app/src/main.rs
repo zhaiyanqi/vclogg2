@@ -138,10 +138,15 @@ fn open_workspace_window_with_options(
                 log::error!("Could not initialize native window controls: {error:#}");
             }
         }
-        let workspace = cx.new(|cx| Workspace::new(primary, initial_documents, window, cx));
+        let workspace = cx.new(|cx| Workspace::new(primary, Vec::new(), window, cx));
         {
             let _scope = ui_performance::trace::scope("Startup.register_window");
             Workspace::register_window(&workspace, window, cx);
+        }
+        if !initial_documents.is_empty() {
+            workspace.update(cx, |workspace, cx| {
+                workspace.open_initial_documents_after_activation(initial_documents, window, cx);
+            });
         }
         workspace
     })?;
@@ -152,14 +157,13 @@ fn open_workspace_window_with_options(
 }
 
 fn handle_external_open_request(request: single_instance::OpenRequest, cx: &mut App) {
+    if Workspace::activate_for_external_open(request.paths.clone(), cx) {
+        return;
+    }
     if request.paths.is_empty() {
         if let Err(error) = open_workspace_window(cx, false, Vec::new()) {
             log::error!("外部启动未能创建 VCLogg2 窗口：{error:#}");
         }
-        return;
-    }
-
-    if Workspace::open_external_paths_in_last_active_window(&request.paths, cx) {
         return;
     }
 
@@ -300,9 +304,7 @@ fn main() {
         }
     });
     app.on_reopen(|cx| {
-        if let Err(error) = open_workspace_window(cx, false, Vec::new()) {
-            log::error!("重新打开应用时未能创建 VCLogg2 窗口：{error:#}");
-        }
+        handle_external_open_request(single_instance::OpenRequest { paths: Vec::new() }, cx);
     });
 
     let trace_attachment = cold_trace
