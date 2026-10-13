@@ -19,10 +19,11 @@ dist/
 .env.*
 !.env.example
 
-# # Local AI instructions, skills, conversations and working notes
+# Local AI configuration, conversations and working notes
 .local/
 .agent/
-.agents/
+/.agents/*
+!/.agents/skills/
 # .codex/
 # .claude/
 # AGENTS.md
