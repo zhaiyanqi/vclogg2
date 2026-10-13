@@ -121,25 +121,6 @@ fn release_notes_dialog(
     );
     let language = crate::i18n::current_language();
     let releases = manifest.upgrade_releases();
-    let changes_title = if manifest.history_is_partial() {
-        crate::tr!(
-            "版本更新差异（部分记录）",
-            "Version changes (partial history)"
-        )
-    } else {
-        crate::tr!("版本更新差异", "Version changes")
-    };
-    let mut important = String::new();
-    for release in &releases {
-        let important_notes = release.important_notes(language);
-        if !important_notes.trim().is_empty() {
-            important.push_str(&format!(
-                "## {}\n\n{}\n\n",
-                release.release_version(),
-                important_notes
-            ));
-        }
-    }
     let expanded = state.read(cx).expanded_versions.clone();
     let entries: Vec<AnyElement> = releases
         .into_iter()
@@ -197,27 +178,11 @@ fn release_notes_dialog(
         .max_w(window.viewport_size().width * 0.9)
         .close_button(false)
         .child(
-            v_flex()
-                .gap_3()
-                .child(details)
-                .child(changes_title)
-                .when(!important.is_empty(), |this| {
-                    this.child(crate::tr!(
-                        "不兼容变更与迁移要求",
-                        "Breaking changes and migration requirements"
-                    ))
-                    .child(
-                        TextView::markdown("update-important-notes", important)
-                            .selectable(true)
-                            .scrollable(false),
-                    )
-                })
-                .children(entries)
-                .child(
-                    Button::new("update-all-releases")
-                        .label(crate::tr!("查看完整发布历史", "View full release history"))
-                        .on_click(|_, _, cx| cx.open_url(RELEASES_URL)),
-                ),
+            v_flex().gap_3().child(details).children(entries).child(
+                Button::new("update-all-releases")
+                    .label(crate::tr!("查看完整发布历史", "View full release history"))
+                    .on_click(|_, _, cx| cx.open_url(RELEASES_URL)),
+            ),
         )
         .footer(
             DialogFooter::new()

@@ -3,7 +3,7 @@ use std::{
     collections::BTreeMap,
     io::Read as _,
     sync::{
-        LazyLock, Mutex,
+        Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -20,10 +20,6 @@ const CACHE_SECONDS: u64 = 24 * 60 * 60;
 const MAX_BODY_BYTES: u64 = 8 * 1024 * 1024;
 static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static CACHE: Mutex<Option<CheckCache>> = Mutex::new(None);
-static IMPORTANT_NOTES_PATTERN: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"(?i)breaking[ -]changes?|incompatib\w*|migrat\w*|不兼容|破坏性|迁移")
-        .expect("constant release-note pattern")
-});
 
 pub(crate) struct CheckGuard;
 
@@ -74,31 +70,6 @@ impl ReleaseRecord {
             .get(key)
             .map(|notes| notes.release_notes.clone())
             .unwrap_or_else(|| legacy_language_notes(&self.release_notes, language))
-    }
-
-    pub(crate) fn important_notes(&self, language: crate::i18n::Language) -> String {
-        let key = match language {
-            crate::i18n::Language::Chinese => "zh-CN",
-            crate::i18n::Language::English => "en",
-        };
-        let notes = self.release_notes(language);
-        if notes.trim().is_empty() && !self.important_notes.trim().is_empty() {
-            return match language {
-                crate::i18n::Language::Chinese => "此版本包含重要变更，但暂无中文说明；请在升级前打开发布页面查看原文。",
-                crate::i18n::Language::English => "This release contains important changes, but English notes are unavailable. Read the original release page before upgrading.",
-            }.to_owned();
-        }
-        if let Some(notes) = self.localized_notes.get(key) {
-            return notes.important_notes.clone();
-        }
-        // Legacy feeds have mixed-language important notes. Select a language
-        // from the full body first so the pinned notice cannot mix translations.
-        // Preserve all localized context if any important requirement is present.
-        if IMPORTANT_NOTES_PATTERN.is_match(&notes) {
-            notes
-        } else {
-            String::new()
-        }
     }
 
     fn version(&self) -> Result<semver::Version> {
@@ -186,18 +157,6 @@ impl Manifest {
         } else {
             selected
         }
-    }
-
-    pub(crate) fn history_is_partial(&self) -> bool {
-        let current = semver::Version::parse(crate::build_info::VERSION)
-            .expect("build version was validated before displaying the manifest");
-        !self.history_complete
-            && self
-                .releases
-                .last()
-                .unwrap_or(&self.latest)
-                .version()
-                .is_ok_and(|oldest| oldest.cmp_precedence(&current).is_gt())
     }
 
     fn version(&self) -> Result<semver::Version> {
