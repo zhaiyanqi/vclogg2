@@ -65,9 +65,6 @@ impl ReleaseRecord {
     pub(crate) fn release_version(&self) -> &str {
         &self.version
     }
-    pub(crate) fn published_at(&self) -> &str {
-        &self.published_at
-    }
     pub(crate) fn release_notes(&self, language: crate::i18n::Language) -> String {
         let key = match language {
             crate::i18n::Language::Chinese => "zh-CN",
@@ -168,9 +165,6 @@ impl Manifest {
     pub(crate) fn release_version(&self) -> &str {
         self.latest.release_version()
     }
-    pub(crate) fn published_at(&self) -> &str {
-        self.latest.published_at()
-    }
     pub(crate) fn download_url(&self) -> &str {
         &self.latest.download_url
     }
@@ -254,11 +248,7 @@ struct CheckCache {
 
 #[derive(Clone)]
 pub(crate) enum CheckOutcome {
-    Success {
-        manifest: Manifest,
-        is_newer: bool,
-        cached: bool,
-    },
+    Success { manifest: Manifest },
     Unavailable,
 }
 
@@ -288,11 +278,11 @@ pub(crate) fn check(store: Option<&StateStore>) -> CheckOutcome {
         && now >= cache.checked_at
         && now - cache.checked_at < CACHE_SECONDS
         && let Some(manifest) = &cache.manifest
-        && let Ok(outcome) = compare(manifest, true)
+        && let Ok(outcome) = check_manifest(manifest)
     {
         return outcome;
     }
-    match fetch().and_then(|manifest| Ok((compare(&manifest, false)?, manifest))) {
+    match fetch().and_then(|manifest| Ok((check_manifest(&manifest)?, manifest))) {
         Ok((outcome, manifest)) => {
             *cache = CheckCache {
                 manifest: Some(manifest),
@@ -314,14 +304,11 @@ pub(crate) fn check(store: Option<&StateStore>) -> CheckOutcome {
     }
 }
 
-fn compare(manifest: &Manifest, cached: bool) -> Result<CheckOutcome> {
-    let latest = manifest.version()?;
-    let current = semver::Version::parse(crate::build_info::VERSION)?;
-    // Build metadata does not participate in SemVer precedence.
+fn check_manifest(manifest: &Manifest) -> Result<CheckOutcome> {
+    manifest.version()?;
+    semver::Version::parse(crate::build_info::VERSION)?;
     Ok(CheckOutcome::Success {
         manifest: manifest.clone(),
-        is_newer: latest.cmp_precedence(&current).is_gt(),
-        cached,
     })
 }
 

@@ -77,11 +77,9 @@ fn open_update_check_dialog(
             });
         let outcome = state.read(cx).outcome.clone();
         match outcome {
-            Some(CheckOutcome::Success {
-                manifest,
-                is_newer,
-                cached,
-            }) => release_notes_dialog(dialog, &manifest, is_newer, cached, &state, window, cx),
+            Some(CheckOutcome::Success { manifest }) => {
+                release_notes_dialog(dialog, &manifest, &state, window, cx)
+            }
             outcome => dialog
                 .child(if outcome.is_none() {
                     crate::tr!(
@@ -110,36 +108,26 @@ fn open_update_check_dialog(
 fn release_notes_dialog(
     dialog: Dialog,
     manifest: &Manifest,
-    is_newer: bool,
-    cached: bool,
     state: &Entity<UpdateCheckDialogState>,
     window: &mut Window,
     cx: &mut App,
 ) -> Dialog {
     let version = manifest.release_version();
-    let title = crate::tr_args!("版本 {version} 更新内容", "Release {version}");
+    let title = crate::tr!("版本更新", "Version update");
     let current = crate::build_info::VERSION;
-    let published = manifest.published_at();
     let details = crate::tr_args!(
-        "当前版本：{current} · 发布日期：{published}",
-        "Installed: {current} · Published: {published}"
+        "当前版本：{current} · 最新版本：{version}",
+        "Current version: {current} · Latest version: {version}"
     );
     let language = crate::i18n::current_language();
     let releases = manifest.upgrade_releases();
-    let count = releases.len();
-    let partial = manifest.history_is_partial();
-    let summary = if partial {
-        crate::tr_args!(
-            "显示 {count} 个版本的部分更新记录",
-            "Showing partial history for {count} releases"
-        )
-    } else if is_newer {
-        crate::tr_args!(
-            "跨越 {count} 个稳定版本",
-            "Upgrading across {count} stable releases"
+    let changes_title = if manifest.history_is_partial() {
+        crate::tr!(
+            "版本更新差异（部分记录）",
+            "Version changes (partial history)"
         )
     } else {
-        crate::tr!("未发现更新的稳定版本", "No newer stable release").to_string()
+        crate::tr!("版本更新差异", "Version changes")
     };
     let mut important = String::new();
     for release in &releases {
@@ -160,12 +148,7 @@ fn release_notes_dialog(
             let is_open = expanded.contains(&version);
             let toggle_state = state.clone();
             let toggle_version = version.clone();
-            let label = format!(
-                "{} {} · {}",
-                if is_open { "▾" } else { "▸" },
-                version,
-                release.published_at()
-            );
+            let label = format!("{} {}", if is_open { "▾" } else { "▸" }, version);
             let localized_notes = release.release_notes(language);
             let notes: SharedString = if localized_notes.trim().is_empty() {
                 crate::tr!(
@@ -216,26 +199,25 @@ fn release_notes_dialog(
         .child(
             v_flex()
                 .gap_3()
-                .child(summary)
-                .child(details.clone())
-                .when(cached, |this| {
+                .child(details)
+                .child(changes_title)
+                .when(!important.is_empty(), |this| {
                     this.child(crate::tr!(
-                        "以下为 24 小时内缓存的检查结果",
-                        "Showing a check cached within the last 24 hours"
+                        "不兼容变更与迁移要求",
+                        "Breaking changes and migration requirements"
                     ))
+                    .child(
+                        TextView::markdown("update-important-notes", important)
+                            .selectable(true)
+                            .scrollable(false),
+                    )
                 })
-                .when(partial, |this| this.child(crate::tr!(
-                    "当前版本早于清单覆盖范围，以下不是完整升级记录。",
-                    "Your version predates the available history; these notes do not cover the entire upgrade."
-                )))
-                .when(!important.is_empty(), |this| this
-                    .child(crate::tr!("不兼容变更与迁移要求", "Breaking changes and migration requirements"))
-                    .child(TextView::markdown("update-important-notes", important)
-                        .selectable(true).scrollable(false)))
                 .children(entries)
-                .child(Button::new("update-all-releases")
-                    .label(crate::tr!("查看完整发布历史", "View full release history"))
-                    .on_click(|_, _, cx| cx.open_url(RELEASES_URL))),
+                .child(
+                    Button::new("update-all-releases")
+                        .label(crate::tr!("查看完整发布历史", "View full release history"))
+                        .on_click(|_, _, cx| cx.open_url(RELEASES_URL)),
+                ),
         )
         .footer(
             DialogFooter::new()

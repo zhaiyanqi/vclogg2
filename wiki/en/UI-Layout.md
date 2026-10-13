@@ -99,7 +99,7 @@ Release notes after a successful update check (including cached results and no-n
 ```text
 Root overlays [A041] (reference)
 └─ Release notes dialog [A814] — workspace/update_checks.rs
-   ├─ Version and status [A815] — installed/latest version, publication date, cache status
+   ├─ Version and status [A815] — current and latest versions
    ├─ Release notes [A816] — selectable Markdown; standard dialog body scrolls
    ├─ Close [A817] — dismiss; Escape also closes and restores focus
    └─ Open download page [A818] — open the verified Release URL
@@ -111,7 +111,7 @@ The update dialog immediately shows “Checking for updates” [A819], independe
 
 ```text
 Release notes dialog [A814] (reference)
-├─ Version and status [A815] — installed/latest versions, release count, cache and partial-history notice
+├─ Version and status [A815] — current and latest versions
 ├─ Breaking changes and migration requirements [A820] — important notes from all selected releases, always visible
 ├─ Release notes [A816] — grouped by descending version
 │  └─ Version disclosure button [A821] — stable version identity; newest three initially expanded
@@ -119,3 +119,5 @@ Release notes dialog [A814] (reference)
 ```
 
 Release notes [A816] and important notes [A820] follow the current application language. Missing translations show a localized notice; important changes without a translation retain a pinned notice to read the original release page. Hierarchy and IDs are unchanged.
+
+The result shows only current/latest versions and version changes, without cache-age, publication-date or release-count messages. Incomplete coverage is marked only in the changes heading. Disclosure controls, important notes and download actions remain; background caching and backoff are unchanged.
