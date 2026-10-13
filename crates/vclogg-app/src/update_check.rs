@@ -16,7 +16,6 @@ use crate::state_store::StateStore;
 
 pub(crate) const RELEASES_URL: &str = "https://github.com/zhaiyanqi/vclogg2/releases";
 const MANIFEST_URL: &str = "https://zhaiyanqi.github.io/vclogg2/latest.json";
-const CACHE_SECONDS: u64 = 24 * 60 * 60;
 const MAX_BODY_BYTES: u64 = 8 * 1024 * 1024;
 static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static CACHE: Mutex<Option<CheckCache>> = Mutex::new(None);
@@ -205,15 +204,13 @@ impl Manifest {
 struct CheckCache {
     manifest: Option<Manifest>,
     checked_at: u64,
-    failed_at: u64,
-    failures: u32,
-    retry_after_seconds: u64,
 }
 
 #[derive(Clone)]
 pub(crate) enum CheckOutcome {
     Success { manifest: Manifest },
     UpToDate { version: String },
+    Cached { manifest: Manifest, checked_at: u64 },
     Unavailable,
 }
 
@@ -231,40 +228,35 @@ pub(crate) fn check(store: Option<&StateStore>) -> CheckOutcome {
             })
             .unwrap_or_default()
     });
-    let now = timestamp();
-    // A backwards clock change invalidates deadlines instead of blocking checks indefinitely.
-    if cache.failures > 0
-        && now >= cache.failed_at
-        && now - cache.failed_at < cache.retry_after_seconds.min(3600)
-    {
-        return CheckOutcome::Unavailable;
-    }
-    if cache.failures == 0
-        && now >= cache.checked_at
-        && now - cache.checked_at < CACHE_SECONDS
-        && let Some(manifest) = &cache.manifest
-        && let Ok(outcome) = check_manifest(manifest)
-    {
-        return outcome;
-    }
     match fetch().and_then(|manifest| Ok((check_manifest(&manifest)?, manifest))) {
         Ok((outcome, manifest)) => {
             *cache = CheckCache {
                 manifest: Some(manifest),
                 checked_at: timestamp(),
-                ..Default::default()
             };
             persist(store, cache);
             outcome
         }
         Err(error) => {
             log::warn!("Update check failed: {error:#}");
-            cache.failures = cache.failures.saturating_add(1);
-            cache.failed_at = timestamp();
-            cache.retry_after_seconds =
-                (60_u64 << cache.failures.saturating_sub(1).min(6)).min(3600);
-            persist(store, cache);
-            CheckOutcome::Unavailable
+            // Preserve the last successful result and its time across failed checks.
+            // Old cache JSON may contain backoff fields; serde ignores those fields.
+            if let Some(manifest) = &cache.manifest
+                && cache.checked_at > 0
+                && cache.checked_at <= timestamp()
+                && i64::try_from(cache.checked_at)
+                    .ok()
+                    .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+                    .is_some()
+                && check_manifest(manifest).is_ok()
+            {
+                CheckOutcome::Cached {
+                    manifest: manifest.clone(),
+                    checked_at: cache.checked_at,
+                }
+            } else {
+                CheckOutcome::Unavailable
+            }
         }
     }
 }
@@ -294,6 +286,7 @@ fn fetch() -> Result<Manifest> {
     // Request-level timeout also bounds the entire streamed response body.
     let response = client
         .get(MANIFEST_URL)
+        .header(reqwest::header::CACHE_CONTROL, "no-cache")
         .timeout(Duration::from_secs(10))
         .send()?
         .error_for_status()?;

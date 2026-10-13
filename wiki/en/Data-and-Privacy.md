@@ -21,4 +21,4 @@ Exit all processes sharing the root before backup/migration, then copy the full 
 
 Before sharing diagnostics, inspect paths, searches, filters and log snippets for private content. Never attach raw cloud session files, Cookie/CSRF values, release credentials or an unreviewed state database.
 
-Update checks contact the public website only when requested. Version metadata, success time and failure backoff are stored in SQLite; no log content is sent. Successful checks show release notes and a download-page button; failures open GitHub Releases in the browser. See [update checks](Build-and-Release.md#update-checks).
+Every manual update check contacts the website without sending log content. SQLite stores the manifest and last successful check time across restarts; failures preserve both. Failure shows a valid cached result with a connection warning and its time, never an up-to-date claim; without a valid cache, Releases opens. See [update checks](Build-and-Release.md#update-checks).

@@ -105,9 +105,9 @@ Root overlays [A041] (reference)
    └─ Open download page [A818] — open the verified Release URL
 ```
 
-For equal or older versions, [A814] keeps the Check for updates title, [A815] shows “No updates available” with current/source versions, and only Close [A817] remains; release notes, download and history actions are absent.
+For a successful remote response with an equal or older version, [A814] keeps the Check for updates title, [A815] shows “No updates available” with current/source versions, and only Close [A817] remains; release notes, download and history actions are absent.
 
-The website manifest includes the full release body. Empty or legacy notes show an explicit fallback message. Failed checks continue to open the Releases index.
+The website manifest includes the full release body. Empty or legacy notes show an explicit fallback message. Failed checks without a valid cache open the Releases index.
 
 The update dialog immediately shows “Checking for updates” [A819], independent of notification settings, and replaces its content with the result. Close or Escape dismisses it while pending; background work may finish caching, but will not reopen the dialog or launch the browser after dismissal.
 
@@ -122,3 +122,11 @@ Release notes dialog [A814] (reference)
 
 
 The update dialog no longer shows a Version changes heading or a separate breaking-change/migration summary [A820]; the ID remains reserved. Current/latest versions are followed directly by the per-version release notes, preserving the original text and initially expanding the newest three versions.
+
+Every check requests the remote manifest first. Failure with a valid cache shows the previous result in [A814]; [A815] uses “Previously checked source version”, never “Latest version” or “No updates available”. A newer cached version retains notes and downloads; otherwise only status and Close remain.
+
+```text
+Release notes dialog [A814] (reference, cached fallback)
+├─ Connection failure and last successful check [A823] — local time with offset; availability is unverified
+└─ Version and status [A815] — current and previously checked source versions
+```
