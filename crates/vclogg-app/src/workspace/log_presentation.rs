@@ -990,13 +990,24 @@ impl Workspace {
         let count = VirtualLogListDelegate::row_count(delegate);
         let base_height = snap_to_device_pixels(delegate.minimum_row_height(), self.scale_factor);
         if count == 0 {
+            let message = match tab.load_state {
+                DocumentLoadState::Opening | DocumentLoadState::Preview => {
+                    crate::tr!("加载中", "Loading").into()
+                }
+                DocumentLoadState::IndexFailed => crate::tr!(
+                    "文件加载失败，请重新加载",
+                    "Could not load the file. Reload to try again."
+                )
+                .into(),
+                DocumentLoadState::Ready => delegate.empty_message(),
+            };
             return v_flex()
                 .size_full()
                 .items_center()
                 .justify_center()
                 .gap_2()
                 .text_color(cx.theme().muted_foreground)
-                .child(delegate.empty_message())
+                .child(message)
                 .into_any_element();
         }
         let content_width = if (if region == WrappedRegion::Results {
