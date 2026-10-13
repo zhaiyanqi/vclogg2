@@ -141,6 +141,32 @@ fn defer_window_move(
         .detach();
 }
 
+#[cfg(target_os = "linux")]
+fn platform_move_to(window: &Window, origin: Point<Pixels>, _cx: &App) -> anyhow::Result<()> {
+    use raw_window_handle::RawWindowHandle;
+    use x11rb::{
+        connection::Connection as _,
+        protocol::xproto::{ConfigureWindowAux, ConnectionExt as _},
+    };
+    let id = match raw_window_handle::HasWindowHandle::window_handle(window)?.as_raw() {
+        RawWindowHandle::Xcb(handle) => handle.window.get(),
+        RawWindowHandle::Xlib(handle) => handle.window as u32,
+        _ => anyhow::bail!("the compositor does not allow positioning a window"),
+    };
+    let (connection, _) = x11rb::connect(None)?;
+    let scale = window.scale_factor();
+    connection
+        .configure_window(
+            id,
+            &ConfigureWindowAux::new()
+                .x((origin.x.as_f32() * scale).round() as i32)
+                .y((origin.y.as_f32() * scale).round() as i32),
+        )?
+        .check()?;
+    connection.flush()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,30 +210,4 @@ mod tests {
         cx.run_until_parked();
         assert!(!moved.get());
     }
-}
-
-#[cfg(target_os = "linux")]
-fn platform_move_to(window: &Window, origin: Point<Pixels>, _cx: &App) -> anyhow::Result<()> {
-    use raw_window_handle::RawWindowHandle;
-    use x11rb::{
-        connection::Connection as _,
-        protocol::xproto::{ConfigureWindowAux, ConnectionExt as _},
-    };
-    let id = match raw_window_handle::HasWindowHandle::window_handle(window)?.as_raw() {
-        RawWindowHandle::Xcb(handle) => handle.window.get(),
-        RawWindowHandle::Xlib(handle) => handle.window as u32,
-        _ => anyhow::bail!("the compositor does not allow positioning a window"),
-    };
-    let (connection, _) = x11rb::connect(None)?;
-    let scale = window.scale_factor();
-    connection
-        .configure_window(
-            id,
-            &ConfigureWindowAux::new()
-                .x((origin.x.as_f32() * scale).round() as i32)
-                .y((origin.y.as_f32() * scale).round() as i32),
-        )?
-        .check()?;
-    connection.flush()?;
-    Ok(())
 }

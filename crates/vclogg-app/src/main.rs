@@ -239,10 +239,11 @@ fn main() {
     log::info!("VCLogg2 {} starting", build_info::VERSION);
 
     let initial_paths = single_instance::command_line_paths(arguments.paths);
-    let primary_instance = match {
+    let startup_result = {
         let _scope = ui_performance::trace::scope("Startup.single_instance");
         single_instance::acquire_or_forward(&initial_paths)
-    } {
+    };
+    let primary_instance = match startup_result {
         Ok(single_instance::Startup::Primary(instance)) => instance,
         Ok(single_instance::Startup::Forwarded) => {
             if cold_trace.is_some() {
@@ -257,10 +258,11 @@ fn main() {
             return;
         }
     };
-    let forwarded_requests = match {
+    let listener_result = {
         let _trace = ui_performance::trace::scope("Startup.instance_listener");
         primary_instance.start_listener()
-    } {
+    };
+    let forwarded_requests = match listener_result {
         Ok(receiver) => receiver,
         Err(error) => {
             log::error!("VCLogg2 单实例监听失败：{error:#}");
