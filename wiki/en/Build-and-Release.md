@@ -49,3 +49,5 @@ Use `--version v2.2.14` / `-Version v2.2.14` to override version and `--client-k
 Server support for update feeds does not mean this desktop client uses them. Desktop checks use the static website manifest described above. The server's signed-registration default also needs reconciliation with the current unsigned desktop registration; see [Cloud filters](Cloud-Filters.md).
 
 Source: [release workflow](https://github.com/zhaiyanqi/vclogg2/blob/main/.github/workflows/release-build.yml), [scripts](https://github.com/zhaiyanqi/vclogg2/tree/main/scripts).
+
+Clicking Check for updates immediately shows a pending dialog regardless of notification settings; success replaces its content with release notes. If dismissed while pending, background work only completes caching and does not show results or open the browser.

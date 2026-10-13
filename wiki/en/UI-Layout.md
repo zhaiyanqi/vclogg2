@@ -106,3 +106,5 @@ Root overlays [A041] (reference)
 ```
 
 The website manifest includes the full release body. Empty or legacy notes show an explicit fallback message. Failed checks continue to open the Releases index.
+
+The update dialog immediately shows “Checking for updates” [A819], independent of notification settings, and replaces its content with the result. Close or Escape dismisses it while pending; background work may finish caching, but will not reopen the dialog or launch the browser after dismissal.

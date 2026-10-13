@@ -186,3 +186,5 @@ powershell -ExecutionPolicy Bypass -File scripts/package-server-release.ps1 -Ver
 ## 当前打包前置条件
 
 桌面三个打包脚本仍要求 ripgrep：Windows 从 PATH 查找 `rg.exe`；macOS/Linux 从 PATH 查找 `rg`，不存在即失败。程序与 ripgrep 许可证一起打包。安装命令见[源码构建](Building.md#桌面打包额外依赖ripgrep)。本次仅核对脚本，没有执行打包或验证发行产物。
+
+点击检查后立即显示等待弹窗，不依赖通知设置；成功后在同一弹窗显示更新内容。等待期间关闭弹窗后，后台仅完成缓存，不再显示结果或跳转浏览器。

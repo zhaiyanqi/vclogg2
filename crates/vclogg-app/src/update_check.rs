@@ -90,6 +90,7 @@ struct CheckCache {
     retry_after_seconds: u64,
 }
 
+#[derive(Clone)]
 pub(crate) enum CheckOutcome {
     Success {
         manifest: Manifest,
