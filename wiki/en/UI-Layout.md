@@ -79,4 +79,15 @@ Text tag context menu
 
 A601 also remains in the row’s “Text mark” submenu; it is disabled when there are no tags, the document is stale, a file is opening or the state store is unavailable.
 
-Performance recording in Settings → Advanced provides start, stop/export, retry export and discard actions. During [cold-start capture](Building.md#cold-start-performance-capture), this area shows automatic recording status and disables duplicate starts and manual stopping. When timed collection stops, manual recording becomes available again; the automatic export uses the command-line destination.
+Performance recording is in Settings → Advanced, retaining its existing node IDs:
+
+```text
+Performance recording [A808] — application Recorder; recording and saving continue after Settings closes
+├─ Start recording [A809] — create a trace cache file, update snapshots about once per second
+├─ Stop recording [A810] — stop collection and save the final snapshot, without a path dialog
+├─ Retry save [A811] — retry a failed final save to the same cache path
+├─ Dismiss retry [A812] — release retained data without deleting saved files
+└─ Open folder [A813] — open the trace cache directory, including during recording
+```
+
+Cold-start capture stops at its [CLI deadline](Building.md#cold-start-performance-capture). Manual starts and stops are disabled during that capture; Open folder remains available. The recording path and write errors are displayed; failed writes retry automatically, and a failed final save allows retry or dismissal.

@@ -4,7 +4,7 @@ use std::ffi::OsString;
 
 pub(crate) struct Arguments {
     pub(crate) paths: Vec<OsString>,
-    output: Option<PathBuf>,
+    enabled: bool,
     duration: Duration,
 }
 
@@ -12,28 +12,15 @@ impl Arguments {
     pub(crate) fn parse() -> anyhow::Result<Self> {
         let mut arguments = std::env::args_os().skip(1);
         let mut paths = Vec::new();
-        let mut output = None;
+        let mut enabled = false;
         let mut seconds = None;
         while let Some(argument) = arguments.next() {
             if argument == "--" {
                 paths.extend(arguments);
                 break;
             } else if argument == "--trace-startup" {
-                anyhow::ensure!(
-                    output.is_none(),
-                    "--trace-startup may only be specified once"
-                );
-                let path = arguments.next().ok_or_else(|| {
-                    anyhow::anyhow!("--trace-startup requires an output JSON path")
-                })?;
-                anyhow::ensure!(
-                    !path.is_empty()
-                        && path != "--trace-duration"
-                        && path != "--trace-startup"
-                        && path != "--",
-                    "--trace-startup requires an output JSON path"
-                );
-                output = Some(PathBuf::from(path));
+                anyhow::ensure!(!enabled, "--trace-startup may only be specified once");
+                enabled = true;
             } else if argument == "--trace-duration" {
                 anyhow::ensure!(
                     seconds.is_none(),
@@ -55,30 +42,22 @@ impl Arguments {
             }
         }
         anyhow::ensure!(
-            seconds.is_none() || output.is_some(),
+            seconds.is_none() || enabled,
             "--trace-duration requires --trace-startup"
         );
         Ok(Self {
             paths,
-            output,
+            enabled,
             duration: Duration::from_secs(seconds.unwrap_or(15)),
         })
     }
 
     pub(crate) fn begin(&self) -> anyhow::Result<Option<StartupTrace>> {
-        let Some(output) = self.output.clone() else {
+        if !self.enabled {
             return Ok(None);
-        };
-        let capture = Arc::new(Capture {
-            ui_thread: thread::current().id(),
-            start: Instant::now(),
-            accepting: AtomicBool::new(true),
-            end: Mutex::new(None),
-            slices: Mutex::new(Vec::with_capacity(MAX_EVENTS)),
-            lost: AtomicU64::new(0),
-            active: Mutex::new(HashMap::new()),
-            next_id: AtomicU64::new(1),
-        });
+        }
+        let capture = Capture::new()?;
+        let writer = live::Writer::start(capture.clone())?;
         let deadline = capture.start + self.duration;
         let foreground = capture.ui_thread;
         let was_enabled = profiler::trace_enabled();
@@ -106,6 +85,11 @@ impl Arguments {
                 data.seal();
                 // Restore tracing before allowing another UI recording to begin.
                 drop(_restore);
+                let result = writer.finish();
+                if let Err(error) = &result {
+                    *data.write_error.lock().unwrap_or_else(|e| e.into_inner()) =
+                        Some(format!("{error:#}"));
+                }
                 {
                     let mut active = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
                     if active
@@ -116,15 +100,14 @@ impl Arguments {
                         ENABLED.store(false, Ordering::Relaxed);
                     }
                 }
-                let result = export_trace(&data, &output);
                 match &result {
                     Ok(lost) => eprintln!(
                         "Startup trace saved to {} (lost events: {lost})",
-                        output.display()
+                        data.path.display()
                     ),
                     Err(error) => eprintln!(
                         "Could not save startup trace to {}: {error:#}",
-                        output.display()
+                        data.path.display()
                     ),
                 }
                 result.map(|_| ())

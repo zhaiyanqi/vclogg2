@@ -1,4 +1,5 @@
 //! Application-owned, bounded Chrome Trace recording; no framework source patches.
+mod live;
 pub(crate) mod startup;
 use std::{
     collections::HashMap,
@@ -55,13 +56,36 @@ struct Capture {
     start: Instant,
     accepting: AtomicBool,
     end: Mutex<Option<Instant>>,
-    slices: Mutex<Vec<Slice>>,
+    slices: Mutex<Vec<Arc<Slice>>>,
+    path: PathBuf,
+    write_error: Mutex<Option<String>>,
     lost: AtomicU64,
     active: Mutex<HashMap<u64, Slice>>,
     next_id: AtomicU64,
 }
 
 impl Capture {
+    fn new() -> anyhow::Result<Arc<Self>> {
+        let directory = crate::app_paths::trace_cache_dir()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine trace cache directory"))?;
+        Ok(Arc::new(Self {
+            ui_thread: thread::current().id(),
+            start: Instant::now(),
+            accepting: AtomicBool::new(true),
+            end: Mutex::new(None),
+            slices: Mutex::new(Vec::with_capacity(MAX_EVENTS)),
+            path: directory.join(format!(
+                "vclogg2-trace-{}-{}.json",
+                chrono::Local::now().format("%Y%m%d-%H%M%S"),
+                uuid::Uuid::new_v4()
+            )),
+            write_error: Mutex::new(None),
+            lost: AtomicU64::new(0),
+            active: Mutex::new(HashMap::new()),
+            next_id: AtomicU64::new(1),
+        }))
+    }
+
     fn seal(&self) {
         // Serialize with scope completion so unfinished scopes remain available to export.
         let _active = self.active.lock().unwrap_or_else(|e| e.into_inner());
@@ -90,7 +114,7 @@ impl Capture {
             if !self.accepting.load(Ordering::Relaxed) {
                 return;
             }
-            slices.push(slice);
+            slices.push(Arc::new(slice));
             return;
         }
         self.lost.fetch_add(1, Ordering::Relaxed);
@@ -109,6 +133,9 @@ pub(crate) fn scope(name: &'static str) -> Scope {
         None
     };
     let capture = capture.and_then(|capture| {
+        if !capture.accepting.load(Ordering::Relaxed) {
+            return None;
+        }
         let id = capture.next_id.fetch_add(1, Ordering::Relaxed);
         let start = Instant::now();
         let recorded = if let Ok(mut active) = capture.active.try_lock() {
@@ -168,7 +195,7 @@ impl Drop for Scope {
 
 struct Recording {
     stop: Option<mpsc::Sender<()>>,
-    worker: Option<JoinHandle<()>>,
+    worker: Option<JoinHandle<anyhow::Result<u64>>>,
     capture: Arc<Capture>,
 }
 impl Recording {
@@ -205,16 +232,63 @@ pub(crate) fn recorder(cx: &mut App) -> Entity<Recorder> {
         return global.0.clone();
     }
     let recorder = cx.new(|cx: &mut Context<Recorder>| {
-        let mut recorder = Recorder { recording: None, ready: None, task: None, status: None };
+        let mut recorder = Recorder {
+            recording: None,
+            ready: None,
+            task: None,
+            directory_task: None,
+            watch: None,
+            status: None,
+        };
         if is_recording() {
-            recorder.status = Some(crate::tr!("正在录制冷启动，将按命令行设置自动导出。", "Cold-start recording will export automatically as configured on the command line.").into());
+            let cold_capture = ACTIVE.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            recorder.status = Some(
+                crate::tr!(
+                    "正在录制冷启动，文件将持续保存到缓存目录。",
+                    "Cold-start capture is saving to the cache folder."
+                )
+                .into(),
+            );
             recorder.task = Some(cx.spawn(async move |this, cx| {
+                let mut previous_error = None;
                 while is_recording() {
-                    cx.background_executor().timer(Duration::from_millis(500)).await;
+                    cx.background_executor()
+                        .timer(Duration::from_millis(500))
+                        .await;
+                    let error = cold_capture.as_ref().and_then(|data| {
+                        data.write_error.lock().ok().and_then(|error| error.clone())
+                    });
+                    if error != previous_error {
+                        previous_error = error;
+                        _ = this.update(cx, |_, cx| cx.notify());
+                    }
                 }
                 _ = this.update(cx, |this, cx| {
                     this.task = None;
-                    this.status = Some(crate::tr!("冷启动采集已停止，导出结果见命令行指定路径及终端输出。", "Cold-start capture stopped. Check the configured output path and terminal for export results.").into());
+                    this.status = Some(
+                        crate::tr!(
+                            "冷启动采集已停止，可打开目录查看录制文件。",
+                            "Cold-start capture stopped. Open the folder to find the recording."
+                        )
+                        .into(),
+                    );
+                    if let Some(data) = cold_capture {
+                        let error = data
+                            .write_error
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .clone();
+                        if let Some(error) = error {
+                            this.ready = Some(data);
+                            this.status = Some(
+                                crate::tr_args!(
+                                    "保存失败：{error}。数据已保留，可重试保存。",
+                                    "Save failed: {error}. Data is retained for retry."
+                                )
+                                .into(),
+                            );
+                        }
+                    }
                     cx.refresh_windows();
                     cx.notify();
                 });
@@ -231,6 +305,8 @@ pub(crate) struct Recorder {
     recording: Option<Recording>,
     ready: Option<Arc<Capture>>,
     task: Option<Task<()>>,
+    directory_task: Option<Task<()>>,
+    watch: Option<Task<()>>,
     status: Option<SharedString>,
 }
 
@@ -240,16 +316,28 @@ impl Recorder {
         {
             return;
         }
-        let capture = Arc::new(Capture {
-            ui_thread: thread::current().id(),
-            start: Instant::now(),
-            accepting: AtomicBool::new(true),
-            end: Mutex::new(None),
-            slices: Mutex::new(Vec::with_capacity(MAX_EVENTS)),
-            lost: AtomicU64::new(0),
-            active: Mutex::new(HashMap::new()),
-            next_id: AtomicU64::new(1),
-        });
+        let capture = match Capture::new() {
+            Ok(capture) => capture,
+            Err(error) => {
+                self.status = Some(
+                    crate::tr_args!("无法开始录制：{error}", "Couldn’t start recording: {error}")
+                        .into(),
+                );
+                cx.notify();
+                return;
+            }
+        };
+        let writer = match live::Writer::start(capture.clone()) {
+            Ok(writer) => writer,
+            Err(error) => {
+                self.status = Some(
+                    crate::tr_args!("无法开始录制：{error}", "Couldn’t start recording: {error}")
+                        .into(),
+                );
+                cx.notify();
+                return;
+            }
+        };
         let collector = cx.foreground_journal().collector();
         let foreground = capture.ui_thread;
         let task_cursors = profiler::get_all_timings(gpui_kit::TasksIncluded::OnlyCompleted)
@@ -274,6 +362,7 @@ impl Recorder {
                     None,
                 );
                 data.seal();
+                writer.finish()
             });
         match worker {
             Ok(worker) => {
@@ -284,6 +373,35 @@ impl Recorder {
                     worker: Some(worker),
                     capture,
                 });
+                self.watch = Some(cx.spawn(async move |this, cx| {
+                    let mut previous_error = None;
+                    loop {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(500))
+                            .await;
+                        let keep_watching = this
+                            .update(cx, |this, cx| {
+                                let Some(recording) = &this.recording else {
+                                    return false;
+                                };
+                                let error = recording
+                                    .capture
+                                    .write_error
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .clone();
+                                if error != previous_error {
+                                    previous_error = error;
+                                    cx.notify();
+                                }
+                                true
+                            })
+                            .unwrap_or(false);
+                        if !keep_watching {
+                            break;
+                        }
+                    }
+                }));
                 self.status = Some(
                     crate::tr!(
                         "正在录制，可关闭设置并复现卡顿。",
@@ -304,7 +422,7 @@ impl Recorder {
         cx.notify();
     }
 
-    fn stop_and_export(&mut self, cx: &mut Context<Self>) {
+    fn stop_and_save(&mut self, cx: &mut Context<Self>) {
         if self.task.is_some() {
             return;
         }
@@ -312,20 +430,49 @@ impl Recorder {
             return;
         };
         recording.stop();
+        self.watch = None;
         cx.refresh_windows();
         self.status = Some(crate::tr!("正在结束录制…", "Stopping recording…").into());
         self.task = Some(cx.spawn(async move |this, cx| {
-            let (data, success) = cx.background_spawn(async move {
-                let success = recording.worker.take().is_none_or(|worker| worker.join().is_ok());
-                recording.capture.seal();
-                (recording.capture.clone(), success)
-            }).await;
+            let (data, result) = cx
+                .background_spawn(async move {
+                    let result = recording
+                        .worker
+                        .take()
+                        .ok_or_else(|| anyhow::anyhow!("Missing trace collector"))
+                        .and_then(|worker| {
+                            worker
+                                .join()
+                                .map_err(|_| anyhow::anyhow!("Trace collector panicked"))
+                        })
+                        .and_then(|result| result);
+                    recording.capture.seal();
+                    (recording.capture.clone(), result)
+                })
+                .await;
             _ = this.update(cx, |this, cx| {
                 this.task = None;
-                this.ready = Some(data);
-                if success { this.export(cx); }
-                else {
-                    this.status = Some(crate::tr!("采集线程异常结束，已保留部分数据，可重试导出。", "The collector stopped unexpectedly. Partial data is retained for export.").into());
+                match result {
+                    Ok(lost) => {
+                        this.status = Some(
+                            crate::tr_args!(
+                                "已保存到 {}。丢失事件：{lost}。",
+                                "Saved to {}. Lost events: {lost}.",
+                                data.path.display()
+                            )
+                            .into(),
+                        )
+                    }
+                    Err(error) => {
+                        this.ready = Some(data);
+                        this.status = Some(
+                            crate::tr_args!(
+                                "保存失败：{error}。数据已保留，可重试保存。",
+                                "Save failed: {error}. Data is retained for retry."
+                            )
+                            .into(),
+                        );
+                    }
                 }
                 cx.notify();
             });
@@ -333,55 +480,72 @@ impl Recorder {
         cx.notify();
     }
 
-    fn export(&mut self, cx: &mut Context<Self>) {
+    fn retry_save(&mut self, cx: &mut Context<Self>) {
         if self.task.is_some() {
             return;
         }
         let Some(data) = self.ready.clone() else {
             return;
         };
-        let directory = dirs::document_dir().unwrap_or_else(|| PathBuf::from("."));
-        let name = format!(
-            "vclogg2-trace-{}.json",
-            chrono::Local::now().format("%Y%m%d-%H%M%S")
-        );
-        let prompt = cx.prompt_for_new_path(&directory, Some(&name));
         self.task = Some(cx.spawn(async move |this, cx| {
-            let result = match prompt.await {
-                Ok(Ok(Some(path))) => Some(
-                    cx.background_spawn(async move {
-                        export_trace(&data, &path).map(|lost| (path, lost))
-                    })
-                    .await,
-                ),
-                Ok(Ok(None)) => None,
-                Ok(Err(error)) => Some(Err(error)),
-                Err(error) => Some(Err(anyhow::anyhow!(error))),
-            };
+            let result = cx
+                .background_spawn(
+                    async move { live::save(&data).map(|lost| (data.path.clone(), lost)) },
+                )
+                .await;
             _ = this.update(cx, |this, cx| {
                 this.task = None;
                 this.status = Some(
                     match result {
-                        Some(Ok((path, lost))) => {
+                        Ok((path, lost)) => {
                             this.ready = None;
                             crate::tr_args!(
-                                "已导出到 {}。丢失事件：{lost}。可使用 Perfetto 打开。",
-                                "Exported to {}. Lost events: {lost}. Open the file in Perfetto.",
+                                "已保存到 {}。丢失事件：{lost}。",
+                                "Saved to {}. Lost events: {lost}.",
                                 path.display()
                             )
                         }
-                        Some(Err(error)) => crate::tr_args!(
-                            "导出失败：{error}。数据已保留，可重试。",
-                            "Export failed: {error}. Data is retained for retry."
+                        Err(error) => crate::tr_args!(
+                            "保存失败：{error}。数据已保留，可重试。",
+                            "Save failed: {error}. Data is retained for retry."
                         ),
-                        None => crate::tr!(
-                            "已停止录制，数据已保留，可重新导出。",
-                            "Recording stopped. Data is retained for export."
-                        )
-                        .to_owned(),
                     }
                     .into(),
                 );
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    fn open_directory(&mut self, cx: &mut Context<Self>) {
+        if self.directory_task.is_some() {
+            return;
+        }
+        self.directory_task = Some(cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let directory = crate::app_paths::trace_cache_dir().ok_or_else(|| {
+                        anyhow::anyhow!("Could not determine trace cache directory")
+                    })?;
+                    std::fs::create_dir_all(&directory)?;
+                    Ok::<_, anyhow::Error>(directory)
+                })
+                .await;
+            _ = this.update(cx, |this, cx| {
+                this.directory_task = None;
+                match result {
+                    Ok(directory) => cx.reveal_path(&directory),
+                    Err(error) => {
+                        this.status = Some(
+                            crate::tr_args!(
+                                "打开目录失败：{error}",
+                                "Couldn’t open folder: {error}"
+                            )
+                            .into(),
+                        )
+                    }
+                }
                 cx.notify();
             });
         }));
@@ -392,25 +556,38 @@ impl Recorder {
 impl Render for Recorder {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let busy = self.task.is_some();
+        let capture = self
+            .recording
+            .as_ref()
+            .map(|recording| recording.capture.clone())
+            .or_else(|| ACTIVE.lock().ok().and_then(|active| active.clone()));
+        let write_error = capture
+            .as_ref()
+            .and_then(|data| data.write_error.lock().ok().and_then(|error| error.clone()));
         v_flex().gap_2().p_3().border_1().border_color(cx.theme().border).rounded(cx.theme().radius)
             .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("性能录制", "Performance recording")))
             .child(div().text_sm().text_color(cx.theme().muted_foreground).child(crate::tr!(
-                "录制 GPUI 事件和控件耗时，停止后导出供 Perfetto 查看。最多保留 20 万条事件，超出部分会标记为丢失。",
-                "Record GPUI events and control timings, then export for Perfetto. Up to 200,000 events are retained; excess events are reported as lost."
+                "录制期间约每秒保存到缓存目录，可用 Perfetto 打开。最多保留 20 万条事件，超出部分标记为丢失。",
+                "Save to the cache folder about once per second while recording. Open the JSON in Perfetto. Up to 200,000 events are retained; excess events are reported as lost."
             )))
             .child(h_flex().gap_2().flex_wrap()
                 .child(Button::new("trace-start").small().outline().label(crate::tr!("开始录制", "Start recording"))
                     .disabled(is_recording() || busy || self.recording.is_some() || self.ready.is_some())
                     .on_click(cx.listener(|this, _, _, cx| this.start(cx))))
-                .child(Button::new("trace-stop-export").small().outline().label(crate::tr!("停止并导出 trace…", "Stop and export trace…"))
+                .child(Button::new("trace-stop-export").small().outline().label(crate::tr!("停止录制", "Stop recording"))
                     .disabled(busy || self.recording.is_none())
-                    .on_click(cx.listener(|this, _, _, cx| this.stop_and_export(cx))))
-                .child(Button::new("trace-export-retry").small().outline().label(crate::tr!("重新导出…", "Retry export…"))
+                    .on_click(cx.listener(|this, _, _, cx| this.stop_and_save(cx))))
+                .child(Button::new("trace-export-retry").small().outline().label(crate::tr!("重试保存", "Retry save"))
                     .disabled(busy || self.ready.is_none())
-                    .on_click(cx.listener(|this, _, _, cx| this.export(cx))))
-                .child(Button::new("trace-discard").small().ghost().label(crate::tr!("丢弃录制", "Discard recording"))
+                    .on_click(cx.listener(|this, _, _, cx| this.retry_save(cx))))
+                .child(Button::new("trace-discard").small().ghost().label(crate::tr!("放弃重试", "Dismiss retry"))
                     .disabled(busy || self.ready.is_none())
-                    .on_click(cx.listener(|this, _, _, cx| { this.ready = None; this.status = None; cx.notify(); }))))
+                    .on_click(cx.listener(|this, _, _, cx| { this.ready = None; this.status = None; cx.notify(); })))
+                .child(Button::new("trace-open-directory").small().outline().label(crate::tr!("打开目录", "Open folder"))
+                .disabled(self.directory_task.is_some()).on_click(cx.listener(|this, _, _, cx| this.open_directory(cx)))))
+            .children(write_error
+                .map(|error| div().text_sm().text_color(cx.theme().danger).child(crate::tr_args!("写入失败，将自动重试：{error}", "Write failed; retrying automatically: {error}"))))
+            .children(capture.map(|data| div().text_sm().text_color(cx.theme().muted_foreground).child(data.path.display().to_string())))
             .children(self.status.clone().map(|status| div().text_sm().child(status)))
     }
 }
@@ -609,23 +786,19 @@ fn export_trace(capture: &Capture, path: &Path) -> anyhow::Result<u64> {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .unwrap_or_else(Instant::now);
-    let mut slices = capture
-        .slices
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
-    slices.extend(
-        capture
-            .active
+    let slices = {
+        let active = capture.active.lock().unwrap_or_else(|e| e.into_inner());
+        let mut slices = capture
+            .slices
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .values()
-            .cloned()
-            .map(|mut slice| {
-                slice.end = stopped_at;
-                slice
-            }),
-    );
+            .clone();
+        slices.extend(active.values().cloned().map(|mut slice| {
+            slice.end = stopped_at;
+            Arc::new(slice)
+        }));
+        slices
+    };
     // One exported tid per actual Rust thread, regardless of event category.
     // Process starts chronologically (outer intervals first for equal starts).
     // Crossing intervals are split at parent boundaries and continued on the same
@@ -721,7 +894,7 @@ fn export_trace(capture: &Capture, path: &Path) -> anyhow::Result<u64> {
         .saturating_add(omitted_export_segments as u64);
     events.push(json!({"ph":"M", "name":"process_name", "pid":1, "args":{"name":"VCLogg2"}}));
     events.push(json!({"ph":"i", "s":"t", "name":"Recording summary", "pid":1, "tid":1, "ts":0,
-        "args":{"ui_thread":format!("{:?}", capture.ui_thread),"ui_track_prefix":"GPUI UI / Main","omitted_export_segments":omitted_export_segments,"export_segment_limit":MAX_EXPORT_SEGMENTS,"lost_events":lost,"limit":MAX_EVENTS,"includes_active_scopes":true,"active_scope_limit":MAX_ACTIVE_SCOPES,"duration_ms":stopped_at.duration_since(capture.start).as_secs_f64()*1000.,"build":if cfg!(debug_assertions) {"Debug"} else {"Release"},"version":env!("CARGO_PKG_VERSION"),"tracks":"One track per source Rust thread. Crossing scopes continue as split segments; frame latency is an instant with elapsed_us. Durations are wall time, not CPU samples or GPU timings"}}));
+        "args":{"ui_thread":format!("{:?}", capture.ui_thread),"ui_track_prefix":"GPUI UI / Main","recording":capture.accepting.load(Ordering::Relaxed),"omitted_export_segments":omitted_export_segments,"export_segment_limit":MAX_EXPORT_SEGMENTS,"lost_events":lost,"limit":MAX_EVENTS,"includes_active_scopes":true,"active_scope_limit":MAX_ACTIVE_SCOPES,"duration_ms":stopped_at.duration_since(capture.start).as_secs_f64()*1000.,"build":if cfg!(debug_assertions) {"Debug"} else {"Release"},"version":env!("CARGO_PKG_VERSION"),"tracks":"One track per source Rust thread. Crossing scopes continue as split segments; frame latency is an instant with elapsed_us. Durations are wall time, not CPU samples or GPU timings"}}));
     // Serialize on the worker and replace the destination only after the whole file is written.
     let parent = path
         .parent()

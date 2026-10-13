@@ -271,7 +271,7 @@ impl SettingsCategory {
                 "快捷键 打开文件 聚焦搜索框 快速查找 关闭当前标签 打开设置 切换区分大小写 跳到日志底部 轮换颜色标签 切换自动换行 进入编辑模式 按键 绑定 冲突 keyboard shortcut keymap edit mode"
             }
             Self::Advanced => {
-                "高级 性能 录制 导出 trace Perfetto 叠加层 帧耗时 卡顿 FPS performance recording overlay frame time 应用图标 啄木鸟 软萌 立体 坐姿 插画 贴纸 应用日志 日志等级 关闭 Error Warn Info Debug Trace 导出 诊断 advanced application icon mascot log level export diagnostics"
+                "高级 性能 录制 保存 缓存 打开目录 导出 trace Perfetto 叠加层 帧耗时 卡顿 FPS performance recording overlay frame time 应用图标 啄木鸟 软萌 立体 坐姿 插画 贴纸 应用日志 日志等级 关闭 Error Warn Info Debug Trace 导出 诊断 advanced application icon mascot log level export diagnostics"
             }
             Self::About => {
                 "关于 VCLogg2 版本 编译时间 构建目标 commit 提交 技术栈 开源库 GitHub 仓库 repository 源代码 source code 作者 zhaiyanqi copyright 版权 Apache 2.0 license Rust GPUI SQLite"

@@ -69,6 +69,17 @@ pub(crate) fn index_cache_dir() -> Option<PathBuf> {
     }
 }
 
+pub(crate) fn trace_cache_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        application_data_dir().map(|root| root.join("cache").join("traces"))
+    }
+    #[cfg(not(windows))]
+    {
+        cache_dir().map(|root| application_data_dir_from_root(root).join("traces"))
+    }
+}
+
 pub(crate) fn temporary_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     {

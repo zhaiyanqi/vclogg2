@@ -201,23 +201,25 @@ rg --version
 
 ## 冷启动性能录制
 
-先退出所有 VCLogg2 实例，再运行已有的可执行文件（以下命令不会编译）：
+先退出所有 VCLogg2 实例，再运行已有可执行文件（以下命令不会编译）：
 
 ```sh
-./target/release/vclogg2 --trace-startup ./startup-trace.json --trace-duration 15
+./target/release/vclogg2 --trace-startup --trace-duration 15
 ```
 
-Windows 使用 `./target/release/vclogg2.exe`；Debug 可执行文件同样支持这些参数。`--trace-startup` 指定 JSON 文件，父目录必须已存在；`--trace-duration` 为 1–600 的整数秒，省略时为 15 秒。可在参数后追加要打开的日志路径，含空格时加引号；以 `--` 分隔后，后续参数均作为文件路径。
+Windows 使用 `./target/release/vclogg2.exe`，Debug 同样支持。`--trace-startup` 现在是开关，不再接输出 JSON 路径；旧命令请移除路径参数。`--trace-duration` 为 1–600 的整数秒，默认 15 秒。需要同时打开日志时使用 `-- service.log`，路径包含空格时加引号。已有实例运行时仍转发打开请求，无法录制已有进程的启动。
 
-录制在平台、字体、状态库和窗口初始化前开启。独立采集线程到时自动停止并原子写入指定文件（会替换同名文件），无需在界面点击停止；UI 卡住时也不依赖 UI 线程来触发导出。`main` 提前返回会尽早导出，强制结束进程或崩溃中止不能保证落盘。若已有实例运行，本次启动仍按原规则转发打开请求，无法录制已有进程的启动。
+手动及冷启动录制都自动保存在应用缓存的 `traces` 子目录，名称包含时间和 UUID。macOS/Linux 使用系统 cache 下的 `VCLogg2/traces`（Debug 数据隔离时位于隔离缓存根）；Windows 使用配置的数据根下的 `cache/traces`。“设置 → 高级 → 性能录制 → 打开目录”可在录制期间打开该目录。
 
-使用 [Perfetto UI](https://ui.perfetto.dev/) 打开 JSON。先查看 `Startup.*` 初始化节点，再看 `Document.*`、`Search.*`、`Tab.*`、`Viewport.*`、`Settings.apply` 及已有控件耗时；停止时仍未结束的应用节点会裁剪到录制边界，带 `incomplete=true`。同时导出 GPUI 任务 poll、输入、Action、Draw、Present、帧等待与跳帧标记。任务位置是 spawn 位置，不是采样调用栈；帧等待和嵌套事件不能相加作为 CPU 耗时，未埋点内部逻辑仍需继续定位。
+独立写入线程开始时保存快照，此后每次写完等待 1 秒再保存；事件量大或磁盘忙时更新间隔会延长。每次先生成完整 Chrome Trace Event JSON，再原子替换同一会话文件，停止时补写最终快照。不弹出保存对话框。实时文件是完整快照，不是逐事件追加，写入不依赖 UI 线程响应。强制退出后可使用最后已发布的快照，最后一个周期的数据及尚未完成的写入不保证保存。文件不会自动删除。
 
-最多保留 200,000 条已完成事件和 4,096 个活动 scope；`Recording summary` 中的 `lost_events` 表示缓冲覆盖、竞争或容量超限造成的丢失。冷启动录制期间“设置 → 高级”会显示自动录制状态并禁用重复开始。手动录制仍使用“开始录制 / 停止并导出 trace”。
+手动录制使用“开始录制 / 停止录制”；写入失败自动重试并提示，停止后的失败数据可“重试保存”，或“放弃重试”释放内存；已保存的文件不会因此删除。冷启动按时自动停止；设置已打开时同样显示写入错误，并在最终失败时保留数据供重试。终端也报告冷启动最终保存结果。
 
-导出的 UI 轨道统一以 `GPUI UI / Main` 开头，其他线程以 `Background` 开头；手动录制与冷启动录制均保存实际主线程的 Rust ThreadId，不按线程名称或导出线程猜测。每个事件的 `thread_role` / `source_thread` 和 `Recording summary.ui_thread` 可用于核对归属。每个实际 Rust 线程只对应一个显示轨道和一个 JSON tid，类别仅保留在事件 cat 中；tid 是导出映射编号，不是系统线程 ID。普通事件在同轨道嵌套；交叉区间在边界处分段衔接，source_event、continued、split 和 original_duration_us 可用于还原同一原始事件。帧延迟使用同轨道瞬时标记，elapsed_us 保留测量时长。导出最多 404,096 个事件片段，超过上限的待导出部分计入 omitted_export_segments 和 lost_events。
+使用 [Perfetto UI](https://ui.perfetto.dev/) 打开 JSON。先查看 `Startup.*`，再看 `Document.*`、`Search.*`、`Tab.*`、`Viewport.*`、`Settings.apply` 及控件耗时。快照时尚未完成的应用 scope 标记为 `incomplete=true`。最多保留 200,000 条完成事件及 4,096 个活动 scope；达到容量后继续更新快照及丢失计数，不无限增长内存。`Recording summary.recording` 区分录制中快照与已停止快照，`lost_events` 报告丢失。
 
-GPUI 的前台任务与输入、布局、绘制共享 UI 线程，`cx.spawn` 不会自动移到后台。优先检查 `GPUI UI / Main` 下的 Draw、Application、GPUI tasks 和输入长区间，再关联帧延迟。区间记录经过时间，包含阻塞等待，不是 CPU 采样；空白区间也不能单独证明 UI 空闲或卡顿。后台 CPU/锁/内存争用、GPU 或呈现延迟仍可能造成可感知卡顿；本 trace 不含系统调度及 GPU 执行时间。
+每个实际 Rust 线程对应一条轨道：主线程 `GPUI UI / Main`，其他线程 `Background`。事件参数 `thread_role` / `source_thread` 保留身份，tid 是导出映射而非 OS ID。交叉区间在同轨道分段衔接，保留 source_event、continued、split、original_duration_us；帧延迟为携带 elapsed_us 的瞬时标记。导出最多 404,096 个事件片段，超限待导出部分计入 omitted_export_segments 和 lost_events。
+
+`cx.spawn` 仍在 UI 线程执行。优先检查 UI 轨道的 Draw、Application、GPUI tasks 和输入长区间。区间为包含阻塞等待的经过时间，不是 CPU 采样；任务位置是 spawn 位置，不是完整调用栈。空白区间不能单独证明空闲或卡顿，嵌套区间不能相加计作 CPU 耗时。后台资源争用、GPU 或呈现延迟也可能导致卡顿；本 trace 不含系统调度及 GPU 执行时间。
 
 ## 性能叠加层与控制台日志
 

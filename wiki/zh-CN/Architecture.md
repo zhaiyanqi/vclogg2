@@ -51,7 +51,7 @@ app 组合 core/data；core 不依赖 data/app，data 不依赖 app。core/data 
 
 ## 性能 trace
 
-`ui_performance/trace.rs` 保留应用级 Recorder；`trace/startup.rs` 在 `main` 的平台初始化之前解析并启动命令行录制，再在 GPUI 初始化回调中接入 foreground journal。独立线程每 50 ms 排空 journal 与任务缓冲，以统一 Instant 基准导出 Chrome Trace Event JSON。冷启动到时自动落盘；手动录制停止后选择保存位置，取消或失败保留数据供重试。
+`ui_performance/trace.rs` 保留应用级 Recorder。`trace/startup.rs` 在平台初始化前开启命令行录制，GPUI 初始化回调接入 foreground journal；采集线程每 50 ms 排空 journal 和任务缓冲。`trace/live.rs` 的独立写入线程每次保存后等待 1 秒，生成统一 Instant 时间基准的完整 Chrome Trace Event JSON 快照，通过同目录临时文件原子替换会话文件；停止时补写最终快照。缓存路径由 app_paths 统一提供，使用时间与 UUID 命名。手动录制不再选择保存位置，失败自动重试，最终失败保留内存数据供重试。快照只在短锁内克隆 Arc 事件与活动 scope，排序、序列化、落盘均在写入线程执行。
 
 应用 scope 在进入时登记线程与起点，退出时记录完成事件；停止冻结时保留尚在执行的 scope，并补取 GPUI 边界任务快照，以 `incomplete` 标识。事件和活动 scope 分别限制为 200,000 / 4,096，丢失数量写入摘要。跳帧、空闲、挂起和短 poll 聚合用瞬时事件表示；dirty-to-present 和回调投递延迟使用带测量时长的瞬时标记，不冒充 CPU 工作。应用埋点覆盖启动、文件准备/索引、搜索执行与结果安装、标签激活、可见行加载和设置应用，未录制时新增 scope 不读取时钟。参见[冷启动参数](Building.md#冷启动性能录制)。
 
