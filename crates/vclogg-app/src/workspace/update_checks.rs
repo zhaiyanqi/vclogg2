@@ -71,12 +71,13 @@ fn show_release_notes(
         manifest.release_notes().to_owned().into()
     };
     let url = manifest.download_url().to_owned();
-    window.open_dialog(cx, move |dialog, _, cx| {
+    window.open_dialog(cx, move |dialog, window, cx| {
         let url = url.clone();
         dialog
             .title(title.clone())
-            .w(rems(40.))
-            .max_w(relative(0.9))
+            // Dialog sizing accepts pixels; resolve the rem and viewport sizes here.
+            .w(window.rem_size() * 40.)
+            .max_w(window.viewport_size().width * 0.9)
             .close_button(false)
             .child(
                 v_flex()
