@@ -211,6 +211,8 @@ Debug 配置对 `gpui-component` 和 `gpui-base` 启用 `opt-level = 3`，与已
 
 `Startup.initialize_services` 仅覆盖服务注册；窗口创建单独记录在 `Startup.open_workspace_window` 及其子区间中。比较旧 trace 时，注意旧版服务区间还包含窗口创建，不能把区间缩短直接当作性能提升。
 
+Unix 单实例启动在首次清理失效 socket 后立即重试绑定；只有重复清理或其他连接失败时才使用 40 ms 退避，总超时仍为 5 秒。`Startup.cleanup_stale_instance_socket` 标识实际发生的清理。
+
 Windows 使用 `./target/release/vclogg2.exe`，Debug 同样支持。`--trace-startup` 现在是开关，不再接输出 JSON 路径；旧命令请移除路径参数。`--trace-duration` 为 1–600 的整数秒，默认 15 秒。需要同时打开日志时使用 `-- service.log`，路径包含空格时加引号。已有实例运行时仍转发打开请求，无法录制已有进程的启动。
 
 手动及冷启动录制都自动保存在应用缓存的 `traces` 子目录，名称包含时间和 UUID。macOS/Linux 使用系统 cache 下的 `VCLogg2/traces`（Debug 数据隔离时位于隔离缓存根）；Windows 使用配置的数据根下的 `cache/traces`。“设置 → 高级 → 性能录制 → 打开目录”可在录制期间打开该目录。

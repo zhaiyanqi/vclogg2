@@ -141,6 +141,8 @@ The Debug profile sets `opt-level = 3` for `gpui-component` and `gpui-base`, mat
 
 `Startup.initialize_services` covers service registration only; window creation is recorded separately under `Startup.open_workspace_window` and its child scopes. Older traces include window creation in the service scope, so a shorter scope alone does not demonstrate a performance improvement.
 
+On Unix, startup retries binding immediately after the first stale instance socket cleanup. Repeated cleanups and other connection failures retain the 40 ms backoff and the overall 5-second timeout. `Startup.cleanup_stale_instance_socket` identifies cleanup that actually occurred.
+
 Use `./target/release/vclogg2.exe` on Windows. Debug supports the same options. `--trace-startup` is now a flag with no output-path argument; remove that path from older commands. `--trace-duration` accepts integer seconds from 1 to 600, defaulting to 15. Append `-- service.log` to open logs, quoting paths with spaces. If another instance is running, normal forwarding applies and cannot capture that process's startup.
 
 Manual and cold-start recordings save automatically into the application's trace cache with timestamp-and-UUID filenames. macOS/Linux use `VCLogg2/traces` under the system cache (or the isolated Debug cache root); Windows uses `cache/traces` under the configured data root. Settings → Advanced → Performance recording → Open folder is available during recording.

@@ -116,6 +116,7 @@ mod unix {
         let socket_path = socket_path()?;
         let request = encode_request(paths)?;
         let started_at = Instant::now();
+        let mut retried_stale_socket = false;
 
         loop {
             match UnixListener::bind(&socket_path) {
@@ -151,13 +152,24 @@ mod unix {
                             std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
                         ) =>
                     {
-                        remove_stale_socket(&socket_path)?;
+                        {
+                            let _trace = crate::ui_performance::trace::scope(
+                                "Startup.cleanup_stale_instance_socket",
+                            );
+                            remove_stale_socket(&socket_path)?;
+                        }
                         if started_at.elapsed() >= STARTUP_FORWARD_TIMEOUT {
                             return Err(connect_error).with_context(|| {
                                 format!("无法创建或连接单实例套接字：{}", socket_path.display())
                             });
                         }
-                        thread::sleep(RETRY_INTERVAL);
+                        // The first cleanup makes an immediate bind useful. Keep
+                        // backoff for repeated failures/races rather than delaying
+                        // every launch after a process leaves its socket behind.
+                        if retried_stale_socket {
+                            thread::sleep(RETRY_INTERVAL);
+                        }
+                        retried_stale_socket = true;
                     }
                     Err(_connect_error) if started_at.elapsed() < STARTUP_FORWARD_TIMEOUT => {
                         thread::sleep(RETRY_INTERVAL);
