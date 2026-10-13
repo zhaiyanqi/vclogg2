@@ -1,5 +1,42 @@
 use super::*;
 
+// Enumerate only immediate files, off the UI thread. Preserve the drop order
+// between inputs and sort each folder independently before creating tab shells.
+pub(super) fn expand_dropped_paths(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<String>) {
+    let mut files = Vec::new();
+    let mut errors = Vec::new();
+    for path in paths {
+        if !path.is_dir() {
+            files.push(path);
+            continue;
+        }
+        let entries = match std::fs::read_dir(&path) {
+            Ok(entries) => entries,
+            Err(error) => {
+                errors.push(format!("{}: {error}", path.display()));
+                continue;
+            }
+        };
+        let mut children = Vec::new();
+        for entry in entries {
+            match entry {
+                Ok(entry) => {
+                    let child = entry.path();
+                    match child.metadata() {
+                        Ok(metadata) if metadata.is_file() => children.push(child),
+                        Ok(_) => {}
+                        Err(error) => errors.push(format!("{}: {error}", child.display())),
+                    }
+                }
+                Err(error) => errors.push(format!("{}: {error}", path.display())),
+            }
+        }
+        children.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
+        files.extend(children);
+    }
+    (files, errors)
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct SearchPreparationOptions {
     pub(super) case_sensitive: bool,

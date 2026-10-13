@@ -2657,8 +2657,8 @@ impl Render for Workspace {
             .is_some();
         let file_drop_title = crate::tr!("松开以打开日志", "Release to open logs");
         let file_drop_description = crate::tr!(
-            "支持同时拖入多个文件，文件夹会被忽略",
-            "You can drop multiple files; folders are ignored"
+            "支持文件和文件夹，文件夹内文件按名称打开（不含子文件夹）",
+            "Drop files or folders; folder files open by name (no subfolders)"
         );
         let drop_overlay_top = window.rem_size() * 0.5;
         let drop_enter_travel = window.rem_size() * 0.5;
@@ -2781,7 +2781,7 @@ impl Render for Workspace {
                         .border_2()
                         .border_dashed()
                         .border_color(cx.theme().primary)
-                        .bg(cx.theme().popover)
+                        .bg(cx.theme().popover.opacity(0.65))
                         .text_color(cx.theme().popover_foreground)
                         .child(
                             v_flex()

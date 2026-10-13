@@ -114,28 +114,7 @@ impl Workspace {
             );
             return;
         }
-        let (files, ignored_count): (Vec<_>, Vec<_>) = paths
-            .paths()
-            .iter()
-            .cloned()
-            .partition(|path| !path.is_dir());
-        if files.is_empty() {
-            window.notify_message(
-                crate::tr!("请拖入一个或多个日志文件", "Drop one or more log files"),
-                cx,
-            );
-            return;
-        }
-        if !ignored_count.is_empty() {
-            window.notify_message(
-                crate::tr_args!(
-                    "已忽略 {} 个文件夹",
-                    "Ignored {} folders",
-                    ignored_count.len(),
-                ),
-                cx,
-            );
-        }
+        let paths = paths.paths().to_vec();
         // A modal may own unsaved settings. Check it outside the workspace
         // update; closing it programmatically would skip its cancel callback.
         let workspace = cx.weak_entity();
@@ -151,9 +130,61 @@ impl Workspace {
                 return;
             }
             _ = workspace.update(cx, |workspace, cx| {
-                workspace.begin_open_paths(files, window, cx);
+                workspace.begin_open_dropped_paths(paths, window, cx);
             });
         });
+    }
+
+    fn begin_open_dropped_paths(
+        &mut self,
+        paths: Vec<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Recheck after the deferred modal guard before reserving the loader slot.
+        if self.open_task.is_some() {
+            window.notify_message(
+                crate::tr!(
+                    "当前正在打开其他文件，请稍后再拖入",
+                    "Another file is being opened. Drop files again shortly.",
+                ),
+                cx,
+            );
+            return;
+        }
+        self.file_refresh_task.take();
+        self.activity = Activity::Opening;
+        self.open_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let (files, errors) = cx
+                .background_spawn(async move { expand_dropped_paths(paths) })
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                this.open_task = None;
+                this.activity = Activity::Ready;
+                if !errors.is_empty() {
+                    let details = errors.join("\n");
+                    window.notify_message(
+                        crate::tr_args!(
+                            "部分拖入路径无法读取：{details}",
+                            "Some dropped paths could not be read: {details}"
+                        ),
+                        cx,
+                    );
+                } else if files.is_empty() {
+                    window.notify_message(
+                        crate::tr!(
+                            "拖入的文件夹中没有可打开的文件（不包含子文件夹）",
+                            "The dropped folders contain no files to open (subfolders are excluded)",
+                        ),
+                        cx,
+                    );
+                }
+                this.begin_open_paths(files, window, cx);
+                this.open_queued_external_paths_if_idle(window, cx);
+                cx.notify();
+            });
+        }));
+        cx.notify();
     }
 
     pub(super) fn restore_last_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
