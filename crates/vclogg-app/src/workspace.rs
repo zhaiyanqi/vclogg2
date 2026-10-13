@@ -2309,6 +2309,8 @@ impl Workspace {
                     }
                     Err(error) => {
                         this.history_loading = false;
+                        let icon = crate::app_icon::restored_icon(Default::default(), cx);
+                        crate::app_icon::apply(icon, window, cx);
                         window.notify_message(
                             crate::tr_args!(
                                 "状态库不可用，本次仍可继续查看日志：{error}",

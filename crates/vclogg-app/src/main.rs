@@ -118,19 +118,34 @@ fn open_workspace_window_with_options(
     };
     #[cfg(target_os = "macos")]
     let (window_options, traffic_light_position) = macos_window_controls::configure(window_options);
+    // GPUI creates the native window and renderer before invoking the content builder.
+    // Keep that cost separate from application-owned setup without patching GPUI.
+    let native_window_scope = ui_performance::trace::scope("Startup.prepare_native_window");
     let (handle, _) = gpui_kit::open_window(window_options, cx, |window, cx| {
+        drop(native_window_scope);
+        let _scope = ui_performance::trace::scope("Startup.build_workspace_window");
         window.set_window_title("VCLogg2");
-        app_icon::attach_window(window, cx);
-        #[cfg(target_os = "macos")]
-        if let Some(position) = traffic_light_position
-            && let Err(error) = macos_window_controls::attach(window, position)
         {
-            log::error!("Could not initialize native window controls: {error:#}");
+            let _scope = ui_performance::trace::scope("Startup.attach_window_icon");
+            app_icon::attach_window(window, cx);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _scope = ui_performance::trace::scope("Startup.attach_window_controls");
+            if let Some(position) = traffic_light_position
+                && let Err(error) = macos_window_controls::attach(window, position)
+            {
+                log::error!("Could not initialize native window controls: {error:#}");
+            }
         }
         let workspace = cx.new(|cx| Workspace::new(primary, initial_documents, window, cx));
-        Workspace::register_window(&workspace, window, cx);
+        {
+            let _scope = ui_performance::trace::scope("Startup.register_window");
+            Workspace::register_window(&workspace, window, cx);
+        }
         workspace
     })?;
+    let _scope = ui_performance::trace::scope("Startup.activate_window");
     cx.activate(true);
     _ = handle.update(cx, |_, window, _| window.activate_window());
     Ok(handle)

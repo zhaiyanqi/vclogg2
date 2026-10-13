@@ -114,11 +114,10 @@ pub(crate) fn attach_window(window: &mut Window, cx: &mut App) {
     if let Err(error) = platform::apply_window(icon, window) {
         log::warn!("Could not initialize window icon: {error:#}");
     }
-    if cx.global::<IconRuntime>().current.is_none()
-        && let Err(error) = platform::apply_application(icon)
-    {
-        log::warn!("Could not initialize application icon: {error:#}");
-    }
+    // Keep the system-provided application icon until settings restore calls apply.
+    // Setting a temporary default here makes AppKit decode and publish a Dock icon
+    // during window creation, only to repeat that work when the saved choice arrives.
+    // Do not set `current`: an early window must not override the saved preference.
 }
 
 /// Called by the existing preview/commit/cancel path, never from a renderer.
@@ -126,6 +125,7 @@ pub(crate) fn apply(icon: AppIcon, window: &mut Window, cx: &mut App) {
     if cx.global::<IconRuntime>().current == Some(icon) {
         return;
     }
+    let _scope = crate::ui_performance::trace::scope("AppIcon.apply");
     cx.global_mut::<IconRuntime>().current = Some(icon);
     let mut errors = Vec::new();
     if let Err(error) = platform::apply_application(icon) {
