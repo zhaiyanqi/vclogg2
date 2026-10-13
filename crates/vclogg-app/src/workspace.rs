@@ -22,7 +22,7 @@ use gpui_kit::base::{
 use gpui_kit::component::Root;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, ElementExt as _, FocusableExt as _, Icon, IconName,
-    IndexPath, Selectable as _, Side, Sizable as _, StyledExt as _, TitleBar, WindowExt as _,
+    IndexPath, Selectable as _, Side, Sizable as _, TitleBar, WindowExt as _,
     animation::ease_out_cubic,
     button::{Button, ButtonCustomVariant, ButtonRounded, ButtonVariants as _},
     checkbox::Checkbox,
