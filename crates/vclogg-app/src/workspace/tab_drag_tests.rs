@@ -138,7 +138,7 @@ fn file_tabs_reorder_outside_strip_and_fly_back_before_restoring(cx: &mut TestAp
         assert!(workspace.read(cx).tab_drag.flight.is_none());
         assert!(workspace.read(cx).tab_drag.file_hidden.is_none());
     });
-    // Cancellation and reduced motion must never leave a hidden source tab behind.
+    // Cancellation restores immediately; reduced motion still plays the full return flight.
     for cancel in [true, false] {
         cx.update_window(handle.into(), |_, window, cx| {
             cx.set_reduce_motion(!cancel);
@@ -182,11 +182,33 @@ fn file_tabs_reorder_outside_strip_and_fly_back_before_restoring(cx: &mut TestAp
                     cx,
                 );
             }
-            assert!(workspace.read(cx).tab_drag.file_hidden.is_none());
-            assert!(workspace.read(cx).tab_drag.flight.is_none());
+            if cancel {
+                assert!(workspace.read(cx).tab_drag.file_hidden.is_none());
+                assert!(workspace.read(cx).tab_drag.flight.is_none());
+            } else {
+                assert_eq!(workspace.read(cx).tab_drag.file_hidden, Some(id));
+                assert!(workspace.read(cx).tab_drag.flight.is_some());
+            }
             assert!(!cx.has_active_drag());
         })
         .unwrap();
+        if !cancel {
+            cx.run_until_parked();
+            let before_completion = tab_drag::ANIMATION_DURATION - Duration::from_millis(1);
+            cx.background_executor.advance_clock(before_completion);
+            cx.run_until_parked();
+            cx.update(|cx| {
+                assert_eq!(workspace.read(cx).tab_drag.file_hidden, dragged_id);
+                assert!(workspace.read(cx).tab_drag.flight.is_some());
+            });
+            cx.background_executor
+                .advance_clock(Duration::from_millis(1));
+            cx.run_until_parked();
+            cx.update(|cx| {
+                assert!(workspace.read(cx).tab_drag.file_hidden.is_none());
+                assert!(workspace.read(cx).tab_drag.flight.is_none());
+            });
+        }
     }
 }
 
