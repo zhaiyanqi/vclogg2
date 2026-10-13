@@ -152,7 +152,12 @@ impl Manifest {
                     .is_ok_and(|version| version.cmp_precedence(&current).is_gt())
             })
             .collect();
-        if selected.is_empty() {
+        if selected.is_empty()
+            && self
+                .latest
+                .version()
+                .is_ok_and(|version| version.cmp_precedence(&current).is_gt())
+        {
             vec![&self.latest]
         } else {
             selected
@@ -208,6 +213,7 @@ struct CheckCache {
 #[derive(Clone)]
 pub(crate) enum CheckOutcome {
     Success { manifest: Manifest },
+    UpToDate { version: String },
     Unavailable,
 }
 
@@ -264,8 +270,14 @@ pub(crate) fn check(store: Option<&StateStore>) -> CheckOutcome {
 }
 
 fn check_manifest(manifest: &Manifest) -> Result<CheckOutcome> {
-    manifest.version()?;
-    semver::Version::parse(crate::build_info::VERSION)?;
+    let latest = manifest.version()?;
+    let current = semver::Version::parse(crate::build_info::VERSION)?;
+    // Build metadata does not participate in SemVer precedence.
+    if !latest.cmp_precedence(&current).is_gt() {
+        return Ok(CheckOutcome::UpToDate {
+            version: manifest.release_version().to_owned(),
+        });
+    }
     Ok(CheckOutcome::Success {
         manifest: manifest.clone(),
     })

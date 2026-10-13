@@ -94,7 +94,7 @@ Cold-start capture stops at its [CLI deadline](Building.md#cold-start-performanc
 
 FileDropOverlay [A130] has been removed; its identifier remains reserved. FileDropObserver / FileDropTarget [A128] still receives external file and folder drops, opening them on release without a hover overlay.
 
-Release notes after a successful update check (including cached results and no-newer-version results):
+Release notes appear only when the source version is strictly newer than the current version; cached results use the same comparison:
 
 ```text
 Root overlays [A041] (reference)
@@ -104,6 +104,8 @@ Root overlays [A041] (reference)
    ├─ Close [A817] — dismiss; Escape also closes and restores focus
    └─ Open download page [A818] — open the verified Release URL
 ```
+
+For equal or older versions, [A814] keeps the Check for updates title, [A815] shows “No updates available” with current/source versions, and only Close [A817] remains; release notes, download and history actions are absent.
 
 The website manifest includes the full release body. Empty or legacy notes show an explicit fallback message. Failed checks continue to open the Releases index.
 

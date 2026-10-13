@@ -81,16 +81,23 @@ fn open_update_check_dialog(
                 release_notes_dialog(dialog, &manifest, &state, window, cx)
             }
             outcome => dialog
-                .child(if outcome.is_none() {
-                    crate::tr!(
+                .child(match outcome {
+                    None => crate::tr!(
                         "正在检查更新，请稍候…",
                         "Checking for updates. Please wait…"
-                    )
-                } else {
-                    crate::tr!(
+                    ).to_owned(),
+                    Some(CheckOutcome::UpToDate { version }) => {
+                        let current = crate::build_info::VERSION;
+                        crate::tr_args!(
+                            "未发现更新。当前版本：{current} · 更新源版本：{version}",
+                            "No updates available. Current version: {current} · Update source version: {version}"
+                        )
+                    }
+                    Some(CheckOutcome::Unavailable) => crate::tr!(
                         "暂时无法检查更新，已请求在浏览器打开 Releases 页面。",
                         "Unable to check for updates. Requested opening Releases in your browser."
-                    )
+                    ).to_owned(),
+                    Some(CheckOutcome::Success { .. }) => unreachable!(),
                 })
                 .footer(
                     DialogFooter::new().child(crate::dialog_focus::dialog_cancel_action(
