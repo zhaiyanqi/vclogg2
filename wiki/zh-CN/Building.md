@@ -218,3 +218,11 @@ Windows 使用 `./target/release/vclogg2.exe`；Debug 可执行文件同样支�
 导出的 UI 轨道统一以 `GPUI UI / Main` 开头，其他线程以 `Background` 开头；手动录制与冷启动录制均保存实际主线程的 Rust ThreadId，不按线程名称或导出线程猜测。每个事件的 `thread_role` / `source_thread` 和 `Recording summary.ui_thread` 可用于核对归属。每个实际 Rust 线程只对应一个显示轨道和一个 JSON tid，类别仅保留在事件 cat 中；tid 是导出映射编号，不是系统线程 ID。普通事件在同轨道嵌套；交叉区间在边界处分段衔接，source_event、continued、split 和 original_duration_us 可用于还原同一原始事件。帧延迟使用同轨道瞬时标记，elapsed_us 保留测量时长。导出最多 404,096 个事件片段，超过上限的待导出部分计入 omitted_export_segments 和 lost_events。
 
 GPUI 的前台任务与输入、布局、绘制共享 UI 线程，`cx.spawn` 不会自动移到后台。优先检查 `GPUI UI / Main` 下的 Draw、Application、GPUI tasks 和输入长区间，再关联帧延迟。区间记录经过时间，包含阻塞等待，不是 CPU 采样；空白区间也不能单独证明 UI 空闲或卡顿。后台 CPU/锁/内存争用、GPU 或呈现延迟仍可能造成可感知卡顿；本 trace 不含系统调度及 GPU 执行时间。
+
+## 性能叠加层与控制台日志
+
+旧的性能超时警告、渲染阶段耗时明细和专用检测线程已移除；Debug / Release 均通过按需 trace 记录控件耗时，普通业务错误日志保持原有行为。`VCLOGG2_UI_PERF_WARN_MS` / `VCLOGG2_UI_PERF_REPEAT_MS` 不再生效。
+
+Windows 的隔离 Debug 启动脚本仍可用：`powershell -ExecutionPolicy Bypass -File scripts/run-performance-debug.ps1`。它执行 `cargo run -p vclogg2 --locked --target-dir target/perf-debug`，设置 `RUST_BACKTRACE=full` 和 `VCLOGG2_DEV_DATA_DIR`（默认 `target/perf-debug/local-app-data`，可通过 `-DataDirectory` 覆盖）；不再接受 `-WarnAfterMilliseconds` / `-RepeatAfterMilliseconds`，使用“设置 → 高级”开启叠加层或录制 trace。此命令会编译并启动应用。
+
+当前依赖的叠加层 `MAX` 取当前窗口最近最多 1000 次 `begin_draw` 到 `end_draw` 的最大经过时间（毫秒），对应 UI 线程上的 Draw 阶段，不是全主线程任务最大耗时、帧间隔或 GPU 执行时间。Draw 之外的输入处理、任务阻塞和等待呈现等卡顿不一定反映在此值中，应结合 trace 查看。

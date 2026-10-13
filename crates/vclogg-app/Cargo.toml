@@ -10,6 +10,8 @@ name = "vclogg2"
 path = "src/main.rs"
 
 [features]
+# Compatibility alias; trace and overlay profiling are always enabled below.
+# The former console slow-task monitor has been removed.
 ui-performance-profiler = ["gpui-kit/profiler"]
 
 [dependencies]

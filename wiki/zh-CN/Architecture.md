@@ -56,3 +56,5 @@ app 组合 core/data；core 不依赖 data/app，data 不依赖 app。core/data 
 应用 scope 在进入时登记线程与起点，退出时记录完成事件；停止冻结时保留尚在执行的 scope，并补取 GPUI 边界任务快照，以 `incomplete` 标识。事件和活动 scope 分别限制为 200,000 / 4,096，丢失数量写入摘要。跳帧、空闲、挂起和短 poll 聚合用瞬时事件表示；dirty-to-present 和回调投递延迟使用带测量时长的瞬时标记，不冒充 CPU 工作。应用埋点覆盖启动、文件准备/索引、搜索执行与结果安装、标签激活、可见行加载和设置应用，未录制时新增 scope 不读取时钟。参见[冷启动参数](Building.md#冷启动性能录制)。
 
 每次 Capture 显式保留 UI 线程的 Rust ThreadId，手动入口取 GPUI 前台回调线程，冷启动入口取 main 线程。导出用该身份统一标注 `GPUI UI / Main` / `Background`，将原始 Rust 线程身份写入事件参数，避免按事件类别误把 UI 上的任务或应用 scope 当成后台工作。每个实际 Rust 线程只映射到一个 tid；按时间与外层优先顺序导出嵌套片段，交叉区间在父区间终点切分后续接到同一线程。片段保留原始事件编号及时间，避免创建虚构线程。帧延迟用带 elapsed_us 的瞬时标记表示，导出片段数量受限且显式报告丢失。
+
+控件计时在 Debug / Release 中统一委托给按需 trace scope；未录制时不安装计时元素包装。旧的阈值控制台诊断、聚合明细和后台 HangDetector 监测已移除，避免诊断日志本身增加渲染开销。`ui-performance-profiler` feature 仅保留为既有命令的兼容别名。

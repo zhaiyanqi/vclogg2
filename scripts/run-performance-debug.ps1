@@ -1,10 +1,4 @@
 param(
-    [ValidateRange(1, 60000)]
-    [int]$WarnAfterMilliseconds = 16,
-
-    [ValidateRange(1, 60000)]
-    [int]$RepeatAfterMilliseconds = 2000,
-
     [string]$DataDirectory,
 
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -23,15 +17,11 @@ $DataDirectory = [System.IO.Path]::GetFullPath($DataDirectory)
 
 $env:RUST_BACKTRACE = 'full'
 $env:VCLOGG2_DEV_DATA_DIR = $DataDirectory
-$env:VCLOGG2_UI_PERF_WARN_MS = $WarnAfterMilliseconds.ToString()
-$env:VCLOGG2_UI_PERF_REPEAT_MS = $RepeatAfterMilliseconds.ToString()
 
 $cargoArguments = @(
     'run',
     '-p',
     'vclogg2',
-    '--features',
-    'ui-performance-profiler',
     '--locked',
     '--target-dir',
     $targetDirectory

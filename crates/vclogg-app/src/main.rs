@@ -299,8 +299,6 @@ fn main() {
             _ = attachment.send(cx.foreground_journal().collector());
         }
         let _scope = ui_performance::trace::scope("Startup.initialize_services");
-        ui_performance::init_ui_thread();
-        ui_performance::start_framework_monitor(cx);
         {
             let _trace = ui_performance::trace::scope("Startup.gpui_kit");
             gpui_kit::init(cx);
