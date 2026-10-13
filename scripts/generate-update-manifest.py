@@ -36,8 +36,12 @@ def main():
     if not required <= assets:
         raise ValueError(f'Release is missing desktop packages: {sorted(required - assets)}')
     manifest = {'schema_version': 1, 'version': version,
-                'published_at': published_at, 'download_url': url}
-    args.output.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+                'published_at': published_at, 'download_url': url,
+                'release_notes': release.get('body') or ''}
+    payload = json.dumps(manifest, indent=2, ensure_ascii=False) + '\n'
+    if len(payload.encode('utf-8')) > 1024 * 1024:
+        raise ValueError('Update manifest exceeds the client 1 MiB limit')
+    args.output.write_text(payload, encoding='utf-8')
     print(f'Generated update manifest for {tag}: {args.output}')
 
 

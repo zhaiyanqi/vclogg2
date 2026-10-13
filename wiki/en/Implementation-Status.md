@@ -13,7 +13,7 @@ This page describes source at `3c7086b`, not a newly executed acceptance report.
 | Settings | One process-wide native settings window; preview, save and rollback |
 | Persistence | SQLite schema v22; revision-aware session merging |
 | Cloud | UUID/revision merge and cached browsing; desktop/server authentication compatibility must be checked |
-| Updates | Help checks a cached static website manifest; newer releases or failures open GitHub Releases; no automatic download/install |
+| Updates | Help checks a cached static website manifest; success shows release notes and a download-page button; failure opens GitHub Releases; no automatic download/install |
 | Removed features | AI analysis, MCP, memory and workspace sidebars |
 | Documentation | Main-repository bilingual Markdown, mdBook, shared Pages artifact with the website |
 

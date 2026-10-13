@@ -53,7 +53,7 @@ vclogg2 <service.log> <worker.trace>
 
 Windows 安装版更改数据目录不会自动搬迁旧数据，卸载保留数据。需要搬迁时，先退出应用，再完整复制所选数据根；不要只复制一个正在打开的 SQLite 主库文件而遗漏 WAL。
 
-“帮助 → 检查更新”读取官网版本清单；发现新版或联网失败时打开 Releases 页面。成功结果缓存 24 小时，失败后持久化退避；详见[构建与发布](Build-and-Release.md)。确认实际下载包的版本与签名，不要用文件名推断签名状态。
+“帮助 → 检查更新”读取官网版本清单；成功后显示更新说明和下载入口；联网失败时打开 Releases 页面。成功结果缓存 24 小时，失败后持久化退避；详见[构建与发布](Build-and-Release.md)。确认实际下载包的版本与签名，不要用文件名推断签名状态。
 
 下一步：[快速上手](Getting-Started.md) · [数据与隐私](Data-and-Privacy.md) · [排障](Troubleshooting.md)。
 

@@ -93,3 +93,16 @@ Performance recording [A808] — application Recorder; recording and saving cont
 Cold-start capture stops at its [CLI deadline](Building.md#cold-start-performance-capture). Manual starts and stops are disabled during that capture; Open folder remains available. The recording path and write errors are displayed; failed writes retry automatically, and a failed final save allows retry or dismissal.
 
 FileDropOverlay [A130] has been removed; its identifier remains reserved. FileDropObserver / FileDropTarget [A128] still receives external file and folder drops, opening them on release without a hover overlay.
+
+Release notes after a successful update check (including cached results and no-newer-version results):
+
+```text
+Root overlays [A041] (reference)
+└─ Release notes dialog [A814] — workspace/update_checks.rs
+   ├─ Version and status [A815] — installed/latest version, publication date, cache status
+   ├─ Release notes [A816] — selectable Markdown; standard dialog body scrolls
+   ├─ Close [A817] — dismiss; Escape also closes and restores focus
+   └─ Open download page [A818] — open the verified Release URL
+```
+
+The website manifest includes the full release body. Empty or legacy notes show an explicit fallback message. Failed checks continue to open the Releases index.

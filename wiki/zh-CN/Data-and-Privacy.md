@@ -41,4 +41,4 @@ Windows 安装目录中的 `vclogg2-data-dir.txt` 保存绝对数据根。不存
 
 源码依据：[app_paths.rs](https://github.com/zhaiyanqi/vclogg2/blob/main/crates/vclogg-app/src/app_paths.rs) · [state_repository.rs](https://github.com/zhaiyanqi/vclogg2/blob/main/crates/vclogg-data/src/state_repository.rs) · [app_log.rs](https://github.com/zhaiyanqi/vclogg2/blob/main/crates/vclogg-app/src/app_log.rs) · [crash_report.rs](https://github.com/zhaiyanqi/vclogg2/blob/main/crates/vclogg-app/src/crash_report.rs)。
 
-检查更新仅在用户点击时访问官网，版本信息、成功时间和失败退避状态保存在 SQLite，不发送日志内容。发现新版或检查失败时在浏览器打开 GitHub Releases，详见[构建与发布](Build-and-Release.md)。
+检查更新仅在用户点击时访问官网，版本信息、成功时间和失败退避状态保存在 SQLite，不发送日志内容。成功后显示更新说明和下载入口，失败时在浏览器打开 GitHub Releases，详见[构建与发布](Build-and-Release.md)。

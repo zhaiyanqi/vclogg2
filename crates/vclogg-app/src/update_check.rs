@@ -16,7 +16,7 @@ use crate::state_store::StateStore;
 pub(crate) const RELEASES_URL: &str = "https://github.com/zhaiyanqi/vclogg2/releases";
 const MANIFEST_URL: &str = "https://zhaiyanqi.github.io/vclogg2/latest.json";
 const CACHE_SECONDS: u64 = 24 * 60 * 60;
-const MAX_BODY_BYTES: u64 = 16 * 1024;
+const MAX_BODY_BYTES: u64 = 1024 * 1024;
 static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static CACHE: Mutex<Option<CheckCache>> = Mutex::new(None);
 
@@ -38,14 +38,29 @@ impl Drop for CheckGuard {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-struct Manifest {
+pub(crate) struct Manifest {
     schema_version: u32,
     version: String,
     published_at: String,
     download_url: String,
+    #[serde(default)]
+    release_notes: String,
 }
 
 impl Manifest {
+    pub(crate) fn release_version(&self) -> &str {
+        &self.version
+    }
+    pub(crate) fn published_at(&self) -> &str {
+        &self.published_at
+    }
+    pub(crate) fn download_url(&self) -> &str {
+        &self.download_url
+    }
+    pub(crate) fn release_notes(&self) -> &str {
+        &self.release_notes
+    }
+
     fn version(&self) -> Result<semver::Version> {
         ensure!(
             self.schema_version == 1,
@@ -76,8 +91,11 @@ struct CheckCache {
 }
 
 pub(crate) enum CheckOutcome {
-    Current { cached: bool },
-    Available(String),
+    Success {
+        manifest: Manifest,
+        is_newer: bool,
+        cached: bool,
+    },
     Unavailable,
 }
 
@@ -137,10 +155,10 @@ fn compare(manifest: &Manifest, cached: bool) -> Result<CheckOutcome> {
     let latest = manifest.version()?;
     let current = semver::Version::parse(crate::build_info::VERSION)?;
     // Build metadata does not participate in SemVer precedence.
-    Ok(if latest.cmp_precedence(&current).is_gt() {
-        CheckOutcome::Available(manifest.download_url.clone())
-    } else {
-        CheckOutcome::Current { cached }
+    Ok(CheckOutcome::Success {
+        manifest: manifest.clone(),
+        is_newer: latest.cmp_precedence(&current).is_gt(),
+        cached,
     })
 }
 
