@@ -237,12 +237,12 @@ impl SearchProgress {
     }
 
     fn advance(&self, scanned_lines: usize, matched_lines: usize) {
-        _ = self.counters.scanned_lines.fetch_update(
+        _ = self.counters.scanned_lines.try_update(
             Ordering::Relaxed,
             Ordering::Relaxed,
             |current| Some(current.saturating_add(scanned_lines)),
         );
-        _ = self.counters.matched_lines.fetch_update(
+        _ = self.counters.matched_lines.try_update(
             Ordering::Relaxed,
             Ordering::Relaxed,
             |current| {
