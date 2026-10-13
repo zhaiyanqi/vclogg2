@@ -1,8 +1,9 @@
 //! User-initiated update checks. Network and storage work run off the UI thread.
 use std::{
+    collections::BTreeMap,
     io::Read as _,
     sync::{
-        Mutex,
+        LazyLock, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -19,6 +20,10 @@ const CACHE_SECONDS: u64 = 24 * 60 * 60;
 const MAX_BODY_BYTES: u64 = 8 * 1024 * 1024;
 static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static CACHE: Mutex<Option<CheckCache>> = Mutex::new(None);
+static IMPORTANT_NOTES_PATTERN: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(?i)breaking[ -]changes?|incompatib\w*|migrat\w*|不兼容|破坏性|迁移")
+        .expect("constant release-note pattern")
+});
 
 pub(crate) struct CheckGuard;
 
@@ -38,6 +43,12 @@ impl Drop for CheckGuard {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
+struct LocalizedNotes {
+    release_notes: String,
+    important_notes: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct ReleaseRecord {
     version: String,
     published_at: String,
@@ -46,6 +57,8 @@ pub(crate) struct ReleaseRecord {
     release_notes: String,
     #[serde(default)]
     important_notes: String,
+    #[serde(default)]
+    localized_notes: BTreeMap<String, LocalizedNotes>,
 }
 
 impl ReleaseRecord {
@@ -55,11 +68,40 @@ impl ReleaseRecord {
     pub(crate) fn published_at(&self) -> &str {
         &self.published_at
     }
-    pub(crate) fn release_notes(&self) -> &str {
-        &self.release_notes
+    pub(crate) fn release_notes(&self, language: crate::i18n::Language) -> String {
+        let key = match language {
+            crate::i18n::Language::Chinese => "zh-CN",
+            crate::i18n::Language::English => "en",
+        };
+        self.localized_notes
+            .get(key)
+            .map(|notes| notes.release_notes.clone())
+            .unwrap_or_else(|| legacy_language_notes(&self.release_notes, language))
     }
-    pub(crate) fn important_notes(&self) -> &str {
-        &self.important_notes
+
+    pub(crate) fn important_notes(&self, language: crate::i18n::Language) -> String {
+        let key = match language {
+            crate::i18n::Language::Chinese => "zh-CN",
+            crate::i18n::Language::English => "en",
+        };
+        let notes = self.release_notes(language);
+        if notes.trim().is_empty() && !self.important_notes.trim().is_empty() {
+            return match language {
+                crate::i18n::Language::Chinese => "此版本包含重要变更，但暂无中文说明；请在升级前打开发布页面查看原文。",
+                crate::i18n::Language::English => "This release contains important changes, but English notes are unavailable. Read the original release page before upgrading.",
+            }.to_owned();
+        }
+        if let Some(notes) = self.localized_notes.get(key) {
+            return notes.important_notes.clone();
+        }
+        // Legacy feeds have mixed-language important notes. Select a language
+        // from the full body first so the pinned notice cannot mix translations.
+        // Preserve all localized context if any important requirement is present.
+        if IMPORTANT_NOTES_PATTERN.is_match(&notes) {
+            notes
+        } else {
+            String::new()
+        }
     }
 
     fn version(&self) -> Result<semver::Version> {
@@ -75,6 +117,40 @@ impl ReleaseRecord {
         chrono::DateTime::parse_from_rfc3339(&self.published_at)?;
         Ok(version)
     }
+}
+
+/// Compatibility for already-cached manifests generated before locale fields.
+fn legacy_language_notes(body: &str, language: crate::i18n::Language) -> String {
+    use crate::i18n::Language;
+    let mut active = None;
+    let mut fenced = false;
+    let mut lines = Vec::new();
+    for line in body.lines() {
+        let stripped = line.trim();
+        if stripped.starts_with("```") || stripped.starts_with("~~~") {
+            fenced = !fenced;
+        }
+        if !fenced {
+            if let Some(heading) = stripped.strip_prefix("## ") {
+                active = match heading.trim().to_lowercase().as_str() {
+                    "english" | "en" => Some(Language::English),
+                    "简体中文" | "中文" | "zh-cn" => Some(Language::Chinese),
+                    _ => None,
+                };
+                continue;
+            }
+            if stripped.starts_with("<a ")
+                || stripped == "---"
+                || stripped.starts_with("[Full Changelog / 完整变更记录]")
+            {
+                continue;
+            }
+        }
+        if active == Some(language) {
+            lines.push(line);
+        }
+    }
+    lines.join("\n").trim().to_owned()
 }
 
 #[derive(Clone, Deserialize, Serialize)]

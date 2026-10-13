@@ -117,3 +117,5 @@ Release notes dialog [A814] (reference)
 │  └─ Version disclosure button [A821] — stable version identity; newest three initially expanded
 └─ View full release history [A822] — open the Releases index
 ```
+
+Release notes [A816] and important notes [A820] follow the current application language. Missing translations show a localized notice; important changes without a translation retain a pinned notice to read the original release page. Hierarchy and IDs are unchanged.

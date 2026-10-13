@@ -17,6 +17,7 @@ def important_notes(body):
     section_level = None
     fenced = False
     for block in re.split(r'\n\s*\n', body):
+        block = block.strip('\n')
         heading = re.match(r'^(#{1,6})\s+(.+)', block)
         if heading and not fenced:
             level = len(heading[1])
@@ -31,6 +32,32 @@ def important_notes(body):
     return '\n\n'.join(selected)
 
 
+def localized_notes(body):
+    """Split the release generator's language sections, excluding navigation."""
+    sections = {'en': [], 'zh-CN': []}
+    language = None
+    fenced = False
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(('```', '~~~')):
+            fenced = not fenced
+        if not fenced:
+            heading = re.fullmatch(r'##\s+(English|EN|简体中文|中文|ZH-CN)\s*', stripped, re.I)
+            if heading:
+                language = 'en' if heading[1].lower() in ('english', 'en') else 'zh-CN'
+                continue
+            if stripped.startswith('## '):
+                language = None
+            if (stripped.startswith('<a ') or stripped == '---'
+                    or stripped.startswith('[Full Changelog / 完整变更记录]')):
+                continue
+        if language:
+            sections[language].append(line)
+    return {language: {'release_notes': '\n'.join(lines).strip(),
+                       'important_notes': important_notes('\n'.join(lines))}
+            for language, lines in sections.items()}
+
+
 def release_record(release):
     tag = release['tag_name']
     version = tag[1:]
@@ -43,7 +70,8 @@ def release_record(release):
     body = release.get('body') or ''
     return {'version': version, 'published_at': published_at,
             'download_url': url, 'release_notes': body,
-            'important_notes': important_notes(body)}
+            'important_notes': important_notes(body),
+            'localized_notes': localized_notes(body)}
 
 
 def main():

@@ -124,6 +124,7 @@ fn release_notes_dialog(
         "当前版本：{current} · 发布日期：{published}",
         "Installed: {current} · Published: {published}"
     );
+    let language = crate::i18n::current_language();
     let releases = manifest.upgrade_releases();
     let count = releases.len();
     let partial = manifest.history_is_partial();
@@ -142,11 +143,12 @@ fn release_notes_dialog(
     };
     let mut important = String::new();
     for release in &releases {
-        if !release.important_notes().trim().is_empty() {
+        let important_notes = release.important_notes(language);
+        if !important_notes.trim().is_empty() {
             important.push_str(&format!(
                 "## {}\n\n{}\n\n",
                 release.release_version(),
-                release.important_notes()
+                important_notes
             ));
         }
     }
@@ -164,14 +166,15 @@ fn release_notes_dialog(
                 version,
                 release.published_at()
             );
-            let notes: SharedString = if release.release_notes().trim().is_empty() {
+            let localized_notes = release.release_notes(language);
+            let notes: SharedString = if localized_notes.trim().is_empty() {
                 crate::tr!(
-                    "此版本未提供更新说明，可打开下载页面查看。",
-                    "No release notes were provided. Open the download page for details."
+                    "此版本暂无中文更新说明，请打开发布页面查看原文及迁移要求。",
+                    "English release notes are unavailable. Open the release page for the original notes and migration requirements."
                 )
                 .into()
             } else {
-                release.release_notes().to_owned().into()
+                localized_notes.into()
             };
             v_flex()
                 .gap_2()
