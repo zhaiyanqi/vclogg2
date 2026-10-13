@@ -1,3 +1,101 @@
+pub(crate) mod trace;
+
+use gpui_kit::{
+    AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
+    LayoutId, Pixels, Window,
+};
+
+pub(crate) struct UiPerformanceElement {
+    child: AnyElement,
+    request_layout_name: &'static str,
+    prepaint_name: &'static str,
+    paint_name: &'static str,
+}
+
+pub(crate) fn element(
+    request_layout_name: &'static str,
+    prepaint_name: &'static str,
+    paint_name: &'static str,
+    child: impl IntoElement,
+) -> AnyElement {
+    #[cfg(not(debug_assertions))]
+    if !trace::is_recording() {
+        return child.into_any_element();
+    }
+    UiPerformanceElement {
+        child: child.into_any_element(),
+        request_layout_name,
+        prepaint_name,
+        paint_name,
+    }
+    .into_any_element()
+}
+
+impl IntoElement for UiPerformanceElement {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for UiPerformanceElement {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let _performance_scope = scope(self.request_layout_name);
+        #[cfg(debug_assertions)]
+        let _aggregate = debug::aggregate(self.request_layout_name);
+        (self.child.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        let _performance_scope = scope(self.prepaint_name);
+        #[cfg(debug_assertions)]
+        let _aggregate = debug::aggregate(self.prepaint_name);
+        self.child.prepaint(window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut Self::RequestLayoutState,
+        _: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let _performance_scope = scope(self.paint_name);
+        #[cfg(debug_assertions)]
+        let _aggregate = debug::aggregate(self.paint_name);
+        self.child.paint(window, cx);
+    }
+}
+
 struct OverlayPreference(bool);
 impl gpui_kit::Global for OverlayPreference {}
 
@@ -59,11 +157,6 @@ mod debug {
     #[cfg(feature = "ui-performance-profiler")]
     use gpui_kit::profiler::hang::{HangDetector, SerializedHangIncident};
 
-    use gpui_kit::{
-        AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId,
-        IntoElement, LayoutId, Pixels, Window,
-    };
-
     const LOG_TARGET: &str = "vclogg2::ui_performance";
     const DEFAULT_WARN_AFTER_MS: u64 = 16;
     const DEFAULT_REPEAT_AFTER_MS: u64 = 2_000;
@@ -106,7 +199,7 @@ mod debug {
         samples: HashMap<&'static str, AggregateSample>,
     }
 
-    struct AggregateGuard {
+    pub(super) struct AggregateGuard {
         name: &'static str,
     }
 
@@ -122,93 +215,11 @@ mod debug {
     static LOG_STATES: OnceLock<Mutex<LogStates>> = OnceLock::new();
 
     pub(crate) struct UiPerformanceScope {
+        trace: super::trace::Scope,
         name: &'static str,
         started_at: Instant,
         diagnostic_overhead_at_start: Duration,
         warn_after: Duration,
-    }
-
-    pub(crate) struct UiPerformanceElement {
-        child: AnyElement,
-        request_layout_name: &'static str,
-        prepaint_name: &'static str,
-        paint_name: &'static str,
-    }
-
-    pub(crate) fn element(
-        request_layout_name: &'static str,
-        prepaint_name: &'static str,
-        paint_name: &'static str,
-        child: impl IntoElement,
-    ) -> UiPerformanceElement {
-        UiPerformanceElement {
-            child: child.into_any_element(),
-            request_layout_name,
-            prepaint_name,
-            paint_name,
-        }
-    }
-
-    impl IntoElement for UiPerformanceElement {
-        type Element = Self;
-
-        fn into_element(self) -> Self::Element {
-            self
-        }
-    }
-
-    impl Element for UiPerformanceElement {
-        type RequestLayoutState = ();
-        type PrepaintState = ();
-
-        fn id(&self) -> Option<ElementId> {
-            None
-        }
-
-        fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
-            None
-        }
-
-        fn request_layout(
-            &mut self,
-            _: Option<&GlobalElementId>,
-            _: Option<&InspectorElementId>,
-            window: &mut Window,
-            cx: &mut App,
-        ) -> (LayoutId, Self::RequestLayoutState) {
-            let _performance_scope = scope(self.request_layout_name);
-            let _aggregate = aggregate(self.request_layout_name);
-            (self.child.request_layout(window, cx), ())
-        }
-
-        fn prepaint(
-            &mut self,
-            _: Option<&GlobalElementId>,
-            _: Option<&InspectorElementId>,
-            _: Bounds<Pixels>,
-            _: &mut Self::RequestLayoutState,
-            window: &mut Window,
-            cx: &mut App,
-        ) -> Self::PrepaintState {
-            let _performance_scope = scope(self.prepaint_name);
-            let _aggregate = aggregate(self.prepaint_name);
-            self.child.prepaint(window, cx);
-        }
-
-        fn paint(
-            &mut self,
-            _: Option<&GlobalElementId>,
-            _: Option<&InspectorElementId>,
-            _: Bounds<Pixels>,
-            _: &mut Self::RequestLayoutState,
-            _: &mut Self::PrepaintState,
-            window: &mut Window,
-            cx: &mut App,
-        ) {
-            let _performance_scope = scope(self.paint_name);
-            let _aggregate = aggregate(self.paint_name);
-            self.child.paint(window, cx);
-        }
     }
 
     pub(crate) fn init_ui_thread() {
@@ -291,6 +302,7 @@ mod debug {
     #[inline]
     pub(crate) fn scope(name: &'static str) -> UiPerformanceScope {
         UiPerformanceScope {
+            trace: super::trace::scope(name),
             name,
             started_at: Instant::now(),
             diagnostic_overhead_at_start: diagnostic_overhead(),
@@ -300,6 +312,7 @@ mod debug {
 
     impl Drop for UiPerformanceScope {
         fn drop(&mut self) {
+            self.trace.finish();
             let elapsed =
                 elapsed_without_diagnostics(self.started_at, self.diagnostic_overhead_at_start);
             record_aggregate_sample(self.name, elapsed);
@@ -332,7 +345,7 @@ mod debug {
         }
     }
 
-    fn aggregate(name: &'static str) -> AggregateGuard {
+    pub(super) fn aggregate(name: &'static str) -> AggregateGuard {
         ACTIVE_AGGREGATES.with(|aggregates| {
             aggregates.borrow_mut().push(ActiveAggregate {
                 name,
@@ -469,10 +482,10 @@ mod debug {
 }
 
 #[cfg(debug_assertions)]
-pub(crate) use debug::{element, init_ui_thread, scope, start_framework_monitor};
+pub(crate) use debug::{init_ui_thread, scope, start_framework_monitor};
 
 #[cfg(not(debug_assertions))]
-pub(crate) struct UiPerformanceScope;
+pub(crate) use trace::scope;
 
 #[cfg(not(debug_assertions))]
 #[inline(always)]
@@ -481,21 +494,3 @@ pub(crate) fn init_ui_thread() {}
 #[cfg(not(debug_assertions))]
 #[inline(always)]
 pub(crate) fn start_framework_monitor(_: &mut gpui_kit::App) {}
-
-#[cfg(not(debug_assertions))]
-#[inline(always)]
-pub(crate) fn element<E: gpui_kit::IntoElement>(
-    _: &'static str,
-    _: &'static str,
-    _: &'static str,
-    child: E,
-) -> E {
-    child
-}
-
-#[cfg(not(debug_assertions))]
-#[must_use]
-#[inline(always)]
-pub(crate) fn scope(_: &'static str) -> UiPerformanceScope {
-    UiPerformanceScope
-}
