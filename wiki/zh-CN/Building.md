@@ -207,6 +207,10 @@ rg --version
 ./target/release/vclogg2 --trace-startup --trace-duration 15
 ```
 
+Debug 配置对 `gpui-component` 和 `gpui-base` 启用 `opt-level = 3`，与已优化的 GPUI 运行时保持一致，以减少控件初始化等框架工作的未优化执行开销；应用代码仍使用默认 Debug 优化级别。首次重新构建会重编这两个依赖，依赖内部的单步调试可能受优化影响。此配置不改变 Release。
+
+`Startup.initialize_services` 仅覆盖服务注册；窗口创建单独记录在 `Startup.open_workspace_window` 及其子区间中。比较旧 trace 时，注意旧版服务区间还包含窗口创建，不能把区间缩短直接当作性能提升。
+
 Windows 使用 `./target/release/vclogg2.exe`，Debug 同样支持。`--trace-startup` 现在是开关，不再接输出 JSON 路径；旧命令请移除路径参数。`--trace-duration` 为 1–600 的整数秒，默认 15 秒。需要同时打开日志时使用 `-- service.log`，路径包含空格时加引号。已有实例运行时仍转发打开请求，无法录制已有进程的启动。
 
 手动及冷启动录制都自动保存在应用缓存的 `traces` 子目录，名称包含时间和 UUID。macOS/Linux 使用系统 cache 下的 `VCLogg2/traces`（Debug 数据隔离时位于隔离缓存根）；Windows 使用配置的数据根下的 `cache/traces`。“设置 → 高级 → 性能录制 → 打开目录”可在录制期间打开该目录。

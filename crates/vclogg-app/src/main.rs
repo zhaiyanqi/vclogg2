@@ -313,7 +313,7 @@ fn main() {
         if let Some(attachment) = trace_attachment {
             _ = attachment.send(cx.foreground_journal().collector());
         }
-        let _scope = ui_performance::trace::scope("Startup.initialize_services");
+        let services_scope = ui_performance::trace::scope("Startup.initialize_services");
         {
             let _trace = ui_performance::trace::scope("Startup.gpui_kit");
             gpui_kit::init(cx);
@@ -340,6 +340,8 @@ fn main() {
         });
         std::mem::forget(cx.on_app_quit(Workspace::flush_all_on_quit));
         cx.set_quit_mode(QuitMode::LastWindowClosed);
+        // Window creation has its own scopes and is not service initialization.
+        drop(services_scope);
 
         // Platform window geometry is a physical boundary; descendant UI uses
         // GPUI rem helpers and theme-relative sizing instead of fixed pixels.

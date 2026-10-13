@@ -68,6 +68,9 @@ codegen-units = 16
 debug = "limited"
 
 [profile.dev.package]
+# Keep component/bootstrap work optimized alongside the GPUI runtime in Debug.
+gpui-component = { opt-level = 3 }
+gpui-base = { opt-level = 3 }
 gpui-pre = { opt-level = 3 }
 gpui-pre-platform = { opt-level = 3 }
 vclogg-core = { opt-level = 3 }
