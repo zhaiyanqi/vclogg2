@@ -229,8 +229,8 @@ impl SettingsCategory {
                 "Keyboard bindings and conflict checks for application commands",
             ),
             Self::Advanced => crate::tr!(
-                "应用图标、日志等级、诊断记录与导出",
-                "Application icon, log levels, diagnostic records, and export",
+                "应用图标、性能叠加层、日志等级与诊断导出",
+                "Application icon, performance overlay, log levels, and diagnostic export",
             ),
             Self::About => crate::tr!(
                 "版本、构建信息、技术栈、开源组件与许可",
@@ -271,7 +271,7 @@ impl SettingsCategory {
                 "快捷键 打开文件 聚焦搜索框 快速查找 关闭当前标签 打开设置 切换区分大小写 跳到日志底部 轮换颜色标签 切换自动换行 进入编辑模式 按键 绑定 冲突 keyboard shortcut keymap edit mode"
             }
             Self::Advanced => {
-                "高级 应用图标 啄木鸟 软萌 立体 坐姿 插画 贴纸 应用日志 日志等级 关闭 Error Warn Info Debug Trace 导出 诊断 advanced application icon mascot log level export diagnostics"
+                "高级 性能 叠加层 帧耗时 卡顿 FPS performance overlay frame time 应用图标 啄木鸟 软萌 立体 坐姿 插画 贴纸 应用日志 日志等级 关闭 Error Warn Info Debug Trace 导出 诊断 advanced application icon mascot log level export diagnostics"
             }
             Self::About => {
                 "关于 VCLogg2 版本 编译时间 构建目标 commit 提交 技术栈 开源库 GitHub 仓库 repository 源代码 source code 作者 zhaiyanqi copyright 版权 Apache 2.0 license Rust GPUI SQLite"
@@ -1254,6 +1254,43 @@ impl SettingsDialog {
             .push(cx.observe(&editor, |_, _, cx| Self::draft_changed(cx)));
         self.highlight_editor = Some(editor);
         cx.notify();
+    }
+
+    fn render_performance_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .id("settings-performance-section")
+            .justify_between()
+            .items_center()
+            .gap_4()
+            .p_3()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_0p5()
+                    .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(
+                        crate::tr!("性能叠加层", "Performance overlay"),
+                    ))
+                    .child(div().text_sm().text_color(cx.theme().muted_foreground).child(
+                        crate::tr!(
+                            "在窗口右上角显示绘制耗时、P99、P90、最大耗时和累计帧数，帮助观察卡顿。",
+                            "Show draw time, P99, P90, maximum draw time, and frame count in the top-right corner to help spot stutters."
+                        ),
+                    )),
+            )
+            .child(
+                Switch::new("settings-performance-overlay")
+                    .small()
+                    .checked(self.draft.show_performance_overlay)
+                    .accessibility_label(crate::tr!("性能叠加层", "Performance overlay"))
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.draft.show_performance_overlay = *checked;
+                        Self::draft_changed(cx);
+                    })),
+            )
     }
 
     pub fn settings(&self, cx: &gpui_kit::App) -> Result<AppSettings, String> {
@@ -3836,7 +3873,7 @@ impl Render for SettingsDialog {
                                         has_matches
                                             && active_category == SettingsCategory::Advanced,
                                         |content| {
-                                            content.child(self.render_icon_settings(cx)).child(
+                                            content.child(self.render_icon_settings(cx)).child(self.render_performance_settings(cx)).child(
                                                 v_flex()
                     .id("settings-application-log-section")
                     .gap_3()

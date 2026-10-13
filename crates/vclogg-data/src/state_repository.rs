@@ -20,7 +20,7 @@ use crate::{
 };
 
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
-pub const STATE_SCHEMA_VERSION: u32 = 22;
+pub const STATE_SCHEMA_VERSION: u32 = 23;
 
 /// Owns SQLite access for durable file-history and workspace records.
 pub struct StateRepository {
@@ -532,7 +532,7 @@ impl StateRepository {
                         search_toolbar_height, search_toolbar_font_size,
                         search_input_height, search_input_font_size, shortcut_add_text_mark, app_icon, keyword_match_styles,
                         show_horizontal_scrollbar, log_coloring, confirm_clipboard_paste,
-                        shortcut_enter_edit_mode
+                        shortcut_enter_edit_mode, show_performance_overlay
                  FROM app_settings WHERE id = 1",
                 [],
                 |row| {
@@ -590,6 +590,7 @@ impl StateRepository {
                         log_coloring: row.get(50)?,
                         confirm_clipboard_paste: row.get::<_, i64>(51)? != 0,
                         shortcut_enter_edit_mode: row.get(52)?,
+                        show_performance_overlay: row.get::<_, i64>(53)? != 0,
                     })
                 },
             )
@@ -688,6 +689,7 @@ impl StateRepository {
                      language = excluded.language,
                      app_log_level = excluded.app_log_level,
                      app_icon = excluded.app_icon,
+                     show_performance_overlay = excluded.show_performance_overlay,
                      light_log_text_color = excluded.light_log_text_color,
                      light_log_background_color = excluded.light_log_background_color,
                      dark_log_text_color = excluded.dark_log_text_color,
@@ -714,8 +716,8 @@ impl StateRepository {
                      search_toolbar_height, search_toolbar_font_size,
                      search_input_height, search_input_font_size, shortcut_add_text_mark, app_icon, keyword_match_styles,
                      show_horizontal_scrollbar, log_coloring, confirm_clipboard_paste,
-                     shortcut_enter_edit_mode
-                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53)
+                     shortcut_enter_edit_mode, show_performance_overlay
+                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54)
                  ON CONFLICT(id) DO UPDATE SET {update}");
         connection
             .execute(
@@ -774,6 +776,7 @@ impl StateRepository {
                     settings.log_coloring,
                     settings.confirm_clipboard_paste,
                     settings.shortcut_enter_edit_mode,
+                    settings.show_performance_overlay,
                 ],
             )
             .context("无法保存应用设置")?;
@@ -1382,6 +1385,7 @@ fn initialize_schema(connection: &Connection, defaults: &StateMigrationDefaults)
                  reduce_motion INTEGER NOT NULL DEFAULT 0,
                  confirm_close_tab INTEGER NOT NULL DEFAULT 0,
                  confirm_clipboard_paste INTEGER NOT NULL DEFAULT 0,
+                 show_performance_overlay INTEGER NOT NULL DEFAULT 0,
                  show_full_path INTEGER NOT NULL DEFAULT 1,
                  show_horizontal_scrollbar INTEGER NOT NULL DEFAULT 1,
                  max_search_results INTEGER NOT NULL DEFAULT 0,
@@ -1569,6 +1573,7 @@ fn ensure_app_settings_columns(connection: &Connection, default_log_level: &str)
         ("reduce_motion", "INTEGER NOT NULL DEFAULT 0"),
         ("confirm_close_tab", "INTEGER NOT NULL DEFAULT 0"),
         ("confirm_clipboard_paste", "INTEGER NOT NULL DEFAULT 0"),
+        ("show_performance_overlay", "INTEGER NOT NULL DEFAULT 0"),
         ("show_full_path", "INTEGER NOT NULL DEFAULT 1"),
         ("show_horizontal_scrollbar", "INTEGER NOT NULL DEFAULT 1"),
         ("max_search_results", "INTEGER NOT NULL DEFAULT 0"),

@@ -164,6 +164,10 @@ impl SettingsWindow {
             .with_highlight_baseline(highlight_baseline.clone(), window, cx)
         });
         let initial_network = workspace.read(cx).cloud.settings.clone();
+        crate::ui_performance::apply_overlay(
+            workspace.read(cx).app_settings.show_performance_overlay,
+            window,
+        );
         let initial_draft = settings
             .read(cx)
             .settings(cx)
@@ -773,6 +777,7 @@ fn merge_changes(before: &AppSettings, after: &AppSettings, current: &AppSetting
     fields!(
         app_icon,
         app_log_level,
+        show_performance_overlay,
         language,
         theme_preference,
         default_show_line_numbers,

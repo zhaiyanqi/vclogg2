@@ -236,6 +236,7 @@ impl Default for ShortcutSettings {
 pub struct AppSettings {
     pub(crate) app_icon: crate::app_icon::AppIcon,
     pub app_log_level: AppLogLevel,
+    pub show_performance_overlay: bool,
     pub language: Language,
     pub theme_preference: ThemePreference,
     pub default_show_line_numbers: bool,
@@ -284,6 +285,7 @@ impl Default for AppSettings {
         Self {
             app_icon: crate::app_icon::AppIcon::default(),
             app_log_level: AppLogLevel::default(),
+            show_performance_overlay: false,
             language: Language::Chinese,
             theme_preference: ThemePreference::Light,
             default_show_line_numbers: true,
@@ -822,6 +824,7 @@ fn app_settings_from_record(record: AppSettingsRecord) -> AppSettings {
     AppSettings {
         app_icon: crate::app_icon::AppIcon::from_storage_value(&record.app_icon),
         app_log_level: AppLogLevel::from_database(&record.app_log_level),
+        show_performance_overlay: record.show_performance_overlay,
         language: Language::from_database(&record.language),
         theme_preference: ThemePreference::from_database(&record.theme_preference),
         default_show_line_numbers: record.default_show_line_numbers,
@@ -968,6 +971,7 @@ fn app_settings_to_record(settings: AppSettings) -> AppSettingsRecord {
         viewer_overscan: i64::from(settings.viewer_overscan.clamp(4, 40)),
         language: settings.language.database_value().into(),
         app_log_level: settings.app_log_level.database_value().into(),
+        show_performance_overlay: settings.show_performance_overlay,
     }
 }
 

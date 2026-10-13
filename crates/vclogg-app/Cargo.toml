@@ -19,7 +19,7 @@ async-channel.workspace = true
 chrono.workspace = true
 encoding_rs = "0.8"
 dirs.workspace = true
-gpui-kit.workspace = true
+gpui-kit = { workspace = true, features = ["profiler"] }
 log.workspace = true
 notify.workspace = true
 pinyin = { version = "0.11", default-features = false, features = ["plain", "heteronym"] }

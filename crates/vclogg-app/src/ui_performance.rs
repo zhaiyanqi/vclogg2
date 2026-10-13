@@ -1,3 +1,42 @@
+struct OverlayPreference(bool);
+impl gpui_kit::Global for OverlayPreference {}
+
+/// Keep in-session changes ahead of late settings loads from other windows.
+pub(crate) fn restore_overlay(
+    saved: bool,
+    window: &mut gpui_kit::Window,
+    cx: &mut gpui_kit::App,
+) -> bool {
+    let enabled = cx
+        .try_global::<OverlayPreference>()
+        .map_or(saved, |value| value.0);
+    cx.set_global(OverlayPreference(enabled));
+    apply_overlay(enabled, window);
+    enabled
+}
+
+/// Use GPUI's scene overlay without introducing a redraw timer or view invalidations.
+pub(crate) fn apply_overlay(enabled: bool, window: &mut gpui_kit::Window) {
+    let mode = if enabled {
+        gpui_kit::DebugFrameOverlayMode::Full
+    } else {
+        gpui_kit::DebugFrameOverlayMode::Hidden
+    };
+    if window.debug_frame_overlay_mode() != mode {
+        window.set_debug_frame_overlay_mode(mode);
+    }
+}
+
+pub(crate) fn sync_overlay(enabled: bool, window: &mut gpui_kit::Window, cx: &mut gpui_kit::App) {
+    cx.set_global(OverlayPreference(enabled));
+    apply_overlay(enabled, window);
+    let current = window.window_handle();
+    for handle in cx.windows().into_iter().filter(|handle| *handle != current) {
+        // Touch only the Window so settings changes cannot re-enter Workspace entities.
+        _ = handle.update(cx, |_, window, _| apply_overlay(enabled, window));
+    }
+}
+
 #[cfg(all(feature = "ui-performance-profiler", not(debug_assertions)))]
 compile_error!("ui-performance-profiler 仅允许用于 Debug 性能诊断构建");
 

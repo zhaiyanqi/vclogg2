@@ -1205,6 +1205,7 @@ impl Workspace {
         crate::i18n::set_language(settings.language);
         self.refresh_localized_input_copy(window, cx);
         crate::app_log::set_level(settings.app_log_level);
+        crate::ui_performance::sync_overlay(settings.show_performance_overlay, window, cx);
         crate::app_icon::apply(settings.app_icon, window, cx);
         Self::apply_theme_preference(&settings, window, cx);
         self.app_settings = settings.clone();
