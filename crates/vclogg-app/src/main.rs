@@ -158,21 +158,19 @@ fn open_workspace_window_with_options(
 }
 
 fn handle_external_open_request(request: single_instance::OpenRequest, cx: &mut App) {
-    if Workspace::activate_for_external_open(request.paths.clone(), cx) {
+    let paths = request.into_paths();
+    let _trace = ui_performance::trace::scope("ExternalOpen.handle_request");
+    if Workspace::activate_for_external_open(paths.clone(), cx) {
         return;
     }
-    if request.paths.is_empty() {
+    if paths.is_empty() {
         if let Err(error) = open_workspace_window(cx, false, Vec::new()) {
             log::error!("外部启动未能创建 VCLogg2 窗口：{error:#}");
         }
         return;
     }
 
-    let initial_documents = request
-        .paths
-        .into_iter()
-        .map(InitialDocument::from_path)
-        .collect();
+    let initial_documents = paths.into_iter().map(InitialDocument::from_path).collect();
     if let Err(error) = open_workspace_window(cx, false, initial_documents) {
         log::error!("外部文件未能在 VCLogg2 中打开：{error:#}");
     }
@@ -303,11 +301,11 @@ fn main() {
             })
             .collect::<Vec<_>>();
         if !paths.is_empty() {
-            _ = platform_open_sender.send_blocking(single_instance::OpenRequest { paths });
+            _ = platform_open_sender.send_blocking(single_instance::OpenRequest::new(paths));
         }
     });
     app.on_reopen(|cx| {
-        handle_external_open_request(single_instance::OpenRequest { paths: Vec::new() }, cx);
+        handle_external_open_request(single_instance::OpenRequest::new(Vec::new()), cx);
     });
 
     let trace_attachment = cold_trace

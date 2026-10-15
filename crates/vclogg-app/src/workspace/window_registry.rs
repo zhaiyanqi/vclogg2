@@ -17,11 +17,15 @@ impl Workspace {
             if candidate
                 .window
                 .update(cx, move |_, window, cx| {
+                    let activation_frames = crate::ui_performance::trace::scope(
+                        "ExternalOpen.wait_for_activation_frames",
+                    );
                     cx.activate(true);
                     window.activate_window();
                     // Yield a presented frame, not just a call to the native activation API.
                     window.on_next_frame(move |window, _| {
                         window.on_next_frame(move |_, cx| {
+                            drop(activation_frames);
                             // Frame callbacks hold this window's mutable lease. Route only
                             // after GPUI returns it to App, otherwise handle.update fails
                             // and incorrectly treats the existing window as unavailable.
@@ -108,6 +112,12 @@ impl Workspace {
         workspace.update(cx, |workspace, cx| {
             let activation_subscription =
                 cx.observe_window_activation(window, |workspace, window, cx| {
+                    let _trace =
+                        crate::ui_performance::trace::scope(if window.is_window_active() {
+                            "Window.did_activate"
+                        } else {
+                            "Window.did_deactivate"
+                        });
                     workspace.file_watch_window_active = window.is_window_active();
                     workspace.sync_file_watch(window.window_handle(), cx);
                     if window.is_window_active() {

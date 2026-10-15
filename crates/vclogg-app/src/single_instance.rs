@@ -6,7 +6,24 @@ use std::{
 use anyhow::Result;
 
 pub(crate) struct OpenRequest {
-    pub(crate) paths: Vec<PathBuf>,
+    paths: Vec<PathBuf>,
+    delivery_trace: crate::ui_performance::trace::Scope,
+}
+
+impl OpenRequest {
+    pub(crate) fn new(paths: Vec<PathBuf>) -> Self {
+        Self {
+            paths,
+            // Starts on the receiving thread and ends when the UI consumes the
+            // request. This is queue latency, not continuous work on that thread.
+            delivery_trace: crate::ui_performance::trace::scope("ExternalOpen.wait_for_ui"),
+        }
+    }
+
+    pub(crate) fn into_paths(self) -> Vec<PathBuf> {
+        drop(self.delivery_trace);
+        self.paths
+    }
 }
 
 pub(crate) enum Startup {
@@ -305,7 +322,7 @@ mod unix {
         if offset != request.len() {
             bail!("单实例启动请求包含多余数据");
         }
-        Ok(OpenRequest { paths })
+        Ok(OpenRequest::new(paths))
     }
 
     fn take_u32(input: &[u8], offset: &mut usize) -> Result<u32> {
@@ -480,7 +497,10 @@ mod windows {
             }
         }
 
-        let request = read_request(server.0.0);
+        let request = {
+            let _trace = crate::ui_performance::trace::scope("ExternalOpen.read_pipe_request");
+            read_request(server.0.0)
+        };
         let keep_listening = match request {
             Ok(request) => {
                 let accepted = sender.send_blocking(request).is_ok();
@@ -676,7 +696,7 @@ mod windows {
         if offset != request.len() {
             bail!("单实例启动请求包含多余数据");
         }
-        Ok(OpenRequest { paths })
+        Ok(OpenRequest::new(paths))
     }
 
     fn take_u32(input: &[u8], offset: &mut usize) -> Result<u32> {
