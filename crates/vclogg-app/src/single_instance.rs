@@ -376,15 +376,19 @@ mod windows {
     use anyhow::{Context as _, Result, anyhow, bail};
     use sha2::{Digest as _, Sha256};
     use windows_sys::Win32::{
-        Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE},
+        Foundation::{
+            CloseHandle, GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
+        },
         Storage::FileSystem::{
-            FILE_FLAG_FIRST_PIPE_INSTANCE, FlushFileBuffers, PIPE_ACCESS_DUPLEX, ReadFile,
-            WriteFile,
+            CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FlushFileBuffers, OPEN_EXISTING,
+            PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
         },
         System::Pipes::{
-            CallNamedPipeW, ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe,
+            ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeServerProcessId,
             PIPE_READMODE_MESSAGE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_MESSAGE, PIPE_WAIT,
+            SetNamedPipeHandleState, TransactNamedPipe,
         },
+        UI::WindowsAndMessaging::AllowSetForegroundWindow,
     };
 
     use super::{OpenRequest, PrimaryInstance, Startup};
@@ -517,17 +521,50 @@ mod windows {
     }
 
     fn forward_request(name: &[u16], request: &[u8]) -> Result<()> {
+        // Keep the connection open so foreground permission goes to the same
+        // server that receives the request, before it can wake the UI thread.
+        // Busy pipes use acquire_or_forward's bounded retry loop.
+        let pipe = unsafe {
+            CreateFileW(
+                name.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                0,
+                null(),
+                OPEN_EXISTING,
+                0,
+                null_mut(),
+            )
+        };
+        if pipe == INVALID_HANDLE_VALUE {
+            let error = unsafe { GetLastError() };
+            bail!("无法连接已有 VCLogg2 实例：Windows 错误 {error}");
+        }
+        let pipe = OwnedHandle(pipe);
+        if unsafe { SetNamedPipeHandleState(pipe.0, &PIPE_READMODE_MESSAGE, null(), null()) } == 0 {
+            let error = unsafe { GetLastError() };
+            bail!("无法设置单实例管道消息模式：Windows 错误 {error}");
+        }
+        let mut server_process_id = 0;
+        if unsafe { GetNamedPipeServerProcessId(pipe.0, &mut server_process_id) } != 0 {
+            // Shell launches can pass their foreground right to the primary
+            // process. Other launchers may lack it; still deliver their files.
+            if unsafe { AllowSetForegroundWindow(server_process_id) } == 0 {
+                log::debug!("无法转交前台激活权限：Windows 错误 {}", unsafe {
+                    GetLastError()
+                });
+            }
+        }
         let mut acknowledgement = [0u8; 1];
         let mut bytes_read = 0u32;
         let forwarded = unsafe {
-            CallNamedPipeW(
-                name.as_ptr(),
+            TransactNamedPipe(
+                pipe.0,
                 request.as_ptr().cast(),
                 request.len() as u32,
                 acknowledgement.as_mut_ptr().cast(),
                 acknowledgement.len() as u32,
                 &mut bytes_read,
-                CLIENT_CALL_TIMEOUT_MS,
+                null_mut(),
             )
         };
         if forwarded == 0 {
