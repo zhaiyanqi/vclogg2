@@ -1,5 +1,62 @@
 use super::*;
 
+/// Run external activation only after the native window has left minimized state.
+fn after_window_restore(
+    window: &mut Window,
+    cx: &mut App,
+    ready: impl FnOnce(&mut Window, &mut App) + 'static,
+) {
+    #[cfg(not(windows))]
+    ready(window, cx);
+
+    #[cfg(windows)]
+    {
+        use raw_window_handle::RawWindowHandle;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{IsIconic, SW_RESTORE, ShowWindow};
+
+        let handle = window.window_handle();
+        cx.spawn(async move |cx| {
+            let _trace = crate::ui_performance::trace::scope("ExternalOpen.restore_window");
+            let result = handle.update(cx, |_, window, _| -> anyhow::Result<_> {
+                let RawWindowHandle::Win32(native) =
+                    raw_window_handle::HasWindowHandle::window_handle(window)?.as_raw()
+                else {
+                    anyhow::bail!("Expected a Win32 window");
+                };
+                Ok(native.hwnd.get() as windows_sys::Win32::Foundation::HWND)
+            });
+            let hwnd = match result {
+                Ok(Ok(hwnd)) => hwnd,
+                Ok(Err(error)) | Err(error) => {
+                    log::error!("无法恢复外部打开目标窗口：{error:#}");
+                    return;
+                }
+            };
+
+            // Run on the owning UI thread, outside App/Window update leases:
+            // ShowWindow synchronously dispatches resize/activation callbacks.
+            // Unlike ShowWindowAsync, it finishes the restore before we enqueue
+            // GPUI's focus operation. Its return value is previous visibility,
+            // not success, so verify IsIconic on the live window below instead.
+            unsafe {
+                if IsIconic(hwnd) != 0 {
+                    ShowWindow(hwnd, SW_RESTORE);
+                }
+            }
+            if let Err(error) = handle.update(cx, |_, window, cx| {
+                if unsafe { IsIconic(hwnd) } != 0 {
+                    log::error!("外部打开目标窗口仍处于最小化状态，未执行焦点与文件打开操作");
+                    return;
+                }
+                ready(window, cx);
+            }) {
+                log::debug!("外部打开目标窗口在恢复期间已关闭：{error:#}");
+            }
+        })
+        .detach();
+    }
+}
+
 impl Workspace {
     pub(crate) fn init_window_registry(cx: &mut App) {
         cx.set_global(WorkspaceWindowRegistry::default());
@@ -17,30 +74,36 @@ impl Workspace {
             if candidate
                 .window
                 .update(cx, move |_, window, cx| {
-                    let activation_frames = crate::ui_performance::trace::scope(
-                        "ExternalOpen.wait_for_activation_frames",
-                    );
-                    cx.activate(true);
-                    window.activate_window();
-                    // Yield a presented frame, not just a call to the native activation API.
-                    window.on_next_frame(move |window, _| {
-                        window.on_next_frame(move |_, cx| {
-                            drop(activation_frames);
-                            // Frame callbacks hold this window's mutable lease. Route only
-                            // after GPUI returns it to App, otherwise handle.update fails
-                            // and incorrectly treats the existing window as unavailable.
-                            cx.defer(move |cx| {
-                                if !paths.is_empty()
-                                    && !Self::open_external_paths_in_last_active_window(&paths, cx)
-                                {
-                                    let documents =
-                                        paths.into_iter().map(InitialDocument::from_path).collect();
-                                    if let Err(error) =
-                                        crate::open_workspace_window(cx, false, documents)
+                    after_window_restore(window, cx, move |window, cx| {
+                        let activation_frames = crate::ui_performance::trace::scope(
+                            "ExternalOpen.wait_for_activation_frames",
+                        );
+                        cx.activate(true);
+                        window.activate_window();
+                        // Yield a presented frame, not just a call to the native activation API.
+                        window.on_next_frame(move |window, _| {
+                            window.on_next_frame(move |_, cx| {
+                                drop(activation_frames);
+                                // Frame callbacks hold this window's mutable lease. Route only
+                                // after GPUI returns it to App, otherwise handle.update fails
+                                // and incorrectly treats the existing window as unavailable.
+                                cx.defer(move |cx| {
+                                    if !paths.is_empty()
+                                        && !Self::open_external_paths_in_last_active_window(
+                                            &paths, cx,
+                                        )
                                     {
-                                        log::error!("外部文件未能在 VCLogg2 中打开：{error:#}");
+                                        let documents = paths
+                                            .into_iter()
+                                            .map(InitialDocument::from_path)
+                                            .collect();
+                                        if let Err(error) =
+                                            crate::open_workspace_window(cx, false, documents)
+                                        {
+                                            log::error!("外部文件未能在 VCLogg2 中打开：{error:#}");
+                                        }
                                     }
-                                }
+                                });
                             });
                         });
                     });
@@ -81,14 +144,16 @@ impl Workspace {
                 if candidate
                     .window
                     .update(cx, move |_, window, cx| {
-                        cx.activate(true);
-                        window.activate_window();
-                        let workspace = workspace.downgrade();
-                        // The owning window can differ from the one initially foregrounded.
-                        window.on_next_frame(move |window, _| {
-                            window.on_next_frame(move |window, cx| {
-                                _ = workspace.update(cx, |workspace, cx| {
-                                    workspace.enqueue_external_paths(vec![path], window, cx)
+                        after_window_restore(window, cx, move |window, cx| {
+                            cx.activate(true);
+                            window.activate_window();
+                            let workspace = workspace.downgrade();
+                            // The owning window can differ from the one initially foregrounded.
+                            window.on_next_frame(move |window, _| {
+                                window.on_next_frame(move |window, cx| {
+                                    _ = workspace.update(cx, |workspace, cx| {
+                                        workspace.enqueue_external_paths(vec![path], window, cx)
+                                    });
                                 });
                             });
                         });
