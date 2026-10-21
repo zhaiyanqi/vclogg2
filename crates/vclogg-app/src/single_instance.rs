@@ -394,18 +394,26 @@ mod windows {
     use sha2::{Digest as _, Sha256};
     use windows_sys::Win32::{
         Foundation::{
-            CloseHandle, GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
+            CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_PIPE_BUSY,
+            ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, HWND,
+            INVALID_HANDLE_VALUE, LPARAM, WAIT_OBJECT_0, WAIT_TIMEOUT,
         },
         Storage::FileSystem::{
-            CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FlushFileBuffers, OPEN_EXISTING,
+            CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, OPEN_EXISTING,
             PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
         },
+        System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED},
         System::Pipes::{
             ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeServerProcessId,
             PIPE_READMODE_MESSAGE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_MESSAGE, PIPE_WAIT,
             SetNamedPipeHandleState, TransactNamedPipe,
         },
-        UI::WindowsAndMessaging::AllowSetForegroundWindow,
+        System::Threading::{CreateEventW, INFINITE, WaitForSingleObject},
+        UI::WindowsAndMessaging::{
+            AllowSetForegroundWindow, EnumWindows, GW_OWNER, GetLastActivePopup, GetWindow,
+            GetWindowThreadProcessId, IsIconic, IsWindowVisible, SW_RESTORE, SetForegroundWindow,
+            ShowWindowAsync,
+        },
     };
 
     use super::{OpenRequest, PrimaryInstance, Startup};
@@ -413,8 +421,9 @@ mod windows {
     const PIPE_MAGIC: &[u8; 8] = b"VCLGIPC1";
     const MAX_PATHS: usize = 4_096;
     const MAX_REQUEST_BYTES: usize = 1024 * 1024;
-    const CLIENT_CALL_TIMEOUT_MS: u32 = 500;
+    const PIPE_DEFAULT_WAIT_MS: u32 = 500;
     const STARTUP_FORWARD_TIMEOUT: Duration = Duration::from_secs(5);
+    const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
     const RETRY_INTERVAL: Duration = Duration::from_millis(40);
 
     pub(super) struct ServerPipe(OwnedHandle);
@@ -434,29 +443,23 @@ mod windows {
     pub(super) fn acquire_or_forward(paths: &[PathBuf]) -> Result<Startup> {
         let name = pipe_name();
         let request = encode_request(paths)?;
-        let started_at = Instant::now();
+        let deadline = Instant::now() + STARTUP_FORWARD_TIMEOUT;
 
         loop {
             let create_error = match create_server_pipe(&name) {
-                Ok(server) => {
-                    return Ok(Startup::Primary(PrimaryInstance { server }));
-                }
+                Ok(server) => return Ok(Startup::Primary(PrimaryInstance { server })),
                 Err(error) => error,
             };
-
-            match forward_request(&name, &request) {
-                Ok(()) => return Ok(Startup::Forwarded),
-                Err(_) if started_at.elapsed() < STARTUP_FORWARD_TIMEOUT => {
-                    thread::sleep(RETRY_INTERVAL);
-                }
-                Err(forward_error) => {
-                    return Err(forward_error).with_context(|| {
-                        format!(
-                            "已有 VCLogg2 实例，但无法转交启动请求（创建管道错误 {create_error}）"
-                        )
-                    });
-                }
+            // Only retry before a connection exists. After transmission starts,
+            // a missing acknowledgement does not prove the request was rejected.
+            if forward_request(&name, &request, deadline)? {
+                return Ok(Startup::Forwarded);
             }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                bail!("连接已有 VCLogg2 实例超时（创建管道错误 {create_error}）");
+            }
+            thread::sleep(RETRY_INTERVAL.min(remaining));
         }
     }
 
@@ -489,35 +492,46 @@ mod windows {
         server: &ServerPipe,
         sender: &async_channel::Sender<OpenRequest>,
     ) -> Result<bool> {
-        let connected = unsafe { ConnectNamedPipe(server.0.0, null_mut()) } != 0;
-        if !connected {
-            let error = unsafe { GetLastError() };
-            if error != windows_sys::Win32::Foundation::ERROR_PIPE_CONNECTED {
-                bail!("等待单实例客户端失败：Windows 错误 {error}");
+        // Idle listening has no deadline. Once connected, every client gets a
+        // bounded exchange so a stalled sender cannot monopolize the only pipe.
+        pipe_io(server.0.0, None, |overlapped, _| unsafe {
+            let connected = ConnectNamedPipe(server.0.0, overlapped);
+            if connected == 0 && GetLastError() == ERROR_PIPE_CONNECTED {
+                1
+            } else {
+                connected
             }
-        }
-
+        })?;
+        let deadline = Instant::now() + CONNECTION_TIMEOUT;
         let request = {
             let _trace = crate::ui_performance::trace::scope("ExternalOpen.read_pipe_request");
-            read_request(server.0.0)
+            read_request(server.0.0, deadline)
         };
         let keep_listening = match request {
             Ok(request) => {
                 let accepted = sender.send_blocking(request).is_ok();
-                write_acknowledgement(server.0.0, accepted)?;
+                write_acknowledgement(server.0.0, accepted, deadline)?;
                 accepted
             }
             Err(error) => {
-                _ = write_acknowledgement(server.0.0, false);
+                _ = write_acknowledgement(server.0.0, false, deadline);
                 log::warn!("忽略无效的单实例启动请求：{error:#}");
                 true
             }
         };
 
-        unsafe {
-            FlushFileBuffers(server.0.0);
-            DisconnectNamedPipe(server.0.0);
-        }
+        // Do not FlushFileBuffers: it can wait forever for the peer to read.
+        // A receipt proves the acknowledgement was consumed before disconnect.
+        // Older clients close after reading it, which also completes this read.
+        let mut receipt = [0u8; 1];
+        _ = pipe_io(
+            server.0.0,
+            Some(deadline),
+            |overlapped, transferred| unsafe {
+                ReadFile(server.0.0, receipt.as_mut_ptr(), 1, transferred, overlapped)
+            },
+        );
+        unsafe { DisconnectNamedPipe(server.0.0) };
         Ok(keep_listening)
     }
 
@@ -525,12 +539,12 @@ mod windows {
         let pipe = unsafe {
             CreateNamedPipeW(
                 name.as_ptr(),
-                PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE | FILE_FLAG_OVERLAPPED,
                 PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
                 1,
                 MAX_REQUEST_BYTES as u32,
                 MAX_REQUEST_BYTES as u32,
-                CLIENT_CALL_TIMEOUT_MS,
+                PIPE_DEFAULT_WAIT_MS,
                 null(),
             )
         };
@@ -540,7 +554,7 @@ mod windows {
         Ok(ServerPipe(OwnedHandle(pipe)))
     }
 
-    fn forward_request(name: &[u16], request: &[u8]) -> Result<()> {
+    fn forward_request(name: &[u16], request: &[u8], deadline: Instant) -> Result<bool> {
         // Keep the connection open so foreground permission goes to the same
         // server that receives the request, before it can wake the UI thread.
         // Busy pipes use acquire_or_forward's bounded retry loop.
@@ -551,12 +565,15 @@ mod windows {
                 0,
                 null(),
                 OPEN_EXISTING,
-                0,
+                FILE_FLAG_OVERLAPPED,
                 null_mut(),
             )
         };
         if pipe == INVALID_HANDLE_VALUE {
             let error = unsafe { GetLastError() };
+            if matches!(error, ERROR_PIPE_BUSY | ERROR_FILE_NOT_FOUND) {
+                return Ok(false);
+            }
             bail!("无法连接已有 VCLogg2 实例：Windows 错误 {error}");
         }
         let pipe = OwnedHandle(pipe);
@@ -573,67 +590,165 @@ mod windows {
                     GetLastError()
                 });
             }
+            wake_existing_window(server_process_id);
         }
         let mut acknowledgement = [0u8; 1];
-        let mut bytes_read = 0u32;
-        let forwarded = unsafe {
+        let bytes_read = pipe_io(pipe.0, Some(deadline), |overlapped, transferred| unsafe {
             TransactNamedPipe(
                 pipe.0,
                 request.as_ptr().cast(),
                 request.len() as u32,
                 acknowledgement.as_mut_ptr().cast(),
                 acknowledgement.len() as u32,
-                &mut bytes_read,
-                null_mut(),
+                transferred,
+                overlapped,
             )
-        };
-        if forwarded == 0 {
-            let error = unsafe { GetLastError() };
-            bail!("无法连接已有 VCLogg2 实例：Windows 错误 {error}");
-        }
+        })?;
         if bytes_read != 1 || acknowledgement[0] != 1 {
             bail!("已有 VCLogg2 实例未接受启动请求");
         }
-        Ok(())
+        // The request is accepted even if the peer closes before this optional
+        // receipt (including older servers). Never resend after acknowledgement.
+        _ = pipe_io(pipe.0, Some(deadline), |overlapped, transferred| unsafe {
+            WriteFile(pipe.0, acknowledgement.as_ptr(), 1, transferred, overlapped)
+        });
+        Ok(true)
     }
 
-    fn read_request(pipe: HANDLE) -> Result<OpenRequest> {
+    fn read_request(pipe: HANDLE, deadline: Instant) -> Result<OpenRequest> {
         let mut buffer = vec![0u8; MAX_REQUEST_BYTES];
-        let mut bytes_read = 0u32;
-        let read = unsafe {
+        let bytes_read = pipe_io(pipe, Some(deadline), |overlapped, transferred| unsafe {
             ReadFile(
                 pipe,
                 buffer.as_mut_ptr(),
                 buffer.len() as u32,
-                &mut bytes_read,
-                null_mut(),
+                transferred,
+                overlapped,
             )
-        };
-        if read == 0 {
-            let error = unsafe { GetLastError() };
-            bail!("读取单实例启动请求失败：Windows 错误 {error}");
-        }
+        })?;
         buffer.truncate(bytes_read as usize);
         decode_request(&buffer)
     }
 
-    fn write_acknowledgement(pipe: HANDLE, accepted: bool) -> Result<()> {
+    fn write_acknowledgement(pipe: HANDLE, accepted: bool, deadline: Instant) -> Result<()> {
         let acknowledgement = [u8::from(accepted)];
-        let mut bytes_written = 0u32;
-        let written = unsafe {
-            WriteFile(
-                pipe,
-                acknowledgement.as_ptr(),
-                acknowledgement.len() as u32,
-                &mut bytes_written,
-                null_mut(),
-            )
-        };
-        if written == 0 || bytes_written != acknowledgement.len() as u32 {
-            let error = unsafe { GetLastError() };
-            bail!("回复单实例启动请求失败：Windows 错误 {error}");
-        }
+        let bytes_written = pipe_io(pipe, Some(deadline), |overlapped, transferred| unsafe {
+            WriteFile(pipe, acknowledgement.as_ptr(), 1, transferred, overlapped)
+        })?;
+        anyhow::ensure!(bytes_written == 1, "单实例回复不完整");
         Ok(())
+    }
+
+    /// Keep the event, OVERLAPPED and caller-owned buffers alive until completion,
+    /// including cancellation completion. This runs only on IPC/startup threads.
+    fn pipe_io(
+        pipe: HANDLE,
+        deadline: Option<Instant>,
+        start: impl FnOnce(*mut OVERLAPPED, *mut u32) -> i32,
+    ) -> Result<u32> {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            bail!("单实例管道通信超时");
+        }
+        let event = unsafe { CreateEventW(null(), 1, 0, null()) };
+        anyhow::ensure!(!event.is_null(), "无法创建单实例管道完成事件");
+        let event = OwnedHandle(event);
+        let mut overlapped = OVERLAPPED {
+            hEvent: event.0,
+            ..Default::default()
+        };
+        let mut transferred = 0;
+        if start(&mut overlapped, &mut transferred) != 0 {
+            return Ok(transferred);
+        }
+        let error = unsafe { GetLastError() };
+        if error != ERROR_IO_PENDING {
+            bail!("单实例管道操作失败：Windows 错误 {error}");
+        }
+        let timeout = deadline.map_or(INFINITE, |deadline| {
+            deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis()
+                .min(u128::from(INFINITE - 1)) as u32
+        });
+        let waited = unsafe { WaitForSingleObject(event.0, timeout) };
+        if waited != WAIT_OBJECT_0 {
+            let error = unsafe { GetLastError() };
+            // CancelIoEx requests cancellation, but does not finish it. Draining
+            // the kernel completion is required before freeing borrowed buffers.
+            unsafe {
+                CancelIoEx(pipe, &overlapped);
+                GetOverlappedResult(pipe, &overlapped, &mut transferred, 1);
+            }
+            if waited == WAIT_TIMEOUT {
+                bail!("单实例管道通信超时");
+            }
+            bail!("等待单实例管道失败：Windows 错误 {error}");
+        }
+        if unsafe { GetOverlappedResult(pipe, &overlapped, &mut transferred, 0) } == 0 {
+            bail!("单实例管道操作失败：Windows 错误 {}", unsafe {
+                GetLastError()
+            });
+        }
+        Ok(transferred)
+    }
+
+    fn wake_existing_window(process_id: u32) {
+        struct Target {
+            process_id: u32,
+            window: HWND,
+        }
+        unsafe extern "system" fn find_window(window: HWND, context: LPARAM) -> i32 {
+            // EnumWindows invokes this synchronously while Target is on our stack.
+            let target = unsafe { &mut *(context as *mut Target) };
+            let mut process_id = 0;
+            unsafe { GetWindowThreadProcessId(window, &mut process_id) };
+            if process_id == target.process_id
+                && unsafe { IsWindowVisible(window) } != 0
+                && unsafe { GetWindow(window, GW_OWNER) }.is_null()
+            {
+                target.window = window;
+                return 0;
+            }
+            1
+        }
+        let _trace = crate::ui_performance::trace::scope("ExternalOpen.wake_from_sender");
+        let mut target = Target {
+            process_id,
+            window: null_mut(),
+        };
+        unsafe { EnumWindows(Some(find_window), &mut target as *mut Target as LPARAM) };
+        if target.window.is_null() {
+            // A primary still starting has no window yet. Its normal UI routing
+            // will activate the window once the queued request is consumed.
+            return;
+        }
+        let mut owner = 0;
+        unsafe { GetWindowThreadProcessId(target.window, &mut owner) };
+        if owner != process_id {
+            return;
+        }
+        unsafe {
+            // Post restore instead of waiting for the other UI thread's resize
+            // callbacks. Do not change the window's maximized/restored geometry.
+            if IsIconic(target.window) != 0 {
+                ShowWindowAsync(target.window, SW_RESTORE);
+            }
+            let popup = GetLastActivePopup(target.window);
+            let mut popup_process_id = 0;
+            if !popup.is_null() {
+                GetWindowThreadProcessId(popup, &mut popup_process_id);
+            }
+            let window = if popup_process_id == process_id && IsWindowVisible(popup) != 0 {
+                popup
+            } else {
+                target.window
+            };
+            if SetForegroundWindow(window) == 0 {
+                // Foreground rules may deny this request. The primary keeps its
+                // existing activation path; file delivery must still proceed.
+                log::debug!("转发进程未能置前已有窗口，将由主进程继续激活");
+            }
+        }
     }
 
     fn encode_request(paths: &[PathBuf]) -> Result<Vec<u8>> {
