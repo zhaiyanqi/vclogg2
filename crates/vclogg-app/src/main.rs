@@ -33,6 +33,7 @@ mod macos_window_controls;
 mod modal_event_layer;
 mod notifications;
 mod open_directory;
+mod open_log;
 mod path_identity;
 mod pending_tasks;
 mod predefined_filters;
@@ -112,6 +113,7 @@ fn open_workspace_window_with_options(
     display_id: Option<DisplayId>,
 ) -> anyhow::Result<gpui_kit::AnyWindowHandle> {
     let _scope = ui_performance::trace::scope("Startup.open_workspace_window");
+    let _open_stage = crate::open_log::Stage::new("Startup.open_workspace_window", "");
     let window_options = WindowOptions {
         window_bounds: Some(window_bounds),
         display_id,
@@ -121,18 +123,24 @@ fn open_workspace_window_with_options(
     let (window_options, traffic_light_position) = macos_window_controls::configure(window_options);
     // GPUI creates the native window and renderer before invoking the content builder.
     // Keep that cost separate from application-owned setup without patching GPUI.
+    let native_window_log = crate::open_log::Stage::new("Startup.prepare_native_window", "");
     let native_window_scope = ui_performance::trace::scope("Startup.prepare_native_window");
     let (handle, _) = gpui_kit::open_window(window_options, cx, |window, cx| {
         drop(native_window_scope);
+        native_window_log.event("native_window_ready");
+        drop(native_window_log);
         let _scope = ui_performance::trace::scope("Startup.build_workspace_window");
+        let _open_stage = crate::open_log::Stage::new("Startup.build_workspace_window", "");
         window.set_window_title("VCLogg2");
         {
             let _scope = ui_performance::trace::scope("Startup.attach_window_icon");
+            let _open_stage = crate::open_log::Stage::new("Startup.attach_window_icon", "");
             app_icon::attach_window(window, cx);
         }
         #[cfg(target_os = "macos")]
         {
             let _scope = ui_performance::trace::scope("Startup.attach_window_controls");
+            let _open_stage = crate::open_log::Stage::new("Startup.attach_window_controls", "");
             if let Some(position) = traffic_light_position
                 && let Err(error) = macos_window_controls::attach(window, position)
             {
@@ -142,6 +150,7 @@ fn open_workspace_window_with_options(
         let workspace = cx.new(|cx| Workspace::new(primary, Vec::new(), window, cx));
         {
             let _scope = ui_performance::trace::scope("Startup.register_window");
+            let _open_stage = crate::open_log::Stage::new("Startup.register_window", "");
             Workspace::register_window(&workspace, window, cx);
         }
         if !initial_documents.is_empty() {
@@ -152,6 +161,7 @@ fn open_workspace_window_with_options(
         workspace
     })?;
     let _scope = ui_performance::trace::scope("Startup.activate_window");
+    let _open_stage = crate::open_log::Stage::new("Startup.activate_window", "");
     cx.activate(true);
     _ = handle.update(cx, |_, window, _| window.activate_window());
     Ok(handle)
@@ -160,6 +170,7 @@ fn open_workspace_window_with_options(
 fn handle_external_open_request(request: single_instance::OpenRequest, cx: &mut App) {
     let paths = request.into_paths();
     let _trace = ui_performance::trace::scope("ExternalOpen.handle_request");
+    let _open_stage = crate::open_log::Stage::new("ExternalOpen.handle_request", "");
     if Workspace::activate_for_external_open(paths.clone(), cx) {
         return;
     }
@@ -211,10 +222,14 @@ fn report_windows_data_directory_error(error: &str) {
 }
 
 fn main() {
+    app_log::init();
+    let _diagnostic_flush = open_log::FlushOnExit;
+    log::info!(target: open_log::TARGET, "process_entry launch={} args={:?}", std::process::id(), std::env::args_os().skip(1).collect::<Vec<_>>());
     let arguments = match ui_performance::trace::startup::Arguments::parse() {
         Ok(arguments) => arguments,
         Err(error) => {
             eprintln!("{error:#}");
+            crate::open_log::flush();
             std::process::exit(2);
         }
     };
@@ -222,21 +237,20 @@ fn main() {
         Ok(trace) => trace,
         Err(error) => {
             eprintln!("Could not start startup trace: {error:#}");
+            crate::open_log::flush();
             std::process::exit(1);
         }
     };
     let startup_scope = ui_performance::trace::scope("Startup.bootstrap");
-    {
-        let _scope = ui_performance::trace::scope("Startup.logging");
-        app_log::init();
-    }
     #[cfg(windows)]
     if let Err(error) = {
         let _trace = ui_performance::trace::scope("Startup.data_directory");
+        let _open_stage = crate::open_log::Stage::new("Startup.data_directory", "");
         app_paths::initialize_windows_data_directory()
     } {
         report_windows_data_directory_error(&error);
         drop(cold_trace);
+        crate::open_log::flush();
         std::process::exit(1);
     }
     app_paths::log_development_override();
@@ -245,11 +259,16 @@ fn main() {
     let initial_paths = single_instance::command_line_paths(arguments.paths);
     let startup_result = {
         let _scope = ui_performance::trace::scope("Startup.single_instance");
+        let _open_stage = crate::open_log::Stage::new("Startup.single_instance", "");
         single_instance::acquire_or_forward(&initial_paths)
     };
     let primary_instance = match startup_result {
-        Ok(single_instance::Startup::Primary(instance)) => instance,
+        Ok(single_instance::Startup::Primary(instance)) => {
+            log::info!(target: open_log::TARGET, "launch={} role=primary", std::process::id());
+            instance
+        }
         Ok(single_instance::Startup::Forwarded) => {
+            log::info!(target: open_log::TARGET, "launch={} forward_complete", std::process::id());
             if cold_trace.is_some() {
                 eprintln!(
                     "An existing VCLogg2 instance received the request; quit it first to capture a cold start."
@@ -258,6 +277,7 @@ fn main() {
             return;
         }
         Err(error) => {
+            log::info!(target: open_log::TARGET, "launch={} forward_failed error={error:#}", std::process::id());
             log::error!("VCLogg2 单实例初始化失败：{error:#}");
             return;
         }
@@ -265,14 +285,17 @@ fn main() {
     #[cfg(windows)]
     if let Err(error) = {
         let _trace = ui_performance::trace::scope("Startup.validate_data_directory");
+        let _open_stage = crate::open_log::Stage::new("Startup.validate_data_directory", "");
         app_paths::validate_windows_data_directory()
     } {
         report_windows_data_directory_error(&format!("{error:#}"));
         drop(cold_trace);
+        crate::open_log::flush();
         std::process::exit(1);
     }
     let listener_result = {
         let _trace = ui_performance::trace::scope("Startup.instance_listener");
+        let _open_stage = crate::open_log::Stage::new("Startup.instance_listener", "");
         primary_instance.start_listener()
     };
     let forwarded_requests = match listener_result {
@@ -286,6 +309,7 @@ fn main() {
     // scans and crash-report cleanup off the external-open delivery path.
     {
         let _trace = ui_performance::trace::scope("Startup.crash_reporting");
+        let _open_stage = crate::open_log::Stage::new("Startup.crash_reporting", "");
         crash_report::install_panic_hook();
     }
     let initial_documents = initial_paths
@@ -296,14 +320,17 @@ fn main() {
     i18n::initialize_native_language();
     let platform = {
         let _scope = ui_performance::trace::scope("Startup.platform");
+        let _open_stage = crate::open_log::Stage::new("Startup.platform", "");
         gpui_kit::platform::current_platform(false)
     };
     let system_fonts = {
         let _scope = ui_performance::trace::scope("Startup.fonts");
+        let _open_stage = crate::open_log::Stage::new("Startup.fonts", "");
         system_fonts::SystemFonts::new(platform.text_system())
     };
     let app = {
         let _scope = ui_performance::trace::scope("Startup.application");
+        let _open_stage = crate::open_log::Stage::new("Startup.application", "");
         Application::with_platform(platform).with_assets(app_assets::Assets)
     };
     let (platform_open_sender, platform_open_receiver) = async_channel::unbounded();
@@ -340,6 +367,7 @@ fn main() {
         let services_scope = ui_performance::trace::scope("Startup.initialize_services");
         {
             let _trace = ui_performance::trace::scope("Startup.gpui_kit");
+            let _open_stage = crate::open_log::Stage::new("Startup.gpui_kit", "");
             gpui_kit::init(cx);
         }
         notifications::init(cx);
@@ -347,12 +375,14 @@ fn main() {
         cx.set_cursor_hide_mode(CursorHideMode::Never);
         {
             let _trace = ui_performance::trace::scope("Startup.theme");
+            let _open_stage = crate::open_log::Stage::new("Startup.theme", "");
             ui_theme::apply_product_theme(ThemeMode::Light, cx);
         }
         actions::init(cx);
         Workspace::init_window_registry(cx);
         {
             let _trace = ui_performance::trace::scope("Startup.app_icon");
+            let _open_stage = crate::open_log::Stage::new("Startup.app_icon", "");
             app_icon::init(cx);
         }
         let mut request_tasks = vec![external_request_listener(platform_open_receiver, cx)];

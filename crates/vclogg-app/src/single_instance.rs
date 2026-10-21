@@ -7,12 +7,17 @@ use anyhow::Result;
 
 pub(crate) struct OpenRequest {
     paths: Vec<PathBuf>,
+    delivery_log: crate::open_log::Stage,
     delivery_trace: crate::ui_performance::trace::Scope,
 }
 
 impl OpenRequest {
     pub(crate) fn new(paths: Vec<PathBuf>) -> Self {
         Self {
+            delivery_log: crate::open_log::Stage::new(
+                "ExternalOpen.wait_for_ui",
+                format_args!("paths={paths:?}"),
+            ),
             paths,
             // Starts on the receiving thread and ends when the UI consumes the
             // request. This is queue latency, not continuous work on that thread.
@@ -21,6 +26,11 @@ impl OpenRequest {
     }
 
     pub(crate) fn into_paths(self) -> Vec<PathBuf> {
+        self.delivery_log.event(format_args!(
+            "ui_received request={} paths={:?}",
+            self.delivery_log.id(),
+            self.paths
+        ));
         drop(self.delivery_trace);
         self.paths
     }
@@ -404,9 +414,9 @@ mod windows {
         },
         System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED},
         System::Pipes::{
-            ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeServerProcessId,
-            PIPE_READMODE_MESSAGE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_MESSAGE, PIPE_WAIT,
-            SetNamedPipeHandleState, TransactNamedPipe,
+            ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeClientProcessId,
+            GetNamedPipeServerProcessId, PIPE_READMODE_MESSAGE, PIPE_REJECT_REMOTE_CLIENTS,
+            PIPE_TYPE_MESSAGE, PIPE_WAIT, SetNamedPipeHandleState, TransactNamedPipe,
         },
         System::Threading::{CreateEventW, INFINITE, WaitForSingleObject},
         UI::WindowsAndMessaging::{
@@ -441,11 +451,17 @@ mod windows {
     }
 
     pub(super) fn acquire_or_forward(paths: &[PathBuf]) -> Result<Startup> {
+        let stage =
+            crate::open_log::Stage::new("ExternalOpen.acquire", format_args!("paths={paths:?}"));
         let name = pipe_name();
+        stage.event("pipe_name_resolved");
         let request = encode_request(paths)?;
         let deadline = Instant::now() + STARTUP_FORWARD_TIMEOUT;
 
+        let mut attempt = 0;
         loop {
+            attempt += 1;
+            stage.event(format_args!("connect_attempt={attempt}"));
             let create_error = match create_server_pipe(&name) {
                 Ok(server) => return Ok(Startup::Primary(PrimaryInstance { server })),
                 Err(error) => error,
@@ -480,6 +496,7 @@ mod windows {
                 Ok(true) => {}
                 Ok(false) => break,
                 Err(error) => {
+                    log::info!(target: crate::open_log::TARGET, "listener_failed error={error:#}");
                     log::error!("单实例启动请求处理失败：{error:#}");
                     unsafe { DisconnectNamedPipe(server.0.0) };
                     thread::sleep(RETRY_INTERVAL);
@@ -502,19 +519,33 @@ mod windows {
                 connected
             }
         })?;
+        let mut client_pid = 0;
+        let client_known = unsafe { GetNamedPipeClientProcessId(server.0.0, &mut client_pid) };
+        let stage = crate::open_log::Stage::new(
+            "ExternalOpen.connection",
+            format_args!("client_pid={client_pid} pid_known={client_known}"),
+        );
         let deadline = Instant::now() + CONNECTION_TIMEOUT;
         let request = {
             let _trace = crate::ui_performance::trace::scope("ExternalOpen.read_pipe_request");
+            let _open_stage = crate::open_log::Stage::new("ExternalOpen.read_pipe_request", "");
             read_request(server.0.0, deadline)
         };
         let keep_listening = match request {
             Ok(request) => {
+                stage.event(format_args!(
+                    "decoded request={} paths={:?}",
+                    request.delivery_log.id(),
+                    request.paths
+                ));
                 let accepted = sender.send_blocking(request).is_ok();
+                stage.event(format_args!("queued accepted={accepted}"));
                 write_acknowledgement(server.0.0, accepted, deadline)?;
                 accepted
             }
             Err(error) => {
                 _ = write_acknowledgement(server.0.0, false, deadline);
+                stage.event(format_args!("invalid_request error={error:#}"));
                 log::warn!("忽略无效的单实例启动请求：{error:#}");
                 true
             }
@@ -555,6 +586,10 @@ mod windows {
     }
 
     fn forward_request(name: &[u16], request: &[u8], deadline: Instant) -> Result<bool> {
+        let stage = crate::open_log::Stage::new(
+            "ExternalOpen.forward",
+            format_args!("bytes={}", request.len()),
+        );
         // Keep the connection open so foreground permission goes to the same
         // server that receives the request, before it can wake the UI thread.
         // Busy pipes use acquire_or_forward's bounded retry loop.
@@ -583,15 +618,17 @@ mod windows {
         }
         let mut server_process_id = 0;
         if unsafe { GetNamedPipeServerProcessId(pipe.0, &mut server_process_id) } != 0 {
+            stage.event(format_args!("connected server_pid={server_process_id}"));
             // Shell launches can pass their foreground right to the primary
             // process. Other launchers may lack it; still deliver their files.
             if unsafe { AllowSetForegroundWindow(server_process_id) } == 0 {
-                log::debug!("无法转交前台激活权限：Windows 错误 {}", unsafe {
+                log::info!(target: crate::open_log::TARGET, "无法转交前台激活权限：Windows 错误 {}", unsafe {
                     GetLastError()
                 });
             }
             wake_existing_window(server_process_id);
         }
+        stage.event("wake_returned transact_begin");
         let mut acknowledgement = [0u8; 1];
         let bytes_read = pipe_io(pipe.0, Some(deadline), |overlapped, transferred| unsafe {
             TransactNamedPipe(
@@ -604,6 +641,10 @@ mod windows {
                 overlapped,
             )
         })?;
+        stage.event(format_args!(
+            "acknowledgement bytes={bytes_read} accepted={}",
+            acknowledgement[0]
+        ));
         if bytes_read != 1 || acknowledgement[0] != 1 {
             bail!("已有 VCLogg2 实例未接受启动请求");
         }
@@ -646,7 +687,12 @@ mod windows {
         deadline: Option<Instant>,
         start: impl FnOnce(*mut OVERLAPPED, *mut u32) -> i32,
     ) -> Result<u32> {
+        let stage = crate::open_log::Stage::new(
+            "ExternalOpen.pipe_io",
+            format_args!("bounded={}", deadline.is_some()),
+        );
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            stage.event("deadline_expired");
             bail!("单实例管道通信超时");
         }
         let event = unsafe { CreateEventW(null(), 1, 0, null()) };
@@ -662,6 +708,7 @@ mod windows {
         }
         let error = unsafe { GetLastError() };
         if error != ERROR_IO_PENDING {
+            stage.event(format_args!("io_error code={error}"));
             bail!("单实例管道操作失败：Windows 错误 {error}");
         }
         let timeout = deadline.map_or(INFINITE, |deadline| {
@@ -675,10 +722,14 @@ mod windows {
             let error = unsafe { GetLastError() };
             // CancelIoEx requests cancellation, but does not finish it. Draining
             // the kernel completion is required before freeing borrowed buffers.
+            stage.event(format_args!(
+                "wait_failed result={waited} error={error} cancel_and_drain_begin"
+            ));
             unsafe {
                 CancelIoEx(pipe, &overlapped);
                 GetOverlappedResult(pipe, &overlapped, &mut transferred, 1);
             }
+            stage.event("cancel_and_drain_end");
             if waited == WAIT_TIMEOUT {
                 bail!("单实例管道通信超时");
             }
@@ -712,6 +763,7 @@ mod windows {
             1
         }
         let _trace = crate::ui_performance::trace::scope("ExternalOpen.wake_from_sender");
+        let _open_stage = crate::open_log::Stage::new("ExternalOpen.wake_from_sender", "");
         let mut target = Target {
             process_id,
             window: null_mut(),
@@ -720,8 +772,14 @@ mod windows {
         if target.window.is_null() {
             // A primary still starting has no window yet. Its normal UI routing
             // will activate the window once the queued request is consumed.
+            _open_stage.event("no_visible_window");
             return;
         }
+        _open_stage.event(format_args!(
+            "target_pid={process_id} hwnd={:?} minimized={}",
+            target.window,
+            unsafe { IsIconic(target.window) }
+        ));
         let mut owner = 0;
         unsafe { GetWindowThreadProcessId(target.window, &mut owner) };
         if owner != process_id {
@@ -731,7 +789,8 @@ mod windows {
             // Post restore instead of waiting for the other UI thread's resize
             // callbacks. Do not change the window's maximized/restored geometry.
             if IsIconic(target.window) != 0 {
-                ShowWindowAsync(target.window, SW_RESTORE);
+                let posted = ShowWindowAsync(target.window, SW_RESTORE);
+                _open_stage.event(format_args!("restore_posted={posted}"));
             }
             let popup = GetLastActivePopup(target.window);
             let mut popup_process_id = 0;
@@ -743,7 +802,11 @@ mod windows {
             } else {
                 target.window
             };
-            if SetForegroundWindow(window) == 0 {
+            let foreground = SetForegroundWindow(window);
+            _open_stage.event(format_args!(
+                "foreground_requested hwnd={window:?} result={foreground}"
+            ));
+            if foreground == 0 {
                 // Foreground rules may deny this request. The primary keeps its
                 // existing activation path; file delivery must still proceed.
                 log::debug!("转发进程未能置前已有窗口，将由主进程继续激活");

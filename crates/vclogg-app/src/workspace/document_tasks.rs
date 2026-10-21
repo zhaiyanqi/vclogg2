@@ -692,10 +692,19 @@ pub(super) fn prepare_document_in_range(
     range: SearchRange,
 ) -> Result<PreparedDocument> {
     let _trace = crate::ui_performance::trace::scope("Document.prepare");
+    let _open_stage =
+        crate::open_log::Stage::new("Document.prepare", format_args!("path={path:?}"));
     let (document, pending_index_cache) = match cached_complete_document {
-        Some(document) => (document, None),
+        Some(document) => {
+            _open_stage.event("reuse_complete_document");
+            (document, None)
+        }
         None => {
             let _trace = crate::ui_performance::trace::scope("Document.open_and_index");
+            let _open_stage = crate::open_log::Stage::new(
+                "Document.open_and_index",
+                format_args!("path={path:?}"),
+            );
             let (document, pending_index_cache) =
                 if let Some(cache_dir) = crate::app_paths::index_cache_dir() {
                     LogDocument::open_with_index_cache(path, cache_dir)?
@@ -710,6 +719,8 @@ pub(super) fn prepare_document_in_range(
         session_override
     } else {
         let _trace = crate::ui_performance::trace::scope("Document.load_session");
+        let _open_stage =
+            crate::open_log::Stage::new("Document.load_session", format_args!("path={path:?}"));
         match store.map(|store| store.load_session(path)).transpose() {
             Ok(session) => session.flatten(),
             Err(error) => {
@@ -789,6 +800,7 @@ pub(super) fn load_document_upgrade_frames(
     jobs: Vec<DocumentUpgradeLoadJob>,
 ) -> Vec<PreparedDocumentUpgradeFrame> {
     let _trace = crate::ui_performance::trace::scope("Document.upgrade_frames");
+    let _open_stage = crate::open_log::Stage::new("Document.upgrade_frames", "");
     jobs.into_iter()
         .map(|job| {
             let mut reader = LinePreviewReader::default();
@@ -838,6 +850,7 @@ pub(super) fn prepare_document_shell(
     regex: bool,
 ) -> PreparedDocument {
     let _trace = crate::ui_performance::trace::scope("Document.shell");
+    let _open_stage = crate::open_log::Stage::new("Document.shell", format_args!("path={path:?}"));
     PreparedDocument {
         document: Arc::new(LogDocument::placeholder(path)),
         cached_complete_document: None,
@@ -906,6 +919,8 @@ pub(super) fn prepare_document_preview(
     color_labels: &[ColorLabel],
 ) -> Result<PreparedDocument> {
     let _trace = crate::ui_performance::trace::scope("Document.preview");
+    let _open_stage =
+        crate::open_log::Stage::new("Document.preview", format_args!("path={path:?}"));
     let mut warning = None;
     let session = if session_override.is_some() {
         session_override

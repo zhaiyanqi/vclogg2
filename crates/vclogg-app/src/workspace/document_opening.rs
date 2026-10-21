@@ -231,6 +231,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        log::info!(target: crate::open_log::TARGET, "external_enqueue window={:?} paths={paths:?} open_busy={} history_loading={}", window.window_handle().window_id(), self.open_task.is_some(), self.history_loading);
         let paths = deduplicate_paths(
             paths
                 .into_iter()
@@ -254,6 +255,11 @@ impl Workspace {
                 .position(|tab| paths_match(tab.document.path(), path))
         }) {
             self.activate_tab(ix, window, cx);
+        }
+        for path in &paths {
+            if !new_paths.contains(path) {
+                log::info!(target: crate::open_log::TARGET, "external_existing_tab path={path:?} ready={}", self.documents.iter().any(|tab| paths_match(tab.document.path(), path) && tab.load_state == DocumentLoadState::Ready));
+            }
         }
         self.pending_external_paths.extend(new_paths);
         self.open_queued_external_paths_if_idle(window, cx);
@@ -503,12 +509,20 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let stage = crate::open_log::Stage::new(
+            "Document.open_batch",
+            format_args!(
+                "window={:?} paths={paths:?}",
+                window.window_handle().window_id()
+            ),
+        );
         let paths = deduplicate_paths(
             paths
                 .into_iter()
                 .filter(|path| !path.as_os_str().is_empty()),
         );
         if paths.is_empty() || self.open_task.is_some() {
+            stage.event("skipped_empty_or_busy");
             return;
         }
         self.file_refresh_task.take();
@@ -562,6 +576,7 @@ impl Workspace {
             })
             .collect::<Vec<_>>();
         if paths.is_empty() {
+            stage.event("already_ready");
             self.activity = Activity::Ready;
             self.maybe_restore_persisted_search(window, cx);
             for (path, completion) in overrides.move_completions {
@@ -621,6 +636,7 @@ impl Workspace {
             if presented.recv().await.is_err() {
                 return;
             }
+            stage.event("shell_frame_callbacks_complete session_load_begin");
             let restore_paths = paths.clone();
             let restore_store = state_store.clone();
             let (sessions, fallback_store, effective_search_result_limit) = cx
@@ -646,6 +662,7 @@ impl Workspace {
                 })
                 .await;
 
+            stage.event("session_load_end preview_begin");
             let preview_paths = paths.clone();
             let preview_sessions = sessions.clone();
             let preview_store = fallback_store.clone();
@@ -666,6 +683,15 @@ impl Workspace {
                     })
                 })
                 .await;
+            for (path, result) in &previews {
+                match result {
+                    Ok(_) => stage.event(format_args!("preview_prepared path={path:?}")),
+                    Err(error) => {
+                        stage.event(format_args!("preview_failed path={path:?} error={error:#}"))
+                    }
+                }
+            }
+            stage.event("preview_prepare_end upgrade_begin");
             let cached_complete_documents = previews
                 .iter()
                 .filter_map(|(path, prepared)| {
@@ -734,6 +760,7 @@ impl Workspace {
                 }
             });
 
+            stage.event("preview_install_returned full_prepare_begin");
             let full_paths = paths.clone();
             let full_store = fallback_store;
             let mut opened = cx
@@ -755,6 +782,15 @@ impl Workspace {
                 })
                 .await;
 
+            for (path, result) in &opened {
+                match result {
+                    Ok(_) => stage.event(format_args!("full_prepared path={path:?}")),
+                    Err(error) => {
+                        stage.event(format_args!("full_failed path={path:?} error={error:#}"))
+                    }
+                }
+            }
+            stage.event("full_prepare_end upgrade_begin");
             let upgrade_jobs = this
                 .update_in(cx, |this, window, cx| {
                     this.prepare_document_upgrade_jobs(&opened, window, cx)
@@ -777,6 +813,7 @@ impl Workspace {
                     active_path.clone()
                 };
                 let selected_tab = this.active_tab_id;
+                stage.event("install_completed_begin");
                 this.install_completed_documents(
                     opened,
                     selected_path.as_deref(),
@@ -791,6 +828,14 @@ impl Workspace {
                 {
                     this.activate_workspace_tab(selected_tab, window, cx);
                 }
+                stage.event("install_completed_end");
+                let frame_stage = crate::open_log::Stage::new(
+                    "Document.completion_frames",
+                    format_args!("paths={paths:?}"),
+                );
+                window.on_next_frame(move |window, _| {
+                    window.on_next_frame(move |_, _| frame_stage.event("frame_callbacks_complete"));
+                });
                 this.open_task = None;
                 this.maybe_restore_persisted_search(window, cx);
                 for (path, completion) in move_completions {

@@ -17,6 +17,7 @@ fn after_window_restore(
         let handle = window.window_handle();
         cx.spawn(async move |cx| {
             let _trace = crate::ui_performance::trace::scope("ExternalOpen.restore_window");
+            let _open_stage = crate::open_log::Stage::new("ExternalOpen.restore_window", "");
             let result = handle.update(cx, |_, window, _| -> anyhow::Result<_> {
                 let RawWindowHandle::Win32(native) =
                     raw_window_handle::HasWindowHandle::window_handle(window)?.as_raw()
@@ -28,6 +29,7 @@ fn after_window_restore(
             let hwnd = match result {
                 Ok(Ok(hwnd)) => hwnd,
                 Ok(Err(error)) | Err(error) => {
+                    _open_stage.event(format_args!("restore_failed error={error:#}"));
                     log::error!("无法恢复外部打开目标窗口：{error:#}");
                     return;
                 }
@@ -38,11 +40,19 @@ fn after_window_restore(
             // Unlike ShowWindowAsync, it finishes the restore before we enqueue
             // GPUI's focus operation. Its return value is previous visibility,
             // not success, so verify IsIconic on the live window below instead.
+            _open_stage.event(format_args!(
+                "restore_begin hwnd={hwnd:?} minimized={}",
+                unsafe { IsIconic(hwnd) }
+            ));
             unsafe {
                 if IsIconic(hwnd) != 0 {
                     ShowWindow(hwnd, SW_RESTORE);
                 }
             }
+            _open_stage.event(format_args!(
+                "restore_end hwnd={hwnd:?} minimized={}",
+                unsafe { IsIconic(hwnd) }
+            ));
             if let Err(error) = handle.update(cx, |_, window, cx| {
                 if unsafe { IsIconic(hwnd) } != 0 {
                     log::error!("外部打开目标窗口仍处于最小化状态，未执行焦点与文件打开操作");
@@ -50,6 +60,7 @@ fn after_window_restore(
                 }
                 ready(window, cx);
             }) {
+                _open_stage.event(format_args!("restore_target_closed error={error:#}"));
                 log::debug!("外部打开目标窗口在恢复期间已关闭：{error:#}");
             }
         })
@@ -66,15 +77,29 @@ impl Workspace {
     /// Foreground the application before inspecting files or changing document state.
     pub(crate) fn activate_for_external_open(paths: Vec<PathBuf>, cx: &mut App) -> bool {
         let _trace = crate::ui_performance::trace::scope("ExternalOpen.activate");
+        let _open_stage =
+            crate::open_log::Stage::new("ExternalOpen.activate", format_args!("paths={paths:?}"));
         let candidates = cx
             .global::<WorkspaceWindowRegistry>()
             .windows_by_recent_focus();
+        _open_stage.event(format_args!("candidate_count={}", candidates.len()));
         for candidate in candidates {
+            _open_stage.event(format_args!(
+                "candidate_window={:?}",
+                candidate.window.window_id()
+            ));
             let paths = paths.clone();
             if candidate
                 .window
                 .update(cx, move |_, window, cx| {
                     after_window_restore(window, cx, move |window, cx| {
+                        let activation_log = crate::open_log::Stage::new(
+                            "ExternalOpen.activation_frames",
+                            format_args!(
+                                "window={:?} paths={paths:?}",
+                                window.window_handle().window_id()
+                            ),
+                        );
                         let activation_frames = crate::ui_performance::trace::scope(
                             "ExternalOpen.wait_for_activation_frames",
                         );
@@ -83,6 +108,7 @@ impl Workspace {
                         // Yield a presented frame, not just a call to the native activation API.
                         window.on_next_frame(move |window, _| {
                             window.on_next_frame(move |_, cx| {
+                                activation_log.event("frame_callbacks_complete");
                                 drop(activation_frames);
                                 // Frame callbacks hold this window's mutable lease. Route only
                                 // after GPUI returns it to App, otherwise handle.update fails
@@ -121,6 +147,10 @@ impl Workspace {
         cx: &mut App,
     ) -> bool {
         let _trace = crate::ui_performance::trace::scope("ExternalOpen.dispatch_after_activation");
+        let _open_stage = crate::open_log::Stage::new(
+            "ExternalOpen.dispatch_after_activation",
+            format_args!("paths={paths:?}"),
+        );
         if paths.is_empty() {
             return false;
         }
@@ -137,6 +167,7 @@ impl Workspace {
                     .iter()
                     .any(|tab| paths_match(tab.document.path(), path))
             });
+            log::info!(target: crate::open_log::TARGET, "route path={path:?} existing_owner={:?}", owner.map(|candidate| candidate.window.window_id()));
             let targets = owner.into_iter().chain(candidates.iter());
             for candidate in targets {
                 let workspace = candidate.workspace.clone();
@@ -152,6 +183,7 @@ impl Workspace {
                             window.on_next_frame(move |window, _| {
                                 window.on_next_frame(move |window, cx| {
                                     _ = workspace.update(cx, |workspace, cx| {
+                                        log::info!(target: crate::open_log::TARGET, "route_frame_callbacks_complete window={:?} path={path:?}", window.window_handle().window_id());
                                         workspace.enqueue_external_paths(vec![path], window, cx)
                                     });
                                 });
@@ -183,6 +215,7 @@ impl Workspace {
                         } else {
                             "Window.did_deactivate"
                         });
+                    log::info!(target: crate::open_log::TARGET, "window_activation_observed window={:?} active={}", window.window_handle().window_id(), window.is_window_active());
                     workspace.file_watch_window_active = window.is_window_active();
                     workspace.sync_file_watch(window.window_handle(), cx);
                     if window.is_window_active() {

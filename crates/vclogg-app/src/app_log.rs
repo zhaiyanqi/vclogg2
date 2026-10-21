@@ -175,13 +175,14 @@ impl AppLogger {
 
     fn set_level(&self, level: AppLogLevel) {
         self.level.store(level.as_u8(), Ordering::Relaxed);
-        log::set_max_level(level.filter());
+        log::set_max_level(level.filter().max(LevelFilter::Info));
     }
 }
 
 impl Log for AppLogger {
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-        self.level().accepts(metadata.level())
+        (metadata.target() == crate::open_log::TARGET && metadata.level() == Level::Info)
+            || self.level().accepts(metadata.level())
     }
 
     fn log(&self, record: &Record<'_>) {
@@ -189,13 +190,18 @@ impl Log for AppLogger {
             return;
         }
         let line = format!(
-            "{} {:<5} [{}] {}",
+            "{} {:<5} [pid={}] [{}] {}",
             Local::now().format("%Y-%m-%d %H:%M:%S%.3f%:z"),
             record.level(),
+            std::process::id(),
             record_source(record),
             record.args(),
         );
-        eprintln!("{line}");
+        if record.target() == crate::open_log::TARGET {
+            crate::open_log::persist(&line);
+        } else {
+            eprintln!("{line}");
+        }
         if let Ok(mut buffer) = self.buffer.lock() {
             buffer.push(line);
         }
@@ -224,7 +230,7 @@ fn record_source(record: &Record<'_>) -> String {
 pub(crate) fn init() {
     let logger = LOGGER.get_or_init(|| AppLogger::new(AppLogLevel::default()));
     if log::set_logger(logger).is_ok() {
-        log::set_max_level(logger.level().filter());
+        log::set_max_level(logger.level().filter().max(LevelFilter::Info));
     }
 }
 
@@ -245,13 +251,14 @@ pub(crate) fn export(path: &Path) -> anyhow::Result<usize> {
     let logger = LOGGER
         .get()
         .context("application logger is not initialized")?;
-    let (text, count) = {
+    let (mut text, count) = {
         let buffer = logger
             .buffer
             .lock()
             .map_err(|_| anyhow::anyhow!("application log buffer is unavailable"))?;
         (buffer.export_text(), buffer.entries.len())
     };
+    crate::open_log::append_export(&mut text);
     fs::write(path, text)
         .with_context(|| format!("couldn't write application log to {}", path.display()))?;
     Ok(count)

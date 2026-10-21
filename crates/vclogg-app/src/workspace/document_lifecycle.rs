@@ -849,6 +849,7 @@ impl Workspace {
                         )
                 });
                 if !still_open {
+                    log::info!(target: crate::open_log::TARGET, "open_result_discarded path={path:?} tab={expected_id} reason=closed_or_replaced");
                     continue;
                 }
                 if result.is_err()
@@ -857,8 +858,20 @@ impl Workspace {
                     tab.load_state = DocumentLoadState::IndexFailed;
                 }
             }
+            match &result {
+                Ok(_) => {
+                    log::info!(target: crate::open_log::TARGET, "open_result_accepted path={path:?}")
+                }
+                Err(error) => {
+                    log::info!(target: crate::open_log::TARGET, "open_result_failed path={path:?} error={error:#}")
+                }
+            }
             accepted.push((path, result));
         }
+        let completed_paths = accepted
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
         self.install_documents(
             accepted,
             active_path,
@@ -868,6 +881,15 @@ impl Workspace {
             window,
             cx,
         );
+        for path in completed_paths {
+            if let Some(tab) = self
+                .documents
+                .iter()
+                .find(|tab| paths_match(tab.document.path(), &path))
+            {
+                log::info!(target: crate::open_log::TARGET, "open_install_result window={:?} path={path:?} tab={} ready={} source_lines={}", window.window_handle().window_id(), tab.id, tab.load_state == DocumentLoadState::Ready, tab.document.source_line_count());
+            }
+        }
         self.complete_pending_search_result_jump(window, cx);
         self.pending_directory_group_activation = None;
         self.persist_workspace_order(window, cx);
