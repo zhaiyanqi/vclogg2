@@ -167,6 +167,16 @@ fn resolve_windows_data_directory() -> anyhow::Result<PathBuf> {
     };
     std::fs::create_dir_all(&directory)
         .with_context(|| format!("无法创建数据目录：{}", directory.display()))?;
+    Ok(directory)
+}
+
+/// Only the primary process writes application data. Forwarding a shell open
+/// request must not wait for a temporary-file scan or require write access.
+#[cfg(windows)]
+pub(crate) fn validate_windows_data_directory() -> anyhow::Result<()> {
+    use anyhow::Context as _;
+
+    let directory = application_data_dir().context("无法确定数据目录")?;
     let probe = directory.join(format!(".vclogg2-write-{}", uuid::Uuid::new_v4()));
     let file = std::fs::OpenOptions::new()
         .write(true)
@@ -176,7 +186,7 @@ fn resolve_windows_data_directory() -> anyhow::Result<PathBuf> {
     drop(file);
     std::fs::remove_file(&probe)
         .with_context(|| format!("无法清理数据目录写入检查文件：{}", probe.display()))?;
-    Ok(directory)
+    Ok(())
 }
 
 #[cfg(test)]

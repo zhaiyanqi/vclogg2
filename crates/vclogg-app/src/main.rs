@@ -187,6 +187,29 @@ fn external_request_listener(
     })
 }
 
+#[cfg(windows)]
+fn report_windows_data_directory_error(error: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+
+    log::error!("VCLogg2 数据目录初始化失败：{error}");
+    let message = format!(
+        "无法使用 VCLogg2 数据目录。\n\n{error}\n\n请检查目录权限，或重新运行安装程序选择数据目录。"
+    )
+    .encode_utf16()
+    .chain(std::iter::once(0))
+    .collect::<Vec<_>>();
+    let title = windows_sys::w!("VCLogg2");
+    // Both strings are NUL-terminated and remain alive for this modal call.
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            message.as_ptr(),
+            title,
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
+
 fn main() {
     let arguments = match ui_performance::trace::startup::Arguments::parse() {
         Ok(arguments) => arguments,
@@ -212,28 +235,11 @@ fn main() {
         let _trace = ui_performance::trace::scope("Startup.data_directory");
         app_paths::initialize_windows_data_directory()
     } {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
-
-        log::error!("VCLogg2 数据目录初始化失败：{error}");
-        let message = format!("无法使用 VCLogg2 数据目录。\n\n{error}\n\n请检查目录权限，或重新运行安装程序选择数据目录。")
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect::<Vec<_>>();
-        let title = windows_sys::w!("VCLogg2");
-        // Both strings are NUL-terminated and remain alive for this modal call.
-        unsafe {
-            MessageBoxW(
-                std::ptr::null_mut(),
-                message.as_ptr(),
-                title,
-                MB_OK | MB_ICONERROR,
-            );
-        }
+        report_windows_data_directory_error(&error);
         drop(cold_trace);
         std::process::exit(1);
     }
     app_paths::log_development_override();
-    crash_report::install_panic_hook();
     log::info!("VCLogg2 {} starting", build_info::VERSION);
 
     let initial_paths = single_instance::command_line_paths(arguments.paths);
@@ -256,6 +262,15 @@ fn main() {
             return;
         }
     };
+    #[cfg(windows)]
+    if let Err(error) = {
+        let _trace = ui_performance::trace::scope("Startup.validate_data_directory");
+        app_paths::validate_windows_data_directory()
+    } {
+        report_windows_data_directory_error(&format!("{error:#}"));
+        drop(cold_trace);
+        std::process::exit(1);
+    }
     let listener_result = {
         let _trace = ui_performance::trace::scope("Startup.instance_listener");
         primary_instance.start_listener()
@@ -267,6 +282,12 @@ fn main() {
             return;
         }
     };
+    // Secondary launches have already forwarded and returned. Keep directory
+    // scans and crash-report cleanup off the external-open delivery path.
+    {
+        let _trace = ui_performance::trace::scope("Startup.crash_reporting");
+        crash_report::install_panic_hook();
+    }
     let initial_documents = initial_paths
         .into_iter()
         .map(InitialDocument::from_path)
