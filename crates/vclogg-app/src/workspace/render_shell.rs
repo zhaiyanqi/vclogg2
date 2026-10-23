@@ -267,7 +267,6 @@ impl Workspace {
                     .disabled(!has_document)
                     .on_click(reveal),
                 )
-                .separator()
                 .item(
                     PopupMenuItem::new(crate::tr!("关闭标签", "Close tab"))
                         .action(Box::new(CloseActiveTab))
@@ -282,7 +281,6 @@ impl Workspace {
                     PopupMenuItem::new(crate::tr!("关闭全部标签页", "Close all tabs"))
                         .on_click(close_all),
                 )
-                .separator()
                 .item(
                     PopupMenuItem::new(crate::tr!("退出 VCLogg2", "Quit VCLogg2"))
                         .on_click(|_, _, cx| cx.quit()),
@@ -294,14 +292,23 @@ impl Workspace {
             .dropdown_menu(move |menu, window, cx| {
                 let menu =
                     Self::popup_menu_with_workspace_action_context(menu, &edit_workspace, cx);
-                let can_edit_file = edit_workspace.read_with(cx, |this, _| {
-                    this.active_document().is_some_and(|tab| {
-                        tab.edit_load_task.is_none()
-                            && !tab.edit.as_ref().is_some_and(|edit| edit.active)
+                let (can_edit_file, editing) = edit_workspace.read_with(cx, |this, _| {
+                    this.active_document().map_or((false, false), |tab| {
+                        (
+                            tab.edit_load_task.is_none(),
+                            tab.edit.as_ref().is_some_and(|edit| edit.active),
+                        )
                     })
                 });
                 let edit_file = window.listener_for(&edit_workspace, |this, _, window, cx| {
-                    this.enter_document_edit_action(&EnterEditMode, window, cx);
+                    let Some(tab) = this.active_document() else {
+                        return;
+                    };
+                    if tab.edit.as_ref().is_some_and(|edit| edit.active) {
+                        this.exit_document_edit(tab.id, window, cx);
+                    } else {
+                        this.enter_document_edit_action(&EnterEditMode, window, cx);
+                    }
                 });
                 let copy = window.listener_for(&edit_workspace, |this, _, window, cx| {
                     this.copy_current_line(&CopyCurrentLine, window, cx);
@@ -326,12 +333,15 @@ impl Workspace {
                     this.clear_search(window, cx);
                 });
                 menu.item(
-                    PopupMenuItem::new(crate::tr!("编辑文件", "Edit file"))
-                        .action(Box::new(EnterEditMode))
-                        .disabled(!can_edit_file)
-                        .on_click(edit_file),
+                    PopupMenuItem::new(if editing {
+                        crate::tr!("退出编辑模式", "Exit edit mode")
+                    } else {
+                        crate::tr!("编辑文件", "Edit file")
+                    })
+                    .when(!editing, |item| item.action(Box::new(EnterEditMode)))
+                    .disabled(!can_edit_file)
+                    .on_click(edit_file),
                 )
-                .separator()
                 .item(
                     PopupMenuItem::new(crate::tr!("复制当前行", "Copy current line"))
                         .action(Box::new(CopyCurrentLine))
@@ -359,7 +369,6 @@ impl Workspace {
                         .disabled(!has_document)
                         .on_click(select_all),
                 )
-                .separator()
                 .item(
                     PopupMenuItem::new(crate::tr!("查找", "Find"))
                         .action(Box::new(FocusSearch))
@@ -483,7 +492,6 @@ impl Workspace {
                         .disabled(!has_document)
                         .on_click(toggle_auto_follow),
                 )
-                .separator()
                 .item(
                     PopupMenuItem::new(crate::tr!("文件开头", "Start of file"))
                         .action(Box::new(JumpToStart))
@@ -496,7 +504,6 @@ impl Workspace {
                         .disabled(!has_document)
                         .on_click(jump_to_end),
                 )
-                .separator()
                 .item(
                     PopupMenuItem::new(fullscreen_label)
                         .action(Box::new(ToggleFullscreen))
@@ -524,7 +531,6 @@ impl Workspace {
                             .icon(IconName::Settings2)
                             .on_click(predefined_filters),
                     )
-                    .separator()
                     .item(
                         PopupMenuItem::new(crate::tr!("设置", "Settings"))
                             .action(Box::new(OpenSettings))
@@ -584,7 +590,6 @@ impl Workspace {
                             .checked(highlight_matches)
                             .on_click(toggle_match_highlight),
                     )
-                    .separator()
                     .item(
                         PopupMenuItem::new(crate::tr!("标记行", "Mark lines"))
                             .action(Box::new(ToggleMarkedRow))
@@ -605,7 +610,6 @@ impl Workspace {
                             )
                             .on_click(manage_labels),
                     )
-                    .separator()
                     .item(
                         PopupMenuItem::new(crate::tr!("清除搜索高亮", "Clear search highlighting"))
                             .action(Box::new(ClearSearch))
@@ -658,18 +662,16 @@ impl Workspace {
                                 this.history_loading || this.pinned_updating,
                             )
                         });
-                    let mut menu = menu
-                        .item(
-                            PopupMenuItem::new(if active_file_is_pinned {
-                                crate::tr!("取消收藏文件", "Remove from favorites")
-                            } else {
-                                crate::tr!("收藏当前文件", "Favorite current file")
-                            })
-                            .checked(active_file_is_pinned)
-                            .disabled(!has_document || pinned_updating)
-                            .on_click(toggle),
-                        )
-                        .separator();
+                    let mut menu = menu.item(
+                        PopupMenuItem::new(if active_file_is_pinned {
+                            crate::tr!("取消收藏文件", "Remove from favorites")
+                        } else {
+                            crate::tr!("收藏当前文件", "Favorite current file")
+                        })
+                        .checked(active_file_is_pinned)
+                        .disabled(!has_document || pinned_updating)
+                        .on_click(toggle),
+                    );
                     if pinned_files.is_empty() {
                         menu = menu.item(
                             PopupMenuItem::new(crate::tr!("暂无收藏文件", "No favorite files"))
@@ -691,7 +693,7 @@ impl Workspace {
                             );
                         }
                     }
-                    menu.separator().item(
+                    menu.item(
                         PopupMenuItem::new(crate::tr!("清空收藏", "Clear favorites"))
                             .disabled(pinned_files.is_empty() || pinned_updating)
                             .on_click(clear),
@@ -726,7 +728,6 @@ impl Workspace {
                     PopupMenuItem::new(crate::tr!("主页", "Homepage"))
                         .on_click(|_, _, cx| cx.open_url("https://zhaiyanqi.github.io/vclogg2/")),
                 )
-                .separator()
                 .item(
                     PopupMenuItem::new(format!(
                         "{} ver.{}",
