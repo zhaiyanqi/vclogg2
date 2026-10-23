@@ -227,7 +227,7 @@ impl Workspace {
             return;
         }
         if active_drag {
-            self.advance_row_drag_selection(cx);
+            self.advance_row_drag_selection(window, cx);
         }
         let changed_row_selection = self.row_drag_selection.is_some_and(|drag| {
             drag.document_id == document_id && drag.region == region && drag.changed_row_selection()
@@ -274,7 +274,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if self.row_drag_selection.is_some() {
-            self.advance_row_drag_selection(cx);
+            self.advance_row_drag_selection(window, cx);
         }
         // Result replacement clears the delegate's pointer anchor before MouseUp. Keep the
         // workspace-owned drag target so its text-selection suppression is still released.
@@ -348,22 +348,20 @@ impl Workspace {
         self.row_drag_frame_scheduled = true;
         cx.on_next_frame(window, |this, window, cx| {
             this.row_drag_frame_scheduled = false;
-            let keep_scrolling = this.advance_row_drag_selection(cx);
-            if this
-                .row_drag_selection
-                .is_some_and(|drag| drag.mode == RowDragMode::Lines)
-            {
-                // The log viewport owns cross-row drag scrolling. End the text
-                // gesture so it cannot synthesize competing wheel events.
-                TextSelection::end(window, cx);
-            }
+            // Keep the text gesture alive across line-selection mode so its original anchor
+            // and moving endpoint are still valid when the pointer returns to the start row.
+            let keep_scrolling = this.advance_row_drag_selection(window, cx);
             if keep_scrolling {
                 this.schedule_row_drag_frame(window, cx);
             }
         });
     }
 
-    pub(super) fn advance_row_drag_selection(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(super) fn advance_row_drag_selection(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         const EDGE: f32 = 32.;
         let Some(drag) = self.row_drag_selection else {
             return false;
@@ -375,8 +373,9 @@ impl Workspace {
         else {
             return false;
         };
+        let text_selection_active = TextSelection::has_selection(window, cx);
         if drag.region == WrappedRegion::GlobalResults {
-            return self.advance_global_row_drag_selection(drag, bounds, cx);
+            return self.advance_global_row_drag_selection(drag, bounds, text_selection_active, cx);
         }
         let Some(tab_ix) = self
             .documents
@@ -431,7 +430,12 @@ impl Workspace {
             .unwrap_or(drag.target_row);
         let line_mode =
             !text_selection_allowed || direct_target != drag.start_row || crossed_viewport_edge;
-        let edge_direction = line_mode.then_some(edge_direction).flatten();
+        // A live text gesture already scrolls this viewport through captured wheel events.
+        // Only row-only gestures need our frame loop; two scroll writers would race.
+        let text_drag_scrolls = text_selection_allowed && text_selection_active;
+        let edge_direction = (line_mode && !text_drag_scrolls)
+            .then_some(edge_direction)
+            .flatten();
         let (target, scroll_top, keep_scrolling) =
             if let Some((direction, distance)) = edge_direction {
                 let step = ((distance.as_f32() / EDGE * 7.).ceil() as usize + 1).min(8);
@@ -568,6 +572,7 @@ impl Workspace {
         &mut self,
         drag: RowDragSelection,
         bounds: Bounds<Pixels>,
+        text_selection_active: bool,
         cx: &mut Context<Self>,
     ) -> bool {
         const EDGE: f32 = 32.;
@@ -602,7 +607,8 @@ impl Workspace {
             !text_selection_allowed || direct_candidate != drag.start_row || crossed_viewport_edge;
         let distance_above = (content_top + px(EDGE) - drag.pointer.y).max(px(0.));
         let distance_below = (drag.pointer.y - (content_bottom - px(EDGE))).max(px(0.));
-        let edge = if !line_mode {
+        let text_drag_scrolls = text_selection_allowed && text_selection_active;
+        let edge = if !line_mode || text_drag_scrolls {
             None
         } else if distance_above > px(0.) {
             Some((-1_isize, distance_above))
