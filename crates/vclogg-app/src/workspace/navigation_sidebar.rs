@@ -17,7 +17,7 @@ impl NavigationSidebar {
     pub(super) fn new(cx: &mut Context<Workspace>) -> Self {
         let workspace = cx.weak_entity();
         Self {
-            visible: true,
+            visible: false,
             vertical_tabs: false,
             show_tabs: false,
             tree: cx.new(|cx| FileTree::new(workspace, cx)),
@@ -45,6 +45,18 @@ impl Render for NavigationTabDrag {
 }
 
 impl Workspace {
+    pub(super) fn navigation_sidebar_visible(&self) -> bool {
+        self.navigation.visible
+    }
+
+    pub(super) fn toggle_navigation_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.navigation.visible = !self.navigation.visible;
+        if self.navigation.visible {
+            self.sync_navigation_file(cx);
+        }
+        cx.notify();
+    }
+
     pub(super) fn sync_navigation_file(&mut self, cx: &mut Context<Self>) {
         if self.navigation.visible
             && !self.navigation.show_tabs
@@ -116,8 +128,6 @@ impl Workspace {
             .h_full()
             .gap_1()
             .p_1()
-            .border_r_1()
-            .border_color(cx.theme().border)
             .child(
                 Button::new("sidebar-files")
                     .small()
@@ -155,12 +165,11 @@ impl Workspace {
                     })),
             );
         if !self.navigation.visible {
-            return h_flex()
+            return div()
                 .flex_1()
                 .min_h_0()
-                .items_stretch()
-                .child(rail)
-                .child(div().flex_1().min_w_0().h_full().child(content))
+                .min_w_0()
+                .child(content)
                 .into_any_element();
         }
         let panel = if self.navigation.show_tabs {
@@ -194,7 +203,6 @@ impl Workspace {
         v_flex()
             .size_full()
             .min_h_0()
-            .bg(cx.theme().sidebar)
             .child(
                 h_flex()
                     .p_1()

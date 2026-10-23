@@ -837,7 +837,7 @@ impl Workspace {
         let active_file_is_pinned = self.active_file_is_pinned();
 
         let colors = ui_theme::palette(cx);
-        // 工具栏内四个圆角方钮为 34px 见方、3px 间距，与 `Button` 的 24/32px
+        // 工具栏内圆角方钮为 34px 见方、3px 间距，与 `Button` 的 24/32px
         // 预设都对不上，所以逐个显式给尺寸。
         let toolbar_icon_button = |button: Button| {
             button
@@ -865,6 +865,19 @@ impl Workspace {
                 h_flex()
                     .gap(px(3.))
                     .flex_shrink_0()
+                    .child(toolbar_icon_button(
+                        Button::new("toggle-navigation-sidebar")
+                            .icon(gpui_kit::assets::IconName::PanelLeft)
+                            .selected(self.navigation_sidebar_visible())
+                            .tooltip(if self.navigation_sidebar_visible() {
+                                crate::tr!("收起侧栏", "Hide sidebar")
+                            } else {
+                                crate::tr!("展开侧栏", "Show sidebar")
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.toggle_navigation_sidebar(cx);
+                            })),
+                    ))
                     .child(toolbar_icon_button(
                         Button::new("open-files")
                             .icon(IconName::FolderOpen)
