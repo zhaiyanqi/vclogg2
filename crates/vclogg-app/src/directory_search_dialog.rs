@@ -216,6 +216,7 @@ fn is_hidden_by_platform(_: &std::fs::DirEntry) -> bool {
 
 pub struct DirectorySearchDialog {
     directory: Option<PathBuf>,
+    directory_input: Entity<InputState>,
     file_type_filter_enabled: bool,
     file_type_patterns: Entity<InputState>,
     include_subdirectories: bool,
@@ -232,22 +233,42 @@ impl DirectorySearchDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let directory_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(
+                    options
+                        .directory
+                        .as_deref()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_default(),
+                )
+                .placeholder(crate::tr!(
+                    "输入或选择目录路径",
+                    "Enter or select a directory path"
+                ))
+        });
         let file_type_patterns = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(options.file_type_patterns)
                 .placeholder(crate::tr!("例如：*.txt|*.log", "Example: *.txt|*.log"))
         });
-        let subscriptions =
-            vec![
-                cx.subscribe(&file_type_patterns, |this, _, event: &InputEvent, cx| {
-                    if matches!(event, InputEvent::Change) {
-                        this.file_type_validation_error = false;
-                        cx.notify();
-                    }
-                }),
-            ];
+        let subscriptions = vec![
+            cx.subscribe(&directory_input, |this, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.directory_validation_error = false;
+                    cx.notify();
+                }
+            }),
+            cx.subscribe(&file_type_patterns, |this, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.file_type_validation_error = false;
+                    cx.notify();
+                }
+            }),
+        ];
         Self {
             directory: options.directory,
+            directory_input,
             file_type_filter_enabled: options.file_type_filter_enabled,
             file_type_patterns,
             include_subdirectories: options.include_subdirectories,
@@ -267,7 +288,7 @@ impl DirectorySearchDialog {
             return None;
         }
         Some(DirectorySearchOptions {
-            directory: Some(self.directory.clone()?),
+            directory: Some(self.input_directory(cx)?),
             file_type_filter_enabled: self.file_type_filter_enabled,
             file_type_patterns,
             include_subdirectories: self.include_subdirectories,
@@ -275,8 +296,23 @@ impl DirectorySearchDialog {
         })
     }
 
+    fn input_directory(&self, cx: &gpui_kit::App) -> Option<PathBuf> {
+        let value = self.directory_input.read(cx).value();
+        // Preserve native paths that cannot round-trip through UTF-8 when unchanged.
+        if let Some(directory) = &self.directory {
+            if directory.to_string_lossy().as_ref() == value.as_ref() {
+                return Some(directory.clone());
+            }
+        }
+        if value.trim().is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(value.as_ref()))
+        }
+    }
+
     pub fn show_validation_errors(&mut self, cx: &mut Context<Self>) {
-        self.directory_validation_error = self.directory.is_none();
+        self.directory_validation_error = self.input_directory(cx).is_none();
         self.file_type_validation_error = self.file_type_filter_enabled
             && !DirectorySearchFileFilter::new(
                 true,
@@ -303,9 +339,12 @@ impl DirectorySearchDialog {
                 .and_then(Result::ok)
                 .flatten()
                 .and_then(|mut paths| paths.pop());
-            _ = this.update_in(cx, |this, _, cx| {
+            _ = this.update_in(cx, |this, window, cx| {
                 this.directory_task = None;
                 if let Some(directory) = directory {
+                    this.directory_input.update(cx, |input, cx| {
+                        input.set_value(directory.display().to_string(), window, cx);
+                    });
                     this.directory = Some(directory);
                     this.directory_validation_error = false;
                 }
@@ -319,12 +358,6 @@ impl Render for DirectorySearchDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _performance_scope = crate::ui_performance::scope("DirectorySearchDialog::render");
         let choosing = self.directory_task.is_some();
-        let path = self
-            .directory
-            .as_deref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| crate::tr!("尚未选择目录", "No directory selected").to_string());
-
         v_flex()
             .id("directory-search-dialog")
             .w_full()
@@ -338,29 +371,16 @@ impl Render for DirectorySearchDialog {
                             .w_full()
                             .gap_2()
                             .child(
-                                div()
-                                    .h_8()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .px_3()
-                                    .flex()
-                                    .items_center()
-                                    .rounded(cx.theme().radius)
-                                    .border_1()
-                                    .border_color(if self.directory_validation_error {
-                                        cx.theme().danger
-                                    } else {
-                                        cx.theme().input
-                                    })
-                                    .bg(cx.theme().background)
-                                    .text_sm()
-                                    .text_color(if self.directory.is_some() {
-                                        cx.theme().foreground
-                                    } else {
-                                        cx.theme().muted_foreground
-                                    })
-                                    .truncate()
-                                    .child(path),
+                                div().min_w_0().flex_1().child(
+                                    Input::new(&self.directory_input)
+                                        .small()
+                                        .w_full()
+                                        .disabled(choosing)
+                                        .aria_label(crate::tr!("搜索目录", "Search directory"))
+                                        .when(self.directory_validation_error, |input| {
+                                            input.border_color(cx.theme().danger)
+                                        }),
+                                ),
                             )
                             .child(
                                 Button::new("directory-search-choose-directory")
@@ -384,7 +404,7 @@ impl Render for DirectorySearchDialog {
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().danger)
-                                .child(crate::tr!("请选择用于搜索的目录", "Select a directory to search")),
+                                .child(crate::tr!("请输入或选择用于搜索的目录", "Enter or select a directory to search")),
                         )
                     }),
             )
