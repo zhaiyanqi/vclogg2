@@ -106,18 +106,14 @@ impl Workspace {
             GlobalState::suppress_text_selection(cx);
             TextSelection::clear(window, cx);
         }
-        table.update(cx, |table, _| {
+        table.update(cx, |table, cx| {
             table.delegate().begin_pointer_selection(
                 row_ix,
                 event.modifiers.control,
                 event.modifiers.shift,
                 event.click_count,
             );
-        });
-        window.defer(cx, move |_, cx| {
-            table.update(cx, |table, cx| {
-                table.set_active_log_row(row_ix, cx);
-            });
+            table.set_active_log_row(row_ix, cx);
         });
     }
 
@@ -836,6 +832,11 @@ impl Workspace {
                         text_highlights
                     },
                 )
+                .selection_scope(if region == WrappedRegion::Results {
+                    self.search_results_viewer.text_selection_scope
+                } else {
+                    self.log_viewer.text_selection_scope
+                })
                 .selection_viewport(self.row_drag_bounds.get(&(document_id, region)).copied())
                 .suppress_selection(suppress_text_selection)
                 .word_boundary_characters(self.app_settings.word_boundary_characters.clone());
@@ -1176,7 +1177,7 @@ impl Workspace {
             GlobalState::suppress_text_selection(cx);
             TextSelection::clear(window, cx);
         }
-        self.global_table.update(cx, |table, _| {
+        self.global_table.update(cx, |table, cx| {
             if is_match {
                 table.delegate().begin_pointer_selection(
                     row_ix,
@@ -1185,18 +1186,8 @@ impl Workspace {
                     event.click_count,
                 );
             }
+            table.set_active_log_row(row_ix, cx);
         });
-        if is_match {
-            let table = self.global_table.clone();
-            window.defer(cx, move |_, cx| {
-                table.update(cx, |table, cx| {
-                    table.set_active_log_row(row_ix, cx);
-                });
-            });
-        } else {
-            self.global_table
-                .update(cx, |table, cx| table.set_active_log_row(row_ix, cx));
-        }
     }
 
     pub(super) fn prepare_wrapped_log_context(
@@ -2697,6 +2688,7 @@ impl Workspace {
                                 text_highlights
                             },
                         )
+                        .selection_scope(self.search_results_viewer.text_selection_scope)
                         .selection_viewport(
                             self.row_drag_bounds
                                 .get(&(0, WrappedRegion::GlobalResults))

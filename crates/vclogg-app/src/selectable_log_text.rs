@@ -7,7 +7,7 @@ use std::{
 
 use gpui_kit::base::{
     GlobalState, TextSelection, TextSelectionEvent, TextSelectionHandle, TextSelectionRegistration,
-    TextSelectionRun,
+    TextSelectionRun, TextSelectionScopeId,
 };
 use gpui_kit::{
     App, BorderStyle, Bounds, Corners, Edges, Element, ElementId, GlobalElementId, Hitbox,
@@ -626,6 +626,7 @@ pub struct SelectableLogText {
     preview_range: Option<Range<usize>>,
     suppress_selection: bool,
     selection_viewport: Option<Bounds<Pixels>>,
+    selection_scope: TextSelectionScopeId,
     word_boundary_characters: SharedString,
 }
 
@@ -648,6 +649,7 @@ impl SelectableLogText {
             preview_range: None,
             suppress_selection: false,
             selection_viewport: None,
+            selection_scope: TextSelectionScopeId::default(),
             word_boundary_characters: SharedString::default(),
         }
     }
@@ -672,6 +674,11 @@ impl SelectableLogText {
     /// Selection auto-scroll uses the owning log viewport, not the clipped text cell.
     pub(crate) fn selection_viewport(mut self, bounds: Option<Bounds<Pixels>>) -> Self {
         self.selection_viewport = bounds;
+        self
+    }
+
+    pub(crate) fn selection_scope(mut self, scope: TextSelectionScopeId) -> Self {
+        self.selection_scope = scope;
         self
     }
 
@@ -1082,6 +1089,7 @@ impl Element for SelectableLogText {
             }
             self.selection.handle.register(
                 TextSelectionRegistration::new(selection_hitbox, bounds)
+                    .with_scope(self.selection_scope)
                     .with_document_order(self.document_order)
                     .with_text_bounds(vec![text_bounds]),
                 window,
@@ -1116,7 +1124,31 @@ impl Element for SelectableLogText {
         let event_layout = layout.clone();
         let event_hitbox = hitbox.clone();
         let boundary_characters = self.word_boundary_characters.clone();
+        let selection_viewport = self.selection_viewport;
+        let selection_scope = self.selection_scope;
+        let document_order = self.document_order;
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+            if phase.capture()
+                && event.button == MouseButton::Left
+                && event_hitbox.is_hovered(window)
+            {
+                // Hover-only prepaint registration may still describe the previous row when
+                // a press follows a fast pointer move. Register before the selection layer's
+                // bubble handler resolves the mouse-down anchor, without registering every
+                // visible row on each idle frame. Event dispatch has no prepaint scope stack.
+                let mut selection_hitbox = event_hitbox.clone();
+                if let Some(viewport) = selection_viewport {
+                    selection_hitbox.content_mask.bounds = viewport;
+                }
+                selection.handle.register(
+                    TextSelectionRegistration::new(selection_hitbox, bounds)
+                        .with_scope(selection_scope)
+                        .with_document_order(document_order)
+                        .with_text_bounds(vec![event_layout.bounds()]),
+                    window,
+                    cx,
+                );
+            }
             if !phase.bubble()
                 || event.button != MouseButton::Left
                 || event.click_count < 2
