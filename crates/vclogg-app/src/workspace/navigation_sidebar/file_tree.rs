@@ -464,7 +464,6 @@ impl Render for FileTree {
                         }),
                         window.rem_size() * self.width_rem,
                         &self.horizontal_scroll,
-                        self.tree.read(cx).scroll_handle(),
                     )),
             )
     }
@@ -474,7 +473,6 @@ fn file_tree_scroll_view(
     tree: Tree,
     tree_width: Pixels,
     horizontal_scroll: &ScrollHandle,
-    vertical_scroll: &UniformListScrollHandle,
 ) -> impl IntoElement {
     use gpui_kit::component::scroll::ScrollbarMode;
 
@@ -517,43 +515,18 @@ fn file_tree_scroll_view(
             div()
                 .id("sidebar-file-tree-scroll-area")
                 .absolute()
-                .top_0()
-                .bottom_0()
-                .left(Scrollbar::width())
-                .right_0()
+                .inset_0()
                 .overflow_x_scroll()
                 .restrict_scroll_to_axis()
                 .track_scroll(horizontal_scroll)
                 .child(tree.w(tree_width).min_w_full()),
         )
         .child(
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left(Scrollbar::width())
-                .right_0()
-                .child(
-                    Scrollbar::horizontal(horizontal_scroll)
-                        .id("sidebar-file-tree-horizontal-scrollbar")
-                        .mode(ScrollbarMode::Always)
-                        .viewport_from_layout(),
-                ),
-        )
-        .child(
-            // Keep the vertical track away from the right-hand resize boundary.
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left_0()
-                .w(Scrollbar::width())
-                .child(
-                    Scrollbar::vertical(vertical_scroll)
-                        .id("sidebar-file-tree-vertical-scrollbar")
-                        .mode(ScrollbarMode::Always)
-                        .styles(|styles| styles.track(|track| track.width(Scrollbar::width())))
-                        .viewport_from_layout(),
-                ),
+            div().absolute().inset_0().child(
+                Scrollbar::horizontal(horizontal_scroll)
+                    .id("sidebar-file-tree-horizontal-scrollbar")
+                    .mode(ScrollbarMode::Always)
+                    .viewport_from_layout(),
+            ),
         )
 }
