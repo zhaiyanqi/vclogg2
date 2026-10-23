@@ -245,10 +245,28 @@ impl Workspace {
         }
     }
 
+    pub(super) fn render_vertical_workspace_tab_contents(
+        tab_id: WorkspaceTabId,
+        presentation: &WorkspaceTabPresentation,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::Div {
+        Self::render_tab_contents(tab_id, presentation, false, true, cx)
+    }
+
     pub(super) fn render_workspace_tab_contents(
         tab_id: WorkspaceTabId,
         presentation: &WorkspaceTabPresentation,
         closing: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::Div {
+        Self::render_tab_contents(tab_id, presentation, closing, false, cx)
+    }
+
+    fn render_tab_contents(
+        tab_id: WorkspaceTabId,
+        presentation: &WorkspaceTabPresentation,
+        closing: bool,
+        vertical: bool,
         cx: &mut Context<Self>,
     ) -> gpui_kit::Div {
         let WorkspaceTabPresentation {
@@ -292,6 +310,7 @@ impl Workspace {
                 cx.stop_propagation();
             }));
         h_flex()
+            .when(vertical, |view| view.w_full().min_w_0())
             .gap(px(8.))
             .items_center()
             .text_size(px(12.))
@@ -312,6 +331,7 @@ impl Workspace {
             .child(
                 div()
                     .min_w_0()
+                    .when(vertical, |view| view.flex_1())
                     .truncate()
                     .line_height(relative(1.5))
                     .child(visible_title),

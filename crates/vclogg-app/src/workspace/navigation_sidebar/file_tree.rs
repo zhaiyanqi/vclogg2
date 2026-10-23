@@ -8,10 +8,14 @@ use vclogg_core::{CancellationToken, DirectoryEntry, navigation_directory, navig
 pub(super) struct FileTree {
     workspace: WeakEntity<Workspace>,
     tree: Entity<TreeState>,
-    root: Option<PathBuf>,
     roots: Vec<PathBuf>,
+    horizontal_scroll: ScrollHandle,
+    width_rem: f32,
+    width_job: Option<Task<()>>,
+    width_revision: u64,
     _roots_job: Task<()>,
     selected: Option<PathBuf>,
+    revealed_path: Option<PathBuf>,
     expanded: BTreeSet<PathBuf>,
     directories: BTreeMap<PathBuf, Vec<DirectoryEntry>>,
     jobs: BTreeMap<PathBuf, (CancellationToken, Task<()>)>,
@@ -36,9 +40,11 @@ impl FileTree {
                 let path = decode_persisted_path(id);
                 this.expanded.insert(path.clone());
                 this.load(path, cx);
+                this.rebuild(cx);
             }
             TreeEvent::Collapsed(id) => {
                 this.expanded.remove(&decode_persisted_path(id));
+                this.rebuild(cx);
             }
         });
         let roots_job = cx.spawn(async move |this, cx| {
@@ -47,7 +53,14 @@ impl FileTree {
                 .await;
             _ = this.update(cx, |this, cx| {
                 match result {
-                    Ok(Some(roots)) => this.roots = roots,
+                    Ok(Some(roots)) => {
+                        for root in roots {
+                            if !this.roots.contains(&root) {
+                                this.roots.push(root);
+                            }
+                        }
+                        this.roots.sort();
+                    }
                     Ok(None) => {}
                     Err(error) => {
                         this.errors.insert(PathBuf::new(), error.to_string());
@@ -59,10 +72,14 @@ impl FileTree {
         Self {
             workspace,
             tree,
-            root: None,
             roots: Vec::new(),
+            horizontal_scroll: ScrollHandle::new(),
+            width_rem: 0.,
+            width_job: None,
+            width_revision: 0,
             _roots_job: roots_job,
             selected: None,
+            revealed_path: None,
             expanded: BTreeSet::new(),
             directories: BTreeMap::new(),
             jobs: BTreeMap::new(),
@@ -74,32 +91,19 @@ impl FileTree {
 
     pub(super) fn reveal(&mut self, path: PathBuf, directory: bool, cx: &mut Context<Self>) {
         let path = std::path::absolute(&path).unwrap_or(path);
-        let root = if directory {
-            path.clone()
-        } else {
-            path.parent().unwrap_or(Path::new(".")).to_path_buf()
-        };
-        if self
-            .root
-            .as_ref()
-            .is_none_or(|existing| !path.starts_with(existing))
-        {
-            for (cancel, _) in self.jobs.values() {
-                cancel.cancel();
+        if let Some(root) = path.ancestors().find(|path| path.parent().is_none()) {
+            let root = root.to_path_buf();
+            if !self.roots.contains(&root) {
+                self.roots.push(root);
+                self.roots.sort();
             }
-            self.jobs.clear();
-            self.generation += 1;
-            self.directories.clear();
-            self.expanded.clear();
-            self.errors.clear();
-            self.root = Some(root.clone());
         }
         self.selected = Some(path.clone());
-        let root = self.root.clone().unwrap_or(root);
+        self.revealed_path = Some(path.clone());
         let ancestors = path
             .ancestors()
             .skip(usize::from(!directory))
-            .take_while(|ancestor| ancestor.starts_with(&root))
+            .filter(|ancestor| !ancestor.as_os_str().is_empty())
             .map(Path::to_path_buf)
             .collect::<Vec<_>>();
         for ancestor in ancestors {
@@ -151,9 +155,16 @@ impl FileTree {
         );
         let mut item = TreeItem::new(id.clone(), label).expanded(self.expanded.contains(path));
         if directory {
-            let children = match self.directories.get(path) {
+            let mut children: Vec<TreeItem> = match self.directories.get(path) {
                 Some(entries) if !entries.is_empty() => entries
                     .iter()
+                    .filter(|entry| {
+                        !entry.is_hidden()
+                            || self
+                                .revealed_path
+                                .as_ref()
+                                .is_some_and(|path| path.starts_with(entry.path()))
+                    })
                     .map(|entry| self.item(entry.path(), entry.is_directory()))
                     .collect(),
                 _ => vec![
@@ -170,22 +181,74 @@ impl FileTree {
                     .disabled(true),
                 ],
             };
+            if children.is_empty() {
+                children.push(
+                    TreeItem::new(
+                        format!("placeholder:{id}"),
+                        crate::tr!("空文件夹", "Empty folder"),
+                    )
+                    .disabled(true),
+                );
+            }
             item = item.children(children);
         }
         item
     }
 
+    fn measure_width(&mut self, items: &[TreeItem], cx: &mut Context<Self>) {
+        let mut pending = items.iter().map(|item| (item, 0usize)).collect::<Vec<_>>();
+        let mut labels = Vec::new();
+        while let Some((item, depth)) = pending.pop() {
+            labels.push((
+                item.label
+                    .replace('\n', "\\n")
+                    .replace('\r', "\\r")
+                    .replace('\t', "\\t"),
+                depth,
+            ));
+            if item.is_expanded() {
+                pending.extend(item.children.iter().map(|item| (item, depth + 1)));
+            }
+        }
+        self.width_revision += 1;
+        let revision = self.width_revision;
+        let text_system = cx.text_system().clone();
+        let font = gpui_kit::font(cx.theme().font_family.clone());
+        let rem = cx.theme().font_size;
+        self.width_job = Some(cx.spawn(async move |this, cx| {
+            let width = cx
+                .background_spawn(async move {
+                    let text_system = gpui_kit::WindowTextSystem::new(text_system);
+                    labels.into_iter().fold(0f32, |width, (label, depth)| {
+                        let run = gpui_kit::TextRun {
+                            len: label.len(),
+                            font: font.clone(),
+                            ..Default::default()
+                        };
+                        let text_width = text_system
+                            .layout_line(&label, rem * 0.875, &[run], None)
+                            .width;
+                        width.max(text_width / rem + depth as f32 + 1. + 0.875 + 0.25)
+                    })
+                })
+                .await;
+            _ = this.update(cx, |this, cx| {
+                if this.width_revision == revision {
+                    this.width_rem = width;
+                    this.width_job = None;
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
     fn rebuild(&mut self, cx: &mut Context<Self>) {
         let items = self
-            .root
-            .as_ref()
-            .map(|root| vec![self.item(root, true)])
-            .unwrap_or_else(|| {
-                self.roots
-                    .iter()
-                    .map(|root| self.item(root, true))
-                    .collect()
-            });
+            .roots
+            .iter()
+            .map(|root| self.item(root, true))
+            .collect::<Vec<_>>();
+        self.measure_width(&items, cx);
         let pending_reveal = self.selected.is_some();
         let selected = self
             .selected
@@ -216,7 +279,8 @@ impl FileTree {
 }
 
 impl Render for FileTree {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let state = cx.entity();
         let workspace_current = self.workspace.clone();
         let workspace = self.workspace.clone();
         let workspace_keyboard = workspace.clone();
@@ -225,44 +289,24 @@ impl Render for FileTree {
             .min_h_0()
             .child(
                 h_flex()
+                    .h(ui_theme::WORKSPACE_BAR_HEIGHT)
+                    .flex_shrink_0()
                     .gap_1()
-                    .p_1()
+                    .px_2()
                     .child(
-                        Button::new("tree-devices")
-                            .small()
-                            .ghost()
-                            .icon(IconName::Folder)
-                            .tooltip(crate::tr!("设备与根目录", "Devices and roots"))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.root = None;
-                                this.selected = None;
-                                this.rebuild(cx);
-                            })),
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .font_semibold()
+                            .child(crate::tr!("文件", "Files")),
                     )
                     .child(
-                        Button::new("tree-parent")
-                            .small()
-                            .ghost()
-                            .icon(IconName::ChevronUp)
-                            .tooltip(crate::tr!("上级文件夹", "Parent folder"))
-                            .disabled(self.root.as_ref().and_then(|root| root.parent()).is_none())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(parent) = this
-                                    .root
-                                    .as_ref()
-                                    .and_then(|root| root.parent())
-                                    .map(Path::to_path_buf)
-                                {
-                                    this.reveal(parent, true, cx);
-                                }
-                            })),
-                    )
-                    .child(
-                        Button::new("tree-refresh")
-                            .small()
+                        Button::new("sidebar-files-refresh")
+                            .xsmall()
                             .ghost()
                             .icon(crate::app_assets::AppIcon::Refresh)
-                            .tooltip(crate::tr!("刷新文件树", "Refresh file tree"))
+                            .tooltip(crate::tr!("刷新文件夹", "Refresh folders"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 for (cancel, _) in this.jobs.values() {
                                     cancel.cancel();
@@ -277,17 +321,32 @@ impl Render for FileTree {
                             })),
                     )
                     .child(
-                        Button::new("tree-current")
-                            .small()
+                        Button::new("sidebar-files-collapse")
+                            .xsmall()
                             .ghost()
-                            .label(crate::tr!("当前文件", "Current file"))
-                            .on_click(move |_, _, cx| {
-                                _ = workspace_current
-                                    .update(cx, |this, cx| this.reveal_active_navigation_file(cx));
+                            .icon(IconName::ChevronUp)
+                            .tooltip(crate::tr!("折叠文件夹", "Collapse folders"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.selected = None;
+                                this.expanded.clear();
+                                this.rebuild(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("sidebar-panel-menu")
+                            .xsmall()
+                            .ghost()
+                            .icon(IconName::Ellipsis)
+                            .tooltip(crate::tr!("侧边栏操作", "Sidebar actions"))
+                            .dropdown_menu(move |menu, window, cx| {
+                                let Some(workspace) = workspace_current.upgrade() else {
+                                    return menu;
+                                };
+                                Workspace::navigation_panel_menu(menu, &workspace, window, cx)
                             }),
                     ),
             )
-            .when(self.root.is_none() && self.roots.is_empty(), |view| {
+            .when(self.roots.is_empty(), |view| {
                 view.child(
                     div()
                         .p_2()
@@ -324,37 +383,112 @@ impl Render for FileTree {
                             });
                         }
                     }))
-                    .child(Tree::new(&self.tree, move |ix, entry, _, _, _| {
-                        let path = decode_persisted_path(&entry.item().id);
-                        let directory = entry.is_folder();
-                        let workspace = workspace.clone();
-                        ListItem::new(ix)
-                            .child(
-                                h_flex()
-                                    .gap_1()
-                                    .pl(rems(entry.depth() as f32))
-                                    .child(
-                                        Icon::new(if directory {
-                                            if entry.is_expanded() {
-                                                IconName::ChevronDown
+                    .child(file_tree_scroll_view(
+                        Tree::new(&self.tree, move |_, entry, selected, _, _| {
+                            let path = decode_persisted_path(&entry.item().id);
+                            let directory = entry.is_folder();
+                            let disabled = entry.is_disabled();
+                            let state = state.clone();
+                            let workspace = workspace.clone();
+                            ListItem::new(entry.item().id.clone())
+                                .selected(selected)
+                                .w_full()
+                                .h(rems(2.))
+                                .px(rems(0.5))
+                                .pl(rems(0.5 + entry.depth() as f32))
+                                .child(
+                                    h_flex()
+                                        .flex_shrink_0()
+                                        .gap(rems(0.25))
+                                        .child(
+                                            Icon::new(if directory {
+                                                if entry.is_expanded() {
+                                                    IconName::ChevronDown
+                                                } else {
+                                                    IconName::ChevronRight
+                                                }
                                             } else {
-                                                IconName::ChevronRight
-                                            }
-                                        } else {
-                                            IconName::File
-                                        })
-                                        .xsmall(),
-                                    )
-                                    .child(entry.item().label.clone()),
-                            )
-                            .on_click(move |_, window, cx| {
-                                if !directory {
-                                    _ = workspace.update(cx, |workspace, cx| {
-                                        workspace.begin_open_paths(vec![path.clone()], window, cx)
-                                    });
-                                }
-                            })
-                    })),
+                                                IconName::File
+                                            })
+                                            .size(rems(0.875)),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .whitespace_nowrap()
+                                                .text_size(rems(0.875))
+                                                .child(
+                                                    entry
+                                                        .item()
+                                                        .label
+                                                        .replace('\n', "\\n")
+                                                        .replace('\r', "\\r")
+                                                        .replace('\t', "\\t"),
+                                                ),
+                                        ),
+                                )
+                                .on_click(move |event, window, cx| {
+                                    if disabled {
+                                        return;
+                                    }
+                                    state.update(cx, |this, _| this.selected = None);
+                                    if !directory && event.click_count() >= 2 {
+                                        _ = workspace.update(cx, |workspace, cx| {
+                                            workspace.begin_open_paths(
+                                                vec![path.clone()],
+                                                window,
+                                                cx,
+                                            )
+                                        });
+                                    }
+                                })
+                        }),
+                        window.rem_size() * self.width_rem,
+                        &self.horizontal_scroll,
+                        self.tree.read(cx).scroll_handle(),
+                    )),
             )
     }
+}
+
+fn file_tree_scroll_view(
+    tree: Tree,
+    tree_width: Pixels,
+    horizontal_scroll: &ScrollHandle,
+    vertical_scroll: &UniformListScrollHandle,
+) -> impl IntoElement {
+    use gpui_kit::component::scroll::ScrollbarMode;
+
+    div()
+        .id("sidebar-file-tree-horizontal")
+        .relative()
+        .flex_1()
+        .min_h_0()
+        .min_w_0()
+        .child(
+            div()
+                .id("sidebar-file-tree-scroll-area")
+                .size_full()
+                .overflow_x_scroll()
+                .restrict_scroll_to_axis()
+                .track_scroll(horizontal_scroll)
+                .child(tree.w(tree_width).min_w_full()),
+        )
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .child(
+                    Scrollbar::horizontal(horizontal_scroll)
+                        .id("sidebar-file-tree-horizontal-scrollbar")
+                        .mode(ScrollbarMode::Always)
+                        .viewport_from_layout(),
+                )
+                .child(
+                    Scrollbar::vertical(vertical_scroll)
+                        .id("sidebar-file-tree-vertical-scrollbar")
+                        .mode(ScrollbarMode::Always)
+                        .viewport_from_layout(),
+                ),
+        )
 }

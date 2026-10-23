@@ -11,6 +11,7 @@ pub(super) struct NavigationSidebar {
     tree: Entity<FileTree>,
     split: Entity<ResizableState>,
     tabs_scroll: UniformListScrollHandle,
+    indicator: VerticalTabState,
 }
 
 impl NavigationSidebar {
@@ -23,7 +24,68 @@ impl NavigationSidebar {
             tree: cx.new(|cx| FileTree::new(workspace, cx)),
             split: cx.new(|_| ResizableState::default()),
             tabs_scroll: UniformListScrollHandle::new(),
+            indicator: VerticalTabState::default(),
         }
+    }
+}
+
+// Preserve the original segmented tab geometry and motion.
+const VERTICAL_TAB_HEIGHT: Pixels = px(36.);
+const VERTICAL_TAB_INDICATOR_HEIGHT: Pixels = px(28.);
+
+#[derive(Default)]
+pub(super) struct VerticalTabState {
+    indicator: Option<TabIndicatorMotion>,
+}
+
+struct TabIndicatorMotion {
+    state: gpui_kit::SpringState,
+    target: f32,
+    updated_at: std::time::Instant,
+}
+
+impl VerticalTabState {
+    fn sample_indicator(
+        &mut self,
+        active_ix: Option<usize>,
+        window: &mut Window,
+        cx: &App,
+    ) -> Option<Pixels> {
+        let Some(ix) = active_ix else {
+            self.indicator = None;
+            return None;
+        };
+        let target = VERTICAL_TAB_HEIGHT.as_f32() * ix as f32;
+        let now = cx.background_executor().now();
+        let motion = self.indicator.get_or_insert(TabIndicatorMotion {
+            state: gpui_kit::SpringState {
+                position: target,
+                velocity: 0.,
+            },
+            target,
+            updated_at: now,
+        });
+        // Match gpui-component's segmented TabBar: 250 ms response, damping 0.85,
+        // and 0.1 px settling tolerance. Product motion does not follow OS preferences.
+        let frequency = std::f32::consts::TAU / 0.25;
+        let spring = gpui_kit::SpringConfig::new(frequency * frequency, 2. * 0.85 * frequency, 1.);
+        motion.state = spring.step(
+            motion.state,
+            motion.target,
+            now.saturating_duration_since(motion.updated_at)
+                .as_secs_f32(),
+        );
+        motion.target = target;
+        motion.updated_at = now;
+        if spring.is_settled(motion.state, target, 0.1) {
+            motion.state = gpui_kit::SpringState {
+                position: target,
+                velocity: 0.,
+            };
+        } else {
+            window.request_animation_frame();
+        }
+        Some(px(motion.state.position))
     }
 }
 
@@ -125,45 +187,48 @@ impl Workspace {
                     .child(self.render_tab_workspace(window, cx)),
             );
         let rail = v_flex()
+            .w(rems(2.25))
             .h_full()
+            .flex_shrink_0()
             .gap_1()
-            .p_1()
-            .child(
-                Button::new("sidebar-files")
-                    .small()
+            .py_1()
+            .items_center()
+            .children([false, true].into_iter().map(|tabs| {
+                div().w_full().px_1().child(
+                    Button::new(if tabs {
+                        "sidebar-tabs"
+                    } else {
+                        "sidebar-files"
+                    })
                     .ghost()
-                    .icon(IconName::Folder)
-                    .selected(self.navigation.visible && !self.navigation.show_tabs)
-                    .tooltip(crate::tr!("文件树", "File tree"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if this.navigation.visible && !this.navigation.show_tabs {
-                            this.navigation.visible = false;
+                    .small()
+                    .w_full()
+                    .h_7()
+                    .p_0()
+                    .child(
+                        Icon::new(if tabs {
+                            IconName::File
                         } else {
-                            this.navigation.visible = true;
-                            this.navigation.show_tabs = false;
-                            this.reveal_active_navigation_file(cx);
+                            IconName::Folder
+                        })
+                        .small(),
+                    )
+                    .selected(self.navigation.show_tabs == tabs)
+                    .tooltip(if tabs {
+                        crate::tr!("标签页", "Tabs")
+                    } else {
+                        crate::tr!("文件", "Files")
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.navigation.show_tabs = tabs;
+                        if tabs {
+                            this.navigation.vertical_tabs = true;
                         }
+                        this.sync_navigation_file(cx);
                         cx.notify();
                     })),
-            )
-            .child(
-                Button::new("sidebar-tabs")
-                    .small()
-                    .ghost()
-                    .icon(IconName::File)
-                    .selected(self.navigation.visible && self.navigation.show_tabs)
-                    .tooltip(crate::tr!("纵向标签栏", "Vertical tabs"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.navigation.visible = true;
-                        this.navigation.show_tabs = true;
-                        this.navigation.vertical_tabs = true;
-                        this.navigation.tabs_scroll.scroll_to_item(
-                            this.active_workspace_tab_ix().unwrap_or_default(),
-                            ScrollStrategy::Nearest,
-                        );
-                        cx.notify();
-                    })),
-            );
+                )
+            }));
         if !self.navigation.visible {
             return div()
                 .flex_1()
@@ -173,69 +238,152 @@ impl Workspace {
                 .into_any_element();
         }
         let panel = if self.navigation.show_tabs {
-            self.render_navigation_tabs(has_other_window, cx)
+            self.render_navigation_tabs(has_other_window, window, cx)
         } else {
             self.navigation.tree.clone().into_any_element()
         };
-        h_flex()
+        let sidebar = h_flex()
+            .items_stretch()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .bg(ui_theme::header_material(&ui_theme::palette(cx)))
+            .child(rail)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .h_full()
+                    .border_l_1()
+                    .border_color(cx.theme().border)
+                    .child(panel),
+            );
+        div()
             .flex_1()
             .min_h_0()
             .min_w_0()
-            .items_stretch()
-            .child(rail)
             .child(
-                div().flex_1().min_w_0().h_full().child(
-                    h_resizable("navigation-split")
-                        .with_state(&self.navigation.split)
-                        .child(
-                            resizable_panel()
-                                .size(window.rem_size() * 16.)
-                                .size_range(window.rem_size() * 8. ..window.rem_size() * 32.)
-                                .child(panel),
-                        )
-                        .child(resizable_panel().child(content)),
-                ),
+                h_resizable("navigation-split")
+                    .with_state(&self.navigation.split)
+                    .child(
+                        resizable_panel()
+                            .size(window.rem_size() * 20.25)
+                            .size_range(window.rem_size() * 10.25..window.rem_size() * 34.25)
+                            .child(sidebar),
+                    )
+                    .child(resizable_panel().child(content)),
             )
             .into_any_element()
     }
 
-    fn render_navigation_tabs(&self, has_other_window: bool, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn navigation_panel_menu(
+        menu: PopupMenu,
+        workspace: &Entity<Self>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> PopupMenu {
+        window.focus(&menu.focus_handle(cx), cx);
+        let vertical = workspace.read(cx).navigation.vertical_tabs;
+        Self::popup_menu_with_workspace_action_context(menu, workspace, cx)
+            .item(
+                PopupMenuItem::new(crate::tr!("定位当前文件", "Reveal current file")).on_click(
+                    window.listener_for(workspace, |this, _, _, cx| {
+                        this.reveal_active_navigation_file(cx)
+                    }),
+                ),
+            )
+            .item(
+                PopupMenuItem::new(crate::tr!("垂直标签页", "Vertical tabs"))
+                    .checked(vertical)
+                    .on_click(window.listener_for(workspace, |this, _, _, cx| {
+                        this.navigation.vertical_tabs = !this.navigation.vertical_tabs;
+                        this.navigation.show_tabs = this.navigation.vertical_tabs;
+                        this.sync_navigation_file(cx);
+                        cx.notify();
+                    })),
+            )
+            .separator()
+            .item(
+                PopupMenuItem::new(crate::tr!("收起侧栏", "Hide sidebar")).on_click(
+                    window.listener_for(workspace, |this, _, _, cx| {
+                        this.toggle_navigation_sidebar(cx)
+                    }),
+                ),
+            )
+    }
+
+    fn render_navigation_tabs(
+        &mut self,
+        has_other_window: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let active_ix = self.active_workspace_tab_ix();
+        let indicator_y = self
+            .navigation
+            .indicator
+            .sample_indicator(active_ix, window, cx);
         v_flex()
             .size_full()
             .min_h_0()
             .child(
                 h_flex()
-                    .p_1()
+                    .h(ui_theme::WORKSPACE_BAR_HEIGHT)
+                    .flex_shrink_0()
                     .gap_1()
+                    .px_2()
                     .child(
-                        Button::new("vertical-new-tab")
-                            .small()
-                            .ghost()
-                            .icon(IconName::Plus)
-                            .tooltip(crate::tr!("新建标签页", "New tab"))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.create_new_tab(window, cx);
-                            })),
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .font_semibold()
+                            .child(crate::tr!("标签页", "Tabs")),
                     )
                     .child(
-                        Button::new("horizontal-tabs")
-                            .small()
+                        Button::new("sidebar-panel-menu")
+                            .xsmall()
                             .ghost()
-                            .label(crate::tr!("横向标签栏", "Horizontal tabs"))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.navigation.vertical_tabs = false;
-                                this.navigation.show_tabs = false;
-                                cx.notify();
-                            })),
+                            .icon(IconName::Ellipsis)
+                            .tooltip(crate::tr!("侧边栏操作", "Sidebar actions"))
+                            .dropdown_menu({
+                                let workspace = cx.entity();
+                                move |menu, window, cx| {
+                                    Self::navigation_panel_menu(menu, &workspace, window, cx)
+                                }
+                            }),
                     ),
             )
             .child(
                 uniform_list(
                     "vertical-document-tabs",
-                    self.tabs.len(),
+                    self.tabs.len() + 1,
                     cx.processor(move |this, range: Range<usize>, _, cx| {
                         range
                             .map(|ix| {
+                                if ix == this.tabs.len() {
+                                    return h_flex()
+                                        .w_full()
+                                        .h(VERTICAL_TAB_HEIGHT)
+                                        .px(px(5.))
+                                        .child(
+                                            Button::new("vertical-new-tab")
+                                                .small()
+                                                .ghost()
+                                                .w_full()
+                                                .h(VERTICAL_TAB_INDICATOR_HEIGHT)
+                                                .rounded(
+                                                    (cx.theme().radius_lg - px(3.)).max(px(0.)),
+                                                )
+                                                .icon(IconName::Plus)
+                                                .tooltip(crate::tr!("新建标签页", "New tab"))
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.create_new_tab(window, cx);
+                                                })),
+                                        )
+                                        .into_any_element();
+                                }
                                 let tab_id = this.tabs[ix];
                                 let title = this.workspace_tab_title(tab_id);
                                 let id: SharedString = format!("vertical-tab-{tab_id:?}").into();
@@ -247,8 +395,35 @@ impl Workspace {
                                 };
                                 let menu_state =
                                     this.workspace_tab_menu_state(ix, has_other_window);
-                                h_flex()
+                                let presentation = this.workspace_tab_presentation(tab_id);
+                                div()
+                                    .relative()
+                                    .w_full()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .h(VERTICAL_TAB_HEIGHT)
+                                    .px(px(5.))
                                     .id(id.clone())
+                                    .when_some(indicator_y, |row, y| {
+                                        row.child(
+                                            div()
+                                                .absolute()
+                                                .left(px(5.))
+                                                .right(px(5.))
+                                                .top(
+                                                    y - VERTICAL_TAB_HEIGHT * ix as f32
+                                                        + (VERTICAL_TAB_HEIGHT
+                                                            - VERTICAL_TAB_INDICATOR_HEIGHT)
+                                                            / 2.,
+                                                )
+                                                .h(VERTICAL_TAB_INDICATOR_HEIGHT)
+                                                .bg(cx.theme().tokens.background)
+                                                .rounded(
+                                                    (cx.theme().radius_lg - px(3.)).max(px(0.)),
+                                                )
+                                                .shadow_sm(),
+                                        )
+                                    })
                                     .on_drag(dragged, |dragged, _, _, cx| {
                                         cx.new(|_| dragged.clone())
                                     })
@@ -292,40 +467,53 @@ impl Workspace {
                                             ),
                                         }
                                     })
-                                    .w_full()
-                                    .p_1()
-                                    .gap_1()
                                     .child(
-                                        Button::new(id)
-                                            .small()
-                                            .ghost()
-                                            .flex_1()
+                                        gpui_kit::base::Tab::new(id)
+                                            .relative()
+                                            .flex()
+                                            .items_center()
+                                            .w_full()
                                             .min_w_0()
-                                            .label(title.clone())
-                                            .tooltip(title)
+                                            .h(VERTICAL_TAB_HEIGHT)
+                                            .px(px(6.))
+                                            .text_color(cx.theme().tab_foreground)
+                                            .styles(|styles| {
+                                                styles.selected(|style| {
+                                                    style.text_color(
+                                                        cx.theme().tab_active_foreground,
+                                                    )
+                                                })
+                                            })
+                                            .hover(|style| {
+                                                style.text_color(cx.theme().tab_active_foreground)
+                                            })
+                                            .accessibility_label(title)
                                             .selected(this.active_tab_id == tab_id)
+                                            .set_position(ix + 1, this.tabs.len())
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.activate_workspace_tab(tab_id, window, cx);
-                                            })),
-                                    )
-                                    .child(
-                                        Button::new(SharedString::from(format!(
-                                            "vertical-close-{tab_id:?}"
-                                        )))
-                                        .small()
-                                        .ghost()
-                                        .icon(IconName::Close)
-                                        .tooltip(crate::tr!("关闭标签", "Close tab"))
-                                        .on_click(
-                                            cx.listener(move |this, _, window, cx| {
-                                                this.request_close_workspace_tabs(
-                                                    BTreeSet::from([tab_id]),
-                                                    window,
+                                            }))
+                                            .on_aux_click(cx.listener(
+                                                move |this, event: &ClickEvent, window, cx| {
+                                                    if event.is_middle_click() {
+                                                        this.request_close_workspace_tabs(
+                                                            BTreeSet::from([tab_id]),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    }
+                                                },
+                                            ))
+                                            .child(
+                                                Self::render_vertical_workspace_tab_contents(
+                                                    tab_id,
+                                                    &presentation,
                                                     cx,
-                                                );
-                                            }),
-                                        ),
+                                                )
+                                                .w_full(),
+                                            ),
                                     )
+                                    .into_any_element()
                             })
                             .collect()
                     }),
