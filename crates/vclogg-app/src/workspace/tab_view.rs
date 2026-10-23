@@ -9,27 +9,21 @@ pub(super) struct WorkspaceTabPresentation {
 }
 
 impl Workspace {
-    pub(super) fn render_workspace_tab(
+    pub(super) fn workspace_tab_menu_state(
         &self,
         ix: usize,
         has_other_window: bool,
-        cx: &mut Context<Self>,
-    ) -> Tab {
+    ) -> TabMenuState {
         let tab_id = self.tabs[ix];
         let tab_count = self.tabs.len();
-        let workspace = cx.entity();
-        let source_workspace = cx.weak_entity();
-        let tab_drop_layout = self.tab_drop_layout.clone();
         let document_id = tab_id.document_id();
-        let tab_title = self.workspace_tab_title(tab_id);
         let can_restore_title = document_id.is_some_and(|document_id| {
             self.documents
                 .iter()
                 .find(|tab| tab.id == document_id)
                 .is_some_and(|tab| tab.file.custom_title.is_some())
         });
-        let dragged_tab = DraggedTab::new(tab_id, source_workspace.clone());
-        let tab_menu_state = TabMenuState {
+        TabMenuState {
             tab_ix: ix,
             tab_count,
             can_restore_title,
@@ -50,7 +44,23 @@ impl Workspace {
                     .get(&id)
                     .is_some_and(|draft| draft.active),
             },
-        };
+        }
+    }
+
+    pub(super) fn render_workspace_tab(
+        &self,
+        ix: usize,
+        has_other_window: bool,
+        cx: &mut Context<Self>,
+    ) -> Tab {
+        let tab_id = self.tabs[ix];
+        let workspace = cx.entity();
+        let source_workspace = cx.weak_entity();
+        let tab_drop_layout = self.tab_drop_layout.clone();
+        let document_id = tab_id.document_id();
+        let tab_title = self.workspace_tab_title(tab_id);
+        let dragged_tab = DraggedTab::new(tab_id, source_workspace.clone());
+        let tab_menu_state = self.workspace_tab_menu_state(ix, has_other_window);
         let context_workspace = workspace.clone();
         let tab_layout = tab_drop_layout.clone();
         let selected = self.active_tab_id == tab_id;

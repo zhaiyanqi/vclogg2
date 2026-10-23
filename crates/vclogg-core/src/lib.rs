@@ -2,6 +2,7 @@
 
 mod cancellation;
 mod document;
+mod navigation;
 mod result_set;
 mod search;
 
@@ -10,6 +11,7 @@ pub use document::{
     DocumentMetadata, DocumentRefreshKind, LinePreview, LinePreviewReader, LineReader,
     LineTextWindow, LogDocument, PendingIndexCacheWrite, RefreshValidation,
 };
+pub use navigation::{DirectoryEntry, navigation_directory, navigation_roots};
 pub use result_set::CompressedRows;
 pub use search::{
     SearchCancellation, SearchMatcher, SearchPreview, SearchProgress, SearchProgressSnapshot,

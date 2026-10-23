@@ -395,6 +395,7 @@ impl Workspace {
     }
 
     pub(super) fn sync_active_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_navigation_file(cx);
         let (title, _query, selected_row) = self
             .active_document()
             .map(|tab| {

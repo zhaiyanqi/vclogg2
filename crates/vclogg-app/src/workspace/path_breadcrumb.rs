@@ -85,7 +85,8 @@ impl Workspace {
             } else {
                 directory.to_path_buf()
             };
-            let click_directory = directory.clone();
+            let click_path = item_path.clone();
+            let context_path = item_path.clone();
             let context_workspace = workspace.clone();
             let label = if is_file && !show_full_path {
                 tab.file.title.to_string()
@@ -123,23 +124,16 @@ impl Workspace {
                         } else {
                             cx.theme().muted_foreground
                         })
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                match crate::open_directory::launch_custom_directory(
-                                    &this.app_settings.open_directory_command,
-                                    &click_directory,
-                                ) {
-                                    Ok(true) => {}
-                                    Ok(false) => cx.open_with_system(&click_directory),
-                                    Err(error) => window.notify_message(error.to_string(), cx),
-                                }
-                            },
-                        )),
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.reveal_navigation_path(click_path.clone(), !is_file, cx);
+                        })),
                     )
                     .context_menu(move |menu, window, cx| {
                         Self::build_breadcrumb_menu(
                             menu,
                             directory.clone(),
+                            context_path.clone(),
+                            is_file,
                             &context_workspace,
                             window,
                             cx,
@@ -161,6 +155,8 @@ impl Workspace {
     fn build_breadcrumb_menu(
         menu: PopupMenu,
         directory: PathBuf,
+        path: PathBuf,
+        is_file: bool,
         workspace: &Entity<Self>,
         window: &mut Window,
         cx: &mut App,
@@ -173,7 +169,29 @@ impl Workspace {
         let choose_directory = directory.clone();
         let find_directory = directory;
         let opening = workspace.read(cx).open_task.is_some();
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
         Self::popup_menu_with_workspace_action_context(menu, workspace, cx)
+            .item(
+                PopupMenuItem::new(if is_file {
+                    crate::tr!("复制文件名", "Copy file name")
+                } else {
+                    crate::tr!("复制文件夹名", "Copy folder name")
+                })
+                .on_click(move |_, _, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(name.clone()))
+                }),
+            )
+            .item(
+                PopupMenuItem::new(crate::tr!("复制路径", "Copy path")).on_click(
+                    move |_, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(path.display().to_string()))
+                    },
+                ),
+            )
+            .separator()
             .item(
                 PopupMenuItem::new(crate::tr!("打开目录文件", "Open files in folder"))
                     .disabled(opening)

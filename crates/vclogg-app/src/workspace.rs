@@ -1661,6 +1661,7 @@ pub struct Workspace {
     tabs: Vec<WorkspaceTabId>,
     active_tab_id: WorkspaceTabId,
     active_ix: Option<usize>,
+    navigation: navigation_sidebar::NavigationSidebar,
     document_tab_scroll: ScrollHandle,
     tab_drag: tab_drag::TabDragState,
     tab_motion: tab_motion::TabMotionState,
@@ -1757,6 +1758,7 @@ mod filter_popover;
 mod highlight_preferences;
 mod log_presentation;
 mod log_viewport;
+mod navigation_sidebar;
 mod path_breadcrumb;
 mod preferences;
 mod quick_find;
@@ -2368,6 +2370,7 @@ impl Workspace {
             tabs: vec![WorkspaceTabId::New(1)],
             active_tab_id: WorkspaceTabId::New(1),
             active_ix: None,
+            navigation: navigation_sidebar::NavigationSidebar::new(cx),
             document_tab_scroll: ScrollHandle::new(),
             tab_drag: tab_drag::TabDragState::default(),
             tab_motion: tab_motion::TabMotionState::default(),
@@ -2754,21 +2757,7 @@ impl Render for Workspace {
             .children(ui_theme::ambient_glow_layers(&colors))
             .child(self.render_title_bar(window, cx))
             .child(self.render_file_toolbar(window, cx))
-            .child(
-                div().flex_1().min_h_0().min_w_0().child(
-                    v_flex()
-                        .size_full()
-                        .min_w_0()
-                        .min_h_0()
-                        .child(self.render_tabs(has_other_window, cx))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_h_0()
-                                .child(self.render_tab_workspace(window, cx)),
-                        ),
-                ),
-            )
+            .child(self.render_navigation_workspace(has_other_window, window, cx))
             .child(self.status_surface.clone())
             .child(self.render_file_drop_observer(cx))
             .when(self.file_drop_paths.is_some(), |element| {
