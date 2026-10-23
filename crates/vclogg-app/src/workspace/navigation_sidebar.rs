@@ -1,5 +1,6 @@
 //! Left navigation owns its tree snapshots independently of document contents.
 use super::*;
+use gpui_kit::component::StyledExt as _;
 use gpui_kit::component::resizable::h_resizable;
 mod file_tree;
 use file_tree::FileTree;
