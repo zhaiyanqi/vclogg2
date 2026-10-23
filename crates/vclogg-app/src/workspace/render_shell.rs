@@ -294,6 +294,15 @@ impl Workspace {
             .dropdown_menu(move |menu, window, cx| {
                 let menu =
                     Self::popup_menu_with_workspace_action_context(menu, &edit_workspace, cx);
+                let can_edit_file = edit_workspace.read_with(cx, |this, _| {
+                    this.active_document().is_some_and(|tab| {
+                        tab.edit_load_task.is_none()
+                            && !tab.edit.as_ref().is_some_and(|edit| edit.active)
+                    })
+                });
+                let edit_file = window.listener_for(&edit_workspace, |this, _, window, cx| {
+                    this.enter_document_edit_action(&EnterEditMode, window, cx);
+                });
                 let copy = window.listener_for(&edit_workspace, |this, _, window, cx| {
                     this.copy_current_line(&CopyCurrentLine, window, cx);
                 });
@@ -317,6 +326,13 @@ impl Workspace {
                     this.clear_search(window, cx);
                 });
                 menu.item(
+                    PopupMenuItem::new(crate::tr!("编辑文件", "Edit file"))
+                        .action(Box::new(EnterEditMode))
+                        .disabled(!can_edit_file)
+                        .on_click(edit_file),
+                )
+                .separator()
+                .item(
                     PopupMenuItem::new(crate::tr!("复制当前行", "Copy current line"))
                         .action(Box::new(CopyCurrentLine))
                         .disabled(!has_document || !has_selected_log_rows)
