@@ -706,6 +706,10 @@ impl Workspace {
                     PopupMenuItem::new(crate::tr!("检查更新", "Check for updates"))
                         .on_click(check_updates),
                 )
+                .item(
+                    PopupMenuItem::new(crate::tr!("主页", "Homepage"))
+                        .on_click(|_, _, cx| cx.open_url("https://zhaiyanqi.github.io/vclogg2/")),
+                )
                 .separator()
                 .item(
                     PopupMenuItem::new(format!(
