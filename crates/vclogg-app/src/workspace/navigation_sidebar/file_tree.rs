@@ -462,12 +462,41 @@ fn file_tree_scroll_view(
 ) -> impl IntoElement {
     use gpui_kit::component::scroll::ScrollbarMode;
 
+    let wheel_scroll = horizontal_scroll.clone();
     div()
         .id("sidebar-file-tree-horizontal")
         .relative()
         .flex_1()
         .min_h_0()
         .min_w_0()
+        .child(
+            canvas(
+                |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+                move |_, hitbox, window, _| {
+                    // Capture before the nested tree handles the same wheel vertically.
+                    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+                        if !phase.capture()
+                            || !event.modifiers.shift
+                            || !hitbox.should_handle_scroll(window)
+                        {
+                            return;
+                        }
+                        let delta = event.delta.pixel_delta(window.line_height());
+                        // Some platforms already translate Shift+wheel onto the x axis.
+                        let horizontal_delta = if delta.x != px(0.) { delta.x } else { delta.y };
+                        let mut offset = wheel_scroll.offset();
+                        offset.x = (offset.x + horizontal_delta)
+                            .clamp(-wheel_scroll.max_offset().x, px(0.));
+                        wheel_scroll.set_offset(offset);
+                        window.refresh();
+                        // Consume even at an edge: Shift must never scroll the tree vertically.
+                        cx.stop_propagation();
+                    });
+                },
+            )
+            .absolute()
+            .size_full(),
+        )
         .child(
             div()
                 .id("sidebar-file-tree-scroll-area")
