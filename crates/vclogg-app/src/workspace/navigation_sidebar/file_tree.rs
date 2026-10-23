@@ -266,7 +266,9 @@ impl FileTree {
             if let Some(ix) = selected.as_ref().and_then(|id| tree.index_of(id)) {
                 tree.set_selected_index(Some(ix), cx);
                 if pending_reveal {
-                    tree.scroll_to_item(ix, ScrollStrategy::Nearest);
+                    // Center explicit reveals even when the row is already visible.
+                    tree.scroll_handle()
+                        .scroll_to_item_strict(ix, ScrollStrategy::Center);
                     revealed = true;
                 }
             }
