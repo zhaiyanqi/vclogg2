@@ -92,7 +92,13 @@ Performance recording [A808] — application Recorder; recording and saving cont
 
 Cold-start capture stops at its [CLI deadline](Building.md#cold-start-performance-capture). Manual starts and stops are disabled during that capture; Open folder remains available. The recording path and write errors are displayed; failed writes retry automatically, and a failed final save allows retry or dismissal.
 
-FileDropOverlay [A130] has been removed; its identifier remains reserved. FileDropObserver / FileDropTarget [A128] still receives external file and folder drops, opening them on release without a hover overlay.
+```text
+FileDropObserver / FileDropTarget [A128] — external drops and release-position routing
+└─ FileDropOverlay [A130] — window-wide drag hint; ordinary drops open top-level files
+   └─ IncludeSubfoldersDropTarget [A131] — folders only; the small central target highlights on hover and opens subfolder files recursively on release
+```
+
+Folder detection and enumeration run in the background. Entries are sorted by name within each folder; canonical directory identities prevent link cycles. Exit, cancellation, and release dismiss the hint.
 
 Release notes appear only when the source version is strictly newer than the current version; cached results use the same comparison:
 

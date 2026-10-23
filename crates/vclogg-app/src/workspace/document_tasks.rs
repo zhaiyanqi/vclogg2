@@ -1,14 +1,31 @@
 use super::*;
 
-// Enumerate only immediate files, off the UI thread. Preserve the drop order
+// Enumerate files off the UI thread. Preserve the drop order
 // between inputs and sort each folder independently before creating tab shells.
-pub(super) fn expand_dropped_paths(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<String>) {
+pub(super) fn expand_dropped_paths(
+    paths: Vec<PathBuf>,
+    recursive: bool,
+) -> (Vec<PathBuf>, Vec<String>) {
     let mut files = Vec::new();
     let mut errors = Vec::new();
-    for path in paths {
+    let mut pending = paths.into_iter().rev().collect::<Vec<_>>();
+    let mut visited = BTreeSet::new();
+    while let Some(path) = pending.pop() {
         if !path.is_dir() {
             files.push(path);
             continue;
+        }
+        // Canonical identities prevent cycles and repeated traversal of linked folders.
+        match std::fs::canonicalize(&path) {
+            Ok(identity) => {
+                if !visited.insert(identity) {
+                    continue;
+                }
+            }
+            Err(error) => {
+                errors.push(format!("{}: {error}", path.display()));
+                continue;
+            }
         }
         let entries = match std::fs::read_dir(&path) {
             Ok(entries) => entries,
@@ -23,7 +40,9 @@ pub(super) fn expand_dropped_paths(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<St
                 Ok(entry) => {
                     let child = entry.path();
                     match child.metadata() {
-                        Ok(metadata) if metadata.is_file() => children.push(child),
+                        Ok(metadata) if metadata.is_file() || (recursive && metadata.is_dir()) => {
+                            children.push(child)
+                        }
                         Ok(_) => {}
                         Err(error) => errors.push(format!("{}: {error}", child.display())),
                     }
@@ -32,7 +51,7 @@ pub(super) fn expand_dropped_paths(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<St
             }
         }
         children.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
-        files.extend(children);
+        pending.extend(children.into_iter().rev());
     }
     (files, errors)
 }

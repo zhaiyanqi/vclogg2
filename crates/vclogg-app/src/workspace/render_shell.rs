@@ -30,6 +30,92 @@ impl gpui_kit::RenderOnce for WorkspaceOverlay {
 }
 
 impl Workspace {
+    pub(super) fn render_file_drop_overlay(
+        &self,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let recursive_bounds = self.file_drop_recursive_bounds.clone();
+        let top = window.rem_size() * 0.5;
+        deferred_workspace_overlay(
+            div()
+                .id("file-drop-overlay")
+                .absolute()
+                .right_2()
+                .bottom_2()
+                .left_2()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(cx.theme().radius_lg)
+                .border_2()
+                .border_dashed()
+                .border_color(cx.theme().primary)
+                .bg(cx.theme().popover.opacity(0.65))
+                .text_color(cx.theme().popover_foreground)
+                .child(
+                    v_flex()
+                        .items_center()
+                        .gap_2()
+                        .p_4()
+                        .child(Icon::new(IconName::FolderOpen).size_8())
+                        .child(
+                            div()
+                                .text_lg()
+                                .font_semibold()
+                                .child(crate::tr!("松开以打开日志", "Release to open logs")),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(crate::tr!(
+                                    "文件夹默认仅打开第一层文件",
+                                    "Folders open top-level files by default"
+                                )),
+                        )
+                        .when(self.file_drop_has_directory, |content| {
+                            content.child(
+                                v_flex()
+                                    .id("file-drop-include-subfolders")
+                                    .mt_4()
+                                    .p_6()
+                                    .gap_2()
+                                    .items_center()
+                                    .rounded(cx.theme().radius_lg)
+                                    .border_2()
+                                    .border_dashed()
+                                    .border_color(cx.theme().border)
+                                    .bg(cx.theme().popover)
+                                    .drag_over::<ExternalPaths>(|style, _, _, cx| {
+                                        style
+                                            .bg(cx.theme().primary.opacity(0.2))
+                                            .border_color(cx.theme().primary)
+                                    })
+                                    .on_prepaint(move |bounds, _, _| {
+                                        recursive_bounds.set(Some(bounds))
+                                    })
+                                    .child(
+                                        div().font_semibold().child(crate::tr!(
+                                            "包含子文件夹",
+                                            "Include subfolders"
+                                        )),
+                                    )
+                                    .child(div().text_sm().child(crate::tr!(
+                                        "在此松开，打开所有层级的文件",
+                                        "Drop here to open files at every level"
+                                    ))),
+                            )
+                        }),
+                )
+                .with_animation(
+                    "file-drop-overlay-enter",
+                    Animation::new(TRANSIENT_SURFACE_ENTER_DURATION).with_easing(ease_out_cubic),
+                    move |overlay, delta| overlay.top(top * delta).opacity(delta),
+                ),
+        )
+    }
+
     /// 菜单按钮为 28px 高、11px 横向内边距、8px 圆角和 12px 常规字重。
     /// `Button` 的 size 预设只有 24/32px 两档，够不到 28px；独立文字层同时避免
     /// 英文字母在组件标签的紧凑行高中被裁切。

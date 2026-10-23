@@ -1701,6 +1701,8 @@ pub struct Workspace {
     color_labels_resolution_cancellation: Option<SearchCancellation>,
     color_labels_resolution_revision: u64,
     file_drop_paths: Option<ExternalPaths>,
+    file_drop_has_directory: bool,
+    file_drop_recursive_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     cross_window_drop_ix: Option<usize>,
     tab_drop_layout: Rc<RefCell<TabDropLayout>>,
     filter_popover: filter_popover::FilterPopoverState,
@@ -2406,6 +2408,8 @@ impl Workspace {
             color_labels_resolution_cancellation: None,
             color_labels_resolution_revision: 0,
             file_drop_paths: None,
+            file_drop_has_directory: false,
+            file_drop_recursive_bounds: Rc::new(Cell::new(None)),
             cross_window_drop_ix: None,
             tab_drop_layout: Rc::new(RefCell::new(TabDropLayout::default())),
             search_panel_state,
@@ -2566,7 +2570,12 @@ impl Workspace {
                         cx.stop_active_drag(window);
                         cx.stop_propagation();
                         _ = row_drag_workspace.update(cx, |workspace, cx| {
-                            workspace.open_dropped_paths(&paths, window, cx);
+                            let recursive = workspace.file_drop_has_directory
+                                && workspace
+                                    .file_drop_recursive_bounds
+                                    .get()
+                                    .is_some_and(|bounds| bounds.contains(&event.position));
+                            workspace.open_dropped_paths(&paths, recursive, window, cx);
                         });
                         return;
                     }
@@ -2687,8 +2696,7 @@ impl Render for Workspace {
                 |this, event: &DragMoveEvent<ExternalPaths>, _, cx| {
                     let inside = event.bounds.contains(&event.event.position);
                     if inside && this.file_drop_paths.is_none() {
-                        this.file_drop_paths = Some(event.drag(cx).clone());
-                        cx.notify();
+                        this.begin_file_drop(event.drag(cx).clone(), cx);
                     } else if !inside && this.file_drop_paths.take().is_some() {
                         cx.notify();
                     }
@@ -2763,6 +2771,9 @@ impl Render for Workspace {
             )
             .child(self.status_surface.clone())
             .child(self.render_file_drop_observer(cx))
+            .when(self.file_drop_paths.is_some(), |element| {
+                element.child(self.render_file_drop_overlay(window, cx))
+            })
             // Kit's Root paints the overlays after this content. Keep the barrier
             // here so their pointer events cannot bubble into the log views.
             .child(crate::modal_event_layer::render_foreground_pointer_barrier());

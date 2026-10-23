@@ -113,9 +113,34 @@ impl Workspace {
         self.begin_open_paths(vec![path], window, cx);
     }
 
+    pub(super) fn begin_file_drop(&mut self, paths: ExternalPaths, cx: &mut Context<Self>) {
+        self.file_drop_paths = Some(paths.clone());
+        self.file_drop_has_directory = false;
+        self.file_drop_recursive_bounds.set(None);
+        cx.spawn(async move |this, cx| {
+            let candidates = paths.paths().to_vec();
+            let has_directory = cx
+                .background_spawn(async move { candidates.iter().any(|path| path.is_dir()) })
+                .await;
+            _ = this.update(cx, |this, cx| {
+                if this
+                    .file_drop_paths
+                    .as_ref()
+                    .is_some_and(|current| current.paths() == paths.paths())
+                {
+                    this.file_drop_has_directory = has_directory;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     pub(super) fn open_dropped_paths(
         &mut self,
         paths: &ExternalPaths,
+        recursive: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -145,7 +170,7 @@ impl Workspace {
                 return;
             }
             _ = workspace.update(cx, |workspace, cx| {
-                workspace.begin_open_dropped_paths(paths, window, cx);
+                workspace.begin_open_dropped_paths(paths, recursive, window, cx);
             });
         });
     }
@@ -153,6 +178,7 @@ impl Workspace {
     fn begin_open_dropped_paths(
         &mut self,
         paths: Vec<PathBuf>,
+        recursive: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -171,7 +197,7 @@ impl Workspace {
         self.activity = Activity::Opening;
         self.open_task = Some(cx.spawn_in(window, async move |this, cx| {
             let (files, errors) = cx
-                .background_spawn(async move { expand_dropped_paths(paths) })
+                .background_spawn(async move { expand_dropped_paths(paths, recursive) })
                 .await;
             _ = this.update_in(cx, |this, window, cx| {
                 this.open_task = None;
@@ -187,10 +213,11 @@ impl Workspace {
                     );
                 } else if files.is_empty() {
                     window.notify_message(
-                        crate::tr!(
-                            "拖入的文件夹中没有可打开的文件（不包含子文件夹）",
-                            "The dropped folders contain no files to open (subfolders are excluded)",
-                        ),
+                        if recursive {
+                            crate::tr!("拖入的文件夹及子文件夹中没有可打开的文件", "The dropped folders and subfolders contain no files to open")
+                        } else {
+                            crate::tr!("拖入的文件夹中没有可打开的文件（不包含子文件夹）", "The dropped folders contain no files to open (subfolders are excluded)")
+                        },
                         cx,
                     );
                 }
