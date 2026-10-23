@@ -247,6 +247,21 @@ pub(crate) fn entry_count() -> usize {
         .unwrap_or_default()
 }
 
+/// Clear persisted diagnostics and the current buffer without changing the level.
+/// Must run on a background task because diagnostics cleanup performs disk I/O.
+pub(crate) fn clear() -> anyhow::Result<()> {
+    crate::open_log::clear()?;
+    let logger = LOGGER
+        .get()
+        .context("application logger is not initialized")?;
+    let mut buffer = logger
+        .buffer
+        .lock()
+        .map_err(|_| anyhow::anyhow!("application log buffer is unavailable"))?;
+    *buffer = LogBuffer::default();
+    Ok(())
+}
+
 pub(crate) fn export(path: &Path) -> anyhow::Result<usize> {
     let logger = LOGGER
         .get()

@@ -21,6 +21,7 @@ static WRITER: OnceLock<Option<mpsc::SyncSender<Message>>> = OnceLock::new();
 enum Message {
     Line(String),
     Flush(mpsc::Sender<()>),
+    Clear(mpsc::Sender<std::io::Result<()>>),
 }
 
 pub(crate) struct Stage {
@@ -138,6 +139,22 @@ fn run(receiver: mpsc::Receiver<Message>) {
                     }
                 }
             }
+            Message::Clear(done) => {
+                // Close our handle before deletion (required on Windows), then
+                // reopen so later diagnostics continue to be recorded.
+                drop(file.take());
+                let result = clear_files();
+                let reopened = create_file();
+                let result = match reopened {
+                    Ok(reopened) => {
+                        file = Some(reopened);
+                        result
+                    }
+                    Err(error) => result.and(Err(error)),
+                };
+                bytes = 0;
+                let _ = done.send(result);
+            }
             Message::Flush(done) => {
                 if let Some((file, _)) = &mut file {
                     let _ = writeln!(
@@ -153,16 +170,19 @@ fn run(receiver: mpsc::Receiver<Message>) {
     }
 }
 
-pub(crate) fn persist(line: &str) {
-    let sender = WRITER.get_or_init(|| {
+fn writer() -> &'static Option<mpsc::SyncSender<Message>> {
+    WRITER.get_or_init(|| {
         let (sender, receiver) = mpsc::sync_channel(2048);
         std::thread::Builder::new()
             .name("open-diagnostic-log".into())
             .spawn(move || run(receiver))
             .ok()
             .map(|_| sender)
-    });
-    if sender
+    })
+}
+
+pub(crate) fn persist(line: &str) {
+    if writer()
         .as_ref()
         .is_none_or(|sender| sender.try_send(Message::Line(line.to_owned())).is_err())
     {
@@ -212,4 +232,39 @@ pub(crate) fn append_export(text: &mut String) {
             Err(error) => text.push_str(&format!("Open failed: {error}\n")),
         }
     }
+}
+
+fn clear_files() -> std::io::Result<()> {
+    let directory =
+        directory().ok_or_else(|| std::io::Error::other("data directory unavailable"))?;
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().starts_with("open-")
+            && entry.path().extension().is_some_and(|ext| ext == "log")
+            && entry.file_type()?.is_file()
+        {
+            match fs::remove_file(entry.path()) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Runs on a background task; the writer orders cleanup after queued records.
+pub(crate) fn clear() -> anyhow::Result<()> {
+    let sender = writer()
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("open diagnostic writer is unavailable"))?;
+    let (done, receiver) = mpsc::channel();
+    sender.send(Message::Clear(done))?;
+    receiver.recv()??;
+    Ok(())
 }

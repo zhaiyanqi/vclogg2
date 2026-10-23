@@ -271,7 +271,7 @@ impl SettingsCategory {
                 "快捷键 打开文件 聚焦搜索框 快速查找 关闭当前标签 打开设置 切换区分大小写 跳到日志底部 轮换颜色标签 切换自动换行 进入编辑模式 按键 绑定 冲突 keyboard shortcut keymap edit mode"
             }
             Self::Advanced => {
-                "高级 性能 录制 保存 缓存 打开目录 导出 trace Perfetto 叠加层 帧耗时 卡顿 FPS performance recording overlay frame time 应用图标 啄木鸟 软萌 立体 坐姿 插画 贴纸 应用日志 日志等级 关闭 Error Warn Info Debug Trace 导出 诊断 advanced application icon mascot log level export diagnostics"
+                "高级 性能 录制 保存 缓存 打开目录 导出 trace Perfetto 叠加层 帧耗时 卡顿 FPS performance recording overlay frame time 应用图标 啄木鸟 软萌 立体 坐姿 插画 贴纸 应用日志 日志等级 清理 清空 关闭 Error Warn Info Debug Trace 导出 诊断 advanced application icon mascot log level clear export diagnostics"
             }
             Self::About => {
                 "关于 VCLogg2 版本 编译时间 构建目标 commit 提交 技术栈 开源库 GitHub 仓库 repository 源代码 source code 作者 zhaiyanqi copyright 版权 Apache 2.0 license Rust GPUI SQLite"
@@ -509,8 +509,9 @@ pub struct SettingsDialog {
     cache_busy: bool,
     cache_task: Option<Task<()>>,
     trace_recorder: Entity<crate::ui_performance::trace::Recorder>,
-    log_export_status: Option<SharedString>,
+    log_status: Option<SharedString>,
     log_export_task: Option<Task<()>>,
+    log_clear_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -1172,8 +1173,9 @@ impl SettingsDialog {
             cache_busy: false,
             cache_task: None,
             trace_recorder: crate::ui_performance::trace::recorder(cx),
-            log_export_status: None,
+            log_status: None,
             log_export_task: None,
+            log_clear_task: None,
             _subscriptions: subscriptions,
         };
         dialog.load_font_families(window, cx);
@@ -1862,8 +1864,35 @@ impl SettingsDialog {
         cx.notify();
     }
 
+    fn clear_application_log(&mut self, cx: &mut Context<Self>) {
+        if self.log_export_task.is_some() || self.log_clear_task.is_some() {
+            return;
+        }
+        self.log_status = None;
+        self.log_clear_task = Some(cx.spawn(async move |this, cx| {
+            let result = cx.background_spawn(async { app_log::clear() }).await;
+            _ = this.update(cx, |this, cx| {
+                this.log_clear_task = None;
+                this.log_status = Some(match result {
+                    Ok(()) => crate::tr!(
+                        "应用日志已清理；新日志将继续按当前等级记录。",
+                        "Application logs cleared. New logs will continue at the current level."
+                    )
+                    .into(),
+                    Err(error) => crate::tr_args!(
+                        "应用日志未完全清理：{error}",
+                        "Couldn’t clear all application logs: {error}"
+                    )
+                    .into(),
+                });
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
     fn export_application_log(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.log_export_task.is_some() {
+        if self.log_export_task.is_some() || self.log_clear_task.is_some() {
             return;
         }
         let directory = dirs::document_dir().unwrap_or_else(|| PathBuf::from("."));
@@ -1887,7 +1916,7 @@ impl SettingsDialog {
                 this.log_export_task = None;
                 match result {
                     Some(Ok((path, entry_count))) => {
-                        this.log_export_status = Some(
+                        this.log_status = Some(
                             crate::tr_args!(
                                 "已导出 {entry_count} 条应用日志到 {}",
                                 "Exported {entry_count} application log entries to {}",
@@ -1901,7 +1930,7 @@ impl SettingsDialog {
                         );
                     }
                     Some(Err(error)) => {
-                        this.log_export_status = Some(
+                        this.log_status = Some(
                             crate::tr_args!(
                                 "应用日志导出失败：{error}",
                                 "Couldn’t export the application log: {error}",
@@ -3924,18 +3953,33 @@ impl Render for SettingsDialog {
                                     )),
                             )
                             .child(
+                                h_flex().gap_2().flex_shrink_0()
+                                .child(
+                                    Button::new("settings-clear-application-log")
+                                        .small()
+                                        .outline()
+                                        .label(crate::tr!("清理日志", "Clear logs"))
+                                        .tooltip(crate::tr!("清理应用诊断缓冲和磁盘记录；不删除已导出的文件。", "Clear buffered and stored application diagnostics. Exported files are kept."))
+                                        .loading(self.log_clear_task.is_some())
+                                        .disabled(self.log_export_task.is_some() || self.log_clear_task.is_some())
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.clear_application_log(cx)
+                                        })),
+                                )
+                                .child(
                                 Button::new("settings-export-application-log")
                                     .small()
                                     .outline()
                                     .label(crate::tr!("导出日志…", "Export log…"))
                                     .loading(self.log_export_task.is_some())
-                                    .disabled(self.log_export_task.is_some())
+                                    .disabled(self.log_export_task.is_some() || self.log_clear_task.is_some())
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.export_application_log(window, cx)
                                     })),
+                                )
                             ),
                     )
-                    .when_some(self.log_export_status.clone(), |section, status| {
+                    .when_some(self.log_status.clone(), |section, status| {
                         section.child(
                             div()
                                 .text_xs()
