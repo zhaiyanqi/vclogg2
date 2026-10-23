@@ -363,9 +363,12 @@ impl Render for FileTree {
                 )
             })
             .child(
-                div()
+                // The scroll viewport grows inside this column. A block parent
+                // leaves its flex-only height unresolved and the tree paints no rows.
+                v_flex()
                     .flex_1()
                     .min_h_0()
+                    .min_w_0()
                     .capture_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                         if event.keystroke.key != "enter" {
                             return;
