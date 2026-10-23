@@ -1,4 +1,6 @@
 use super::*;
+use gpui_kit::base::StyledExt as _;
+
 // Paint after priority-0 table chrome, while staying below component popups and dialogs.
 const WORKSPACE_OVERLAY_PRIORITY: usize = 1;
 const _: () = assert!(WORKSPACE_OVERLAY_PRIORITY < POPUP_PRIORITY);
