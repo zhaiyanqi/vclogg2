@@ -127,9 +127,9 @@ impl Workspace {
                 .active_document()
                 .map(|tab| tab.document.path().to_path_buf())
         {
-            self.navigation
-                .tree
-                .update(cx, |tree, cx| tree.reveal(path, false, cx));
+            self.navigation.tree.update(cx, |tree, cx| {
+                tree.reveal(path, false, ScrollStrategy::Nearest, cx)
+            });
         }
         if self.navigation.vertical_tabs {
             self.navigation.tabs_scroll.scroll_to_item(
@@ -147,9 +147,9 @@ impl Workspace {
     ) {
         self.navigation.visible = true;
         self.navigation.show_tabs = false;
-        self.navigation
-            .tree
-            .update(cx, |tree, cx| tree.reveal(path, directory, cx));
+        self.navigation.tree.update(cx, |tree, cx| {
+            tree.reveal(path, directory, ScrollStrategy::Center, cx)
+        });
         cx.notify();
     }
 

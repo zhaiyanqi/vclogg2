@@ -15,6 +15,7 @@ pub(super) struct FileTree {
     width_revision: u64,
     _roots_job: Task<()>,
     selected: Option<PathBuf>,
+    reveal_strategy: ScrollStrategy,
     revealed_path: Option<PathBuf>,
     expanded: BTreeSet<PathBuf>,
     directories: BTreeMap<PathBuf, Vec<DirectoryEntry>>,
@@ -79,6 +80,7 @@ impl FileTree {
             width_revision: 0,
             _roots_job: roots_job,
             selected: None,
+            reveal_strategy: ScrollStrategy::Nearest,
             revealed_path: None,
             expanded: BTreeSet::new(),
             directories: BTreeMap::new(),
@@ -89,7 +91,13 @@ impl FileTree {
         }
     }
 
-    pub(super) fn reveal(&mut self, path: PathBuf, directory: bool, cx: &mut Context<Self>) {
+    pub(super) fn reveal(
+        &mut self,
+        path: PathBuf,
+        directory: bool,
+        strategy: ScrollStrategy,
+        cx: &mut Context<Self>,
+    ) {
         let path = std::path::absolute(&path).unwrap_or(path);
         if let Some(root) = path.ancestors().find(|path| path.parent().is_none()) {
             let root = root.to_path_buf();
@@ -99,6 +107,7 @@ impl FileTree {
             }
         }
         self.selected = Some(path.clone());
+        self.reveal_strategy = strategy;
         self.revealed_path = Some(path.clone());
         let ancestors = path
             .ancestors()
@@ -261,14 +270,19 @@ impl FileTree {
                     .map(|item| item.id.clone())
             });
         let mut revealed = false;
+        let strategy = self.reveal_strategy;
         self.tree.update(cx, |tree, cx| {
             tree.set_items(items, cx);
             if let Some(ix) = selected.as_ref().and_then(|id| tree.index_of(id)) {
                 tree.set_selected_index(Some(ix), cx);
                 if pending_reveal {
-                    // Center explicit reveals even when the row is already visible.
-                    tree.scroll_handle()
-                        .scroll_to_item_strict(ix, ScrollStrategy::Center);
+                    if strategy == ScrollStrategy::Center {
+                        // Explicit navigation centers even an already visible row.
+                        tree.scroll_handle().scroll_to_item_strict(ix, strategy);
+                    } else {
+                        // Opening a visible tree row must preserve its position.
+                        tree.scroll_to_item(ix, strategy);
+                    }
                     revealed = true;
                 }
             }
