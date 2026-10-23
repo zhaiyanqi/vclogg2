@@ -4,8 +4,6 @@ use gpui_kit::base::input::RopeExt as _;
 
 use super::*;
 
-pub(super) const MAX_EDIT_BYTES: u64 = 100 * 1024 * 1024;
-
 #[derive(Clone, Copy)]
 enum EditExitTarget {
     Document(u64),
@@ -212,16 +210,6 @@ impl Workspace {
         let Some(tab) = self.active_document() else {
             return;
         };
-        if tab.document.metadata().file_size > MAX_EDIT_BYTES {
-            window.notify_message(
-                crate::tr!(
-                    "仅支持编辑不超过 100 MB 的文件",
-                    "Only files up to 100 MB can be edited"
-                ),
-                cx,
-            );
-            return;
-        }
         self.enter_document_edit(tab.id, window, cx);
     }
 
@@ -373,21 +361,7 @@ impl Workspace {
                         len: metadata.len(),
                         modified: metadata.modified().ok(),
                     };
-                    anyhow::ensure!(
-                        metadata.len() <= MAX_EDIT_BYTES,
-                        crate::tr!(
-                            "仅支持编辑不超过 100 MB 的文件",
-                            "Only files up to 100 MB can be edited"
-                        )
-                    );
                     let bytes = std::fs::read(&path)?;
-                    anyhow::ensure!(
-                        bytes.len() as u64 <= MAX_EDIT_BYTES,
-                        crate::tr!(
-                            "仅支持编辑不超过 100 MB 的文件",
-                            "Only files up to 100 MB can be edited"
-                        )
-                    );
                     let encoding = EditEncoding::from_name(&encoding_name)?;
                     let text = encoding.decode(&bytes)?;
                     Ok::<_, anyhow::Error>((text, encoding, disk_version))

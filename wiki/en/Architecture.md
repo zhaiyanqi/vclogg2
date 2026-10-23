@@ -49,7 +49,7 @@ File state (marks, text tags, color rules) is shared by searches of that file. S
 
 Line indices and compressed result sets avoid retaining all decoded text. Visible-line reads, search snapshots and exports retain stable source-line identity. Incremental refresh has an explicit head/tail sampling limitation; see [live logs](Live-Logs.md).
 
-Ordinary browsing and annotations do not write source logs. Explicit [editing](Editing.md) is a separate write path with a 100 MiB entry limit and disk-version checks. Closing or renaming a tab changes workspace state, not the source filename.
+Ordinary browsing and annotations do not write source logs. Explicit [editing](Editing.md) is a separate write path with no fixed file-size limit and with disk-version checks. Closing or renaming a tab changes workspace state, not the source filename.
 
 The optional Go server is built independently. Its default signature requirement is not automatically compatible with the current desktop client's unsigned registration; see [cloud filters](Cloud-Filters.md).
 

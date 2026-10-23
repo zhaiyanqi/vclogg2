@@ -4,7 +4,7 @@
 
 Normal viewing, searches, marks and text tags do not alter source text. **Entering edit mode and saving does replace the file.**
 
-Press **I** outside an input to edit the active document. Entry is limited to 100 × 1024 × 1024 bytes (100 MiB; the UI labels this “100 MB”). The editor decodes the full file, unlike virtual log browsing. Unsupported or invalid encodings are rejected. UTF-8/BOM, UTF-16 BOM and supported legacy encodings are preserved; text that cannot be encoded back is rejected.
+Press **I** outside an input to edit the active document. There is no fixed file-size limit for entering edit mode; practical capacity depends on available memory. The editor decodes the full file, unlike virtual log browsing. Unsupported or invalid encodings are rejected. UTF-8/BOM, UTF-16 BOM and supported legacy encodings are preserved; text that cannot be encoded back is rejected.
 
 Use **Ctrl+S / ⌘S** in the editor to save. Existing-file saves compare size and modification time before writing and again before replacement, write and sync a temporary file in the same directory, preserve permissions and replace the destination. This is not a filesystem lock or a content-hash concurrency guarantee: avoid editing a file another process is actively writing. A detected change requires reopening before editing.
 

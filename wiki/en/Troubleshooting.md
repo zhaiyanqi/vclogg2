@@ -10,7 +10,7 @@
 | Results appear incomplete | Check per-file result limit, selected global files, directory options, source-line bounds and result mode |
 | `a|b` behaves differently in quick find | Main literal search treats `|` as alternatives; literal quick find does not |
 | Settings changes disappeared | Uncommitted previews revert on cancel/close; save with Primary+S |
-| File edit is refused | Check 100 MiB entry limit, valid/supported encoding and disk changes since editing began |
+| File edit is refused | Check valid/supported encoding and disk changes since editing began |
 | Cloud registration fails | Check server URL/TLS and desktop/server authentication compatibility; same-repository builds do not guarantee compatibility |
 | Windows startup reports a data-path error | Inspect `vclogg2-data-dir.txt` and directory permissions; there is deliberately no silent fallback |
 | History cannot be deleted | Open, pinned or marked/annotated records are protected |

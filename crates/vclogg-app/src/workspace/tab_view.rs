@@ -35,13 +35,7 @@ impl Workspace {
             can_restore_title,
             has_other_window,
             can_edit: match tab_id {
-                WorkspaceTabId::Document(id) => self
-                    .documents
-                    .iter()
-                    .find(|tab| tab.id == id)
-                    .is_some_and(|tab| {
-                        tab.document.metadata().file_size <= document_editing::MAX_EDIT_BYTES
-                    }),
+                WorkspaceTabId::Document(id) => self.documents.iter().any(|tab| tab.id == id),
                 WorkspaceTabId::New(id) => self.new_file_drafts.contains_key(&id),
             },
             editing: match tab_id {
