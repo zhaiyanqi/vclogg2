@@ -515,7 +515,11 @@ fn file_tree_scroll_view(
             div()
                 .id("sidebar-file-tree-scroll-area")
                 .absolute()
-                .inset_0()
+                .top_0()
+                .left_0()
+                .right_0()
+                // Reserve the track height outside the tree's scrolling viewport.
+                .bottom(Scrollbar::width())
                 .overflow_x_scroll()
                 .restrict_scroll_to_axis()
                 .track_scroll(horizontal_scroll)
@@ -526,6 +530,7 @@ fn file_tree_scroll_view(
                 Scrollbar::horizontal(horizontal_scroll)
                     .id("sidebar-file-tree-horizontal-scrollbar")
                     .mode(ScrollbarMode::Always)
+                    .styles(|styles| styles.track(|track| track.width(Scrollbar::width())))
                     .viewport_from_layout(),
             ),
         )
