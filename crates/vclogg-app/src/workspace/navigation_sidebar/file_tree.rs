@@ -500,7 +500,11 @@ fn file_tree_scroll_view(
         .child(
             div()
                 .id("sidebar-file-tree-scroll-area")
-                .size_full()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(Scrollbar::width())
+                .right_0()
                 .overflow_x_scroll()
                 .restrict_scroll_to_axis()
                 .track_scroll(horizontal_scroll)
@@ -509,17 +513,30 @@ fn file_tree_scroll_view(
         .child(
             div()
                 .absolute()
-                .inset_0()
+                .top_0()
+                .bottom_0()
+                .left(Scrollbar::width())
+                .right_0()
                 .child(
                     Scrollbar::horizontal(horizontal_scroll)
                         .id("sidebar-file-tree-horizontal-scrollbar")
                         .mode(ScrollbarMode::Always)
                         .viewport_from_layout(),
-                )
+                ),
+        )
+        .child(
+            // Keep the vertical track away from the right-hand resize boundary.
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left_0()
+                .w(Scrollbar::width())
                 .child(
                     Scrollbar::vertical(vertical_scroll)
                         .id("sidebar-file-tree-vertical-scrollbar")
                         .mode(ScrollbarMode::Always)
+                        .styles(|styles| styles.track(|track| track.width(Scrollbar::width())))
                         .viewport_from_layout(),
                 ),
         )
