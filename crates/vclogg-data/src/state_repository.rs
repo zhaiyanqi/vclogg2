@@ -1291,6 +1291,27 @@ fn unix_timestamp() -> i64 {
 }
 
 fn initialize_schema(connection: &Connection, defaults: &StateMigrationDefaults) -> Result<()> {
+    // Reject newer databases before changing their journal mode. WAL must be
+    // enabled outside the migration transaction.
+    let schema_version = connection
+        .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
+        .context("无法读取状态库版本")?;
+    if schema_version > STATE_SCHEMA_VERSION {
+        anyhow::bail!("状态库版本 {schema_version} 高于当前支持的 {STATE_SCHEMA_VERSION}");
+    }
+    connection
+        .execute_batch("PRAGMA journal_mode = WAL;")
+        .context("无法启用状态库 WAL")?;
+    let transaction =
+        rusqlite::Transaction::new_unchecked(connection, TransactionBehavior::Immediate)
+            .context("无法开始状态库迁移事务")?;
+    migrate_schema(&transaction, defaults)?;
+    transaction.commit().context("无法提交状态库迁移事务")
+}
+
+fn migrate_schema(connection: &Connection, defaults: &StateMigrationDefaults) -> Result<()> {
+    // Read again after acquiring the write lock: another connection may have
+    // completed a migration while this connection was waiting.
     let schema_version = connection
         .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
         .context("无法读取状态库版本")?;
@@ -1309,8 +1330,7 @@ fn initialize_schema(connection: &Connection, defaults: &StateMigrationDefaults)
     }
     connection
         .execute_batch(
-            "PRAGMA journal_mode = WAL;
-             CREATE TABLE IF NOT EXISTS file_sessions (
+            "CREATE TABLE IF NOT EXISTS file_sessions (
                  id INTEGER PRIMARY KEY,
                  path TEXT NOT NULL UNIQUE,
                  custom_title TEXT,

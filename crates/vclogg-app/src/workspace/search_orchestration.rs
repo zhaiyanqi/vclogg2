@@ -1,5 +1,27 @@
 use super::*;
 
+static SEARCH_HISTORY_SAVE_REVISION: AtomicU64 = AtomicU64::new(0);
+static SEARCH_HISTORY_SAVE_LOCK: Mutex<()> = Mutex::new(());
+
+fn save_search_history_if_current(
+    store: &StateStore,
+    history: &[String],
+    revision: u64,
+) -> Result<()> {
+    // Window-local task chains do not order writes from other windows. Keep the
+    // revision check and database write together so an older snapshot cannot win.
+    let _guard = SEARCH_HISTORY_SAVE_LOCK.lock().map_err(|_| {
+        anyhow::anyhow!(crate::tr!(
+            "搜索历史保存锁已损坏",
+            "The search-history save lock is poisoned",
+        ))
+    })?;
+    if revision == SEARCH_HISTORY_SAVE_REVISION.load(Ordering::Acquire) {
+        store.save_search_history(history)?;
+    }
+    Ok(())
+}
+
 impl Workspace {
     /// Installs the active search session's matcher and hit rows into the shared upper log
     /// projection. Global and directory searches therefore highlight the opened file with the
@@ -964,6 +986,7 @@ impl Workspace {
         let Some(store) = self.persistence.store.clone() else {
             return;
         };
+        let revision = SEARCH_HISTORY_SAVE_REVISION.fetch_add(1, Ordering::AcqRel) + 1;
         let previous_save = self.persistence.search_history_save_task.take();
         self.persistence.search_history_save_task =
             Some(cx.spawn_in(window, async move |this, cx| {
@@ -971,7 +994,9 @@ impl Workspace {
                     previous_save.await;
                 }
                 let result = cx
-                    .background_spawn(async move { store.save_search_history(&history) })
+                    .background_spawn(async move {
+                        save_search_history_if_current(&store, &history, revision)
+                    })
                     .await;
                 if let Err(error) = result {
                     _ = this.update_in(cx, |this, window, cx| {
