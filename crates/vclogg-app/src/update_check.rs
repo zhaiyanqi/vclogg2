@@ -163,6 +163,18 @@ impl Manifest {
         }
     }
 
+    /// Show upgrades when available, otherwise the newest three known releases.
+    pub(crate) fn displayed_releases(&self) -> Vec<&ReleaseRecord> {
+        let upgrades = self.upgrade_releases();
+        if !upgrades.is_empty() {
+            upgrades
+        } else if self.releases.is_empty() {
+            vec![&self.latest]
+        } else {
+            self.releases.iter().take(3).collect()
+        }
+    }
+
     fn version(&self) -> Result<semver::Version> {
         ensure!(
             self.schema_version == 1,
@@ -209,7 +221,7 @@ struct CheckCache {
 #[derive(Clone)]
 pub(crate) enum CheckOutcome {
     Success { manifest: Manifest },
-    UpToDate { version: String },
+    UpToDate { manifest: Manifest },
     Cached { manifest: Manifest, checked_at: u64 },
     Unavailable,
 }
@@ -267,7 +279,7 @@ fn check_manifest(manifest: &Manifest) -> Result<CheckOutcome> {
     // Build metadata does not participate in SemVer precedence.
     if !latest.cmp_precedence(&current).is_gt() {
         return Ok(CheckOutcome::UpToDate {
-            version: manifest.release_version().to_owned(),
+            manifest: manifest.clone(),
         });
     }
     Ok(CheckOutcome::Success {

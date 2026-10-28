@@ -102,7 +102,7 @@ FileDropObserver / FileDropTarget [A128] — external drops and release-position
 
 Folder detection and enumeration run in the background. Entries are sorted by name within each folder; canonical directory identities prevent link cycles. Exit, cancellation, and release dismiss the hint.
 
-Release notes appear only when the source version is strictly newer than the current version; cached results use the same comparison:
+Release notes include all upgrade versions when the source is strictly newer than the current version; otherwise they show the newest three releases. Cached results use the same selection:
 
 ```text
 Root overlays [A041] (reference)
@@ -113,7 +113,7 @@ Root overlays [A041] (reference)
    └─ Open download page [A818] — open the verified Release URL
 ```
 
-For a successful remote response with an equal or older version, [A814] keeps the Check for updates title, [A815] shows “No updates available” with current/source versions, and only Close [A817] remains; release notes, download and history actions are absent.
+For a successful remote response with an equal or older version, [A814] keeps the Check for updates title and [A815] shows “No updates available” with current/source versions. [A821] initially expands the newest three releases (all available entries when fewer than three exist; legacy manifests show only the latest release). Close [A817] and full release history remain available; the download action appears only when upgrades exist. Offline cached results show the same notes while retaining the availability warning and last check time.
 
 The website manifest includes the full release body. Empty or legacy notes show an explicit fallback message. Failed checks without a valid cache open the Releases index.
 
@@ -131,7 +131,7 @@ Release notes dialog [A814] (reference)
 
 The update dialog no longer shows a Version changes heading or a separate breaking-change/migration summary [A820]; the ID remains reserved. Current/latest versions are followed directly by the per-version release notes, preserving the original text and initially expanding the newest three versions.
 
-Every check requests the remote manifest first. Failure with a valid cache shows the previous result in [A814]; [A815] uses “Previously checked source version”, never “Latest version” or “No updates available”. A newer cached version retains notes and downloads; otherwise only status and Close remain.
+Every check requests the remote manifest first. Failure with a valid cache shows the previous result in [A814]; [A815] uses “Previously checked source version”, never “Latest version” or “No updates available”. A newer cached version retains upgrade notes and downloads; otherwise the newest three releases, full history, and Close remain available.
 
 ```text
 Release notes dialog [A814] (reference, cached fallback)

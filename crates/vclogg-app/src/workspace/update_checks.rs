@@ -39,10 +39,11 @@ impl Workspace {
                     let unavailable = matches!(&outcome, CheckOutcome::Unavailable);
                     dialog_state.update(cx, |state, cx| {
                         if let CheckOutcome::Success { manifest }
+                        | CheckOutcome::UpToDate { manifest }
                         | CheckOutcome::Cached { manifest, .. } = &outcome
                         {
                             state.expanded_versions = manifest
-                                .upgrade_releases()
+                                .displayed_releases()
                                 .into_iter()
                                 .take(3)
                                 .map(|release| release.release_version().to_owned())
@@ -79,12 +80,11 @@ fn open_update_check_dialog(
             });
         let outcome = state.read(cx).outcome.clone();
         match outcome {
-            Some(CheckOutcome::Success { manifest }) => {
+            Some(CheckOutcome::Success { manifest })
+            | Some(CheckOutcome::UpToDate { manifest }) => {
                 release_notes_dialog(dialog, &manifest, None, &state, window, cx)
             }
-            Some(CheckOutcome::Cached { manifest, checked_at })
-                if !manifest.upgrade_releases().is_empty() =>
-            {
+            Some(CheckOutcome::Cached { manifest, checked_at }) => {
                 release_notes_dialog(dialog, &manifest, Some(checked_at), &state, window, cx)
             }
             outcome => dialog
@@ -93,27 +93,13 @@ fn open_update_check_dialog(
                         "正在检查更新，请稍候…",
                         "Checking for updates. Please wait…"
                     ).to_owned(),
-                    Some(CheckOutcome::UpToDate { version }) => {
-                        let current = crate::build_info::VERSION;
-                        crate::tr_args!(
-                            "未发现更新。当前版本：{current} · 更新源版本：{version}",
-                            "No updates available. Current version: {current} · Update source version: {version}"
-                        )
-                    }
-                    Some(CheckOutcome::Cached { manifest, checked_at }) => {
-                        let current = crate::build_info::VERSION;
-                        let version = manifest.release_version();
-                        let warning = cached_result_notice(checked_at);
-                        crate::tr_args!(
-                            "{warning}\n当前版本：{current} · 上次检查的更新源版本：{version}",
-                            "{warning}\nCurrent version: {current} · Previously checked source version: {version}"
-                        )
-                    }
                     Some(CheckOutcome::Unavailable) => crate::tr!(
                         "无法连接更新源，且没有可用的上次检查结果。请稍后重试，已请求在浏览器打开 Releases 页面。",
                         "Unable to connect to the update source, and no previous result is available. Try again later. Requested opening Releases in your browser."
                     ).to_owned(),
-                    Some(CheckOutcome::Success { .. }) => unreachable!(),
+                    Some(CheckOutcome::Success { .. })
+                    | Some(CheckOutcome::UpToDate { .. })
+                    | Some(CheckOutcome::Cached { .. }) => unreachable!(),
                 })
                 .footer(
                     DialogFooter::new().child(crate::dialog_focus::dialog_cancel_action(
@@ -154,8 +140,11 @@ fn release_notes_dialog(
     cx: &mut App,
 ) -> Dialog {
     let version = manifest.release_version();
+    let has_upgrade = !manifest.upgrade_releases().is_empty();
     let title = if checked_at.is_some() {
         crate::tr!("上次检查结果", "Previous update check")
+    } else if !has_upgrade {
+        crate::tr!("检查更新", "Check for updates")
     } else {
         crate::tr!("版本更新", "Version update")
     };
@@ -165,6 +154,11 @@ fn release_notes_dialog(
             "当前版本：{current} · 上次检查的更新源版本：{version}",
             "Current version: {current} · Previously checked source version: {version}"
         )
+    } else if !has_upgrade {
+        crate::tr_args!(
+            "未发现更新。当前版本：{current} · 更新源版本：{version}",
+            "No updates available. Current version: {current} · Update source version: {version}"
+        )
     } else {
         crate::tr_args!(
             "当前版本：{current} · 最新版本：{version}",
@@ -172,7 +166,7 @@ fn release_notes_dialog(
         )
     };
     let language = crate::i18n::current_language();
-    let releases = manifest.upgrade_releases();
+    let releases = manifest.displayed_releases();
     let expanded = state.read(cx).expanded_versions.clone();
     let entries: Vec<AnyElement> = releases
         .into_iter()
@@ -250,16 +244,20 @@ fn release_notes_dialog(
                     Button::new("update-notes-close").label(crate::tr!("关闭", "Close")),
                     cx,
                 ))
-                .child(crate::dialog_focus::dialog_confirm_action(
-                    "update-notes-download-action",
-                    Button::new("update-notes-download")
-                        .primary()
-                        .label(crate::tr!("打开下载页面", "Open download page")),
-                    cx,
-                )),
+                .when(has_upgrade, |footer| {
+                    footer.child(crate::dialog_focus::dialog_confirm_action(
+                        "update-notes-download-action",
+                        Button::new("update-notes-download")
+                            .primary()
+                            .label(crate::tr!("打开下载页面", "Open download page")),
+                        cx,
+                    ))
+                }),
         )
         .on_ok(move |_, _, cx| {
-            cx.open_url(&url);
+            if has_upgrade {
+                cx.open_url(&url);
+            }
             true
         })
 }
