@@ -56,7 +56,9 @@ SettingsWindow [A094] — shared native window / 进程唯一原生窗口
    └─ Save [A555] — 保存
 ```
 
-Editing replaces log reading with an editor and hides the search panel; see [Editing](Editing.md). Empty tabs show open/recent/recovery content. AI controls and workspace sidebars are removed. Settings is a separate window, not inside the workspace overlay tree. Search-track collapse and search-panel expansion are independent.
+Editing replaces log reading with an editor and hides the search panel; see [Editing](Editing.md). Empty tabs show open/recent/recovery content. AI controls are removed; the workspace's left navigation can show a file tree or vertical tab list. Settings is a separate window, not inside the workspace overlay tree. Search-track collapse and search-panel expansion are independent.
+
+The horizontal document tab bar [A016] is hidden only while the left navigation is visible, vertical tabs are enabled, and the tab list is selected. Hiding the sidebar or switching to the file tree restores [A016] while retaining the vertical-tab preference; showing the vertical tab list again hides the horizontal bar. This transition neither closes documents nor changes the active tab, and horizontal drop geometry follows the actual visibility.
 
 New semantic controls introduced for this map:
 

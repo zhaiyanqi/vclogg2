@@ -168,7 +168,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if self.navigation.vertical_tabs {
+        // Keep a tab navigation surface available when the sidebar is hidden
+        // or showing files, without discarding the user's vertical-tab preference.
+        let vertical_tabs_visible =
+            self.navigation.visible && self.navigation.vertical_tabs && self.navigation.show_tabs;
+        if vertical_tabs_visible {
             let mut layout = self.tab_drop_layout.borrow_mut();
             layout.tabs.clear();
             layout.end = Bounds::default();
@@ -178,7 +182,7 @@ impl Workspace {
             .size_full()
             .min_w_0()
             .min_h_0()
-            .when(!self.navigation.vertical_tabs, |view| {
+            .when(!vertical_tabs_visible, |view| {
                 view.child(self.render_tabs(has_other_window, cx))
             })
             .child(
