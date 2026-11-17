@@ -237,6 +237,12 @@ fn register() -> io::Result<()> {
     set_string(&command_key, "", &command)?;
     let key = create_key(MENU_KEY)?;
     set_string(&key, "", &wide("使用 vclogg 打开"))?;
+    // Explorer does not infer a static verb's icon from its command.
+    let mut icon = vec![b'"' as u16];
+    icon.extend(executable.as_os_str().encode_wide());
+    icon.extend("\",0".encode_utf16());
+    icon.push(0);
+    set_string(&key, "Icon", &icon)?;
     set_string(&key, "MultiSelectModel", &wide("Single"))?;
     Ok(())
 }
