@@ -41,7 +41,7 @@ vclogg-core = { path = "../vclogg-core" }
 vclogg-data = { path = "../vclogg-data" }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, features = ["Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { workspace = true, features = ["Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(any(windows, target_os = "linux", target_os = "macos"))'.dependencies]
 raw-window-handle = { version = "0.6.2", features = ["std"] }

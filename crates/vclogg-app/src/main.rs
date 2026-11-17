@@ -58,6 +58,8 @@ mod update_check;
 mod virtual_log_lines;
 mod virtual_log_list;
 mod window_drag;
+#[cfg(windows)]
+mod windows_context_menu;
 mod workspace;
 mod workspace_state;
 
