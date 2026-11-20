@@ -6,4 +6,4 @@
 
 历史原文保留原始语言，包括退役功能、历史实现、验收结果和完整旧 UI 编号表。它们仅用于追溯，不作为当前操作说明，不进入发布站点或搜索索引。当前中英文页面按相同章节名成对维护。
 
-GitHub `/wiki` 地址属于 GitHub Wiki，Pages 无法替它做重定向。远程旧 Wiki 尚未删除或改写；维护者后续可在旧首页加迁移提示，指向新文档。不要继续把旧 Wiki 当作第二套维护源。
+GitHub Wiki 的原章节地址现在直接提供这份双语指南。退役章节的旧书签会打开对应的归档入口。两种发布形式都以主仓库 `wiki/zh-CN/` 和 `wiki/en/` 的 Markdown 为源。[GitHub Wiki](https://github.com/zhaiyanqi/vclogg2/wiki)

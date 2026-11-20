@@ -70,7 +70,7 @@ Expected URLs after deployment:
 
 The landing page and documentation must be deployed together: a second Pages deployment would replace the first artifact. The workflow triggers on `doc/**`, `wiki/**`, the docs build script and the workflow itself. Do not add credentials or runtime files to these public source directories.
 
-GitHub's old Wiki URLs cannot be redirected by Pages. See [migration](Archive.md) for the retained source snapshot and optional old-Wiki notice. A local successful build does not prove the remote deployment has run; check the Actions deployment result after pushing.
+The GitHub Wiki publishes the same guides separately. Chinese chapters retain their existing page names. English pages use the `EN-` prefix. When publishing changes there, update the sidebar from both summaries and include the illustrations and sample logs in the Wiki repository. After publishing, check a chapter in each language, an image and a sample from the live Wiki. [GitHub Wiki](https://github.com/zhaiyanqi/vclogg2/wiki) · [Historical pages](Archive.md)
 
 ## Updating content
 

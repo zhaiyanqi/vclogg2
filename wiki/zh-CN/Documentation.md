@@ -70,7 +70,7 @@ python3 -m http.server 8000 --directory _site
 
 官网与文档必须一起发布：第二份 Pages 部署会替换第一份产物。触发路径包含 `doc/**`、`wiki/**`、文档构建脚本和工作流本身。公开目录不存凭据或运行数据。
 
-Pages 不能重定向 GitHub 的旧 Wiki 地址。原始快照与可选旧 Wiki 迁移提示见[归档](Archive.md)。本地构建成功不表示远端已部署，推送后需查看 Actions 部署结果。
+GitHub Wiki 单独发布同一套指南。中文章节沿用原页面名，英文页加 `EN-` 前缀。更新 Wiki 时，按两份目录更新侧栏，将插图和示例日志一起提交到 Wiki 仓库。发布后从线上各打开一份中英文页面，并核对插图与样例。[GitHub Wiki](https://github.com/zhaiyanqi/vclogg2/wiki) · [历史页面](Archive.md)
 
 ## 内容维护
 
