@@ -15,7 +15,7 @@ Windows `vclogg2-data-dir.txt` specifies an absolute data root. Missing means po
 
 Stored records include `sessions/vclogg2-state.db` (SQLite settings, paths, searches and recovery), rebuildable indices, public cloud page caches, private cloud session JSON, crash reports and temporary documents. Current schema is v22. Unix session directory/file permissions are 0700/0600; Windows follows data-root permissions. Session JSON has no extra encryption and is not stored in a system keychain.
 
-Panic reports include build/platform/thread/source location/backtrace; normal startup retains the latest 20. Application logs use an in-memory buffer limited to 20,000 entries and 8 MiB, exported only on request rather than continuously written to a permanent log file.
+Panic reports include build and platform information, thread details, source location, and a backtrace. Normal startup retains the latest 20 reports. The application log buffer holds up to 20,000 entries and 8 MiB. Startup and file-opening diagnostics also rotate on disk under `logs/open` in the application data directory. Application log exports can include both sources. [VCLogg2 Privacy Notice](Privacy-Notice.md)
 
 Exit all processes sharing the root before backup/migration, then copy the full data directory. Do not copy only a live SQLite main file and omit WAL. Storage settings can clear rebuildable indices; history cleanup protects open, pinned or annotated/marked records. Temporary-file cleanup validates application ownership and current use.
 

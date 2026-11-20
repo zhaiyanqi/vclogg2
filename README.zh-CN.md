@@ -33,6 +33,8 @@ VCLogg2（VCLogg）是免费开源的大文件日志查看器（log viewer），
 
 数据目录见[安装与升级](wiki/zh-CN/Installation.md)，签名说明见[构建与发布](wiki/zh-CN/Build-and-Release.md)。当前 macOS 包使用临时签名，尚未公证。
 
+[代码签名政策](wiki/zh-CN/Code-Signing-Policy.md) · [隐私说明](wiki/zh-CN/Privacy-Notice.md)
+
 ## 从源码构建
 
 [源码构建指南](wiki/zh-CN/Building.md)提供 Rust 与平台依赖、完整环境配置、Debug/Release 命令和验证说明。构建与打包脚本统一保留在 `scripts/`，使用仓库中的 `Cargo.lock`。

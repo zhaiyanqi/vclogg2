@@ -33,6 +33,8 @@ Get the [latest release](https://github.com/zhaiyanqi/vclogg2/releases/latest) f
 
 See [installation](wiki/en/Installation.md) for data locations and [build and release notes](wiki/en/Build-and-Release.md) for signing details. Current macOS packages use ad-hoc signing without notarization.
 
+[Code signing policy](wiki/en/Code-Signing-Policy.md) · [Privacy notice](wiki/en/Privacy-Notice.md)
+
 ## Build from source
 
 See the [source build guide](wiki/en/Building.md) for Rust and platform prerequisites, environment setup, Debug/Release commands, and validation. Build and packaging scripts are maintained in `scripts/` and use the committed `Cargo.lock`.
