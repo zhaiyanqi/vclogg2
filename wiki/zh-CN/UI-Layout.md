@@ -51,10 +51,10 @@ SettingsWindow [A094] — shared native window / 进程唯一原生窗口
 │     ├─ Advanced [A316] — 高级
 │     └─ About [A395] — 关于
 ├─ Details [A319] — category content / 分类内容
-└─ Actions [A553]
-   ├─ Cancel [A554] — 取消
-   └─ Save [A555] — 保存
+└─ Actions [A553] — restore defaults / 恢复默认设置，保存失败时可重试
 ```
+
+设置窗口采用自动保存。原底部取消 [A554] 和保存 [A555] 按钮的历史编号继续保留。
 
 编辑时正文切换为编辑器并隐藏搜索面板，见[文件编辑](Editing.md)。空标签显示打开、最近文件与恢复入口。AI 控件已移除；工作区左侧导航可显示文件树或垂直标签列表。设置是独立窗口，不属于工作区弹层树。搜索标签轨道折叠与搜索面板展开互相独立。
 

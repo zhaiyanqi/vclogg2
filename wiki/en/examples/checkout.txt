@@ -1,0 +1,5 @@
+09:14:02 INFO  id=42 request started
+09:14:03 WARN  id=42 retry
+09:14:04 INFO  id=42 peer=payments
+09:14:05 ERROR id=42 timeout
+09:14:06 INFO  id=42 request closed

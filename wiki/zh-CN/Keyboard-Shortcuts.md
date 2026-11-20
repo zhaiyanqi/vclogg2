@@ -1,65 +1,50 @@
-# 键盘快捷键
+# 按任务查快捷键
 
-[English](../en/Keyboard-Shortcuts.md) · [Home / 首页](Home.md)
+[English](../en/Keyboard-Shortcuts.md) · [指南首页](Home.md)
 
-以下是默认绑定。Windows/Linux 的主修饰键为 **Ctrl**，macOS 为 **Command（⌘）**；用户保存的快捷键优先。可以从“帮助 → 键盘快捷键”或“工具 → 设置 → 快捷键”查看并编辑。
+从日志区按 **Ctrl+F / ⌘F**，输入关键词，按 **Enter** 搜索。点选一条结果，再按 **M** 就能标记对应的源行。单字母快捷键和焦点有关：光标仍在搜索框时，输入 `m` 会把这个字母加进查询。
 
-## 可配置的 10 项操作
+![焦点示意：搜索框内按 Enter 提交查询；选中日志行后，M 标记行，N 添加文字标记](images/shortcut-focus.svg)
 
-| 操作 | Windows / Linux | macOS | 使用位置 |
-| --- | --- | --- | --- |
-| 打开日志 | Ctrl+O | ⌘O | 工作区 |
-| 聚焦主搜索栏 | Ctrl+F | ⌘F | 工作区 |
-| 页内查找 | Ctrl+Shift+F | ⌘⇧F | 最后实际点击的正文或结果区域 |
-| 关闭当前标签 | Ctrl+W | ⌘W | 工作区 |
-| 打开 / 关闭设置窗口 | Ctrl+, | ⌘, | 工作区及设置窗口 |
-| 切换搜索大小写 | Alt+C | ⌥C | 工作区 |
-| 文件末尾 | Ctrl+End | ⌘End | 工作区 |
-| 轮换颜色标签 | Ctrl+D | ⌘D | 有选中文字或日志行 |
-| 自动换行 | W | W | 工作区 |
-| 新增文字标记 | N | N | 日志区域，选中单条源行 |
+## 可以自定义的默认按键
 
-可直接按组合键录入，支持清除及单项重置。重复绑定会阻止保存；保存后运行时重新绑定并写入状态库。Esc 和 Tab 保留导航用途。
+下面是新配置的默认值。**帮助 → 键盘快捷键** 和 **工具 → 设置 → 快捷键** 都能进入配置。选中要改的按键后直接录入，也可清除或恢复该项默认值。组合重复时会标红，解决冲突后即可生效。
 
-## 固定命令
-
-| 操作 | Windows / Linux | macOS |
+| 我要做什么 | Windows / Linux | macOS |
 | --- | --- | --- |
-| 新建原生窗口 | Ctrl+Shift+N | ⌘⇧N |
-| 完整重新加载当前文件 | F5 | F5 |
-| 转到源行 | Ctrl+G | ⌘G |
-| 复制文字 / 所选行 | Ctrl+C | ⌘C |
-| 复制行并带源行号 | Ctrl+Shift+C | ⌘⇧C |
+| 打开文件 | Ctrl+O | ⌘O |
+| 聚焦主搜索框 | Ctrl+F | ⌘F |
+| 在最后点过的正文或结果区域里查找 | Ctrl+Shift+F | ⌘⇧F |
+| 切换区分大小写 | Alt+C | ⌥C |
+| 跳到日志末尾 | Ctrl+End | ⌘End |
+| 切换自动换行 | W | W |
+| 为选中文字或行轮换颜色 | Ctrl+D | ⌘D |
+| 给选中的单行添加文字标记 | N | N |
+| 进入编辑模式 | I | I |
+| 关闭活动文件标签 | Ctrl+W | ⌘W |
+| 打开或关闭设置 | Ctrl+, | ⌘, |
+
+## 固定按键
+
+| 我要做什么 | Windows / Linux | macOS |
+| --- | --- | --- |
+| 标记或取消标记选中行 | M | M |
+| 跳到指定源行 | Ctrl+G | ⌘G |
+| 跳到文件开头 | Ctrl+Home | ⌘Home |
+| 复制选中文字或行 | Ctrl+C | ⌘C |
+| 连同源行号一起复制 | Ctrl+Shift+C | ⌘⇧C |
 | 全选当前日志区域 | Ctrl+A | ⌘A |
-| 标记 / 取消标记行 | M | M |
-| 文件开头 | Ctrl+Home | ⌘Home |
-| 全屏切换 | F11 | ⌃⌘F，兼容 F11 |
+| 完整重载当前文件 | F5 | F5 |
+| 打开新窗口 | Ctrl+Shift+N | ⌘⇧N |
+| 在输入框外将剪贴板文字打开为临时文档 | Ctrl+V | ⌘V 或 Ctrl+V |
+| 在编辑器内保存文档 | Ctrl+S | ⌘S |
+| 切换全屏 | F11 | ⌃⌘F 或 F11 |
 
-## 区域导航与输入
+## 焦点在这些位置时
 
-| 操作 | 默认键 / 手势 |
-| --- | --- |
-| 上下移动 | ↑ / ↓ |
-| 按页移动 | PageUp / PageDown |
-| 区域首尾导航 | Home / End |
-| 扩展行选择 | Shift + ↑ / ↓ / PageUp / PageDown / Home / End |
-| 提交主搜索 | 主搜索框内 Enter |
-| 页内查找下一处 / 上一处 | 页内查找框内 Enter / Shift+Enter；浮层内 F3 / Shift+F3 |
-| 关闭页内查找或最上层弹层 | Esc |
-| 控件焦点切换 | Tab / Shift+Tab |
-| 日志字号调整 | Ctrl + 鼠标滚轮 |
+- **正文或结果。** 方向键逐行移动，PageUp/PageDown 翻页；按住 Shift 配合方向键、翻页键或 Home/End 扩展选区。Ctrl 加滚轮调日志字号。
+- **页内查找。** Enter 或 F3 找下一处，Shift+Enter 或 Shift+F3 找上一处。Esc 关闭浮层。
+- **搜索标签栏。** 左右方向键切换标签，Home/End 到首尾，Alt 加左右方向键调整顺序。F2 改名，Delete/Backspace 关闭，Enter 回到查询框。
+- **设置窗口。** Esc 或 Ctrl+W / ⌘W 关闭窗口。有效设置会自动保存。
 
-## 焦点规则
-
-多数应用绑定带 `!Input` 条件：正在输入文字时，M/N/W 等不会作为日志命令触发，Ctrl/⌘+A、C 等由输入控件处理。日志区域中的 M 对一行或多行统一标记；N 要求单行目标，二者含义不同。
-
-macOS 紧凑键盘上 Home/End/Page 键可能需要 Fn 组合，F5/F11 也可能受系统功能键设置影响。表格列出应用收到的键，不假设特定键盘映射。
-
-
-源码依据：[actions.rs](https://github.com/zhaiyanqi/vclogg2/blob/main/crates/vclogg-app/src/actions.rs) · [state_store.rs](https://github.com/zhaiyanqi/vclogg2/blob/main/crates/vclogg-app/src/state_store.rs) · [settings_dialog.rs](https://github.com/zhaiyanqi/vclogg2/blob/main/crates/vclogg-app/src/settings_dialog.rs)。
-
-设置窗口内，Ctrl/⌘+S 保存，Ctrl/⌘+W 或 Esc 关闭；未提交预览随取消恢复。
-
-## 显式编辑与剪贴板
-
-非输入框内按 I 进入编辑；编辑器内 Ctrl/⌘+S 保存。非输入框内 Ctrl/⌘+V 将剪贴板文本打开为临时文档并进入编辑，macOS 也兼容 Ctrl+V。输入控件仍使用普通粘贴。见[文件编辑](Editing.md)。
+[搜索范围与页内查找](Search-and-Filters.md) · [行标记与颜色](Marks-and-Highlighting.md) · [编辑与保存文件](Editing.md)

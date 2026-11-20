@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="232" viewBox="0 0 720 232" role="img" aria-labelledby="title desc">
+  <title id="title">Use a shared filter locally</title>
+  <desc id="desc">Download the rule from Cloud filters. Check it in Filters and run it against the local log.</desc>
+  <rect width="720" height="232" rx="14" fill="#f4f7f8"/>
+  <rect x="16" y="18" width="223" height="196" rx="6" fill="#182e3b" stroke="none"/>
+  <text x="32" y="56" text-anchor="start" xml:space="preserve" fill="#ffffff" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="22" font-weight="650">Cloud filters</text>
+  <text x="32" y="101" text-anchor="start" xml:space="preserve" fill="#ffffff" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="20" font-weight="450">Payment failures</text>
+  <text x="32" y="135" text-anchor="start" xml:space="preserve" fill="#b6dbd3" font-family="Menlo, Consolas, monospace" font-size="18" font-weight="450">retry|timeout</text>
+  <text x="32" y="188" text-anchor="start" xml:space="preserve" fill="#ffffff" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="17" font-weight="630">Download locally</text>
+  <path d="M 244 115 H 271 M 264 109 L 271 115 L 264 121" fill="none" stroke="#126459" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="278" y="18" width="426" height="196" rx="6" fill="#ffffff" stroke="#b9cbd0"/>
+  <text x="294" y="56" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="22" font-weight="650">On your computer</text>
+  <rect x="294" y="79" width="21" height="21" rx="4" fill="#d8f0e9" stroke="#126459"/>
+  <path d="M 299 89 L 304 94 L 311 84" fill="none" stroke="#126459" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="324" y="98" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="19" font-weight="600">Payment failures</text>
+  <text x="294" y="137" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="19" font-weight="450">retry|timeout</text>
+  <path d="M 294 155 H 684" fill="none" stroke="#b9cbd0" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="294" y="188" text-anchor="start" xml:space="preserve" fill="#126459" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="19" font-weight="600">checkout.txt  →  lines 2, 4</text>
+</svg>

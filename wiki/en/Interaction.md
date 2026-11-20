@@ -8,6 +8,6 @@ Copy prefers the real text selection; otherwise it copies selected rows. Primary
 
 Double-click selects a word; whole-row and text selection remain distinct. Wrapping, font changes and result regrouping anchor to source identity rather than transient row indices. Follow tail can be disabled by deliberate navigation back into older content.
 
-File-tab rename is a display-only change. Multiwindow copies use immutable state snapshots; a move closes its source only after successful installation with unchanged source state. Failed or changed-source transfers retain the source. Settings preview across windows and roll back uncommitted changes on cancel; immediate history cleanup is independently committed.
+File-tab rename is a display-only change. Multiwindow copies use immutable state snapshots; a move closes its source only after successful installation with unchanged source state. Failed or changed-source transfers retain the source. Valid changes in Settings apply across windows and save automatically. History cleanup takes effect when confirmed.
 
 Input controls retain their typing and copy/paste semantics. See [shortcuts](Keyboard-Shortcuts.md), [search tabs](Search-and-Filters.md) and [editing](Editing.md).

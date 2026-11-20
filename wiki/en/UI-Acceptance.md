@@ -8,7 +8,7 @@ These are manual review scenarios, **not results executed for this documentation
 - Exercise current/global/directory search tabs, queued/canceled searches, reordering, limits and result-source navigation.
 - Copy text/rows, multi-select, mark, color and add/edit/drag text tags; verify no decoration leaks into export.
 - Append, truncate and rotate a foreground file; switch tabs/windows during refresh; verify follow and F5 recovery.
-- Preview settings across windows, cancel, save and reopen; check singleton window, size recovery and category focus.
+- Change a setting, check the other window, then close and reopen Settings to verify autosave, window size and category focus.
 - Edit a supported small file, reject a changed source, cancel a dirty draft and save a new file without overwriting another.
 - Test platform shortcuts, input focus, window controls, high-DPI layouts and both UI languages.
 - Verify tab copies/moves, session recovery, protected history cleanup and temporary-result ownership.

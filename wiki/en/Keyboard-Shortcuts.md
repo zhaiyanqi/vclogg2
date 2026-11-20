@@ -1,39 +1,50 @@
-# Keyboard shortcuts
+# Keyboard shortcuts by task
 
-[简体中文](../zh-CN/Keyboard-Shortcuts.md) · [Home / 首页](Home.md)
+[简体中文](../zh-CN/Keyboard-Shortcuts.md) · [Guide home](Home.md)
 
-The primary modifier is **Ctrl** on Windows/Linux and **Command (⌘)** on macOS. Saved user bindings override defaults. Open **Tools → Settings → Shortcuts** to record, clear or reset the ten configurable commands; duplicate nonempty bindings prevent saving.
+Start in the log. Press **Ctrl+F / ⌘F**, enter a query and press **Enter**. Click a result, then press **M** to mark the source line. For letter shortcuts, focus matters. Typing `m` in the search box adds a character to your query.
 
-| Configurable command | Windows / Linux | macOS |
+![Focus example showing Enter in the query field and M or N after selecting a log row](images/shortcut-focus.svg)
+
+## Customizable defaults
+
+These are the defaults for a new configuration. **Help → Keyboard shortcuts** opens the same category as **Tools → Settings → Shortcuts**. Select a binding and press the keys you want, clear it or restore its default. Resolve highlighted duplicates to apply the change.
+
+| Action | Windows / Linux | macOS |
 | --- | --- | --- |
-| Open file | Ctrl+O | ⌘O |
-| Focus search | Ctrl+F | ⌘F |
-| Quick find in focused region | Ctrl+Shift+F | ⌘⇧F |
-| Close tab | Ctrl+W | ⌘W |
-| Toggle settings window | Ctrl+, | ⌘, |
+| Open a file | Ctrl+O | ⌘O |
+| Focus the main search field | Ctrl+F | ⌘F |
+| Quick find in the last clicked log or result area | Ctrl+Shift+F | ⌘⇧F |
 | Toggle case sensitivity | Alt+C | ⌥C |
-| End of file | Ctrl+End | ⌘End |
-| Cycle color label | Ctrl+D | ⌘D |
-| Toggle wrapping | W | W |
-| Add text tag to one line | N | N |
+| Jump to the end of the log | Ctrl+End | ⌘End |
+| Toggle word wrap | W | W |
+| Cycle the color of selected text or rows | Ctrl+D | ⌘D |
+| Add a text tag to one selected row | N | N |
+| Enter edit mode | I | I |
+| Close the active file tab | Ctrl+W | ⌘W |
+| Open or close Settings | Ctrl+, | ⌘, |
 
-| Fixed command | Binding (primary = Ctrl / ⌘) |
-| --- | --- |
-| New native window | Primary+Shift+N |
-| Full reload | F5 |
-| Go to source line | Primary+G |
-| Copy selected text / rows | Primary+C |
-| Copy rows with source numbers | Primary+Shift+C |
-| Select all rows in focused region | Primary+A |
-| Mark / unmark rows | M |
-| Start of file | Primary+Home |
-| Enter edit mode | I, outside an input |
-| Save editor or settings | Primary+S, in that window/context |
-| Clipboard text as temporary file | Primary+V, outside an input; macOS also accepts Ctrl+V |
-| Fullscreen | F11; macOS also Ctrl+⌘F |
+## Fixed commands
 
-Arrow keys, PageUp/PageDown and Home/End navigate a log region; Shift extends selection. Enter submits the main query. Quick find uses Enter/Shift+Enter or F3/Shift+F3 for next/previous and Esc to close. Tab/Shift+Tab moves focus. Ctrl+wheel adjusts log font size.
+| Action | Windows / Linux | macOS |
+| --- | --- | --- |
+| Mark or unmark selected rows | M | M |
+| Jump to a source line | Ctrl+G | ⌘G |
+| Jump to the start of the file | Ctrl+Home | ⌘Home |
+| Copy selected text or rows | Ctrl+C | ⌘C |
+| Copy rows with source line numbers | Ctrl+Shift+C | ⌘⇧C |
+| Select all in the focused log area | Ctrl+A | ⌘A |
+| Reload the current file | F5 | F5 |
+| Open a new window | Ctrl+Shift+N | ⌘⇧N |
+| Open clipboard text as a temporary document, outside an input | Ctrl+V | ⌘V or Ctrl+V |
+| Save the document in the editor | Ctrl+S | ⌘S |
+| Toggle full screen | F11 | ⌃⌘F or F11 |
 
-Search-tab navigation: Left/Right switches tabs, Home/End selects first/last, Alt+Left/Right reorders, F2 renames, Delete/Backspace closes, Enter returns to search input. Most workspace bindings exclude input controls so typing M/N/W/I and normal input copy/paste keep their text meaning. Settings use Primary+W or Esc to close and revert unsaved preview.
+## Navigate the region with focus
 
-Source: [actions.rs](https://github.com/zhaiyanqi/vclogg2/blob/main/crates/vclogg-app/src/actions.rs).
+- **Original log or results.** Arrows move between rows. PageUp/PageDown move by a page. Shift with the arrows, paging keys or Home/End extends the selection. Ctrl+wheel changes log font size.
+- **Quick find.** Enter or F3 moves to the next occurrence, Shift+Enter or Shift+F3 to the previous one. Esc closes quick find.
+- **Search-tab strip.** Left/Right switches tabs, Home/End selects the first or last and Alt+Left/Right reorders. F2 renames, Delete/Backspace closes, Enter returns to the query.
+- **Settings window.** Esc or Ctrl+W / ⌘W closes the window. Valid preference changes save automatically.
+
+[Search scopes and quick find](Search-and-Filters.md) · [Row marks and colors](Marks-and-Highlighting.md) · [Editing and saving](Editing.md)

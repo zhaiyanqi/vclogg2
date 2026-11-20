@@ -4,12 +4,12 @@
 
 | Symptom | Check |
 | --- | --- |
-| File looks incorrectly decoded | Re-detect/select encoding and reload; unsupported encodings may prevent editing |
+| File looks incorrectly decoded | Use the Encoding menu to re-detect and reload. Unsupported encodings may prevent editing. |
 | New log lines are not shown | Focus the file's window/tab; monitoring is active-document only. F5 performs a full rebuild |
 | Old lines remain after concurrent rewrite/append | Head/tail refresh may miss a middle rewrite; use F5 |
 | Results appear incomplete | Check per-file result limit, selected global files, directory options, source-line bounds and result mode |
-| `a|b` behaves differently in quick find | Main literal search treats `|` as alternatives; literal quick find does not |
-| Settings changes disappeared | Uncommitted previews revert on cancel/close; save with Primary+S |
+| `a\|b` behaves differently in quick find | Main literal search uses the vertical bar for alternatives. Quick find searches for the character itself. |
+| Settings changes disappeared | Check the validation message or shortcut conflict. Valid changes save automatically. Use **Retry** if a save failed. |
 | File edit is refused | Check valid/supported encoding and disk changes since editing began |
 | Cloud registration fails | Check server URL/TLS and desktop/server authentication compatibility; same-repository builds do not guarantee compatibility |
 | Windows startup reports a data-path error | Inspect `vclogg2-data-dir.txt` and directory permissions; there is deliberately no silent fallback |

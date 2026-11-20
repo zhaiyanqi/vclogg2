@@ -1,26 +1,34 @@
-# Settings
+# Adjust the workspace for reading
 
-[简体中文](../zh-CN/Settings.md) · [Home / 首页](Home.md)
+[简体中文](../zh-CN/Settings.md) · [Guide home](Home.md)
 
-Open **Tools → Settings** or **Primary+,**. The process shares one native settings window; menu entries can reveal it at a category. It is resizable through the system frame and remembers size. Changes use drafts and cross-window preview. **Primary+S** saves; cancel, Esc or close reverts uncommitted preview. Immediate history deletion is a separate operation and is not rolled back.
+## Give dense logs more space
 
-| Category | Contents |
+Open a log and leave a few results visible. Choose **Tools → Settings → Appearance** (or open Settings with **Ctrl+, / ⌘,**). Change **Log font size** to make the characters larger. Adjust the extra line spacing to separate adjacent records. Watch the same lines in the workspace as you adjust them.
+
+![Reading example showing the same two records with tighter and wider line spacing](images/line-spacing.svg)
+
+Valid changes apply across windows and save automatically. Close Settings with **Esc** or **Ctrl+W / ⌘W**. To undo an appearance change, set the value back. Font and line spacing affect both original text and results. Use **W** in the log when a long line runs off the right edge.
+
+## Where to find a setting
+
+| I want to… | Category |
 | --- | --- |
-| General | Language, paths, close/paste confirmation, directory command, wheel and word boundaries |
-| Network | Optional cloud server connection and session configuration |
-| Appearance | Theme, log font/size/spacing, line numbers, search control sizing |
-| Highlight | Coloring groups, labels, selection and keyword-match styles |
-| Search | Case, regex, per-file result limit, match highlighting |
-| History | File records, temporary results, search history |
-| Storage | Database/index statistics, reveal directories and cleanup |
-| Shortcuts | Ten configurable commands with collision checks |
-| Advanced | Built-in icons, application log level and export |
-| About | Version, locally displayed build time and project links |
+| Change language, path display, close confirmation, wheel behavior or word boundaries | **General** |
+| Set a team server address and test the connection | **Network**. Use **Save and test** to connect. [Cloud filters](Cloud-Filters.md) |
+| Change theme, log font, size, line spacing, line numbers or search control size | **Appearance** |
+| Color log levels or change selection, keyword and label colors | **Highlight**. [Highlighting guide](Marks-and-Highlighting.md) |
+| Use case sensitivity or regex, or change the maximum number of results per file | **Search**. Set the limit to **0** for unlimited matches. |
+| Find a recent file or manage temporary results and previous searches | **History** |
+| Inspect the state database and file-index cache or free space | **Storage** |
+| Record, clear or reset a key binding | **Shortcuts**. Conflicting combinations are flagged. [Shortcut reference](Keyboard-Shortcuts.md) |
+| Export or clear application diagnostics, choose an icon, or enable the Windows Explorer file menu | **Advanced** |
+| Check the version and build information | **About** |
 
-New configurations default to Chinese, the light theme, Consolas 13 px with 6 px extra line spacing, a 60 px line-number column, and unlimited results (0). Case sensitivity, regex and log-level coloring start off; committed-match highlighting starts on. Debug builds default to Debug logging and Release to Error. Existing saved settings and per-file session state can override defaults.
+## Starting values
 
-Toolbar controls and the main search input share a 36 px default height, with independently configurable 13 px default font sizes. The actual common height expands to fit the fonts. Fonts absent on another machine retain their saved name but use available rendering fallbacks.
+A new configuration uses Chinese and the light theme. Log text defaults to Consolas at 13 px with 6 px of extra line spacing. The line-number column starts at 60 px. Fonts are chosen from those available on the system, with a fallback if a saved font is missing. Existing file sessions can retain their own wrapping, separators and line-number state.
 
-View → Horizontal scrollbar synchronizes visibility across windows; horizontal wheel navigation remains available when it is hidden. Per-file line numbers, separators and wrapping are distinct from defaults for new files. Themes support system/light/dark. macOS system-window menu language is initialized at startup, so save and restart to change those native resources.
+Search starts with case and regex off, match highlighting on and log-level coloring off. The toolbar and search field share a default control height of 30 px. Their font sizes can be set independently, and the controls grow to fit larger text.
 
-The View menu notification switch suppresses new popups, while the current-run history retains up to 100 shared messages. Four built-in icon choices affect supported runtime surfaces without rewriting signed packages or guaranteeing every pinned OS shortcut changes.
+**View → Horizontal scrollbar** controls scrollbar visibility across windows. Horizontal wheel navigation still works with it hidden. The notification switch is also in **View**. Messages from the current run remain available in the notification panel.

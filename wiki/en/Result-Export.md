@@ -6,11 +6,11 @@ Export captures the **entire committed result set at the moment of the command**
 
 | Command | Output |
 | --- | --- |
-| Save… | Writes to a chosen file |
+| Save to file… | Writes to a chosen file |
 | Open in new tab | Creates an application-owned temporary result document |
-| Merge by time | Stably merges cross-file results into a new tab |
+| Merge results in new tab | Stably merges cross-file results into a new tab |
 
-Single-file output follows result order. Ordinary global output groups nonempty results by file and includes full-path group headings. Time merge has no file headings and recognizes line-start `MM-DD HH:mm:ss` followed by 1–6 fractional digits; `T` may replace the date/time space. Example: `09-08T14:25:03.120045`.
+Right-click the results to find these commands. Single-file output follows result order. Ordinary global output groups nonempty results by file and includes full-path group headings. Time merge has no file headings and recognizes line-start `MM-DD HH:mm:ss` followed by 1–6 fractional digits; `T` may replace the date/time space. Example: `09-08T14:25:03.120045`.
 
 Untimestamped continuation lines inherit the preceding timestamp in that file; initial continuations may look ahead for its first timestamp. Equal timestamps use file order and source-line order. This is not a general timezone/JSON/cross-year normalization engine.
 

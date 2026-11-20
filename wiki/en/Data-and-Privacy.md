@@ -13,7 +13,7 @@ Normal reading, searches and annotations do not modify logs. Explicit [editing a
 
 Windows `vclogg2-data-dir.txt` specifies an absolute data root. Missing means portable mode; invalid/unwritable means startup failure, not fallback. Windows instance routing is scoped to user and data root.
 
-Stored records include `sessions/vclogg2-state.db` (SQLite settings, paths, searches and recovery), rebuildable indices, public cloud page caches, private cloud session JSON, crash reports and temporary documents. Current schema is v22. Unix session directory/file permissions are 0700/0600; Windows follows data-root permissions. Session JSON has no extra encryption and is not stored in a system keychain.
+Stored records include `sessions/vclogg2-state.db` (SQLite settings, paths, searches and recovery), rebuildable indices, public cloud page caches, private cloud session JSON, crash reports and temporary documents. The database schema is documented in the [architecture reference](Architecture.md). Unix session directory/file permissions are 0700/0600; Windows follows data-root permissions. Session JSON has no extra encryption and is not stored in a system keychain.
 
 Panic reports include build and platform information, thread details, source location, and a backtrace. Normal startup retains the latest 20 reports. The application log buffer holds up to 20,000 entries and 8 MiB. Startup and file-opening diagnostics also rotate on disk under `logs/open` in the application data directory. Application log exports can include both sources. [VCLogg2 Privacy Notice](Privacy-Notice.md)
 

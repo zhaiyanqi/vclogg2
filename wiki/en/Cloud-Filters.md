@@ -1,28 +1,40 @@
-# Cloud filters
+# Use and share filters with your team
 
-[简体中文](../zh-CN/Cloud-Filters.md) · [Home / 首页](Home.md)
+[简体中文](../zh-CN/Cloud-Filters.md) · [Guide home](Home.md)
 
-Cloud sharing is optional; local search and filters work without a server. Configure a server and username in Settings → Network, save/test, then open the cloud filter view. Connections use on-demand `/api/v1` requests, not a permanent socket.
+A predefined filter gives a query a name. For example, a team might call `retry|timeout` **Payment failures**. Each person can apply that rule to a different log on their computer. Local filters work offline. The optional network connection lets people exchange filter definitions and revisions.
 
-## Authentication compatibility
+![Example flow from a cloud filter named Payment failures to a local search that finds lines 2 and 4](images/cloud-filter.svg)
 
-The current desktop client registers without a built-in signing key. The Go server in `server/` defaults to `client_auth.enabled: true` and retains a signed-registration protocol. **Building both in one repository does not make those authentication modes compatible.** A default server deployment may reject this desktop client's registration. Align the protocol before production use; `client_auth.enabled: false` is only an isolated-development option, not a production recommendation.
+## Try a filter on your own
 
-Public connection settings go to SQLite. Cookie/CSRF data is stored in local private `cloud/sessions/<server-URL-SHA-256>.json` files without additional encryption; the current desktop client does not use the OS keychain. Do not publish these files. HTTPS is recommended; HTTP remains available for controlled local networks.
+1. Open **Tools → Predefined filters… → Local filters**. Select **+**, name the filter **Payment failures**, enter `retry|timeout` as the match value and leave regex off. Choose **Done** in the detail view, then **OK** in the local list.
+2. Open the [walkthrough log](Getting-Started.md). Start with an empty query in **Current** scope. Open **Filters** on the search bar and check **Payment failures**. The query field now contains the two keywords.
+3. Click the search button. In **Matches only**, lines 2 and 4 appear. You can use the same filter in a global or directory search.
 
-## UUIDs, revisions and merging
+## Download a teammate’s rule
 
-| Situation | Behavior |
+1. Ask your team for its compatible filter server address. In **Tools → Settings → Network**, enter **Server address** and **User name**. Choose **Save and test** and check the connection status.
+2. Open **Tools → Predefined filters… → Cloud filters**. Search by name, keyword, note or sharer. Open an entry to see its match value and revision.
+3. Choose **Download locally**, or select several entries and choose **Download/update selected**. In **Local filters**, check that the rule is available. Return to the log and check the rule in **Filters** to use it.
+
+## Share a new rule or update one
+
+Select a saved local filter, choose **Share** and confirm the selected entry. For an already shared filter, save your edits locally, inspect its details and choose **Submit local changes** to publish a revision.
+
+| When you update a filter | What to do |
 | --- | --- |
-| UUID absent locally | Download while preserving remote UUID |
-| Only remote changed | Update to newer revision |
-| Different fields changed on each side | Three-way merge |
-| Same field changed differently | Explicit local/remote or field-by-field resolution |
-| Resolve later | Retain local content and common baseline |
-| Save as new filter | Create a new UUID branch |
+| Only the server has changes | Choose **Update local** to bring them in. |
+| Both copies changed | Separate fields can merge automatically. For conflicting fields, choose the value to keep, or defer the decision and keep your local copy. |
+| You want a variation for a different project | Choose **Save as new filter**. It gets its own UUID even if its name and match value are the same. |
+| You need an older revision | Choose **Restore locally** in the history. Review it before submitting another revision. |
 
-Merging locally is not a remote submission. Publishing uses a common revision baseline. A concurrent-revision conflict fetches/merges the latest revision without automatically resubmitting. Restoring history creates local pending edits; deleting a remote share retains the local filter.
+A concurrent edit may require another review before submission. Removing a remote share leaves your local rule available. The local list also supports import/export. JSON export uses v5 and import accepts earlier v1–v4 files, arrays and legacy Qt CONF/INI files. Existing local rules absent from an import are kept.
 
-Sharing/submitting requires the server capability `filter-uuid-branches-v1`. Older servers can still support browsing and downloads. On failure, cached public pages can be searched/sorted locally; they are only pages previously viewed, not a complete offline mirror. Offline merge accepts only safely newer cached revisions. Likes, publishing, remote deletion and remote revision operations require connectivity.
+## If the connection or sharing fails
 
-See [filter acceptance](Filter-Branch-Acceptance.md) and [server source](https://github.com/zhaiyanqi/vclogg2/tree/main/server).
+- **Connection fails.** Verify the service URL and authentication with its operator. The desktop client registers unsigned. The bundled Go server defaults to signed registration (`client_auth.enabled: true`) and may reject this client. Production deployments need compatible registration. Disabling that protection is limited to isolated development.
+- **Sharing is disabled.** Check whether the server advertises `filter-uuid-branches-v1`. Older servers can still support browsing and downloads.
+- **Working offline.** You can browse previously cached public pages and bring in safely newer cached revisions. Publishing, liking, remote deletion and retrieving revision history need a connection.
+
+Requests use the service’s `/api/v1` endpoints on demand. Public connection settings are stored in SQLite. Session files under `cloud/sessions/` contain cookies and CSRF data without additional encryption. Keep them out of shared diagnostic attachments. [Local data and privacy](Data-and-Privacy.md) · [Filter revision reference](Filter-Branch-Acceptance.md)

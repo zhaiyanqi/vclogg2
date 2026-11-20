@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="368" viewBox="0 0 720 368" role="img" aria-labelledby="title desc">
+  <title id="title">From a match to its source</title>
+  <desc id="desc">Source lines 2 and 4 match. Selecting result 4 reveals line 4 beside its context in checkout.txt.</desc>
+  <rect width="720" height="368" rx="14" fill="#f4f7f8"/>
+  <rect x="18" y="14" width="684" height="37" rx="6" fill="#182e3b" stroke="none"/>
+  <text x="32" y="39" text-anchor="start" xml:space="preserve" fill="#ffffff" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="18" font-weight="600">checkout.txt</text>
+  <rect x="18" y="55" width="684" height="143" rx="6" fill="#ffffff" stroke="#b9cbd0"/>
+  <rect x="21" y="139" width="678" height="28" rx="2" fill="#d8f0e9" stroke="none"/>
+  <text x="40" y="79" text-anchor="start" xml:space="preserve" fill="#4b6270" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="450">1</text>
+  <text x="79" y="79" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="18" font-weight="450">09:14:02 INFO  id=42 request started</text>
+  <text x="40" y="106" text-anchor="start" xml:space="preserve" fill="#4b6270" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="450">2</text>
+  <rect x="305" y="88" width="59" height="22" rx="3" fill="#ffdf9a" stroke="none"/>
+  <text x="79" y="106" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="18" font-weight="450">09:14:03 WARN  id=42 retry</text>
+  <text x="40" y="133" text-anchor="start" xml:space="preserve" fill="#4b6270" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="450">3</text>
+  <text x="79" y="133" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="18" font-weight="450">09:14:04 INFO  id=42 peer=payments</text>
+  <text x="40" y="160" text-anchor="start" xml:space="preserve" fill="#4b6270" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="450">4</text>
+  <rect x="305" y="142" width="80" height="22" rx="3" fill="#ffdf9a" stroke="none"/>
+  <text x="79" y="160" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="18" font-weight="450">09:14:05 ERROR id=42 timeout</text>
+  <text x="40" y="187" text-anchor="start" xml:space="preserve" fill="#4b6270" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="450">5</text>
+  <text x="79" y="187" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="18" font-weight="450">09:14:06 INFO  id=42 request closed</text>
+  <rect x="18" y="209" width="684" height="43" rx="6" fill="#e5ecee" stroke="none"/>
+  <text x="31" y="237" text-anchor="start" xml:space="preserve" fill="#126459" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="19" font-weight="650">Current</text>
+  <rect x="133" y="214" width="377" height="33" rx="6" fill="#ffffff" stroke="#b9cbd0"/>
+  <text x="149" y="237" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="18" font-weight="450">retry|timeout</text>
+  <text x="532" y="237" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="18" font-weight="550">Matches only</text>
+  <rect x="18" y="263" width="684" height="88" rx="6" fill="#ffffff" stroke="#b9cbd0"/>
+  <rect x="21" y="309" width="678" height="39" rx="2" fill="#d8f0e9" stroke="none"/>
+  <text x="40" y="293" text-anchor="start" xml:space="preserve" fill="#126459" font-family="Menlo, Consolas, monospace" font-size="18" font-weight="650">2</text>
+  <rect x="305" y="275" width="59" height="22" rx="3" fill="#ffdf9a" stroke="none"/>
+  <text x="79" y="293" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="18" font-weight="450">09:14:03 WARN  id=42 retry</text>
+  <text x="40" y="335" text-anchor="start" xml:space="preserve" fill="#126459" font-family="Menlo, Consolas, monospace" font-size="18" font-weight="650">4</text>
+  <rect x="305" y="317" width="80" height="22" rx="3" fill="#ffdf9a" stroke="none"/>
+  <text x="79" y="335" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="18" font-weight="450">09:14:05 ERROR id=42 timeout</text>
+  <path d="M 625 328 H 673 V 153 H 625 M 634 146 L 625 153 L 634 160" fill="none" stroke="#126459" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

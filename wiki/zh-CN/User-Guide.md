@@ -1,13 +1,21 @@
-# 用户指南
+# 按排查场景找功能
 
-[English](../en/User-Guide.md) · [Home / 首页](Home.md)
+[English](../en/User-Guide.md) · [指南首页](Home.md)
 
-1. [安装](Installation.md)对应平台发行包并[打开日志](Getting-Started.md)。
-2. 熟悉[界面](Interface.md)与[键盘命令](Keyboard-Shortcuts.md)。
-3. 选择[搜索范围](Search-and-Filters.md)，从结果查看源行上下文。
-4. 添加[标记和颜色](Marks-and-Highlighting.md)或[文字注释](Row-Tags.md)。
-5. [导出](Result-Export.md)完整结果，或跟随[动态更新](Live-Logs.md)。
-6. 配置[设置](Settings.md)、可选[云端过滤器](Cloud-Filters.md)与[数据存储](Data-and-Privacy.md)。
-7. 需要修改文件时再使用[编辑](Editing.md)。
+## 多个服务都处理过这笔请求
 
-遇到问题先查看[排障](Troubleshooting.md)。
+打开相关文件，搜索范围选 **全局**，勾选要查的标签，再搜请求 ID。展开各文件的结果组，点击命中行回看上下文。若各日志的行首时间戳符合支持的格式，可以按时间合并，在一个新标签里读完整经过。[选择搜索范围](Search-and-Filters.md) · [按时间合并与导出](Result-Export.md)
+
+## 服务一边写日志，我一边排查
+
+保持服务日志为活动标签，开启 **视图 → 末尾跟随**。发现异常时关掉跟随，回到较早的几行做标记；当前日志仍可刷新。[动态日志](Live-Logs.md) · [标记与高亮](Marks-and-Highlighting.md)
+
+## 下周还要查同样的问题
+
+把这次命中的关键词存成预定义过滤器，取一个同事也看得懂的名字。下次打开另一份日志，从搜索栏的 **过滤器** 就能用。团队接入了同一服务时，还可以把规则分享给同事下载。[本地与在线过滤器](Cloud-Filters.md)
+
+## 同事只发来一段文字
+
+复制这段文字，选择 **文件 → 从剪贴板打开临时文件…**。需要保留修改时，保存到以后找得到的位置。[剪贴板与编辑](Editing.md)
+
+第一次使用可以先用五行示例练习；已经遇到漏查或结果异常，可以直接查排障页。[第一次排查](Getting-Started.md) · [常见问题](Troubleshooting.md)

@@ -1,15 +1,26 @@
-# VCLogg2 文档
+# VCLogg2 日志查看指南
 
-[English](../en/Home.md) · [Home / 首页](Home.md)
+[English](../en/Home.md)
 
-VCLogg2 是面向 Windows、macOS 与 Linux 的 Rust/GPUI 桌面日志查看器。从[安装](Installation.md)和[快速上手](Getting-Started.md)开始。
+一次请求超时了，哪一行能看出它在等谁？在 VCLogg2 里打开日志，搜索 `timeout`，点一下命中行，就能连同前后的记录一起读。Windows、macOS 和 Linux 都可以在本机完成这次排查。
 
-- 阅读：[界面](Interface.md)、[快捷键](Keyboard-Shortcuts.md)、[动态日志](Live-Logs.md)。
-- 分析：[搜索](Search-and-Filters.md)、[标记与高亮](Marks-and-Highlighting.md)、[文字标记](Row-Tags.md)、[导出](Result-Export.md)。
-- 编辑与配置：[文件编辑](Editing.md)、[设置](Settings.md)、[云端过滤器](Cloud-Filters.md)、[隐私](Data-and-Privacy.md)。
-- 开发：[架构](Architecture.md)、[技术栈](Technology-Stack.md)、[源码构建](Building.md)、[发布](Build-and-Release.md)、[贡献](Contributing.md)。
-- 文档：[维护与 Pages 部署](Documentation.md)、[迁移与归档](Archive.md)。
+![操作示意：搜索命中第 2、4 行，选中结果第 4 行，在上方原文看到同一行及其上下文](images/search-context.svg)
 
-文档位于主仓库的 `wiki/`，每个主题具有中英文页面，由 mdBook 生成后与官网一起发布，不使用独立 Wiki 仓库或子模块。
+**用五行日志试一次。** 跟着一条请求从重试读到超时，再把写有上游服务名的那一行标出来。[开始第一次排查](Getting-Started.md) · [安装 VCLogg2](Installation.md)
 
-当前文档于 2026-10-11 按源码 `3c7086b` 核对。这是源码审查，不代表重新执行应用构建、性能基准或真实窗口验收。旧 Wiki 的原始记录单独归档。
+## 你想做什么？
+
+| 我手头的任务 | 从这里开始 |
+| --- | --- |
+| 打开一个文件、一批日志，或接着读昨天的文件 | [打开文件与文件夹](Opening-Files.md) |
+| 在当前日志或整个目录里找一句话 | [搜索日志](Search-and-Filters.md) |
+| 用同事分享的过滤器查自己的日志 | [下载和使用在线过滤器](Cloud-Filters.md) |
+| 记住一行，并留下它值得关注的原因 | [行标记、颜色与高亮](Marks-and-Highlighting.md) |
+| 字太小、行太密，想换一种读法 | [调整字体与行距](Settings.md) |
+| 用键盘查找、跳行或做标记 | [快捷键速查](Keyboard-Shortcuts.md) |
+
+服务还在运行时，可以跟到最新一行；要把排查结果发给同事，可以只导出相关行。[跟随动态日志](Live-Logs.md) · [导出结果](Result-Export.md) · [更多排查场景](User-Guide.md)
+
+## 帮助与开发
+
+[常见问题](Troubleshooting.md) · [隐私说明](Privacy-Notice.md) · [架构](Architecture.md) · [从源码构建](Building.md) · [参与贡献](Contributing.md)

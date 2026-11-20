@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="235" viewBox="0 0 720 235" role="img" aria-labelledby="title desc">
+  <title id="title">一行日志上的三种标注</title>
+  <desc id="desc">圆点标记第 4 行，颜色突出 timeout，行尾的文字标记记录排查备注。</desc>
+  <rect width="720" height="235" rx="14" fill="#f4f7f8"/>
+  <rect x="16" y="18" width="688" height="37" rx="6" fill="#182e3b" stroke="none"/>
+  <text x="30" y="43" text-anchor="start" xml:space="preserve" fill="#ffffff" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="18" font-weight="600">checkout.txt</text>
+  <rect x="16" y="60" width="688" height="66" rx="6" fill="#ffffff" stroke="#b9cbd0"/>
+  <circle cx="43" cy="93" r="7" fill="#126459"/>
+  <text x="69" y="100" text-anchor="start" xml:space="preserve" fill="#4b6270" font-family="Menlo, Consolas, monospace" font-size="20" font-weight="450">4</text>
+  <text x="109" y="100" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="21" font-weight="450">ERROR id=42</text>
+  <rect x="262" y="74" width="105" height="37" rx="6" fill="#ffdf9a" stroke="none"/>
+  <text x="270" y="100" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="21" font-weight="450">timeout</text>
+  <rect x="395" y="75" width="166" height="35" rx="9" fill="#d8f0e9" stroke="#126459"/>
+  <text x="478" y="99" text-anchor="middle" xml:space="preserve" fill="#126459" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="18" font-weight="650">核对上游</text>
+  <path d="M 43 108 V 152 H 65" fill="none" stroke="#126459" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 312 113 V 152" fill="none" stroke="#126459" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 480 112 V 152 H 533" fill="none" stroke="#126459" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="30" y="180" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="21" font-weight="650">行标记</text>
+  <text x="30" y="209" text-anchor="start" xml:space="preserve" fill="#126459" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="18" font-weight="550">M</text>
+  <text x="241" y="180" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="21" font-weight="650">颜色标签</text>
+  <text x="241" y="209" text-anchor="start" xml:space="preserve" fill="#126459" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="18" font-weight="550">Ctrl+D / ⌘D</text>
+  <text x="510" y="180" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="21" font-weight="650">文字标记</text>
+  <text x="510" y="209" text-anchor="start" xml:space="preserve" fill="#126459" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="18" font-weight="550">N</text>
+</svg>

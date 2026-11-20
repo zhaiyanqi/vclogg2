@@ -51,10 +51,10 @@ SettingsWindow [A094] — shared native window / 进程唯一原生窗口
 │     ├─ Advanced [A316] — 高级
 │     └─ About [A395] — 关于
 ├─ Details [A319] — category content / 分类内容
-└─ Actions [A553]
-   ├─ Cancel [A554] — 取消
-   └─ Save [A555] — 保存
+└─ Actions [A553] — restore defaults / 恢复默认设置，保存失败时可重试
 ```
+
+Autosave replaced the settings footer’s Cancel [A554] and Save [A555] buttons. Their historical IDs remain reserved.
 
 Editing replaces log reading with an editor and hides the search panel; see [Editing](Editing.md). Empty tabs show open/recent/recovery content. AI controls are removed; the workspace's left navigation can show a file tree or vertical tab list. Settings is a separate window, not inside the workspace overlay tree. Search-track collapse and search-panel expansion are independent.
 

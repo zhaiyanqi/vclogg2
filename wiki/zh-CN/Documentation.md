@@ -2,6 +2,14 @@
 
 [English](../en/Documentation.md) · [Home / 首页](Home.md)
 
+## 阅读指南怎样组织
+
+侧栏从一次完整排查开始，日常操作放在前面，排障与开发参考各有入口。按读者区分入口参考了 [OBS Studio Wiki](https://github.com/obsproject/obs-studio/wiki)，按主题组织目录参考了 [qBittorrent Wiki](https://github.com/qbittorrent/qBittorrent/wiki)。
+
+功能页把操作和能观察到的结果放在一起。入门用同一份五行日志，读者可以对照源行、查询和结果。分步配图参考了 [OBS 快速入门](https://obsproject.com/kb/quick-start-guide)，点选结果后解释上下文的方式参考了 [Wireshark 用户指南](https://www.wireshark.org/docs/wsug_html_chunked/ChapterWork.html)。
+
+两种语言各自的 `images/` 目录保存带对应语言标注的示意图，两份教程共用一份[示例文件](../en/examples/checkout.txt)。修改示例时，同时核对正文、图中的源行号和预期命中。
+
 ## 文档工具选择
 
 “get book”可能指 **GitBook**，当前产品支持托管文档和 GitHub/GitLab 同步。仓库同步不等于在本仓库构建静态产物并发布到 GitHub Pages。

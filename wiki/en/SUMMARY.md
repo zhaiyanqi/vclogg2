@@ -1,34 +1,50 @@
 # Summary
 
-- [VCLogg2 documentation](Home.md)
-- [Getting started](Getting-Started.md)
-- [Installation and upgrades](Installation.md)
-- [User guide](User-Guide.md)
-- [Interface](Interface.md)
+[VCLogg2 log viewer](Home.md)
+
+# First investigation
+
+- [Install or upgrade](Installation.md)
+- [Trace your first timeout](Getting-Started.md)
+- [Find your way around](Interface.md)
+- [Common investigations](User-Guide.md)
+
+# Read and search logs
+
+- [Open files and folders](Opening-Files.md)
+- [Follow a growing file](Live-Logs.md)
+- [Search logs](Search-and-Filters.md)
+- [Mark and highlight lines](Marks-and-Highlighting.md)
+  - [Style and reuse text tags](Row-Tags.md)
+- [Export or merge results](Result-Export.md)
+- [Edit a file or clipboard text](Editing.md)
+
+# Filters and preferences
+
+- [Use and share cloud filters](Cloud-Filters.md)
+- [Adjust the workspace](Settings.md)
 - [Keyboard shortcuts](Keyboard-Shortcuts.md)
-- [Search and filters](Search-and-Filters.md)
-- [Live logs](Live-Logs.md)
-- [Marks and highlighting](Marks-and-Highlighting.md)
-- [Text tags](Row-Tags.md)
-- [Export and time merge](Result-Export.md)
-- [File editing and clipboard documents](Editing.md)
-- [Settings](Settings.md)
-- [Cloud filters](Cloud-Filters.md)
-- [Local data and privacy](Data-and-Privacy.md)
-- [Privacy notice](Privacy-Notice.md)
+- [Mouse, selection and focus](Interaction.md)
+
+# Help and privacy
+
 - [Troubleshooting](Troubleshooting.md)
+- [Local data and storage](Data-and-Privacy.md)
+- [Privacy notice](Privacy-Notice.md)
+
+# Development and reference
+
 - [Project overview](Project-Overview.md)
 - [Technology stack](Technology-Stack.md)
 - [Architecture](Architecture.md)
-- [UI layout and stable IDs](UI-Layout.md)
-- [Interaction and focus](Interaction.md)
+  - [UI layout and stable IDs](UI-Layout.md)
 - [Implementation status](Implementation-Status.md)
-- [Search performance and validation](Search-Performance.md)
-- [UI acceptance checklist](UI-Acceptance.md)
-- [Filter branch acceptance checklist](Filter-Branch-Acceptance.md)
-- [Building from source](Building.md)
+  - [Search performance](Search-Performance.md)
+  - [UI acceptance checklist](UI-Acceptance.md)
+  - [Filter revision checklist](Filter-Branch-Acceptance.md)
+- [Build from source](Building.md)
 - [Build and release](Build-and-Release.md)
-- [Code signing policy](Code-Signing-Policy.md)
+  - [Code signing policy](Code-Signing-Policy.md)
 - [Contributing](Contributing.md)
-- [Documentation maintenance and GitHub Pages](Documentation.md)
-- [Migration and historical records](Archive.md)
+- [Maintain and publish the guide](Documentation.md)
+- [Migration and archives](Archive.md)

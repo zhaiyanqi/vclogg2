@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="226" viewBox="0 0 720 226" role="img" aria-labelledby="title desc">
+  <title id="title">快捷键随焦点工作</title>
+  <desc id="desc">焦点在搜索框时，Enter 执行查询。点选日志行后，M 标记行，N 添加文字标记。</desc>
+  <rect width="720" height="226" rx="14" fill="#f4f7f8"/>
+  <rect x="16" y="15" width="688" height="90" rx="6" fill="#ffffff" stroke="#b9cbd0"/>
+  <text x="32" y="48" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="22" font-weight="650">搜索框</text>
+  <text x="32" y="81" text-anchor="start" xml:space="preserve" fill="#4b6270" font-family="Menlo, Consolas, monospace" font-size="18" font-weight="450">retry|timeout</text>
+  <rect x="353" y="41" width="82" height="39" rx="7" fill="#bac9ce" stroke="none"/>
+  <rect x="353" y="38" width="82" height="39" rx="7" fill="#ffffff" stroke="#b9cbd0"/>
+  <text x="394.0" y="64" text-anchor="middle" xml:space="preserve" fill="#182e3b" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="19" font-weight="630">Enter</text>
+  <text x="451" y="65" text-anchor="start" xml:space="preserve" fill="#126459" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="19" font-weight="550">执行这次查询</text>
+  <rect x="16" y="118" width="688" height="92" rx="6" fill="#d8f0e9" stroke="none"/>
+  <text x="32" y="152" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="22" font-weight="650">已选中的日志行</text>
+  <text x="32" y="183" text-anchor="start" xml:space="preserve" fill="#4b6270" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="450">4  ERROR id=42 timeout</text>
+  <rect x="353" y="148" width="44" height="39" rx="7" fill="#bac9ce" stroke="none"/>
+  <rect x="353" y="145" width="44" height="39" rx="7" fill="#ffffff" stroke="#b9cbd0"/>
+  <text x="375.0" y="171" text-anchor="middle" xml:space="preserve" fill="#182e3b" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="19" font-weight="630">M</text>
+  <text x="409" y="173" text-anchor="start" xml:space="preserve" fill="#126459" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="18" font-weight="550">标记行</text>
+  <rect x="493" y="148" width="44" height="39" rx="7" fill="#bac9ce" stroke="none"/>
+  <rect x="493" y="145" width="44" height="39" rx="7" fill="#ffffff" stroke="#b9cbd0"/>
+  <text x="515.0" y="171" text-anchor="middle" xml:space="preserve" fill="#182e3b" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="19" font-weight="630">N</text>
+  <text x="548" y="173" text-anchor="start" xml:space="preserve" fill="#126459" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="18" font-weight="550">添加文字标记</text>
+</svg>

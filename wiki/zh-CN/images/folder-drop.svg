@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="234" viewBox="0 0 720 234" role="img" aria-labelledby="title desc">
+  <title id="title">打开文件夹</title>
+  <desc id="desc">拖入 logs 默认打开 checkout.txt。松手时选择包含子文件夹，还会打开 archive 中的 worker.txt。</desc>
+  <rect width="720" height="234" rx="14" fill="#f4f7f8"/>
+  <rect x="16" y="16" width="288" height="202" rx="6" fill="#182e3b" stroke="none"/>
+  <text x="34" y="51" text-anchor="start" xml:space="preserve" fill="#ffffff" font-family="Menlo, Consolas, monospace" font-size="22" font-weight="650">logs/</text>
+  <path d="M 47 67 V 129 H 63 M 47 85 H 63 M 80 146 V 172 H 95" fill="none" stroke="#76b9ae" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="72" y="92" text-anchor="start" xml:space="preserve" fill="#ffffff" font-family="Menlo, Consolas, monospace" font-size="20" font-weight="450">checkout.txt</text>
+  <text x="72" y="137" text-anchor="start" xml:space="preserve" fill="#ffffff" font-family="Menlo, Consolas, monospace" font-size="20" font-weight="450">archive/</text>
+  <text x="101" y="179" text-anchor="start" xml:space="preserve" fill="#ffffff" font-family="Menlo, Consolas, monospace" font-size="20" font-weight="450">worker.txt</text>
+  <rect x="322" y="16" width="382" height="92" rx="6" fill="#ffffff" stroke="#b9cbd0"/>
+  <text x="341" y="49" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="21" font-weight="650">松开在工作区</text>
+  <text x="341" y="83" text-anchor="start" xml:space="preserve" fill="#126459" font-family="Menlo, Consolas, monospace" font-size="20" font-weight="450">checkout.txt</text>
+  <rect x="322" y="123" width="382" height="95" rx="6" fill="#d8f0e9" stroke="none"/>
+  <text x="341" y="157" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="21" font-weight="650">松开在「包含子文件夹」</text>
+  <text x="341" y="191" text-anchor="start" xml:space="preserve" fill="#126459" font-family="Menlo, Consolas, monospace" font-size="19" font-weight="450">checkout.txt + worker.txt</text>
+</svg>

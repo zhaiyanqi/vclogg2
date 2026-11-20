@@ -1,15 +1,26 @@
-# VCLogg2 documentation
+# VCLogg2 log viewer
 
-[简体中文](../zh-CN/Home.md) · [Home / 首页](Home.md)
+[简体中文](../zh-CN/Home.md)
 
-VCLogg2 is a Rust/GPUI desktop log viewer for Windows, macOS and Linux. Start with [installation](Installation.md) and [getting started](Getting-Started.md).
+When a request times out, the line just before the error can tell you which service the request was waiting for. Open a log in VCLogg2, search for the failure, then select a match to read the lines around it. You can do the whole investigation locally on Windows, macOS or Linux.
 
-- Reading: [interface](Interface.md), [shortcuts](Keyboard-Shortcuts.md), [live logs](Live-Logs.md).
-- Analysis: [search](Search-and-Filters.md), [marks](Marks-and-Highlighting.md), [text tags](Row-Tags.md), [export](Result-Export.md).
-- Editing and configuration: [file editing](Editing.md), [settings](Settings.md), [cloud filters](Cloud-Filters.md), [privacy](Data-and-Privacy.md).
-- Development: [architecture](Architecture.md), [technology](Technology-Stack.md), [building](Building.md), [releases](Build-and-Release.md), [contributing](Contributing.md).
-- Documentation: [maintenance and Pages deployment](Documentation.md), [migration and archives](Archive.md).
+![Guide illustration showing lines 2 and 4 matching a search, with result 4 selected in the original file](images/search-context.svg)
 
-The documentation lives in the main repository's `wiki/` directory, with one page per language. It is built with mdBook and deployed alongside the existing website. There is no separate Wiki checkout or submodule.
+**Try it with five lines of log.** Follow one request from its first retry to its timeout, then mark the line that identifies the upstream service. [Start the walkthrough](Getting-Started.md) · [Install VCLogg2](Installation.md)
 
-Current documentation was reviewed against source commit `3c7086b` on 2026-10-11. This is source review, not a claim of a new application build, benchmark or GUI acceptance run. Historical Wiki records remain separately archived.
+## What are you trying to do?
+
+| I want to… | Open this guide |
+| --- | --- |
+| Read a file, a folder or yesterday’s session | [Open files and folders](Opening-Files.md) |
+| Find a phrase in this file or across a directory | [Search logs](Search-and-Filters.md) |
+| Use a teammate’s filter on my logs | [Download and use a cloud filter](Cloud-Filters.md) |
+| Keep an important line and explain why it matters | [Mark, color and annotate](Marks-and-Highlighting.md) |
+| Make dense logs easier to read | [Change font and spacing](Settings.md) |
+| Search, jump or mark from the keyboard | [Keyboard shortcuts](Keyboard-Shortcuts.md) |
+
+For a running service, follow new lines as they arrive. For a handoff, save just the relevant results. [Live logs](Live-Logs.md) · [Export results](Result-Export.md) · [More workflows](User-Guide.md)
+
+## Help and development
+
+[Troubleshooting](Troubleshooting.md) · [Privacy](Privacy-Notice.md) · [Architecture](Architecture.md) · [Build from source](Building.md) · [Contribute](Contributing.md)

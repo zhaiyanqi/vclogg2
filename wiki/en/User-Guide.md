@@ -1,13 +1,21 @@
-# User guide
+# Common investigations
 
-[简体中文](../zh-CN/User-Guide.md) · [Home / 首页](Home.md)
+[简体中文](../zh-CN/User-Guide.md) · [Guide home](Home.md)
 
-1. [Install](Installation.md) a platform release and [open a log](Getting-Started.md).
-2. Learn the [workspace](Interface.md) and [keyboard commands](Keyboard-Shortcuts.md).
-3. Choose a [search scope](Search-and-Filters.md), then inspect source-line context.
-4. Add [marks and colors](Marks-and-Highlighting.md) or [text tags](Row-Tags.md).
-5. [Export](Result-Export.md) a completed result, or follow [live updates](Live-Logs.md).
-6. Configure [settings](Settings.md), optional [cloud filters](Cloud-Filters.md), and [data storage](Data-and-Privacy.md).
-7. Use [editing](Editing.md) only when you intend to modify a file.
+## A request failed somewhere across several services
 
-For unexpected behavior, start with [troubleshooting](Troubleshooting.md).
+Open the related files, choose **Global** search and select the participating tabs. Search for the request ID. Expand each file’s group and click a hit to inspect the surrounding lines. To turn the matches into a single timeline, use time merge when the timestamps start in a supported format. [Search scopes](Search-and-Filters.md) · [Time merge and export](Result-Export.md)
+
+## A service keeps writing while you investigate
+
+Keep the service log active and turn on **View → Follow end**. To examine an earlier incident, turn following off and mark the relevant lines. The active log can still refresh while you read. [Live logs](Live-Logs.md) · [Marks and highlighting](Marks-and-Highlighting.md)
+
+## The same incident comes back next week
+
+Save the matching words as a predefined filter and give it a name your team will recognize. Use it in another file from the search bar’s **Filters** menu. If you share a server, publish the rule for teammates to download. [Local and cloud filters](Cloud-Filters.md)
+
+## Someone sent a snippet instead of a file
+
+Copy the snippet, then use **File → Open clipboard as temporary file…**. If you want to keep your edits, save the text to a file you can find again. [Clipboard and editing](Editing.md)
+
+For the first walkthrough, use the five-line sample. For a missing match or an unexpected result, check the troubleshooting guide. [First investigation](Getting-Started.md) · [Troubleshooting](Troubleshooting.md)

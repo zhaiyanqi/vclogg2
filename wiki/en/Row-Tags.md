@@ -2,7 +2,7 @@
 
 [简体中文](../zh-CN/Row-Tags.md) · [Home / 首页](Home.md)
 
-Select one source row and press **N**, or use its context menu → Text tags → Add. Group headers are not source rows. The target must belong to an opened, ready document. Keyboard creation starts at the text origin and defaults to vertical centering.
+Select one source row and press **N**, or use its context menu → Text tags → Add. Group headers are not source rows. The target must belong to an opened, ready document. A new tag starts at the end of the text, after any existing tags on that line. Vertical centering starts enabled.
 
 The add/edit dialog owns a draft with text, font, size, height, foreground/background colors, transparency, bold, rounded shape and vertical centering. Text must contain 1–128 characters without newlines. Confirming saves; cancel/Esc discards the draft. Generated “mark 1” names increment across windows and languages. New tags reuse the last confirmed style, while vertical centering starts enabled.
 

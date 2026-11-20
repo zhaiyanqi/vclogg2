@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="335" viewBox="0 0 720 335" role="img" aria-labelledby="title desc">
+  <title id="title">Map of the log workspace</title>
+  <desc id="desc">The file tree and tabs choose a document. Read the original log above the query and results, and switch searches at the bottom.</desc>
+  <rect width="720" height="335" rx="14" fill="#f4f7f8"/>
+  <rect x="16" y="14" width="688" height="37" rx="6" fill="#182e3b" stroke="none"/>
+  <text x="30" y="39" text-anchor="start" xml:space="preserve" fill="#ffffff" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="18" font-weight="600">File toolbar    /    logs    /    checkout.txt</text>
+  <rect x="16" y="60" width="212" height="219" rx="6" fill="#ffffff" stroke="#b9cbd0"/>
+  <text x="30" y="93" text-anchor="start" xml:space="preserve" fill="#126459" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="18" font-weight="650">File tree</text>
+  <text x="30" y="134" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="19" font-weight="550">logs/</text>
+  <path d="M 39 144 V 203 H 54 M 39 167 H 54" fill="none" stroke="#b9cbd0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="60" y="172" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="500">checkout.txt</text>
+  <text x="60" y="209" text-anchor="start" xml:space="preserve" fill="#4b6270" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="450">worker.txt</text>
+  <rect x="238" y="60" width="466" height="36" rx="6" fill="#e5ecee" stroke="none"/>
+  <rect x="242" y="63" width="168" height="30" rx="6" fill="#ffffff" stroke="none"/>
+  <text x="253" y="84" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="16" font-weight="550">checkout.txt</text>
+  <text x="427" y="84" text-anchor="start" xml:space="preserve" fill="#4b6270" font-family="Menlo, Consolas, monospace" font-size="16" font-weight="450">worker.txt</text>
+  <rect x="238" y="103" width="466" height="71" rx="6" fill="#ffffff" stroke="#b9cbd0"/>
+  <text x="253" y="130" text-anchor="start" xml:space="preserve" fill="#126459" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="18" font-weight="650">Original log</text>
+  <text x="253" y="155" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="16" font-weight="450">3   INFO  id=42 peer=payments</text>
+  <rect x="238" y="181" width="466" height="36" rx="6" fill="#d8f0e9" stroke="none"/>
+  <text x="253" y="205" text-anchor="start" xml:space="preserve" fill="#126459" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="16" font-weight="650">Current</text>
+  <text x="348" y="205" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="450">retry|timeout</text>
+  <rect x="238" y="224" width="466" height="55" rx="6" fill="#ffffff" stroke="#b9cbd0"/>
+  <text x="253" y="247" text-anchor="start" xml:space="preserve" fill="#126459" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="17" font-weight="650">Results</text>
+  <text x="253" y="270" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="16" font-weight="450">4   ERROR id=42 timeout</text>
+  <rect x="16" y="287" width="688" height="34" rx="6" fill="#182e3b" stroke="none"/>
+  <text x="31" y="310" text-anchor="start" xml:space="preserve" fill="#ffffff" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="17" font-weight="600">Search tabs</text>
+  <text x="251" y="310" text-anchor="start" xml:space="preserve" fill="#c3e2dc" font-family="Menlo, Consolas, monospace" font-size="16" font-weight="450">+    checkout.txt_1</text>
+</svg>

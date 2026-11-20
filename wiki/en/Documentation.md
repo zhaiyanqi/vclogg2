@@ -2,6 +2,14 @@
 
 [简体中文](../zh-CN/Documentation.md) · [Home / 首页](Home.md)
 
+## How the reader’s guide is organized
+
+The sidebar starts with a walkthrough and groups everyday tasks before troubleshooting and developer reference. This follows the audience-based entry points in the [OBS Studio Wiki](https://github.com/obsproject/obs-studio/wiki) and the topic sections in the [qBittorrent Wiki](https://github.com/qbittorrent/qBittorrent/wiki).
+
+For feature pages, pair an action with the result the reader should see. The opening walkthrough uses a single five-line log so the reader can compare source lines, query and results. The illustrated steps in the [OBS Quick Start Guide](https://obsproject.com/kb/quick-start-guide) and the selection examples in the [Wireshark User’s Guide](https://www.wireshark.org/docs/wsug_html_chunked/ChapterWork.html) informed this format.
+
+Each book keeps its own labeled diagrams in `images/`. Both walkthroughs link to the same [sample file](examples/checkout.txt). Update the example text, expected line numbers and figures together when changing the walkthrough.
+
 ## Choice of documentation system
 
 “Get book” likely refers to **GitBook**. Its current product offers hosted documentation with GitHub/GitLab sync. That sync is not the same as building a static artifact in this repository for GitHub Pages.

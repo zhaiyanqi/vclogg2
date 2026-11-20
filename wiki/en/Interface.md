@@ -1,13 +1,24 @@
-# Interface
+# Find your way around the workspace
 
-[简体中文](../zh-CN/Interface.md) · [Home / 首页](Home.md)
+[简体中文](../zh-CN/Interface.md) · [Guide home](Home.md)
 
-Each native window owns its workspace. The title/menu area and file toolbar provide file opening, reload, encoding and follow controls. A horizontal file-tab strip selects documents; path breadcrumbs reveal the current file location. The empty workspace offers opening, recent/pinned files and previous-session entries.
+Open a file and start with its name in the toolbar. The path tells you which copy of the log you are reading. Click a path segment to reveal it in the left file tree, or use the copy button to pass the full path to a teammate.
 
-The document area contains the virtual log view and a resizable search panel. Log rows have separate mark, line-number and text areas. Current-file results retain source-line numbers; global/directory results are grouped by file. Quick find belongs to the log or result region you actually focused.
+## Read the original and the matches together
 
-The bottom status area contains the unified search-tab strip and selection/status information. File searches, global searches and directory searches share this strip. Its collapse control is independent of the search panel's visibility. Editing hides the search panel.
+![Workspace map showing the file tree, file tabs, original log, search field, results and bottom search tabs](images/workspace.svg)
 
-Settings are a separate, process-wide native window, not a workspace sidebar or modal sheet. The current workspace has no AI panel or left/right sidebars. See [UI layout](UI-Layout.md) for stable control IDs and [settings](Settings.md) for categories.
+*Workspace map with the optional file tree open. The original log and the results each keep their own scroll position.*
 
-Tab renaming changes the displayed title, not the disk filename. File tabs can be reordered, copied or moved across windows. Copying captures a state snapshot; moving only closes the source when transfer succeeds and the source state is still unchanged.
+Read the original log above the search bar. The results below keep the original line numbers. Select result **4** and you can read line **3** above it in the original. Drag the divider to give either area more room. Press **W** with the log focused to wrap a long line. Wrapped text still has one source line number.
+
+## Switch files or switch questions
+
+| Where | What it changes |
+| --- | --- |
+| File tabs | Choose the document to read. Drag a tab to reorder it. Rename its display title or use its context menu to move or copy it to another window. |
+| Left navigation | The toolbar’s **Show sidebar** button reveals the file tree. **Vertical tabs** in the sidebar actions menu shows open tabs down the left. Hiding the sidebar restores the horizontal tabs. |
+| Search tabs in the status bar | Keep separate questions and results. Use **+** for a new current-file, global or directory search. The list button finds a tab even when the strip is collapsed. |
+| Status bar | Check file size, encoding and source position. The notification panel keeps messages from the current run. |
+
+Quick find searches whichever log or result area you last clicked. Settings open in their own window. [Keyboard navigation](Keyboard-Shortcuts.md) · [Mouse and selection gestures](Interaction.md) · [Layout reference](UI-Layout.md)

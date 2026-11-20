@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="226" viewBox="0 0 720 226" role="img" aria-labelledby="title desc">
+  <title id="title">预览日志行距</title>
+  <desc id="desc">相同的两条日志在两种行距下显示。外观设置可以同时预览正文和结果的行距。</desc>
+  <rect width="720" height="226" rx="14" fill="#f4f7f8"/>
+  <rect x="16" y="16" width="334" height="194" rx="6" fill="#ffffff" stroke="#b9cbd0"/>
+  <text x="31" y="51" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="22" font-weight="650">较紧的行距</text>
+  <path d="M 17 70 H 349" fill="none" stroke="#b9cbd0" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="32" y="111" text-anchor="start" xml:space="preserve" fill="#4b6270" font-family="Menlo, Consolas, monospace" font-size="18" font-weight="450">3</text>
+  <text x="68" y="111" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="20" font-weight="450">peer=payments</text>
+  <text x="32" y="137" text-anchor="start" xml:space="preserve" fill="#4b6270" font-family="Menlo, Consolas, monospace" font-size="18" font-weight="450">4</text>
+  <text x="68" y="137" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="20" font-weight="450">timeout</text>
+  <path d="M 308 105 h 12 m -6 0 v 26 m -6 0 h 12" fill="none" stroke="#126459" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="370" y="16" width="334" height="194" rx="6" fill="#ffffff" stroke="#b9cbd0"/>
+  <text x="385" y="51" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="22" font-weight="650">较宽的行距</text>
+  <path d="M 371 70 H 703" fill="none" stroke="#b9cbd0" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="386" y="111" text-anchor="start" xml:space="preserve" fill="#4b6270" font-family="Menlo, Consolas, monospace" font-size="18" font-weight="450">3</text>
+  <text x="422" y="111" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="20" font-weight="450">peer=payments</text>
+  <text x="386" y="160" text-anchor="start" xml:space="preserve" fill="#4b6270" font-family="Menlo, Consolas, monospace" font-size="18" font-weight="450">4</text>
+  <text x="422" y="160" text-anchor="start" xml:space="preserve" fill="#182e3b" font-family="Menlo, Consolas, monospace" font-size="20" font-weight="450">timeout</text>
+  <path d="M 662 105 h 12 m -6 0 v 49 m -6 0 h 12" fill="none" stroke="#126459" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
