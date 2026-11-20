@@ -1,21 +1,28 @@
-# Installation and upgrades
+# Choose a package and upgrade
 
-[简体中文](../zh-CN/Installation.md) · [Home / 首页](Home.md)
+[简体中文](../zh-CN/Installation.md) · [Guide home](Home.md)
 
-Download a package from [GitHub Releases](https://github.com/zhaiyanqi/vclogg2/releases/latest). Replace `<version>` in examples with the downloaded version.
+Open **Assets** on the release page and choose the desktop package for your machine. In the filenames below, `<version>` stands for the release number. [Download VCLogg2](https://github.com/zhaiyanqi/vclogg2/releases/latest)
 
-| Platform | Package and installation |
-| --- | --- |
-| Windows x64 | Extract `vclogg-<version>-windows-x86_64-portable.zip` and run `vclogg2.exe`, or run `vclogg-<version>-windows-x86_64-setup.exe` |
-| macOS Apple Silicon | Open `vclogg2-<version>-macos-aarch64.dmg` and drag VCLogg2.app to Applications |
-| Linux x86_64 | Extract `vclogg2-<version>-linux-x86_64.tar.gz` and run `./Install-VCLogg2-linux.sh --launch` inside it |
+| Machine and preference | Download | First launch |
+| --- | --- | --- |
+| Windows x64, Start menu entry | `vclogg-<version>-windows-x86_64-setup.exe` | Run the installer, choose the program and data directories, then open VCLogg2 from Start. |
+| Windows x64, portable copy | `vclogg-<version>-windows-x86_64-portable.zip` | Extract the entire archive and double-click `vclogg2.exe`. |
+| macOS on Apple silicon | `vclogg2-<version>-macos-aarch64.dmg` | Open the DMG, drag VCLogg2.app into Applications and launch it from there. |
+| Linux x86_64 | `vclogg2-<version>-linux-x86_64.tar.gz` | Extract the archive and run the command below from the directory containing the installer. |
 
-Windows installation is per user. The default application directory is `%LOCALAPPDATA%\Programs\VCLogg2`; the separately selectable data directory defaults to `%LOCALAPPDATA%\VCLogg2`. Portable builds store data in `VCLogg2` next to the executable. The installer creates a Start menu shortcut, optionally a desktop shortcut, and an uninstaller; uninstall preserves data. Windows packages do not register file associations.
+```sh
+./Install-VCLogg2-linux.sh --launch
+```
 
-Linux installs by default to `~/.local/lib/vclogg2`, creates `~/.local/bin/vclogg2`, and registers desktop/MIME integration. Current release runners are Windows 2022, macOS 15 ARM64 and Ubuntu 22.04 x86_64. macOS packages use ad-hoc signing without notarization. Windows signing depends on the configured release backend; the filename does not prove signing status.
+The Linux installer writes to `~/.local/lib/vclogg2` and creates a desktop entry and `~/.local/bin/vclogg2`. Later, run `~/.local/bin/vclogg2 service.log worker.trace` from the directory containing your logs to open both together. Once you see the empty workspace, try the sample. [Trace your first timeout](Getting-Started.md)
 
-Open files from a terminal with `vclogg2 service.log worker.trace`. A later invocation forwards paths to the most recently active window of the running instance; Windows instance scope also includes the data directory.
+## Where do the Windows editions keep my data?
 
-Exit the application before upgrading or moving data. Replace portable program files while retaining the data directory; rerun a newer installer for installed Windows/Linux copies, or replace the macOS app bundle. Choosing a new Windows data directory does not migrate old data. Copy the complete data root only after all writers have exited, including SQLite sidecars where present.
+Setup installs for the current user. The program defaults to `%LOCALAPPDATA%\Programs\VCLogg2` and the data directory to `%LOCALAPPDATA%\VCLogg2`. Portable copies keep data in a `VCLogg2` directory next to the executable, so extract to a writable folder. For an Explorer context menu entry, enable the file context menu in Settings. [Open files and folders](Opening-Files.md)
 
-**Help → Check for updates** always requests the remote manifest. Newer versions offer notes and downloads. Failures show a valid cached result with a connection warning and last success time, never an up-to-date claim; without a valid cache, Releases opens. Check again to retry. No automatic download or installation. See [release details](Build-and-Release.md).
+## Check for updates and upgrade
+
+Choose **Help → Check for updates** for release notes and downloads. If the network request fails, the app dates any cached result it displays or opens Releases if it has no usable result. For package provenance and system prompts, see the [code signing policy](Code-Signing-Policy.md).
+
+Exit VCLogg2 before replacing program files. On Windows, run the newer installer or update the extracted portable program files while keeping the adjacent `VCLogg2` data directory. On macOS replace the application bundle. On Linux rerun the installer from the new package. Windows uninstall keeps your data. Choosing a different data directory does require moving the data yourself. To keep history, marks and settings, close all instances using that directory and copy the entire directory. [Backup and migration](Data-and-Privacy.md)

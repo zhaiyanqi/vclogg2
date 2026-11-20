@@ -16,7 +16,28 @@ Open the sample from the first walkthrough. Press **Ctrl+F** (macOS **⌘F**), c
 | In one of several open tabs | **Global** | Right-click the scope control to choose files. Expand the matching file groups. |
 | In a folder on disk | **Directory** | Enter or choose a path and configure extensions, subfolders and hidden directories. A search uses the files present at execution time. |
 
-Line limits apply to the search tab and file. Both endpoints are included. An open end extends to the last line. Out-of-range text dims immediately. Submit again to update the results.
+## Search only the lines around an incident
+
+Open the five-line `checkout.txt` sample in **Current** scope. Right-click source line 2 and choose **Set search start**, then right-click line 4 and choose **Set search end**. Enter `id=42`, press Enter and select **Matches only**.
+
+| Action | Source line numbers after submitting again |
+| --- | --- |
+| Start at 2, end at 4 | **2, 3, 4**, including both endpoints |
+| Right-click and choose **Clear search limits** | **1, 2, 3, 4, 5** |
+
+Each search tab keeps its own boundaries for each file. Setting only a start searches through the last line. Out-of-range text dims as soon as you change a boundary. The next submission updates the results.
+
+## Find a request in a folder on disk
+
+Save [gateway.txt](examples/incident/gateway.txt) and [payments.txt](examples/incident/payments.txt) in the same empty folder. The files come from two services. One line belongs to a different request.
+
+1. Select **Directory** on the search bar, then choose **Configure directory search…** or right-click the scope button. Enter the folder path or click **Select…**.
+2. Enable **File types** and enter `*.txt`. To include another extension, use `*.txt|*.log`. Clearing the checkbox includes all file types. Turn on **Include subdirectories** to search below this folder. This also makes **Include hidden directories** available.
+3. Confirm the directory options. In the **main query field**, enter `id=42`, press **Enter** and choose **Matches only**. With an unlimited result count, each file group has two hits. Expand gateway and read the source numbers **1 and 3**. The health check on line 2 belongs to another request.
+
+Opening a directory result creates a file tab when needed. Run the search again to pick up files added to the directory.
+
+To see which service reported trouble first, right-click these directory results and choose **Merge results in new tab**. Go straight to the illustration after step 3 of the next exercise. [Check the four events in time order](Result-Export.md#put-two-services-on-one-timeline)
 
 ## Choose how to match
 

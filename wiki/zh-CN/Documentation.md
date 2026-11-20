@@ -8,7 +8,7 @@
 
 功能页把操作和能观察到的结果放在一起。入门用同一份五行日志，读者可以对照源行、查询和结果。分步配图参考了 [OBS 快速入门](https://obsproject.com/kb/quick-start-guide)，点选结果后解释上下文的方式参考了 [Wireshark 用户指南](https://www.wireshark.org/docs/wsug_html_chunked/ChapterWork.html)。
 
-两种语言各自的 `images/` 目录保存带对应语言标注的示意图，两份教程共用一份[示例文件](../en/examples/checkout.txt)。修改示例时，同时核对正文、图中的源行号和预期命中。
+两种语言共用三份文本样例，各自的 `images/` 目录保存对应语言的图。修改[五行入门日志](../en/examples/checkout.txt)时，一起核对命中行号、标记位置和动态追加练习。修改 [gateway.txt](../en/examples/incident/gateway.txt) 或 [payments.txt](../en/examples/incident/payments.txt) 时，一起核对目录搜索的命中数、合并图里的四个时间，以及正文给出的时间差。
 
 ## 文档工具选择
 

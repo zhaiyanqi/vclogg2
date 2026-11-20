@@ -25,11 +25,22 @@ Select a saved local filter, choose **Share** and confirm the selected entry. Fo
 | When you update a filter | What to do |
 | --- | --- |
 | Only the server has changes | Choose **Update local** to bring them in. |
-| Both copies changed | Separate fields can merge automatically. For conflicting fields, choose the value to keep, or defer the decision and keep your local copy. |
+| Both copies changed | Open the cloud entry and choose **Merge update** or **Resolve conflict**. The example below shows what each person keeps. |
 | You want a variation for a different project | Choose **Save as new filter**. It gets its own UUID even if its name and match value are the same. |
 | You need an older revision | Choose **Restore locally** in the history. Review it before submitting another revision. |
 
 A concurrent edit may require another review before submission. Removing a remote share leaves your local rule available. The local list also supports import/export. JSON export uses v5 and import accepts earlier v1–v4 files, arrays and legacy Qt CONF/INI files. Existing local rules absent from an import are kept.
+
+## Two people edited Payment failures. Which values survive?
+
+Suppose you and a teammate downloaded the same rule. Its note originally said “Check payments”. You changed the name and note locally. Your teammate changed the note on the server. Open the cloud entry and choose **Resolve conflict**.
+
+| Field | Your saved copy | New cloud revision | Your copy after the merge |
+| --- | --- | --- | --- |
+| Name | Payment timeouts and retries | Payment failures (original name) | Payment timeouts and retries |
+| Note | Ask the payments team | Notify the on-call engineer | “Notify the on-call engineer” if you choose **Use remote** |
+
+Only the note needs a decision. To keep “Ask the payments team”, choose **Keep local** beside the note. Choose **Complete merge** and check both fields in your local copy. If you want to ask your teammate first, choose **Resolve later** to keep the original common revision for comparison. When you have editing permission and local changes to share, choose **Submit local changes** to publish the merged version.
 
 ## If the connection or sharing fails
 

@@ -1,15 +1,34 @@
-# Text tags
+# Add, reuse and remove text tags
 
-[简体中文](../zh-CN/Row-Tags.md) · [Home / 首页](Home.md)
+[简体中文](../zh-CN/Row-Tags.md) · [Guide home](Home.md)
 
-Select one source row and press **N**, or use its context menu → Text tags → Add. Group headers are not source rows. The target must belong to an opened, ready document. A new tag starts at the end of the text, after any existing tags on that line. Vertical centering starts enabled.
+An error may be easy to find again. A text tag preserves the reason you cared about that particular line. Searches, copies and exports continue to use the original log text.
 
-The add/edit dialog owns a draft with text, font, size, height, foreground/background colors, transparency, bold, rounded shape and vertical centering. Text must contain 1–128 characters without newlines. Confirming saves; cancel/Esc discards the draft. Generated “mark 1” names increment across windows and languages. New tags reuse the last confirmed style, while vertical centering starts enabled.
+## Leave a note beside one line
 
-A fixed log-line preview sits below the scrolling form, with a searchable history list to its right. Preview dragging only changes the preview position; saving an existing tag retains its real source position, and a new tag retains the original placement target. Tag height is clamped to the base log line height, including when wrapping is enabled; rendering clamps without destroying the saved preference.
+1. In the [five-line sample](Getting-Started.md), click source line 4 and press **N**. You can also right-click it and choose **Text mark → New mark…**. If you found it in a directory search, open its file and let indexing finish first.
+2. Replace the generated name with **Check peer**. Enter 1–128 characters on one line. Inspect the style in the preview below and choose **Add**.
+3. The note appears at the end of the line and the row gains a mark in the margin. Double-click the note to edit it and choose **Save** to confirm, or **Cancel** to discard the draft.
 
-Transparency ranges from 0% opaque to 100% transparent and combines with color alpha. Vertical centering allows horizontal dragging while retaining the old vertical coordinate for later use when centering is disabled. Escape during dragging or window deactivation cancels that drag.
+![The row-mark dot, a color label on timeout and a Check peer text tag at the end of line 4](images/line-marks.svg)
 
-History reuses complete styles and deduplicates by exact case-sensitive text, newest-first. Deleting a history entry affects reuse only, not existing annotations or the current draft; successful deletion is immediate and is not undone by canceling the dialog. Every added tag is an independent instance.
+## Reuse a note
 
-Both the row context menu and the text tag’s own context menu offer “Clear all marks” (below “Delete mark” in the tag menu) to clear all text tags belonging to that file, including invisible rows, while retaining ordinary row marks and reuse history. Tags persist separately from source text and are excluded from search, copy and exports. Source-line digest validation prevents attaching an old tag to changed content.
+If you often mark lines “Review later”, right-click another row and pick that name from **Text mark**. The menu lists the ten most recently used entries. For an older one, choose **New mark…** and search **Mark history** on the right. Selecting an entry fills in the text and style so you can adjust it before adding. Two rows with the same note can be edited independently.
+
+## Position and style
+
+A new tag follows the line text and any existing tags. Vertical centering starts enabled. Drag the tag **on the log row** to move it sideways. Turn centering off to move it vertically too. Dragging in the dialog only changes the preview. Press **Esc** during a drag to restore its previous position.
+
+The base line height limits tag height and font size. Transparency runs from 0% (opaque) to 100% (fully transparent). Use the preview to check a saved font, foreground, background and shape against your log.
+
+## Remove the right item
+
+| What to remove | Action and scope |
+| --- | --- |
+| One note on one line | Right-click the note and choose **Delete mark**. The row mark and reuse history remain. |
+| All text notes in this file | Right-click a row and choose **Text mark → Clear all marks**. This includes rows outside the current results. Row marks and reuse history remain. |
+| A name from reuse history | Delete its entry from the history list in the dialog. Notes already attached to logs remain. |
+| The dot in the margin | Select the marked row in the log and press **M**. [Row marks and result modes](Marks-and-Highlighting.md) |
+
+History is case-sensitive and keeps the most recent style for each name. When the source line changes, an old tag can be hidden until the line matches its recorded content again.

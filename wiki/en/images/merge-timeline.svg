@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="254" viewBox="0 0 720 254" role="img" aria-labelledby="title desc">
+  <title id="title">One request in two logs</title>
+  <desc id="desc">Read down in time order: the gateway starts, payments receives the request and reports a busy pool, then the gateway times out.</desc>
+  <rect width="720" height="254" rx="12" fill="#f4f7f8"/>
+  <rect x="12" y="12" width="696" height="42" rx="6" fill="#182e3b"/>
+  <g font-family="system-ui, sans-serif" font-size="17" font-weight="600" fill="#fff">
+    <text x="27" y="40">Time order</text>
+    <text x="245" y="40">gateway.txt</text>
+    <text x="483" y="40">payments.txt</text>
+  </g>
+  <g stroke="#c3d4d7" fill="none">
+    <path d="M210 62v175 M450 62v175"/>
+    <path d="M22 102h676 M22 148h676 M22 194h676"/>
+  </g>
+  <g font-family="Menlo, Consolas, monospace" font-size="18" fill="#294755">
+    <text x="27" y="86">09:14:02.100</text>
+    <text x="27" y="132">09:14:02.240</text>
+    <text x="27" y="178">09:14:05.050</text>
+    <text x="27" y="224">09:14:05.400</text>
+  </g>
+  <g fill="#126459">
+    <circle cx="229" cy="80" r="5"/><circle cx="229" cy="218" r="5"/>
+  </g>
+  <g fill="#855913">
+    <rect x="463" y="121" width="10" height="10" rx="1"/><rect x="463" y="167" width="10" height="10" rx="1"/>
+  </g>
+  <g font-family="Menlo, Consolas, monospace" font-size="18" fill="#182e3b">
+    <text x="244" y="86">request started</text>
+    <text x="483" y="132">received</text>
+    <text x="483" y="178">pool busy</text>
+    <text x="244" y="224">timeout</text>
+  </g>
+</svg>

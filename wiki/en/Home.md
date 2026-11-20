@@ -6,7 +6,14 @@ When a request times out, the line just before the error can tell you which serv
 
 ![Guide illustration showing lines 2 and 4 matching a search, with result 4 selected in the original file](images/search-context.svg)
 
-**Try it with five lines of log.** Follow one request from its first retry to its timeout, then mark the line that identifies the upstream service. [Start the walkthrough](Getting-Started.md) · [Install VCLogg2](Installation.md)
+## Follow a sample investigation
+
+| Start with | What you can find |
+| --- | --- |
+| One five-line log | Identify the upstream service named just before a timeout and mark the clue. [Trace your first timeout](Getting-Started.md) |
+| A request handled by the gateway and payments services | Find four related records in a folder and determine which service reported trouble first. [Download and search both logs](Search-and-Filters.md#find-a-request-in-a-folder-on-disk) · [Compare the merged timeline](Result-Export.md#put-two-services-on-one-timeline) |
+
+For a first installation, [choose the package for your platform](Installation.md).
 
 ## What are you trying to do?
 

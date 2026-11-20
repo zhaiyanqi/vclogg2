@@ -30,4 +30,4 @@ If you see fewer than two matches, check that the per-file limit in **Settings �
 
 Click **line 3 in the original log** and press **M**. A dot appears beside the line. Switch the results to **Marks & matches**. You can now read the retry, the name of the service and the timeout together on lines **2, 3 and 4**. To keep these lines in a separate file, right-click the results and choose **Save to file…**.
 
-Next time, try the same search across several files, or add a note that explains why you marked the line. [Choose a search scope](Search-and-Filters.md) · [Annotate a line](Marks-and-Highlighting.md)
+What happened on the payments side? The next exercise gives you a log from each service. Follow the same request ID across both, or stay with this log and explain why line 3 matters. [Trace the request across two files](Search-and-Filters.md#find-a-request-in-a-folder-on-disk) · [Learn how to annotate a line](Row-Tags.md#leave-a-note-beside-one-line)

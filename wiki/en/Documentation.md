@@ -8,7 +8,7 @@ The sidebar starts with a walkthrough and groups everyday tasks before troublesh
 
 For feature pages, pair an action with the result the reader should see. The opening walkthrough uses a single five-line log so the reader can compare source lines, query and results. The illustrated steps in the [OBS Quick Start Guide](https://obsproject.com/kb/quick-start-guide) and the selection examples in the [Wireshark User’s Guide](https://www.wireshark.org/docs/wsug_html_chunked/ChapterWork.html) informed this format.
 
-Each book keeps its own labeled diagrams in `images/`. Both walkthroughs link to the same [sample file](examples/checkout.txt). Update the example text, expected line numbers and figures together when changing the walkthrough.
+Both languages share three sample files and keep their own labeled illustrations in `images/`. When changing the [five-line log](examples/checkout.txt), check the expected hits, marked row and live-append exercise together. When changing [gateway.txt](examples/incident/gateway.txt) or [payments.txt](examples/incident/payments.txt), check the directory hit counts, the four timestamps in each merge illustration and the time difference given in the text.
 
 ## Choice of documentation system
 

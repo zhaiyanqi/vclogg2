@@ -1,15 +1,29 @@
-# File editing and clipboard documents
+# Edit a file, a clipboard snippet or a new draft
 
-[简体中文](../zh-CN/Editing.md) · [Home / 首页](Home.md)
+[简体中文](../zh-CN/Editing.md) · [Guide home](Home.md)
 
-Normal viewing, searches, marks and text tags do not alter source text. **Entering edit mode and saving does replace the file.**
+Check the path of the active tab first. Where **Ctrl+S / ⌘S** writes depends on how the editor was opened.
 
-Press **I** outside an input to edit the active document. There is no fixed file-size limit for entering edit mode; practical capacity depends on available memory. The editor decodes the full file, unlike virtual log browsing. Unsupported or invalid encodings are rejected. UTF-8/BOM, UTF-16 BOM and supported legacy encodings are preserved; text that cannot be encoded back is rejected.
+| What you have | How to start | Save destination |
+| --- | --- | --- |
+| An existing file | Press **I** in the log or choose **Edit → Edit file** | The source file at its current path |
+| Text from a ticket for a quick investigation | **File → Open clipboard as temporary file…** | The log created in the application’s temporary directory |
+| Text you want to keep | Choose **Create new file** in the empty workspace, then paste into the editor | A new path you choose on first save |
 
-Use **Ctrl+S / ⌘S** in the editor to save. Existing-file saves compare size and modification time before writing and again before replacement, write and sync a temporary file in the same directory, preserve permissions and replace the destination. This is not a filesystem lock or a content-hash concurrency guarantee: avoid editing a file another process is actively writing. A detected change requires reopening before editing.
+## Search a snippet copied from a ticket
 
-New-file drafts use a save dialog. Their first save refuses to overwrite an existing file. Unsaved changes use the editor's save/discard/cancel flow when leaving; do not assume closing a draft saves it.
+1. Copy the text and press **Ctrl+V / ⌘V** outside an input in VCLogg2. If paste confirmation is enabled, choose **Create and edit**. The text opens in a temporary document’s editor.
+2. Make and save any corrections. Choose **Edit → Exit edit mode** to return to reading. You can now search with **Ctrl+F / ⌘F**.
+3. To keep a named copy, copy the edited text, choose **Create new file** in an empty workspace, paste and press **Ctrl+S / ⌘S**. Pick an unused filename such as `ticket-42.txt`. You can reopen it from that path later.
 
-**Ctrl+V / ⌘V** outside an input opens clipboard text as an application-owned temporary document in edit mode, subject to the paste confirmation setting. Input controls retain ordinary paste. Keep a deliberate saved copy if you need the content permanently. The search panel is hidden during editing.
+## When does the source file change?
 
-Source: [document_editing.rs](https://github.com/zhaiyanqi/vclogg2/blob/main/crates/vclogg-app/src/workspace/document_editing.rs), [clipboard_paste.rs](https://github.com/zhaiyanqi/vclogg2/blob/main/crates/vclogg-app/src/workspace/clipboard_paste.rs), [actions.rs](https://github.com/zhaiyanqi/vclogg2/blob/main/crates/vclogg-app/src/actions.rs).
+Saving in the editor for an existing file replaces the file on disk. To record an observation, select a row and press **N** for a text tag. The original line is still available for copying and exporting. [Leave a note on a line](Row-Tags.md)
+
+If edits are pending when you exit edit mode or close the tab, **Save** writes them first, **Don't Save** discards them and **Cancel** returns you to the editor. The first save of a new draft requires a new path. If the selected filename already exists, pick another name.
+
+## If a save is refused or editing is slow
+
+- **File changed on disk.** Saves check size and modification time. Copy the edits you want to keep, reopen the latest file and reconcile your changes.
+- **Invalid encoding or characters that cannot be saved.** Existing files keep their encoding, including supported BOMs and legacy encodings. New characters must be representable in that encoding. To keep a separate UTF-8 copy, paste into a new file.
+- **A large file takes time to enter edit mode.** Editing decodes the entire file, so memory needs depend on its size. You can search, annotate and export a subset in reading mode. [Export search results](Result-Export.md)
