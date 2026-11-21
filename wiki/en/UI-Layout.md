@@ -38,8 +38,9 @@ AppShell [A001] — Root / Workspace
 SettingsWindow [A094] — shared native window / 进程唯一原生窗口
 ├─ TitleBar [A800] — native close/resize / 原生关闭与缩放
 ├─ Sidebar [A309] — categories / 分类
-│  ├─ Search [A310] — 设置搜索
-│  └─ Navigation [A311]
+│  ├─ Search [A310] — locate an option by name or keyword
+│  ├─ Matching options [A828] — selecting a result reveals and highlights its control
+│  └─ Navigation [A311] — shown when the search is empty
 │     ├─ General [A312] — 通用
 │     ├─ Log reading [A313] — 日志阅读
 │     ├─ Highlights & annotations [A801] — 高亮与标注
@@ -52,6 +53,7 @@ SettingsWindow [A094] — shared native window / 进程唯一原生窗口
 ├─ Details [A319] — category content / 分类内容
 │  ├─ Log preview [A824] — shared by reading and highlights / 日志阅读和高亮共用实时样例
 │  ├─ Log reading details — typography, line numbers, log colors, scrolling, word selection
+│  │  ├─ Wrap new files by default [A829] — initial wrapping for files without a saved session
 │  │  ├─ Show line numbers [A095] — reveals column width, colors and column separators
 │  │  ├─ Scrolling [A240] — line and pixel options follow the chosen wheel mode
 │  │  │  └─ Show horizontal scrollbar [A826] — shared with the View menu

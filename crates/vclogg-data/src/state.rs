@@ -90,6 +90,7 @@ pub struct ColorLabelRecord {
 pub struct AppSettingsRecord {
     pub app_icon: String,
     pub show_performance_overlay: bool,
+    pub default_word_wrap: bool,
     pub default_show_line_numbers: bool,
     pub default_show_row_separators: bool,
     pub highlight_log_levels: bool,

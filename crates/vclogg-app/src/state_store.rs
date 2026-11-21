@@ -237,6 +237,7 @@ pub struct AppSettings {
     pub(crate) app_icon: crate::app_icon::AppIcon,
     pub app_log_level: AppLogLevel,
     pub show_performance_overlay: bool,
+    pub default_word_wrap: bool,
     pub language: Language,
     pub theme_preference: ThemePreference,
     pub default_show_line_numbers: bool,
@@ -286,6 +287,7 @@ impl Default for AppSettings {
             app_icon: crate::app_icon::AppIcon::default(),
             app_log_level: AppLogLevel::default(),
             show_performance_overlay: false,
+            default_word_wrap: false,
             language: Language::Chinese,
             theme_preference: ThemePreference::Light,
             default_show_line_numbers: true,
@@ -466,8 +468,9 @@ impl StateStore {
         StateRepository::open(database_path, &defaults).map(|repository| Self { repository })
     }
 
-    pub fn record_opened(&self, paths: &[PathBuf]) -> Result<()> {
-        self.repository.record_opened(paths)
+    pub fn record_opened(&self, files: &[(PathBuf, bool)]) -> Result<()> {
+        self.repository
+            .record_opened_with_wrap(files.iter().map(|(path, wrap)| (path.as_path(), *wrap)))
     }
 
     pub fn load_app_settings(&self) -> Result<AppSettings> {
@@ -834,6 +837,7 @@ fn app_settings_from_record(record: AppSettingsRecord) -> AppSettings {
         app_icon: crate::app_icon::AppIcon::from_storage_value(&record.app_icon),
         app_log_level: AppLogLevel::from_database(&record.app_log_level),
         show_performance_overlay: record.show_performance_overlay,
+        default_word_wrap: record.default_word_wrap,
         language: Language::from_database(&record.language),
         theme_preference: ThemePreference::from_database(&record.theme_preference),
         default_show_line_numbers: record.default_show_line_numbers,
@@ -981,6 +985,7 @@ fn app_settings_to_record(settings: AppSettings) -> AppSettingsRecord {
         language: settings.language.database_value().into(),
         app_log_level: settings.app_log_level.database_value().into(),
         show_performance_overlay: settings.show_performance_overlay,
+        default_word_wrap: settings.default_word_wrap,
     }
 }
 

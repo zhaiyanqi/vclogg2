@@ -21,6 +21,7 @@ pub(crate) struct KeywordMatchStyleSection {
     // Theme -> search/quick find -> foreground/background. All pickers survive tab switches.
     controls: [[[Entity<ColorPickerState>; 2]; 2]; 2],
     scroll: ScrollHandle,
+    location: crate::settings_dialog::search::OptionLocation,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -66,6 +67,7 @@ impl KeywordMatchStyleSection {
             dark: ui_theme::is_dark(cx),
             controls,
             scroll: ScrollHandle::new(),
+            location: Default::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -105,7 +107,7 @@ impl KeywordMatchStyleSection {
             u32::from(Rgba::from(color)) >> 8,
             (color.a * 100.).round() as u8
         );
-        h_flex()
+        let row = h_flex()
             .gap_3()
             .w_full()
             .child(div().flex_1().text_sm().child(if background {
@@ -135,7 +137,14 @@ impl KeywordMatchStyleSection {
                         this.sync_controls(window, cx);
                         cx.notify();
                     })),
-            )
+            );
+        let prefix = if quick_find { "quick" } else { "match" };
+        let color = if background {
+            "background"
+        } else {
+            "foreground"
+        };
+        self.location.mark(&format!("{prefix}-{color}"), row, cx)
     }
 
     fn render_group(&self, quick_find: bool, cx: &mut Context<Self>) -> impl IntoElement {
@@ -167,7 +176,7 @@ impl KeywordMatchStyleSection {
                         ),
                     ]
                     .map(|(id, label, checked)| {
-                        Checkbox::new(format!("keyword-{quick_find}-{id}"))
+                        let checkbox = Checkbox::new(format!("keyword-{quick_find}-{id}"))
                             .label(label)
                             .checked(checked)
                             .on_click(cx.listener(move |this, checked: &bool, _, cx| {
@@ -178,10 +187,17 @@ impl KeywordMatchStyleSection {
                                     _ => style.underline = *checked,
                                 }
                                 cx.notify();
-                            }))
+                            }));
+                        let prefix = if quick_find { "quick" } else { "match" };
+                        self.location.mark(&format!("{prefix}-{id}"), checkbox, cx)
                     }),
                 ),
             )
+    }
+
+    pub(crate) fn locate(&mut self, key: Option<&'static str>, cx: &mut Context<Self>) {
+        self.location.select(key, &self.scroll);
+        cx.notify();
     }
 
     pub(crate) fn editing_dark(&self) -> bool {
@@ -190,7 +206,8 @@ impl KeywordMatchStyleSection {
 }
 
 impl Render for KeywordMatchStyleSection {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.location.reveal(window, cx);
         v_flex()
             .id("keyword-match-content")
             .size_full()

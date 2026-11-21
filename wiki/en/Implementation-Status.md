@@ -11,7 +11,7 @@ This is a source reference for the workflows in the [reader’s guide](Home.md).
 | Live refresh | Foreground window's active ready document only; head/tail sampling has a documented limitation |
 | Editing | Explicit full-text edit mode, no fixed file-size limit, disk size/time checks |
 | Settings | One settings window per process. Valid changes apply across windows and save automatically. |
-| Persistence | SQLite schema v23; revision-aware session merging |
+| Persistence | SQLite schema v24; revision-aware session merging |
 | Cloud | UUID/revision merge and cached browsing; desktop/server authentication compatibility must be checked |
 | Updates | Manual checks request the remote manifest first; failures show a valid cache with a connection warning and last success time, never an up-to-date claim; no valid cache opens Releases; no automatic download/install |
 | Removed features | AI analysis, MCP and memory. The current left sidebar shows files or vertical tabs. |

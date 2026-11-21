@@ -189,6 +189,7 @@ impl Workspace {
         for tab in self
             .documents
             .iter()
+            .filter(|tab| tab.session_loaded)
             .filter(|tab| !path_match_set_contains(&self.transient_paths, tab.document.path()))
         {
             path_buf_map_insert(
@@ -266,7 +267,11 @@ impl Workspace {
                 {
                     return;
                 }
-                let Some(tab) = this.documents.iter().find(|tab| tab.id == document_id) else {
+                let Some(tab) = this
+                    .documents
+                    .iter()
+                    .find(|tab| tab.id == document_id && tab.session_loaded)
+                else {
                     return;
                 };
                 let path = tab.document.path().to_path_buf();
@@ -378,8 +383,9 @@ impl Workspace {
                     prepared.session.is_some(),
                 );
                 let target_frame_is_prepared = if should_upgrade {
-                    let restores_session =
-                        current_state == DocumentLoadState::Opening && prepared.session.is_some();
+                    let restores_session = (current_state == DocumentLoadState::Opening
+                        || !self.documents[existing_ix].session_loaded)
+                        && prepared.session.is_some();
                     let document_id = self.documents[existing_ix].id;
                     let ready = prepared.load_state == DocumentLoadState::Ready;
                     let prepared_frame_installed =
@@ -389,7 +395,8 @@ impl Workspace {
                     }
                     global_sources_changed = true;
                     if ready && !path_match_set_contains(&self.transient_paths, &path) {
-                        recorded_paths.push(path.clone());
+                        recorded_paths
+                            .push((path.clone(), self.documents[existing_ix].view.word_wrap));
                     }
                     prepared_frame_installed
                 } else {
@@ -412,19 +419,20 @@ impl Workspace {
                 continue;
             }
 
-            if prepared.load_state == DocumentLoadState::Ready
-                && !path_match_set_contains(&self.transient_paths, &path)
-            {
-                recorded_paths.push(path.clone());
-            }
             let document = prepared.document;
 
             let uses_default_view_options = prepared.session.is_none();
             let session = prepared.session.unwrap_or_else(|| FileSessionState {
                 show_line_numbers: self.app_settings.default_show_line_numbers,
                 show_row_separators: self.app_settings.default_show_row_separators,
+                word_wrap: self.app_settings.default_word_wrap,
                 ..FileSessionState::default()
             });
+            if prepared.load_state == DocumentLoadState::Ready
+                && !path_match_set_contains(&self.transient_paths, &path)
+            {
+                recorded_paths.push((path.clone(), session.word_wrap));
+            }
             let pending_resume = Some(session.resume.clone());
             let session_base = session.clone();
             let custom_title = session
@@ -716,6 +724,8 @@ impl Workspace {
                 results_visible,
                 restoring_result_selection: false,
                 load_state: prepared.load_state,
+                session_loaded: !uses_default_view_options
+                    || prepared.load_state != DocumentLoadState::Opening,
                 edit: None,
                 edit_load_task: None,
             });
@@ -1114,8 +1124,13 @@ impl Workspace {
                         .len()
                         .max(window_visible_rows),
                 );
-                let log_word_wrap = tab.log_viewport.is_wrapped();
-                let result_word_wrap = tab.result_viewport.is_wrapped();
+                let restored_wrap = prepared
+                    .session
+                    .as_ref()
+                    .filter(|_| tab.load_state == DocumentLoadState::Opening || !tab.session_loaded)
+                    .map(|session| session.word_wrap);
+                let log_word_wrap = restored_wrap.unwrap_or(tab.log_viewport.is_wrapped());
+                let result_word_wrap = restored_wrap.unwrap_or(tab.result_viewport.is_wrapped());
                 let log_measured_heights = if log_word_wrap {
                     let table = tab.log_table.read(cx);
                     tab.log_viewport
@@ -1206,7 +1221,7 @@ impl Workspace {
                 .active_log_row()
                 .and_then(|row_ix| table.delegate().source_row(row_ix))
         };
-        if previous_state == DocumentLoadState::Opening
+        if (previous_state == DocumentLoadState::Opening || !tab.session_loaded)
             && let Some(session) = prepared.session.as_ref()
         {
             // The opening shell may have no session. Retain the loaded baseline after
@@ -1408,6 +1423,8 @@ impl Workspace {
             tab.log_table
                 .update(cx, |table, cx| table.set_active_log_row(row, cx));
         }
+        tab.session_loaded |=
+            prepared.load_state != DocumentLoadState::Opening || prepared.session.is_some();
         tab.load_state = prepared.load_state;
         if prepared.load_state == DocumentLoadState::Ready {
             self.apply_tab_resume(document_ix, cx);

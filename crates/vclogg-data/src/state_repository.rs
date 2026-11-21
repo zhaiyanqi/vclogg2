@@ -20,7 +20,7 @@ use crate::{
 };
 
 const COMPRESSED_MARKED_ROWS_PREFIX: &str = "rb1:";
-pub const STATE_SCHEMA_VERSION: u32 = 23;
+pub const STATE_SCHEMA_VERSION: u32 = 24;
 
 /// Owns SQLite access for durable file-history and workspace records.
 pub struct StateRepository {
@@ -50,21 +50,29 @@ impl StateRepository {
     }
 
     pub fn record_opened(&self, paths: &[PathBuf]) -> Result<()> {
-        if paths.is_empty() {
+        self.record_opened_with_wrap(paths.iter().map(|path| (path.as_path(), false)))
+    }
+
+    pub fn record_opened_with_wrap<'a>(
+        &self,
+        files: impl IntoIterator<Item = (&'a Path, bool)>,
+    ) -> Result<()> {
+        let mut files = files.into_iter().peekable();
+        if files.peek().is_none() {
             return Ok(());
         }
         let mut connection = self.lock()?;
         let transaction = connection.transaction().context("无法开始最近文件事务")?;
         let opened_at = unix_timestamp();
-        for path in paths {
+        for (path, wrap) in files {
             transaction
                 .execute(
-                    "INSERT INTO file_sessions(path, last_opened_at)
-                     VALUES (?1, ?2)
+                    "INSERT INTO file_sessions(path, last_opened_at, word_wrap)
+                     VALUES (?1, ?2, ?3)
                      ON CONFLICT(path) DO UPDATE SET
                          last_opened_at = excluded.last_opened_at,
                          revision = file_sessions.revision + 1",
-                    params![encode_persisted_path(path), opened_at],
+                    params![encode_persisted_path(path), opened_at, wrap],
                 )
                 .with_context(|| format!("无法记录最近文件：{}", path.display()))?;
         }
@@ -406,20 +414,15 @@ impl StateRepository {
             .execute("DELETE FROM last_workspace_files", [])
             .context("无法重置上一次工作区")?;
         for (position, path) in open_paths.iter().enumerate() {
-            let session_id = transaction
-                .query_row(
-                    "SELECT id FROM file_sessions WHERE path = ?1",
-                    [encode_persisted_path(path)],
-                    |row| row.get::<_, i64>(0),
-                )
-                .with_context(|| format!("无法定位工作区文件会话：{}", path.display()))?;
+            // An opening tab may still be waiting for its session lookup. Keep its place
+            // if it has history, without creating a session from a provisional view.
             transaction
                 .execute(
                     "INSERT INTO last_workspace_files(position, file_session_id, was_active)
-                     VALUES (?1, ?2, ?3)",
+                     SELECT ?1, id, ?3 FROM file_sessions WHERE path = ?2",
                     params![
                         i64::try_from(position).unwrap_or(i64::MAX),
-                        session_id,
+                        encode_persisted_path(path),
                         active_path.is_some_and(|active| active == path)
                     ],
                 )
@@ -532,7 +535,7 @@ impl StateRepository {
                         search_toolbar_height, search_toolbar_font_size,
                         search_input_height, search_input_font_size, shortcut_add_text_mark, app_icon, keyword_match_styles,
                         show_horizontal_scrollbar, log_coloring, confirm_clipboard_paste,
-                        shortcut_enter_edit_mode, show_performance_overlay
+                        shortcut_enter_edit_mode, show_performance_overlay, default_word_wrap
                  FROM app_settings WHERE id = 1",
                 [],
                 |row| {
@@ -591,6 +594,7 @@ impl StateRepository {
                         confirm_clipboard_paste: row.get::<_, i64>(51)? != 0,
                         shortcut_enter_edit_mode: row.get(52)?,
                         show_performance_overlay: row.get::<_, i64>(53)? != 0,
+                        default_word_wrap: row.get::<_, i64>(54)? != 0,
                     })
                 },
             )
@@ -690,6 +694,7 @@ impl StateRepository {
                      app_log_level = excluded.app_log_level,
                      app_icon = excluded.app_icon,
                      show_performance_overlay = excluded.show_performance_overlay,
+                     default_word_wrap = excluded.default_word_wrap,
                      light_log_text_color = excluded.light_log_text_color,
                      light_log_background_color = excluded.light_log_background_color,
                      dark_log_text_color = excluded.dark_log_text_color,
@@ -716,8 +721,8 @@ impl StateRepository {
                      search_toolbar_height, search_toolbar_font_size,
                      search_input_height, search_input_font_size, shortcut_add_text_mark, app_icon, keyword_match_styles,
                      show_horizontal_scrollbar, log_coloring, confirm_clipboard_paste,
-                     shortcut_enter_edit_mode, show_performance_overlay
-                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54)
+                     shortcut_enter_edit_mode, show_performance_overlay, default_word_wrap
+                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55)
                  ON CONFLICT(id) DO UPDATE SET {update}");
         connection
             .execute(
@@ -777,6 +782,7 @@ impl StateRepository {
                     settings.confirm_clipboard_paste,
                     settings.shortcut_enter_edit_mode,
                     settings.show_performance_overlay,
+                    settings.default_word_wrap,
                 ],
             )
             .context("无法保存应用设置")?;
@@ -1406,6 +1412,7 @@ fn migrate_schema(connection: &Connection, defaults: &StateMigrationDefaults) ->
                  confirm_close_tab INTEGER NOT NULL DEFAULT 0,
                  confirm_clipboard_paste INTEGER NOT NULL DEFAULT 0,
                  show_performance_overlay INTEGER NOT NULL DEFAULT 0,
+                 default_word_wrap INTEGER NOT NULL DEFAULT 0,
                  show_full_path INTEGER NOT NULL DEFAULT 1,
                  show_horizontal_scrollbar INTEGER NOT NULL DEFAULT 1,
                  max_search_results INTEGER NOT NULL DEFAULT 0,
@@ -1594,6 +1601,7 @@ fn ensure_app_settings_columns(connection: &Connection, default_log_level: &str)
         ("confirm_close_tab", "INTEGER NOT NULL DEFAULT 0"),
         ("confirm_clipboard_paste", "INTEGER NOT NULL DEFAULT 0"),
         ("show_performance_overlay", "INTEGER NOT NULL DEFAULT 0"),
+        ("default_word_wrap", "INTEGER NOT NULL DEFAULT 0"),
         ("show_full_path", "INTEGER NOT NULL DEFAULT 1"),
         ("show_horizontal_scrollbar", "INTEGER NOT NULL DEFAULT 1"),
         ("max_search_results", "INTEGER NOT NULL DEFAULT 0"),

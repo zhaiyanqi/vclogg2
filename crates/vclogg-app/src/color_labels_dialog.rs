@@ -213,8 +213,36 @@ impl ColorLabelsDialog {
     }
 
     pub(crate) fn show_match_styles(&mut self, cx: &mut Context<Self>) {
-        self.active_section = LogColoringSection::KeywordMatch;
-        cx.notify();
+        self.show_section(LogColoringSection::KeywordMatch, cx);
+    }
+
+    pub(crate) fn locate_option(&mut self, key: Option<&'static str>, cx: &mut Context<Self>) {
+        let selection = key.and_then(|key| key.strip_prefix("selection-"));
+        let matches = key.filter(|key| key.starts_with("match-") || key.starts_with("quick-"));
+        self.selection_style
+            .update(cx, |view, cx| view.locate(selection, cx));
+        self.keyword_match
+            .update(cx, |view, cx| view.locate(matches, cx));
+        if let Some(key) = key {
+            self.show_section(
+                match key {
+                    "levels" => LogColoringSection::LogLevels,
+                    "selection" => LogColoringSection::SelectionStyle,
+                    "matches" => LogColoringSection::KeywordMatch,
+                    _ if selection.is_some() => LogColoringSection::SelectionStyle,
+                    _ if matches.is_some() => LogColoringSection::KeywordMatch,
+                    _ => LogColoringSection::ColorLabels,
+                },
+                cx,
+            );
+        }
+    }
+
+    fn show_section(&mut self, section: LogColoringSection, cx: &mut Context<Self>) {
+        if self.active_section != section {
+            self.active_section = section;
+            cx.notify();
+        }
     }
 
     pub fn config(&self, cx: &gpui_kit::App) -> Result<LogColoringConfig, String> {

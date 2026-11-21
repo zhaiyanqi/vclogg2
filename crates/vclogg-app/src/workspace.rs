@@ -696,6 +696,7 @@ struct DocumentTab {
     results_visible: bool,
     restoring_result_selection: bool,
     load_state: DocumentLoadState,
+    session_loaded: bool,
     edit: Option<DocumentEditSession>,
     // Only the initial editor load drives the loading surface; saves belong to the session.
     edit_load_task: Option<Task<()>>,
@@ -2262,6 +2263,12 @@ impl Workspace {
                             .iter_mut()
                             .filter(|tab| tab.view.uses_default_view_options)
                         {
+                            if !tab.session_loaded && tab.view.word_wrap == tab.session_base.word_wrap {
+                                tab.session_base.word_wrap = app_settings.default_word_wrap;
+                                tab.view.word_wrap = app_settings.default_word_wrap;
+                                tab.log_viewport.set_word_wrap(tab.view.word_wrap);
+                                tab.result_viewport.set_word_wrap(tab.view.word_wrap);
+                            }
                             tab.view.show_line_numbers = app_settings.default_show_line_numbers;
                             tab.view.show_row_separators = app_settings.default_show_row_separators;
                             tab.refresh_view_options(cx);
@@ -2303,12 +2310,12 @@ impl Workspace {
                             .documents
                             .iter()
                             .filter(|tab| {
-                                !path_match_set_contains(
+                                tab.load_state == DocumentLoadState::Ready && !path_match_set_contains(
                                     &this.transient_paths,
                                     tab.document.path(),
                                 )
                             })
-                            .map(|tab| tab.document.path().to_path_buf())
+                            .map(|tab| (tab.document.path().to_path_buf(), tab.view.word_wrap))
                             .collect();
                         this.record_recent_paths(open_paths, window, cx);
                     }

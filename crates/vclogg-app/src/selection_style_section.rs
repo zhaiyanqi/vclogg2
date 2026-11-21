@@ -65,6 +65,7 @@ pub(crate) struct SelectionStyleSection {
     preview_inactive: bool,
     controls: [ThemeControls; 2],
     scroll: ScrollHandle,
+    location: crate::settings_dialog::search::OptionLocation,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -119,6 +120,7 @@ impl SelectionStyleSection {
             preview_inactive: false,
             controls,
             scroll: ScrollHandle::new(),
+            location: Default::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -200,13 +202,14 @@ impl SelectionStyleSection {
         control: impl IntoElement,
         setting: Setting,
         cx: &mut Context<Self>,
-    ) -> gpui_kit::Div {
-        h_flex()
+    ) -> gpui_kit::AnyElement {
+        let row = h_flex()
             .flex_none()
             .gap_3()
             .child(div().w_32().flex_none().text_sm().child(label.into()))
             .child(div().min_w_0().flex_1().child(control))
-            .child(self.reset_button(setting, cx))
+            .child(self.reset_button(setting, cx));
+        self.location.mark(setting.id(), row, cx)
     }
 
     fn group(title: SharedString, description: SharedString, cx: &gpui_kit::App) -> gpui_kit::Div {
@@ -406,20 +409,25 @@ impl SelectionStyleSection {
                 Setting::Border,
                 cx,
             ))
-            .when(style.row_border != SelectionBorder::None, |rows| {
-                rows.child(self.color_field(
-                    1,
-                    crate::tr!("边框颜色", "Border color").into(),
-                    Setting::BorderColor,
-                    cx,
-                ))
-                .child(self.field(
-                    crate::tr!("边框粗细", "Border weight"),
-                    self.choices(Setting::Weight, cx),
-                    Setting::Weight,
-                    cx,
-                ))
-            })
+            .when(
+                style.row_border != SelectionBorder::None
+                    || self.location.is("border-color")
+                    || self.location.is("weight"),
+                |rows| {
+                    rows.child(self.color_field(
+                        1,
+                        crate::tr!("边框颜色", "Border color").into(),
+                        Setting::BorderColor,
+                        cx,
+                    ))
+                    .child(self.field(
+                        crate::tr!("边框粗细", "Border weight"),
+                        self.choices(Setting::Weight, cx),
+                        Setting::Weight,
+                        cx,
+                    ))
+                },
+            )
             .child(self.field(
                 crate::tr!("圆角", "Corners"),
                 self.choices(Setting::Radius, cx),
@@ -436,7 +444,7 @@ impl SelectionStyleSection {
             .child(Self::group(crate::tr!("失去焦点", "Unfocused selection").into(), crate::tr!("切换到其他区域或窗口时淡化选区，选中内容仍然保留。", "Dim selections when another region or window gains focus. The selection is retained.").into(), cx))
             .child(self.field(crate::tr!("淡化选区", "Dim selection"), Switch::new("selection-dim-inactive").small().checked(style.dim_inactive)
                 .on_click(cx.listener(|this, checked: &bool, _, cx| { this.draft.theme_mut(this.dark).dim_inactive = *checked; cx.notify(); })), Setting::DimInactive, cx))
-            .when(style.dim_inactive, |fields| fields.child(self.field(crate::tr!("保留强度", "Remaining opacity"), h_flex().gap_3()
+            .when(style.dim_inactive || self.location.is("inactive-opacity"), |fields| fields.child(self.field(crate::tr!("保留强度", "Remaining opacity"), h_flex().gap_3()
                 .child(Slider::new(&self.controls[usize::from(self.dark)].opacity).flex_1())
                 .child(format!("{}%", style.inactive_opacity)), Setting::InactiveOpacity, cx)));
         v_flex()
@@ -450,6 +458,11 @@ impl SelectionStyleSection {
             .child(inactive)
     }
 
+    pub(crate) fn locate(&mut self, key: Option<&'static str>, cx: &mut Context<Self>) {
+        self.location.select(key, &self.scroll);
+        cx.notify();
+    }
+
     pub(crate) fn editing_dark(&self) -> bool {
         self.dark
     }
@@ -459,7 +472,8 @@ impl SelectionStyleSection {
 }
 
 impl Render for SelectionStyleSection {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.location.reveal(window, cx);
         let scroll = &self.scroll;
         let fields = self.render_fields(cx);
         let fields = h_flex()

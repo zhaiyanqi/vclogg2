@@ -793,6 +793,7 @@ fn merge_changes(before: &AppSettings, after: &AppSettings, current: &AppSetting
         theme_preference,
         default_show_line_numbers,
         default_show_row_separators,
+        default_word_wrap,
         show_line_number_row_separators,
         line_number_width,
         line_number_text_color,

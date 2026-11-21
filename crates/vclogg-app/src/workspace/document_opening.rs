@@ -880,7 +880,7 @@ impl Workspace {
 
     pub(super) fn record_recent_paths(
         &mut self,
-        paths: Vec<PathBuf>,
+        paths: Vec<(PathBuf, bool)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {

@@ -116,6 +116,8 @@ fn theme_preference_description(preference: ThemePreference) -> &'static str {
 }
 
 pub(crate) mod preview;
+pub(crate) mod search;
+use search::SearchOption;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum SettingsCategory {
@@ -208,43 +210,6 @@ impl SettingsCategory {
             Self::Diagnostics => crate::tr!("诊断与性能", "Diagnostics & performance"),
             Self::About => crate::tr!("关于", "About"),
         }
-    }
-
-    fn matches(self, query: &str) -> bool {
-        let keywords = match self {
-            Self::General => {
-                "常规 语言 中文 英文 主题 浅色 深色 跟随系统 应用图标 减少动态效果 文件工具栏 完整路径 关闭日志标签前确认 粘贴时确认 打开目录命令 文件右键菜单 language chinese english theme icon reduce motion full path file toolbar close tab paste confirm open folder command windows explorer context menu"
-            }
-            Self::Reading => {
-                "外观 日志字体 字号 行距 正文文字颜色 日志文字颜色 日志背景色 显示行号 行号栏宽度 行号文字颜色 行号背景色 行号行间分隔线 日志分隔线 整行滚动 每次滚动行数 排版 自动换行 横向滚动条 水平滚动条 horizontal scrollbar 鼠标滚轮 像素滚动距离 双击选词 分词边界字符 log font size line spacing number width text background color separator scrolling wheel pixel distance wrap word boundary"
-            }
-            Self::Highlight => {
-                "高亮 颜色标签 选中样式 搜索匹配 页内查找 日志级别着色 分组 关键词 正则 选区 失去焦点 字形 边框 highlights color labels selected rows text selection match style quick find log level coloring group rule regex"
-            }
-            Self::Search => {
-                "搜索栏外观 查询匹配 结果与高亮 共用控件高度 工具栏字号 输入框字号 每个文件的结果上限 区分大小写 使用正则表达式 最大搜索结果数 高亮已提交搜索的匹配文字 搜索工具栏 搜索输入框 控件高度 文字大小 case sensitive regex regular expressions maximum search results result limit per file query matching results and highlighting search bar appearance shared control height toolbar field input text font size"
-            }
-            Self::Shortcuts => {
-                "文件与窗口 搜索与查找 阅读与标注 files and windows search and find reading annotation 打开文件 聚焦搜索框 快速查找 关闭当前标签 打开设置 切换区分大小写 跳到日志底部 轮换颜色标签 切换自动换行 新增文字标记 进入编辑模式 按键绑定 冲突 keyboard shortcut keymap conflicts open file focus find close tab jump color label wrap text mark edit"
-            }
-            Self::History => {
-                "文件记录 临时搜索结果 搜索历史 筛选 删除 清空 索引缓存 占用空间 打开文件夹 清理缓存 file entries temporary results search history filter delete clear index cache size folder cleanup"
-            }
-            Self::Network => {
-                "网络 远程服务 服务器地址 用户名 工号 昵称 测试连接 保存并测试 连接 cookie http https network remote server address user name save test connect"
-            }
-            Self::Diagnostics => {
-                "高级 应用日志 日志等级 清理 导出 诊断 性能叠加层 帧耗时 性能录制 打开目录 重试保存 perfetto trace recording performance overlay frame time fps application log level clear export off error warn info debug"
-            }
-            Self::About => {
-                "版本 编译时间 构建目标 提交 技术栈 开源组件 仓库 作者 许可 version build commit platform github repository open source author license rust gpui sqlite"
-            }
-        };
-        let haystack = format!("{} {keywords}", self.label()).to_lowercase();
-        query
-            .to_lowercase()
-            .split_whitespace()
-            .all(|term| haystack.contains(term))
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -451,6 +416,9 @@ pub struct SettingsDialog {
     highlight_baseline: Option<crate::color_labels_dialog::LogColoringConfig>,
     active_category: SettingsCategory,
     settings_search: Entity<InputState>,
+    search_hits: Vec<SearchOption>,
+    location: search::OptionLocation,
+    detail_scroll: gpui_kit::ScrollHandle,
     network_server_url: Entity<InputState>,
     network_display_name: Entity<InputState>,
     cloud_client: Option<CloudClient>,
@@ -522,6 +490,7 @@ impl SettingsDialog {
         cx: &mut Context<Self>,
     ) {
         if category.is_available() {
+            self.clear_search_location(cx);
             self.settings_search
                 .update(cx, |search, cx| search.set_value("", window, cx));
             self.active_category = category;
@@ -542,6 +511,47 @@ impl SettingsDialog {
         if self.draft.show_horizontal_scrollbar == previous {
             self.draft.show_horizontal_scrollbar = current;
             cx.notify();
+        }
+    }
+
+    fn locate_option(&mut self, hit: SearchOption, window: &mut Window, cx: &mut Context<Self>) {
+        if hit.category.shows_log_preview() {
+            self.ensure_highlight_editor(window, cx);
+        }
+        if hit.category == SettingsCategory::History {
+            self.history_tab = match hit.key {
+                "files" => HistoryTab::Files,
+                "temp" => HistoryTab::TemporaryResults,
+                "cache" => HistoryTab::Cache,
+                _ => HistoryTab::Search,
+            };
+            if let Some(category) = self.history_tab.file_category()
+                && let Some(history) = &self.file_history
+            {
+                history.update(cx, |history, cx| history.set_category(category, cx));
+            }
+        }
+        if let Some(editor) = &self.highlight_editor
+            && (hit.category == SettingsCategory::Highlight
+                || self.active_category == SettingsCategory::Highlight)
+        {
+            let key = (hit.category == SettingsCategory::Highlight).then_some(hit.key);
+            editor.update(cx, |editor, cx| editor.locate_option(key, cx));
+        }
+        if self.active_category != hit.category {
+            self.active_category = hit.category;
+            cx.emit(SettingsDialogEvent::CategoryChanged(hit.category));
+        }
+        self.location.select(Some(hit.key), &self.detail_scroll);
+        cx.notify();
+    }
+
+    fn clear_search_location(&mut self, cx: &mut Context<Self>) {
+        self.location.select(None, &self.detail_scroll);
+        if self.active_category == SettingsCategory::Highlight
+            && let Some(editor) = &self.highlight_editor
+        {
+            editor.update(cx, |editor, cx| editor.locate_option(None, cx));
         }
     }
 
@@ -591,20 +601,32 @@ impl SettingsDialog {
         };
         preference_section(crate::tr!("搜索栏外观", "Search bar appearance"), cx)
             .id("settings-search-toolbar-section")
-            .child(slider_row(
-                crate::tr!("共用控件高度", "Shared control height"),
-                &self.search_toolbar_height,
+            .child(self.location.mark(
+                "height",
+                slider_row(
+                    crate::tr!("共用控件高度", "Shared control height"),
+                    &self.search_toolbar_height,
+                ),
+                cx,
             ))
-            .child(slider_row(
-                crate::tr!("工具栏字号", "Toolbar text size"),
-                &self.search_toolbar_font_size,
+            .child(self.location.mark(
+                "toolbar-font",
+                slider_row(
+                    crate::tr!("工具栏字号", "Toolbar text size"),
+                    &self.search_toolbar_font_size,
+                ),
+                cx,
             ))
             .child(
-                slider_row(
-                    crate::tr!("输入框字号", "Search field text size"),
-                    &self.search_input_font_size,
-                )
-                .id("settings-search-input-section"),
+                self.location.mark(
+                    "input-font",
+                    slider_row(
+                        crate::tr!("输入框字号", "Search field text size"),
+                        &self.search_input_font_size,
+                    )
+                    .id("settings-search-input-section"),
+                    cx,
+                ),
             )
             .child(
                 div()
@@ -655,9 +677,10 @@ impl SettingsDialog {
         } = network;
         let mut shortcut_inputs = BTreeMap::new();
         let mut subscriptions = Vec::new();
+        let detail_scroll = gpui_kit::ScrollHandle::new();
         let settings_search = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder(crate::tr!("筛选设置分类…", "Filter categories…"))
+                .placeholder(crate::tr!("搜索设置选项…", "Search settings…"))
                 .default_value("")
         });
         let default_server_url = cloud_client
@@ -914,21 +937,34 @@ impl SettingsDialog {
                 },
             ));
         }
-        subscriptions.push(
-            cx.subscribe(&settings_search, |this, search, _: &InputEvent, cx| {
-                let query = search.read(cx).value().trim().to_lowercase();
-                if !this.active_category.matches(&query)
-                    && let Some(category) = SettingsCategory::ALL
-                        .into_iter()
-                        .filter(|category| category.is_available())
-                        .find(|category| category.matches(&query))
-                {
-                    this.active_category = category;
-                    cx.emit(SettingsDialogEvent::CategoryChanged(category));
+        subscriptions.push(cx.subscribe_in(
+            &settings_search,
+            window,
+            |this, search, event: &InputEvent, window, cx| {
+                match event {
+                    InputEvent::Change => {
+                        this.search_hits = search::results(search.read(cx).value().as_ref());
+                        if let Some(first) = this.search_hits.first().copied() {
+                            this.locate_option(first, window, cx);
+                        } else {
+                            this.clear_search_location(cx);
+                            cx.notify();
+                        }
+                    }
+                    InputEvent::PressEnter { .. } => {
+                        if let Some(hit) = this
+                            .search_hits
+                            .iter()
+                            .find(|hit| this.location.is(hit.key))
+                            .copied()
+                        {
+                            this.locate_option(hit, window, cx);
+                        }
+                    }
+                    _ => {}
                 }
-                cx.notify();
-            }),
-        );
+            },
+        ));
         subscriptions.push(
             cx.subscribe(&network_server_url, |_, _, event: &InputEvent, cx| {
                 if !matches!(event, InputEvent::Focus) {
@@ -1106,6 +1142,9 @@ impl SettingsDialog {
                 SettingsCategory::default()
             },
             settings_search,
+            search_hits: Vec::new(),
+            location: Default::default(),
+            detail_scroll,
             network_server_url,
             network_display_name,
             cloud_client,
@@ -2066,7 +2105,13 @@ impl SettingsDialog {
                         ]
                         .into_iter()
                         .map(|(tab, id, label)| {
-                            Button::new(id)
+                            let key = match tab {
+                                HistoryTab::Files => "files",
+                                HistoryTab::TemporaryResults => "temp",
+                                HistoryTab::Cache => "cache",
+                                HistoryTab::Search => "history",
+                            };
+                            let button = Button::new(id)
                                 .small()
                                 .ghost()
                                 .label(label)
@@ -2080,7 +2125,8 @@ impl SettingsDialog {
                                             .update(cx, |this, cx| this.set_category(category, cx));
                                     }
                                     cx.notify();
-                                }))
+                                }));
+                            self.location.mark(key, button, cx)
                         }),
                     ),
             )
@@ -2361,7 +2407,7 @@ impl SettingsDialog {
                             ),
                     ),
             )
-            .child(about_section(
+            .child(self.location.mark("build", about_section(
                 "settings-about-build",
                 crate::tr!("版本与构建", "Version & build"),
                 crate::tr!(
@@ -2377,8 +2423,8 @@ impl SettingsDialog {
                     .item(crate::tr!("构建目标", "Build target"), env!("VCLOGG2_BUILD_TARGET"), 1)
                     .item(crate::tr!("构建配置", "Build profile"), env!("VCLOGG2_BUILD_PROFILE"), 1),
                 cx,
-            ))
-            .child(about_section(
+            ), cx))
+            .child(self.location.mark("stack", about_section(
                 "settings-about-stack",
                 crate::tr!("技术栈", "Technology"),
                 crate::tr!(
@@ -2394,8 +2440,8 @@ impl SettingsDialog {
                     .item(crate::tr!("网络", "Networking"), "HTTP/HTTPS · rustls", 1)
                     .item(crate::tr!("平台集成", "Platform integration"), crate::tr!("系统回收站、凭据库、文件打开关联、单实例与原生窗口", "System trash, credential storage, file-opening associations, single-instance routing, and native windows"), 1),
                 cx,
-            ))
-            .child(about_section(
+            ), cx))
+            .child(self.location.mark("libs", about_section(
                 "settings-about-libraries",
                 crate::tr!("主要开源库", "Key open-source libraries"),
                 crate::tr!(
@@ -2438,8 +2484,8 @@ impl SettingsDialog {
                         1,
                     ),
                 cx,
-            ))
-            .child(about_section(
+            ), cx))
+            .child(self.location.mark("repo", about_section(
                 "settings-about-repository",
                 crate::tr!("GitHub 仓库", "GitHub repository"),
                 crate::tr!(
@@ -2474,8 +2520,8 @@ impl SettingsDialog {
                     1,
                 ),
                 cx,
-            ))
-            .child(about_section(
+            ), cx))
+            .child(self.location.mark("license", about_section(
                 "settings-about-credits",
                 crate::tr!("作者与许可", "Author & licenses"),
                 crate::tr!("感谢所有开源项目维护者与贡献者。", "Thanks to all open-source maintainers and contributors."),
@@ -2495,7 +2541,7 @@ impl SettingsDialog {
                         1,
                     ),
                 cx,
-            ))
+            ), cx))
             .into_any_element()
     }
 }
@@ -2546,8 +2592,7 @@ impl SettingsDialog {
     fn render_general(&self, cx: &mut Context<Self>) -> AnyElement {
         let content = v_flex()
                     .gap_5()
-                    .child(
-                        v_flex()
+                    .child(self.location.mark("language", v_flex()
                             .id("settings-language-section")
                             .gap_3()
                             .p_3()
@@ -2600,12 +2645,10 @@ impl SettingsDialog {
                                             }
                                         },
                                     )),
-                            ),
-                    )
+                            ), cx))
             .child(preference_section(crate::tr!("界面主题", "Interface theme"), cx)
                 .id("settings-theme-section")
-                    .child(
-                        RadioGroup::vertical("settings-theme-preference")
+                    .child(self.location.mark("theme", RadioGroup::vertical("settings-theme-preference")
                             .selected_index(Some(self.draft.theme_preference.select_index()))
                             .children(ThemePreference::ALL.into_iter().map(|preference| {
                                 Radio::new(format!(
@@ -2628,10 +2671,8 @@ impl SettingsDialog {
                                     this.draft.theme_preference = preference;
                                     SettingsDialog::draft_changed(cx);
                                 }
-                            })),
-                    )
-                    .child(
-                        h_flex()
+                            })), cx))
+                    .child(self.location.mark("motion", h_flex()
                             .justify_between()
                             .gap_4()
                             .child(div().text_sm().child(crate::tr!("减少动态效果", "Reduce motion")))
@@ -2644,13 +2685,11 @@ impl SettingsDialog {
                                         this.draft.reduce_motion = *checked;
                                         SettingsDialog::draft_changed(cx);
                                     })),
-                            ),
-                    ))
-            .child(self.render_icon_settings(cx))
+                            ), cx)))
+            .child(self.location.mark("icon", self.render_icon_settings(cx), cx))
             .child(preference_section(crate::tr!("文件与标签", "Files & tabs"), cx)
                 .id("settings-files-section")
-                    .child(
-                        h_flex()
+                    .child(self.location.mark("full-path", h_flex()
                             .justify_between()
                             .gap_4()
                             .child(div().text_sm().child(crate::tr!("在文件工具栏显示完整路径", "Show full path in the file toolbar")))
@@ -2663,10 +2702,8 @@ impl SettingsDialog {
                                         this.draft.show_full_path = *checked;
                                         SettingsDialog::draft_changed(cx);
                                     })),
-                            ),
-                    )
-                    .child(
-                        h_flex()
+                            ), cx))
+                    .child(self.location.mark("close-tab", h_flex()
                             .justify_between()
                             .gap_4()
                             .child(div().text_sm().child(crate::tr!("关闭日志标签前确认", "Confirm before closing log tabs")))
@@ -2679,10 +2716,8 @@ impl SettingsDialog {
                                         this.draft.confirm_close_tab = *checked;
                                         SettingsDialog::draft_changed(cx);
                                     })),
-                            ),
-                    )
-                    .child(
-                        h_flex()
+                            ), cx))
+                    .child(self.location.mark("paste", h_flex()
                             .justify_between()
                             .gap_4()
                             .child(div().text_sm().child(crate::tr!("粘贴时确认", "Confirm clipboard paste")))
@@ -2695,10 +2730,8 @@ impl SettingsDialog {
                                         this.draft.confirm_clipboard_paste = *checked;
                                         SettingsDialog::draft_changed(cx);
                                     })),
-                            ),
-                    )
-                    .child(
-                        v_flex()
+                            ), cx))
+                    .child(self.location.mark("directory", v_flex()
                             .gap_1()
                             .child(
                                 div()
@@ -2721,10 +2754,13 @@ impl SettingsDialog {
                                     .id("settings-open-directory-command")
                                     .w_full()
                                     .child(Input::new(&self.open_directory_command).w_full()),
-                            ),
-                    ));
+                            ), cx)));
         #[cfg(windows)]
-        let content = content.child(self.windows_context_menu.clone());
+        let content = content.child(self.location.mark(
+            "explorer",
+            self.windows_context_menu.clone(),
+            cx,
+        ));
         content.into_any_element()
     }
 
@@ -2743,8 +2779,7 @@ impl SettingsDialog {
         let font_size = self.font_size.read(cx).value().start().round() as u16;
         let line_spacing = self.line_spacing.read(cx).value().start().round() as u16;
         preference_section(crate::tr!("排版", "Typography"), cx)
-            .child(
-                h_flex()
+            .child(self.location.mark("font", h_flex()
                     .justify_between()
                     .gap_4()
                     .child(
@@ -2769,10 +2804,8 @@ impl SettingsDialog {
                                 self.draft.log_font_family.family_name()
                                     .unwrap_or(cx.theme().mono_font_family.as_ref()),
                             )),
-                    ),
-            )
-            .child(
-                h_flex()
+                    ), cx))
+            .child(self.location.mark("size", h_flex()
                     .justify_between()
                     .gap_4()
                     .child(
@@ -2798,10 +2831,8 @@ impl SettingsDialog {
                                     .text_sm()
                                     .child(format!("{font_size}px")),
                             ),
-                    ),
-            )
-            .child(
-                h_flex()
+                    ), cx))
+            .child(self.location.mark("spacing", h_flex()
                     .justify_between()
                     .gap_4()
                     .child(
@@ -2827,8 +2858,18 @@ impl SettingsDialog {
                                     .text_sm()
                                     .child(format!("{line_spacing}px")),
                             ),
-                    ),
-            )
+                    ), cx))
+            .child(self.location.mark("wrap", h_flex().justify_between().gap_4()
+                .child(v_flex().gap_1().child(crate::tr!("新文件默认换行", "Wrap new files by default"))
+                    .child(div().text_sm().text_color(cx.theme().muted_foreground).child(crate::tr!(
+                        "仅用于首次打开的文件。再次打开时恢复该文件上次的换行状态。",
+                        "Applies on first open. Returning files restore their own wrap setting."))))
+                .child(Switch::new("settings-default-word-wrap").small()
+                    .accessibility_label(crate::tr!("新文件默认换行", "Wrap new files by default"))
+                    .checked(self.draft.default_word_wrap).on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.draft.default_word_wrap = *checked;
+                        Self::draft_changed(cx);
+                    }))), cx))
             .into_any_element()
     }
 
@@ -2845,8 +2886,7 @@ impl SettingsDialog {
             .value()
             .map(|color| color.alpha(1.).to_hex());
         preference_section(crate::tr!("行号与分隔线", "Line numbers and separators"), cx)
-            .child(
-                h_flex()
+            .child(self.location.mark("numbers", h_flex()
                     .justify_between()
                     .gap_4()
                     .child(
@@ -2869,11 +2909,9 @@ impl SettingsDialog {
                                 this.draft.default_show_line_numbers = *checked;
                                 SettingsDialog::draft_changed(cx);
                             })),
-                    ),
-            )
-            .when(self.draft.default_show_line_numbers, |section| section
-            .child(
-                h_flex()
+                    ), cx))
+            .when(self.draft.default_show_line_numbers || ["number-width", "number-ink", "number-bg", "number-lines"].into_iter().any(|key| self.location.is(key)), |section| section
+            .child(self.location.mark("number-lines", h_flex()
                     .justify_between()
                     .gap_4()
                     .child(
@@ -2901,10 +2939,8 @@ impl SettingsDialog {
                                 this.draft.show_line_number_row_separators = *checked;
                                 SettingsDialog::draft_changed(cx);
                             })),
-                    ),
-            )
-            .child(
-                h_flex()
+                    ), cx))
+            .child(self.location.mark("number-width", h_flex()
                     .justify_between()
                     .gap_4()
                     .child(
@@ -2930,10 +2966,8 @@ impl SettingsDialog {
                                     .text_sm()
                                     .child(format!("{line_number_width}px")),
                             ),
-                    ),
-            )
-            .child(
-                h_flex()
+                    ), cx))
+            .child(self.location.mark("number-ink", h_flex()
                     .justify_between()
                     .gap_4()
                     .child(
@@ -2981,10 +3015,8 @@ impl SettingsDialog {
                                         this.reset_line_number_text_color(window, cx)
                                     })),
                             ),
-                    ),
-            )
-            .child(
-                h_flex()
+                    ), cx))
+            .child(self.location.mark("number-bg", h_flex()
                     .justify_between()
                     .gap_4()
                     .child(
@@ -3032,11 +3064,9 @@ impl SettingsDialog {
                                         this.reset_line_number_background_color(window, cx)
                                     })),
                             ),
-                    ),
+                    ), cx))
             )
-            )
-            .child(
-                h_flex()
+            .child(self.location.mark("row-lines", h_flex()
                     .justify_between()
                     .gap_4()
                     .child(
@@ -3059,8 +3089,7 @@ impl SettingsDialog {
                                 this.draft.default_show_row_separators = *checked;
                                 SettingsDialog::draft_changed(cx);
                             })),
-                    ),
-            )
+                    ), cx))
             .into_any_element()
     }
 
@@ -3113,8 +3142,7 @@ impl SettingsDialog {
                             )),
                     ),
             )
-            .child(
-                h_flex()
+            .child(self.location.mark("log-ink", h_flex()
                     .justify_between()
                     .gap_4()
                     .child(
@@ -3169,10 +3197,8 @@ impl SettingsDialog {
                                         this.reset_log_text_color(window, cx)
                                     })),
                             ),
-                    ),
-            )
-            .child(
-                h_flex()
+                    ), cx))
+            .child(self.location.mark("log-bg", h_flex()
                     .justify_between()
                     .gap_4()
                     .child(
@@ -3227,8 +3253,7 @@ impl SettingsDialog {
                                         this.reset_log_background_color(window, cx)
                                     })),
                             ),
-                    ),
-            )
+                    ), cx))
             .into_any_element()
     }
 
@@ -3237,7 +3262,7 @@ impl SettingsDialog {
         let scroll_lines = self.scroll_lines.read(cx).value().start().round() as u16;
         preference_section(crate::tr!("滚动", "Scrolling"), cx)
                     .id("settings-scroll-section")
-                    .child(h_flex().justify_between().gap_4()
+                    .child(self.location.mark("horizontal", h_flex().justify_between().gap_4()
                         .child(crate::tr!("显示横向滚动条", "Show horizontal scrollbar"))
                         .child(Switch::new("settings-horizontal-scrollbar").small()
                             .accessibility_label(crate::tr!("显示横向滚动条", "Show horizontal scrollbar"))
@@ -3245,9 +3270,8 @@ impl SettingsDialog {
                             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                 this.draft.show_horizontal_scrollbar = *checked;
                                 Self::draft_changed(cx);
-                            }))))
-                    .child(
-                        h_flex()
+                            }))), cx))
+                    .child(self.location.mark("line-scroll", h_flex()
                             .justify_between()
                             .gap_4()
                             .child(div().text_sm().child(crate::tr!("按完整日志行滚动", "Scroll by complete log lines")))
@@ -3260,12 +3284,10 @@ impl SettingsDialog {
                                         this.draft.scroll_by_line = *checked;
                                         SettingsDialog::draft_changed(cx);
                                     })),
-                            ),
-                    )
-                    .when(self.draft.scroll_by_line, |section| {
+                            ), cx))
+                    .when(self.draft.scroll_by_line || self.location.is("scroll-count") || self.location.is("wrap-scroll"), |section| {
                         section
-                            .child(
-                                h_flex()
+                            .child(self.location.mark("scroll-count", h_flex()
                                     .justify_between()
                                     .gap_4()
                                     .child(
@@ -3295,10 +3317,8 @@ impl SettingsDialog {
                                                     .text_sm()
                                                     .child(scroll_lines.to_string()),
                                             ),
-                                    ),
-                            )
-                            .child(
-                                h_flex()
+                                    ), cx))
+                            .child(self.location.mark("wrap-scroll", h_flex()
                                     .justify_between()
                                     .gap_4()
                                     .child(div().text_sm().child(crate::tr!("自动换行时仍按完整日志行滚动", "Scroll by complete log lines while wrapping")))
@@ -3314,12 +3334,10 @@ impl SettingsDialog {
                                                     SettingsDialog::draft_changed(cx);
                                                 },
                                             )),
-                                    ),
-                            )
+                                    ), cx))
                     })
-            .when(!self.draft.scroll_by_line || !self.draft.scroll_by_line_when_word_wrap, |section| section
-                    .child(
-                        h_flex()
+            .when(!self.draft.scroll_by_line || !self.draft.scroll_by_line_when_word_wrap || self.location.is("pixel"), |section| section
+                    .child(self.location.mark("pixel", h_flex()
                             .justify_between()
                             .gap_4()
                             .child(
@@ -3349,16 +3367,14 @@ impl SettingsDialog {
                                             .text_sm()
                                             .child(format!("{scroll_percent}%")),
                                     ),
-                            ),
-                    )
+                            ), cx))
             )
             .into_any_element()
     }
 
     fn render_word_selection(&self, cx: &mut Context<Self>) -> AnyElement {
         preference_section(crate::tr!("双击选词", "Double-click word selection"), cx)
-                    .child(
-                        h_flex()
+                    .child(self.location.mark("words", h_flex()
                             .justify_between()
                             .gap_4()
                             .child(
@@ -3381,8 +3397,7 @@ impl SettingsDialog {
                                     .id("settings-word-boundary-characters")
                                     .w_72()
                                     .child(Input::new(&self.word_boundary_characters).id("settings-word-boundary-input").w_full()),
-                            ),
-                    )
+                            ), cx))
             .into_any_element()
     }
 
@@ -3391,8 +3406,7 @@ impl SettingsDialog {
             .gap_5()
             .child(
                 preference_section(crate::tr!("查询匹配", "Query matching"), cx).id("settings-search-section")
-                    .child(
-                        h_flex()
+                    .child(self.location.mark("case", h_flex()
                             .justify_between()
                             .gap_4()
                             .child(div().text_sm().child(crate::tr!("区分大小写", "Case-sensitive")))
@@ -3405,10 +3419,8 @@ impl SettingsDialog {
                                         this.draft.default_case_sensitive = *checked;
                                         SettingsDialog::draft_changed(cx);
                                     })),
-                            ),
-                    )
-                    .child(
-                        h_flex()
+                            ), cx))
+                    .child(self.location.mark("regex", h_flex()
                             .justify_between()
                             .gap_4()
                             .child(div().text_sm().child(crate::tr!("使用正则表达式", "Use regular expressions")))
@@ -3421,12 +3433,10 @@ impl SettingsDialog {
                                         this.draft.default_use_regex = *checked;
                                         SettingsDialog::draft_changed(cx);
                                     })),
-                            ),
-                    )
+                            ), cx))
             )
             .child(preference_section(crate::tr!("结果与高亮", "Results and highlighting"), cx)
-                    .child(
-                        h_flex()
+                    .child(self.location.mark("limit", h_flex()
                             .justify_between()
                             .gap_4()
                             .child(
@@ -3448,10 +3458,8 @@ impl SettingsDialog {
                                 NumberInput::new(&self.max_search_results)
                                     .small()
                                     .w_56(),
-                            ),
-                    )
-                    .child(
-                        h_flex()
+                            ), cx))
+                    .child(self.location.mark("hits", h_flex()
                             .justify_between()
                             .gap_4()
                             .child(div().text_sm().child(crate::tr!("高亮已提交搜索的匹配文字", "Highlight matches from submitted searches")))
@@ -3464,8 +3472,7 @@ impl SettingsDialog {
                                         this.draft.highlight_matches = *checked;
                                         SettingsDialog::draft_changed(cx);
                                     })),
-                            ),
-                    )
+                            ), cx))
             .child(
                 Button::new("settings-open-match-styles")
                     .small()
@@ -3519,8 +3526,7 @@ impl SettingsDialog {
                             ),
                     ),
             )
-            .child(
-                v_flex()
+            .child(self.location.mark("server", v_flex()
                     .gap_1()
                     .child(
                         div()
@@ -3552,10 +3558,8 @@ impl SettingsDialog {
                         .accessibility_id("A391")
                         .aria_label(crate::tr!("云端服务器地址", "Cloud server address"))
                         .disabled(network_busy),
-                    ),
-            )
-            .child(
-                v_flex()
+                    ), cx))
+            .child(self.location.mark("name", v_flex()
                     .gap_1()
                     .child(
                         div()
@@ -3587,13 +3591,11 @@ impl SettingsDialog {
                         .accessibility_id("A392")
                         .aria_label(crate::tr!("云端用户名", "Cloud user name"))
                         .disabled(network_busy),
-                    ),
-            )
+                    ), cx))
             .child(
                 h_flex()
                     .justify_end()
-                    .child(
-                        Button::new(
+                    .child(self.location.mark("connection", Button::new(
                             "settings-network-connect",
                         )
                         .small()
@@ -3608,8 +3610,7 @@ impl SettingsDialog {
                                     window, cx,
                                 )
                             },
-                        )),
-                    ),
+                        )), cx)),
             )
             .child(
                 div()
@@ -3731,8 +3732,7 @@ impl SettingsDialog {
                     .rounded(cx.theme().radius)
                     .border_1()
                     .border_color(cx.theme().border)
-                    .child(
-                        h_flex()
+                    .child(self.location.mark("app-log", h_flex()
                             .justify_between()
                             .gap_4()
                             .child(
@@ -3756,8 +3756,7 @@ impl SettingsDialog {
                                 div()
                                     .w_40()
                                     .child(Select::new(&self.app_log_level).small()),
-                            ),
-                    )
+                            ), cx))
                     .child(
                         h_flex()
                             .justify_between()
@@ -3773,8 +3772,7 @@ impl SettingsDialog {
                             )
                             .child(
                                 h_flex().gap_2().flex_shrink_0()
-                                .child(
-                                    Button::new("settings-clear-application-log")
+                                .child(self.location.mark("log-clear", Button::new("settings-clear-application-log")
                                         .small()
                                         .outline()
                                         .label(crate::tr!("清理日志", "Clear logs"))
@@ -3783,10 +3781,8 @@ impl SettingsDialog {
                                         .disabled(self.log_export_task.is_some() || self.log_clear_task.is_some())
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.clear_application_log(cx)
-                                        })),
-                                )
-                                .child(
-                                Button::new("settings-export-application-log")
+                                        })), cx))
+                                .child(self.location.mark("log-export", Button::new("settings-export-application-log")
                                     .small()
                                     .outline()
                                     .label(crate::tr!("导出日志…", "Export log…"))
@@ -3794,8 +3790,7 @@ impl SettingsDialog {
                                     .disabled(self.log_export_task.is_some() || self.log_clear_task.is_some())
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.export_application_log(window, cx)
-                                    })),
-                                )
+                                    })), cx))
                             ),
                     )
                     .when_some(self.log_status.clone(), |section, status| {
@@ -3807,8 +3802,8 @@ impl SettingsDialog {
                         )
                     }),
             )
-            .child(self.render_performance_settings(cx))
-            .child(self.trace_recorder.clone())
+            .child(self.location.mark("overlay", self.render_performance_settings(cx).into_any_element(), cx))
+            .child(self.location.mark("trace", self.trace_recorder.clone(), cx))
             .into_any_element()
     }
 
@@ -3837,10 +3832,11 @@ impl SettingsDialog {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .when(!self.search_hits.is_empty(), |list| list.track_scroll(&self.detail_scroll))
                     .gap_3()
                     .children(ShortcutAction::groups().into_iter().map(|(title, actions)| {
                         preference_section(title, cx).children(actions.iter().map(|&action| {
-                            self.render_shortcut_row(action, conflicts.get(&action).map(String::as_str), cx)
+                            self.location.mark(&format!("key-{}", action.id()), self.render_shortcut_row(action, conflicts.get(&action).map(String::as_str), cx), cx)
                         }))
                     })),
             ).into_any_element()
@@ -3852,26 +3848,43 @@ impl Render for SettingsDialog {
         let active_category = self.active_category;
         let settings_entity = cx.entity();
         let settings_query = self.settings_search.read(cx).value().trim().to_lowercase();
-        let visible_categories = SettingsCategory::ALL
-            .into_iter()
-            .filter(|category| category.is_available())
-            .filter(|category| category.matches(&settings_query))
-            .collect::<Vec<_>>();
-        let has_matches = !visible_categories.is_empty();
-        let category_menu =
-            SidebarMenu::new().children(visible_categories.into_iter().map(|category| {
-                let settings_entity = settings_entity.clone();
-                SidebarMenuItem::new(category.label())
-                    .icon(category.icon())
-                    .active(category == active_category)
-                    .on_click(move |_, _, cx| {
-                        settings_entity.update(cx, |this, cx| {
-                            this.active_category = category;
-                            cx.emit(SettingsDialogEvent::CategoryChanged(category));
-                            cx.notify();
-                        });
+        let searching = !settings_query.is_empty();
+        let has_matches = !searching || !self.search_hits.is_empty();
+        let category_menu = if searching {
+            SidebarMenu::new().children(self.search_hits.iter().copied().map(|hit| {
+                let settings = settings_entity.clone();
+                SidebarMenuItem::new(hit.label())
+                    .icon(hit.category.icon())
+                    .accessibility_label(format!("{} · {}", hit.category.label(), hit.label()))
+                    .active(self.location.is(hit.key))
+                    .on_click(move |_, window, cx| {
+                        settings.update(cx, |this, cx| this.locate_option(hit, window, cx))
                     })
-            }));
+            }))
+        } else {
+            SidebarMenu::new().children(
+                SettingsCategory::ALL
+                    .into_iter()
+                    .filter(|category| category.is_available())
+                    .map(|category| {
+                        let settings = settings_entity.clone();
+                        SidebarMenuItem::new(category.label())
+                            .icon(category.icon())
+                            .active(category == active_category)
+                            .on_click(move |_, window, cx| {
+                                settings.update(cx, |this, cx| {
+                                    this.select_category(category, window, cx)
+                                })
+                            })
+                    }),
+            )
+        };
+        if !matches!(
+            active_category,
+            SettingsCategory::Highlight | SettingsCategory::History
+        ) {
+            self.location.reveal(window, cx);
+        }
 
         let detail = if has_matches {
             match active_category {
@@ -3892,7 +3905,7 @@ impl Render for SettingsDialog {
         } else {
             div()
                 .text_color(cx.theme().muted_foreground)
-                .child(crate::tr!("没有匹配的设置分类", "No matching categories"))
+                .child(crate::tr!("没有匹配的设置选项", "No matching settings"))
                 .into_any_element()
         };
         let owns_scroll = matches!(
@@ -3908,6 +3921,12 @@ impl Render for SettingsDialog {
             .child(detail);
         let details = if owns_scroll {
             details.into_any_element()
+        } else if searching {
+            details
+                .overflow_y_scroll()
+                .track_scroll(&self.detail_scroll)
+                .vertical_scrollbar(&self.detail_scroll)
+                .into_any_element()
         } else {
             details
                 .overflow_y_scrollbar()

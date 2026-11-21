@@ -43,7 +43,7 @@ Pipe connection retries and the client exchange share a five-second deadline; ea
 
 ## Data and state
 
-`StateRepository` owns SQLite connections, SQL and migrations. **Current schema: v23**. App `StateStore` converts stable data records to presentation models; it does not own SQL. WAL and revision-aware session merging preserve unrelated updates from different windows. File paths use lossless native identity; display strings are not database identity.
+`StateRepository` owns SQLite connections, SQL and migrations. **Current schema: v24**. App `StateStore` converts stable data records to presentation models; it does not own SQL. WAL and revision-aware session merging preserve unrelated updates from different windows. File paths use lossless native identity; display strings are not database identity.
 
 After enabling WAL, migration acquires an immediate write transaction, reads the version again, and commits column changes, data backfills and the version update together. Failure rolls back the entire migration so a restart cannot skip an unfinished backfill. Search history receives increasing process-local save revisions on the foreground thread; background writers check the revision and write under a shared save lock, preventing stale window snapshots from overwriting newer history. Quit waits for window save tasks before applying pending history deletions from the settings window.
 

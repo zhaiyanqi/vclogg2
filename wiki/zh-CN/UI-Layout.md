@@ -38,8 +38,9 @@ AppShell [A001] — Root / Workspace
 SettingsWindow [A094] — shared native window / 进程唯一原生窗口
 ├─ TitleBar [A800] — native close/resize / 原生关闭与缩放
 ├─ Sidebar [A309] — categories / 分类
-│  ├─ Search [A310] — 设置搜索
-│  └─ Navigation [A311]
+│  ├─ Search [A310] — 按名称或关键词定位选项
+│  ├─ 匹配选项 [A828] — 选中结果后滚动到对应控件并高亮
+│  └─ Navigation [A311] — 搜索为空时显示分类
 │     ├─ General [A312] — 通用
 │     ├─ Log reading [A313] — 日志阅读
 │     ├─ Highlights & annotations [A801] — 高亮与标注
@@ -52,6 +53,7 @@ SettingsWindow [A094] — shared native window / 进程唯一原生窗口
 ├─ Details [A319] — category content / 分类内容
 │  ├─ Log preview [A824] — shared by reading and highlights / 日志阅读和高亮共用实时样例
 │  ├─ 日志阅读详情 — 排版、行号与分隔线、日志配色、滚动、双击选词
+│  │  ├─ 新文件默认换行 [A829] — 无历史会话时的初始换行状态
 │  │  ├─ 显示行号 [A095] — 打开后展开列宽、配色及行号分隔线
 │  │  ├─ 滚动 [A240] — 按适用模式显示整行和像素选项
 │  │  │  └─ 显示横向滚动条 [A826] — 与视图菜单共用

@@ -57,7 +57,9 @@ impl Workspace {
         }
         self.capture_active_search_tab(cx);
         let active_tab_changed = self.active_tab_id != tab_id;
-        if active_tab_changed && let Some(active) = self.active_document() {
+        if active_tab_changed
+            && let Some(active) = self.active_document().filter(|tab| tab.session_loaded)
+        {
             let path = active.document.path().to_path_buf();
             let base = active.session_base.clone();
             let state = self.file_session_state(active, cx);
@@ -635,7 +637,7 @@ impl Workspace {
         let sessions = self
             .documents
             .iter()
-            .filter(|tab| document_ids.contains(&tab.id))
+            .filter(|tab| tab.session_loaded && document_ids.contains(&tab.id))
             .map(|tab| {
                 (
                     tab.document.path().to_path_buf(),
@@ -766,20 +768,22 @@ impl Workspace {
 
     pub(super) fn persist_workspace_order(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let store = self.persistence.store.clone();
-        let sessions = self
+        let documents = self
             .documents
             .iter()
-            .filter(|tab| !path_match_set_contains(&self.transient_paths, tab.document.path()))
+            .filter(|tab| !path_match_set_contains(&self.transient_paths, tab.document.path()));
+        let open_paths = documents
+            .clone()
+            .map(|tab| tab.document.path().to_path_buf())
+            .collect::<Vec<_>>();
+        let sessions = documents
+            .filter(|tab| tab.session_loaded)
             .map(|tab| {
                 (
                     tab.document.path().to_path_buf(),
                     self.file_session_state(tab, cx),
                 )
             })
-            .collect::<Vec<_>>();
-        let open_paths = sessions
-            .iter()
-            .map(|(path, _)| path.clone())
             .collect::<Vec<_>>();
         let active_path = self
             .active_document()

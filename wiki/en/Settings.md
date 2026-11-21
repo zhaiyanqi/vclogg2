@@ -12,6 +12,8 @@ Valid changes apply across windows and save automatically. Close Settings with *
 
 ## Where to find a setting
 
+Type **line number color** in the sidebar search. Settings opens the first matching option, scrolls it into view and highlights the control. Select another result to jump to it, or clear the search to return to the nine categories.
+
 | I want to… | Category |
 | --- | --- |
 | Choose the language, theme or app icon, adjust file and tab behavior, reduce motion, or enable the Windows file menu | **General** |
@@ -28,7 +30,9 @@ Enable **Show line numbers** to adjust their width, colors and separators. Turni
 
 ## Starting values
 
-A new configuration uses Chinese and the light theme. Log text defaults to Consolas at 13 px with 6 px of extra line spacing. The line-number column starts at 60 px. Fonts are chosen from those available on the system, with a fallback if a saved font is missing. Existing file sessions can retain their own wrapping, separators and line-number state.
+A new configuration uses Chinese and the light theme. Log text defaults to Consolas at 13 px with 6 px of extra line spacing. The line-number column starts at 60 px. Fonts are chosen from those available on the system, with a fallback if a saved font is missing. Existing file sessions can retain their own separators and line-number state.
+
+**Log reading → Wrap new files by default** starts off. It sets the initial wrap mode for files without a saved session. Open tabs keep their current mode. When you reopen a file, it restores the wrap mode you last used, including changes made with **W**.
 
 Search starts with case and regex off, match highlighting on and log-level coloring off. The toolbar and search field share a default control height of 30 px. Their font sizes can be set independently, and the controls grow to fit larger text.
 
