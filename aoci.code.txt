@@ -138,7 +138,7 @@ search_context.rs[PD7L]: F:序列化搜索范围、查询标签、行选择、�
 selectable_log_text.rs[LU7L]: F:为虚拟日志行映射源文本与显示文本，注册和缓存文本选择参与者。 | R:code:crates/vclogg-app/src/selection_style.rs,code:crates/vclogg-app/src/virtual_log_lines.rs | A:LogText、SelectableLogText、TextSelectionCache | S:制表符只在排版时展开，源字节坐标仍用于匹配；缓存淘汰单独记录使用顺序。
 selection_style.rs[DU5M]: F:将明暗主题的行与文本选区偏好解析为可绘制的颜色、边框和字体样式。 | R:code:crates/vclogg-app/src/ui_theme.rs | A:SelectionStyles::resolve | S:持久化值与 GPUI 颜色和像素类型分离。
 selection_style_section.rs[AU5L]: F:编辑明暗主题的行与文字选区外观，定位搜索命中的属性，并提供激活与非激活预览 | R:code:crates/vclogg-app/src/selection_style.rs,code:crates/vclogg-app/src/settings_dialog/search.rs | A:SelectionStyleSection、locate、preview_inactive | S:-
-settings_dialog.rs[AU7L]: F:组织九类偏好与自动保存草稿，用选项搜索导航至实际控件，并在阅读与着色设置中共享日志预览 | R:code:crates/vclogg-app/src/settings_dialog/search.rs,code:crates/vclogg-app/src/settings_dialog/preview.rs,code:crates/vclogg-app/src/workspace/settings_window.rs,code:crates/vclogg-app/src/color_labels_dialog.rs | A:SettingsDialog、SettingsCategory | S:定位行号和滚动子项可临时展示控件，保留父开关原值；历史子页和着色编辑器另行选择目标
+settings_dialog.rs[AU7L]: F:托管九类设置的导航、控件状态与自动保存草稿，调度搜索定位、阅读表单和共享预览 | R:code:crates/vclogg-app/src/settings_dialog/reading.rs,code:crates/vclogg-app/src/settings_dialog/search.rs,code:crates/vclogg-app/src/settings_dialog/preview.rs,code:crates/vclogg-app/src/workspace/settings_window.rs | A:SettingsDialog、SettingsCategory | S:阅读与高亮共用样例实体；搜索历史或着色子项时还须选中对应子页
 single_instance.rs[IN8L]: F:仲裁进程主实例并用本机 IPC 向已有窗口转发外部打开请求。 | R:code:crates/vclogg-app/src/main.rs,code:crates/vclogg-app/src/open_log.rs | A:acquire_or_forward、PrimaryInstance::start_listener、OpenRequest | S:Unix 套接字按用户目录身份区分；Windows 使用命名管道。
 state_store.rs[ID8L]: F:适配偏好、路径历史、标记与文件会话的应用模型和持久化记录，传递初次打开的换行值 | R:code:crates/vclogg-data/src/state_repository.rs,code:crates/vclogg-app/src/tab_resume.rs | A:StateStore、FileSessionState、AppSettings | S:并发保存后行标签基线取本窗口实际显示值，防止将另一窗口新增的标签视为本地删除
 system_fonts.rs[IU4T]: F:借用平台文本后端，为设置提供排序去重的系统字体列表 | R:code:crates/vclogg-app/src/settings_dialog.rs | A:SystemFonts::available_families | S:隐藏空名和点开头的字体，不添加 GPUI 的回退别名
@@ -404,7 +404,7 @@ Settings.md[SC5T]: F:英文演示设置搜索定位、共享日志预览与新�
 Technology-Stack.md[SG5T]: F:映射桌面、独立服务和文档构建所用技术与组件职责，记录兼容依赖 | R:code:Cargo.toml,code:rust-toolchain.toml | A:英文技术栈参考 | S:应用目录名与 Cargo 包选择器不同，构建选用 vclogg2。
 Troubleshooting.md[SR5T]: F:借五行日志排查搜索结果、启动更新、服务器连接和平台构建问题，并列出反馈所需信息 | R:code:wiki/en/examples/checkout.txt,code:wiki/en/Search-and-Filters.md | A:英文故障排查指南 | S:-
 UI-Acceptance.md[SQ5T]: F:列出虚拟行、搜索、标注、刷新、编辑及多窗口状态的手工验收场景 | R:code:wiki/en/Archive.md | A:英文 UI 验收清单 | S:场景清单不是已执行结果，实测需另记提交、平台及观察值。
-UI-Layout.md[SU6S]: F:以语义编号维护工作区和设置窗口控件树，记录搜索结果导航、新文件换行与分类详情 | R:code:wiki/zh-CN/UI-Layout.md,code:wiki/en/Archive.md | A:英文控件层级 | S:旧编号继续保留，列表同类实例共享语义身份
+UI-Layout.md[SU6S]: F:以稳定编号记录工作区和窗口控件树，描述阅读页五组、共享预览及搜索选项导航 | R:code:wiki/zh-CN/UI-Layout.md,code:wiki/en/Archive.md | A:英文控件层级 | S:保留旧编号，同类列表实例共享语义身份
 User-Guide.md[SU4T]: F:将跨服务追踪、持续追加、复用团队过滤器及剪贴板调查连接到相应操作教程 | R:code:wiki/en/Result-Export.md,code:wiki/en/Live-Logs.md | A:英文常见调查入口 | S:-
 book.toml[FL4T]: F:配置英文 mdBook 源目录、站点路径及页面编辑链接 | R:code:wiki/en/SUMMARY.md | A:/vclogg2/wiki/en/ | S:缺失页面不自动创建。
 
@@ -479,10 +479,11 @@ Settings.md[SU4T]: F:按任务介绍九类设置、搜索定位和实时预览�
 Technology-Stack.md[SG5T]: F:映射 Rust、GPUI、并行搜索、编码与存储依赖到各层，并说明工作区包名。 | R:code:Cargo.toml,code:wiki/zh-CN/Project-Overview.md | A:技术栈与依赖关系 | S:桌面 crate 目录名是 vclogg-app，Cargo 包选择使用 vclogg2。
 Troubleshooting.md[SR5T]: F:按已知行号核对搜索结果，指导排查启动、更新和构建问题，并从诊断与性能页收集日志或跟踪 | R:code:wiki/zh-CN/Getting-Started.md,code:wiki/zh-CN/Building.md | A:故障排查与反馈说明 | S:-
 UI-Acceptance.md[SQ4T]: F:列出日志、搜索、编辑、跨窗、平台与恢复的手动 UI 验收场景。 | R:code:wiki/zh-CN/Implementation-Status.md,code:wiki/zh-CN/UI-Layout.md | A:UI 验收清单 | S:-
-UI-Layout.md[SU6S]: F:以稳定编号维护工作区和设置控件树，登记匹配选项导航和阅读区的新文件换行开关 | R:code:crates/vclogg-app/src/settings_dialog.rs,code:wiki/zh-CN/Interface.md | A:中文布局树与控件编号 | S:控件重排保留语义编号，停用编号继续保留
+UI-Layout.md[SU6S]: F:按语义编号记录工作区与设置控件层级，包括阅读页分组、控件对齐、条件子项和共享预览 | R:code:crates/vclogg-app/src/settings_dialog/reading.rs,code:crates/vclogg-app/src/settings_dialog.rs,code:wiki/zh-CN/Interface.md | A:中文控件布局树 | S:重排时保留语义编号，旧编号继续保留
 User-Guide.md[SB4T]: F:按跨服务请求、实时跟随、过滤器复用和剪贴板场景索引常用流程。 | R:code:wiki/zh-CN/Result-Export.md,code:wiki/zh-CN/Live-Logs.md,code:wiki/zh-CN/Editing.md | A:场景式使用指南 | S:-
 book.toml[FL4T]: F:指定中文版 mdBook 的源目录、站点路径和仓库编辑链接。 | R:code:wiki/zh-CN/SUMMARY.md | A:mdBook 配置 | S:禁止自动创建缺失章节。
 
 ===/<repository>/crates/vclogg-app/src/settings_dialog/===
-preview.rs[AU5M]: F:将阅读与着色草稿应用于四行固定样例，在两类设置中展示字号行距、行号、匹配、行选中与文字选区 | R:code:crates/vclogg-app/src/settings_dialog.rs,code:crates/vclogg-app/src/color_labels_dialog.rs,code:crates/vclogg-app/src/selectable_log_text.rs | A:PreviewStyles、render_log_preview | S:只使用样例文本与当前可用的着色规则，文字选区通过被动绘制与实际选中状态隔离
-search.rs[AU6L]: F:按中英文名称、别名及分类检索设置，给出有序选项，并为命中的控件附加高亮和滚动锚点 | R:code:crates/vclogg-app/src/settings_dialog.rs,code:crates/vclogg-app/src/selection_style_section.rs,code:crates/vclogg-app/src/keyword_match_style_section.rs | A:SearchOption、results、OptionLocation | S:锚点绑定目标自身所在滚动容器，布局后再滚动以保留搜索框焦点
+preview.rs[AU5M]: F:把字号、行距、行号与着色草稿投影到四行样例，供阅读与高亮设置实时预览 | R:code:crates/vclogg-app/src/settings_dialog.rs,code:crates/vclogg-app/src/color_labels_dialog.rs,code:crates/vclogg-app/src/selectable_log_text.rs | A:PreviewStyles、render_log_preview | S:阅读页单独装饰预览框，两页共用行绘制和颜色求值；示例文字选区被动绘制
+reading.rs[AU6L]: F:按排版、行号、配色、滚动与选词组织阅读设置，将说明、控件和数值对齐并呈现定位标记 | R:code:crates/vclogg-app/src/settings_dialog.rs,code:crates/vclogg-app/src/settings_dialog/search.rs | A:SettingsDialog::render_reading | S:命中条件子项时可展开控件而保留父开关；行直接绑定搜索锚点，编辑沿用对话框持有的实体和草稿通知
+search.rs[AU6L]: F:按双语名称、别名及类别检索设置，为结果控件提供滚动锚点与选中标识 | R:code:crates/vclogg-app/src/settings_dialog.rs,code:crates/vclogg-app/src/settings_dialog/reading.rs,code:crates/vclogg-app/src/selection_style_section.rs,code:crates/vclogg-app/src/keyword_match_style_section.rs | A:SearchOption、results、OptionLocation | S:目标绑定所在容器的滚动句柄，布局后滚动并保留输入焦点；阅读行可复用同一锚点自绘命中样式

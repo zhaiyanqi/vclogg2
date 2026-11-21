@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-11-21T03:44:04Z",
-  "updated_at": "2026-11-21T05:41:47Z",
+  "updated_at": "2026-11-21T06:03:45Z",
   "files": {
     ".agents/skills/gpui-kit-design-guides/SKILL.md": {
       "role": "index",
@@ -645,9 +645,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "7d5b1475bc330f76167bc74bba5adf6ea105c7f7852701ed46c4196bcfe15ac3",
-      "size": 113881,
-      "normalized_sha256": "7d5b1475bc330f76167bc74bba5adf6ea105c7f7852701ed46c4196bcfe15ac3"
+      "sha256": "a86c20d2db2a0a78559ead3d466fd20f6dcf601be5e4ebf8d88af5e6e85ef533",
+      "size": 114325,
+      "normalized_sha256": "a86c20d2db2a0a78559ead3d466fd20f6dcf601be5e4ebf8d88af5e6e85ef533"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -1150,21 +1150,27 @@
     },
     "crates/vclogg-app/src/settings_dialog.rs": {
       "role": "index",
-      "sha256": "b5ab9c3858ba3d39fcd3f0afcf9fef66e783acb4c96794ff94fd22d7ce6a3b38",
-      "size": 185640,
-      "normalized_sha256": "b5ab9c3858ba3d39fcd3f0afcf9fef66e783acb4c96794ff94fd22d7ce6a3b38"
+      "sha256": "0c71b4f4dfd356b29f514044e9ca582a07d2f3393fd587c004a2c7a87d2eee28",
+      "size": 150526,
+      "normalized_sha256": "0c71b4f4dfd356b29f514044e9ca582a07d2f3393fd587c004a2c7a87d2eee28"
     },
     "crates/vclogg-app/src/settings_dialog/preview.rs": {
       "role": "index",
-      "sha256": "3698667ba8b96729215149dfa9b0ca3fa26c39c8673d0e57abda293cb0b17b85",
-      "size": 8604,
-      "normalized_sha256": "3698667ba8b96729215149dfa9b0ca3fa26c39c8673d0e57abda293cb0b17b85"
+      "sha256": "642035950b2a08a5282b70d94c52e9b0bd86d2fdf03e905f9879522d2b23c3b3",
+      "size": 9405,
+      "normalized_sha256": "642035950b2a08a5282b70d94c52e9b0bd86d2fdf03e905f9879522d2b23c3b3"
+    },
+    "crates/vclogg-app/src/settings_dialog/reading.rs": {
+      "role": "index",
+      "sha256": "6f996ed14141c347adbfb5e7022596755c0b0ff3be41825f44baaac6871def78",
+      "size": 18417,
+      "normalized_sha256": "6f996ed14141c347adbfb5e7022596755c0b0ff3be41825f44baaac6871def78"
     },
     "crates/vclogg-app/src/settings_dialog/search.rs": {
       "role": "index",
-      "sha256": "82e7bde1e0f4a397cf52da7a3b9dfe7505fcfa9593ba78a9a3a91e7a6a113537",
-      "size": 16794,
-      "normalized_sha256": "82e7bde1e0f4a397cf52da7a3b9dfe7505fcfa9593ba78a9a3a91e7a6a113537"
+      "sha256": "bb9f36dcddb9bc3ce8928a278ba824f5214c776f8aa5af715cb442426296877e",
+      "size": 16937,
+      "normalized_sha256": "bb9f36dcddb9bc3ce8928a278ba824f5214c776f8aa5af715cb442426296877e"
     },
     "crates/vclogg-app/src/single_instance.rs": {
       "role": "index",
@@ -2702,9 +2708,9 @@
     },
     "wiki/en/UI-Layout.md": {
       "role": "index",
-      "sha256": "4cf7018550a62f761b8082d9c00e8dc870e155118425a72537099b151a3e73e8",
-      "size": 11005,
-      "normalized_sha256": "4cf7018550a62f761b8082d9c00e8dc870e155118425a72537099b151a3e73e8"
+      "sha256": "0a48b25b15c51a87c88183770191495715eab5b7b5b750d44a93e6211f23e79d",
+      "size": 11177,
+      "normalized_sha256": "0a48b25b15c51a87c88183770191495715eab5b7b5b750d44a93e6211f23e79d"
     },
     "wiki/en/User-Guide.md": {
       "role": "index",
@@ -2978,9 +2984,9 @@
     },
     "wiki/zh-CN/UI-Layout.md": {
       "role": "index",
-      "sha256": "0345e9dbe90c90d9d4797952e8f91483d305ffed56fdb23dc76ef27f0f35a237",
-      "size": 10222,
-      "normalized_sha256": "0345e9dbe90c90d9d4797952e8f91483d305ffed56fdb23dc76ef27f0f35a237"
+      "sha256": "dc049653438a1f7f958f4463acd6d59f0d9788b9d461b7e4a68b5c676ad97101",
+      "size": 10384,
+      "normalized_sha256": "dc049653438a1f7f958f4463acd6d59f0d9788b9d461b7e4a68b5c676ad97101"
     },
     "wiki/zh-CN/User-Guide.md": {
       "role": "index",

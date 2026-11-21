@@ -52,12 +52,16 @@ SettingsWindow [A094] — shared native window / 进程唯一原生窗口
 │     └─ About [A395] — 关于
 ├─ Details [A319] — category content / 分类内容
 │  ├─ Log preview [A824] — shared by reading and highlights / 日志阅读和高亮共用实时样例
-│  ├─ Log reading details — typography, line numbers, log colors, scrolling, word selection
-│  │  ├─ Wrap new files by default [A829] — initial wrapping for files without a saved session
-│  │  ├─ Show line numbers [A095] — reveals column width, colors and column separators
-│  │  ├─ Scrolling [A240] — line and pixel options follow the chosen wheel mode
+│  ├─ Log reading details — each group shares a surface; values align at the trailing edge
+│  │  ├─ Typography — font, size and line spacing
+│  │  │  └─ Wrap new files by default [A829] — applies when there is no file session
+│  │  ├─ Line numbers and separators
+│  │  │  └─ Show line numbers [A095] — reveals gutter width, colors and separators
+│  │  ├─ Log colors — text and background for the current theme
+│  │  ├─ Scrolling [A240] — controls follow the selected wheel mode
 │  │  │  └─ Show horizontal scrollbar [A826] — shared with the View menu
-│  │  └─ Word-boundary characters [A252] — double-click word selection
+│  │  └─ Double-click word selection
+│  │     └─ Word-boundary characters [A252]
 │  ├─ Search details
 │  │  ├─ Query matching [A249] — case and regex switches
 │  │  ├─ Results and highlighting [A827] — per-file limit and match highlighting

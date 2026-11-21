@@ -664,6 +664,10 @@ impl OptionLocation {
         self.key == Some(key)
     }
 
+    pub(super) fn anchor_for(&self, key: &str) -> Option<gpui_kit::ScrollAnchor> {
+        self.anchor.clone().filter(|_| self.is(key))
+    }
+
     pub(crate) fn reveal(&mut self, window: &mut Window, cx: &mut gpui_kit::App) {
         if std::mem::take(&mut self.pending)
             && let Some(anchor) = &self.anchor
