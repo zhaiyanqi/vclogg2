@@ -63,4 +63,4 @@ Each window runs one search at a time and queues the others. Switching tabs lets
 
 An empty query can show marked lines. **Settings → Search** controls the maximum matches per file. With a nonzero limit, each file contributes its first N matches and the export uses the resulting set. Set the limit to **0** and rerun the search when you need all matches.
 
-Recall a previous query from suggestions or manage it in **Settings → History**. To reuse a named rule, select it under **Filters** and submit the query. A regex filter can enable regex mode. [Reusable filters](Cloud-Filters.md) · [Export results](Result-Export.md) · [Search performance](Search-Performance.md)
+Recall a previous query from suggestions or manage it in **Settings → History & storage**. To reuse a named rule, select it under **Filters** and submit the query. A regex filter can enable regex mode. [Reusable filters](Cloud-Filters.md) · [Export results](Result-Export.md) · [Search performance](Search-Performance.md)

@@ -182,7 +182,7 @@ impl SettingsWindow {
             |this, _, event: &SettingsDialogEvent, window, cx| match event {
                 SettingsDialogEvent::DraftChanged => this.draft_changed(window, cx),
                 SettingsDialogEvent::CategoryChanged(category) => {
-                    if *category == SettingsCategory::Highlight {
+                    if category.shows_log_preview() {
                         this.settings.update(cx, |settings, cx| {
                             settings.ensure_highlight_editor(window, cx)
                         });

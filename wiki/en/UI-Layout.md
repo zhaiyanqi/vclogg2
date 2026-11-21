@@ -40,17 +40,19 @@ SettingsWindow [A094] — shared native window / 进程唯一原生窗口
 ├─ Sidebar [A309] — categories / 分类
 │  ├─ Search [A310] — 设置搜索
 │  └─ Navigation [A311]
-│     ├─ General [A312] — 常规
-│     ├─ Network [A389] — 网络
-│     ├─ Appearance [A313] — 外观
-│     ├─ Highlight [A801] — 高亮
+│     ├─ General [A312] — 通用
+│     ├─ Log reading [A313] — 日志阅读
+│     ├─ Highlights & annotations [A801] — 高亮与标注
 │     ├─ Search [A314] — 搜索
-│     ├─ History [A802] — 历史
-│     ├─ Storage [A317] — 存储
 │     ├─ Shortcuts [A318] — 快捷键
-│     ├─ Advanced [A316] — 高级
+│     ├─ History & storage [A802] — 历史与存储
+│     ├─ Cloud connection [A389] — 云端连接
+│     ├─ Diagnostics & performance [A316] — 诊断与性能
 │     └─ About [A395] — 关于
 ├─ Details [A319] — category content / 分类内容
+│  ├─ Log preview [A824] — shared by reading and highlights / 日志阅读和高亮共用实时样例
+│  ├─ Match styles [A825] — from Search to the match editor / 从搜索跳到匹配样式
+│  └─ Index cache [A317] — within History & storage / 历史与存储内的分页
 └─ Actions [A553] — restore defaults / 恢复默认设置，保存失败时可重试
 ```
 
@@ -81,7 +83,7 @@ Text tag context menu
 
 A601 also remains in the row’s “Text mark” submenu; it is disabled when there are no tags, the document is stale, a file is opening or the state store is unavailable.
 
-Performance recording is in Settings → Advanced, retaining its existing node IDs:
+Performance recording is in Settings → Diagnostics & performance, retaining its existing node IDs:
 
 ```text
 Performance recording [A808] — application Recorder; recording and saving continue after Settings closes

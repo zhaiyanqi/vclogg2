@@ -57,11 +57,22 @@ impl IconNamed for AppIcon {
 
 pub(crate) struct Assets;
 
-gpui_kit::assets::icon_assets!(SearchAssets, [TextWrap, Earth]);
+gpui_kit::assets::icon_assets!(
+    WorkspaceAssets,
+    [
+        TextWrap,
+        Earth,
+        Highlighter,
+        Keyboard,
+        Database,
+        Cloud,
+        Activity
+    ]
+);
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        if let Some(icon) = SearchAssets.load(path)? {
+        if let Some(icon) = WorkspaceAssets.load(path)? {
             return Ok(Some(icon));
         }
         if let Some(icon) = AppIcon::ALL
@@ -75,7 +86,7 @@ impl AssetSource for Assets {
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         let mut assets = gpui_kit::assets::Assets.list(path)?;
-        assets.extend(SearchAssets.list(path)?);
+        assets.extend(WorkspaceAssets.list(path)?);
         assets.extend(
             AppIcon::ALL
                 .into_iter()

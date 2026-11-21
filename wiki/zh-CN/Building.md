@@ -215,7 +215,7 @@ Unix 单实例启动在首次清理失效 socket 后立即重试绑定；只有�
 
 Windows 使用 `./target/release/vclogg2.exe`，Debug 同样支持。`--trace-startup` 现在是开关，不再接输出 JSON 路径；旧命令请移除路径参数。`--trace-duration` 为 1–600 的整数秒，默认 15 秒。需要同时打开日志时使用 `-- service.log`，路径包含空格时加引号。已有实例运行时仍转发打开请求，无法录制已有进程的启动。
 
-手动及冷启动录制都自动保存在应用缓存的 `traces` 子目录，名称包含时间和 UUID。macOS/Linux 使用系统 cache 下的 `VCLogg2/traces`（Debug 数据隔离时位于隔离缓存根）；Windows 使用配置的数据根下的 `cache/traces`。“设置 → 高级 → 性能录制 → 打开目录”可在录制期间打开该目录。
+手动及冷启动录制都自动保存在应用缓存的 `traces` 子目录，名称包含时间和 UUID。macOS/Linux 使用系统 cache 下的 `VCLogg2/traces`（Debug 数据隔离时位于隔离缓存根）；Windows 使用配置的数据根下的 `cache/traces`。“设置 → 诊断与性能 → 性能录制 → 打开目录”可在录制期间打开该目录。
 
 独立写入线程按最多 2048 条新事件分批排序、编码并增量写入同一 JSON 文件，排空后等待约 250 ms；磁盘忙时会延长。停止只处理剩余事件、未完成 scope 和最终摘要，同步并关闭文件，不再重写历史事件。文件不会自动删除。
 
@@ -235,6 +235,6 @@ Windows 使用 `./target/release/vclogg2.exe`，Debug 同样支持。`--trace-st
 
 旧的性能超时警告、渲染阶段耗时明细和专用检测线程已移除；Debug / Release 均通过按需 trace 记录控件耗时，普通业务错误日志保持原有行为。`VCLOGG2_UI_PERF_WARN_MS` / `VCLOGG2_UI_PERF_REPEAT_MS` 不再生效。
 
-Windows 的隔离 Debug 启动脚本仍可用：`powershell -ExecutionPolicy Bypass -File scripts/run-performance-debug.ps1`。它执行 `cargo run -p vclogg2 --locked --target-dir target/perf-debug`，设置 `RUST_BACKTRACE=full` 和 `VCLOGG2_DEV_DATA_DIR`（默认 `target/perf-debug/local-app-data`，可通过 `-DataDirectory` 覆盖）；不再接受 `-WarnAfterMilliseconds` / `-RepeatAfterMilliseconds`，使用“设置 → 高级”开启叠加层或录制 trace。此命令会编译并启动应用。
+Windows 的隔离 Debug 启动脚本仍可用：`powershell -ExecutionPolicy Bypass -File scripts/run-performance-debug.ps1`。它执行 `cargo run -p vclogg2 --locked --target-dir target/perf-debug`，设置 `RUST_BACKTRACE=full` 和 `VCLOGG2_DEV_DATA_DIR`（默认 `target/perf-debug/local-app-data`，可通过 `-DataDirectory` 覆盖）；不再接受 `-WarnAfterMilliseconds` / `-RepeatAfterMilliseconds`，使用“设置 → 诊断与性能”开启叠加层或录制 trace。此命令会编译并启动应用。
 
 当前依赖的叠加层 `MAX` 取当前窗口最近最多 1000 次 `begin_draw` 到 `end_draw` 的最大经过时间（毫秒），对应 UI 线程上的 Draw 阶段，不是全主线程任务最大耗时、帧间隔或 GPU 执行时间。Draw 之外的输入处理、任务阻塞和等待呈现等卡顿不一定反映在此值中，应结合 trace 查看。

@@ -4,7 +4,7 @@
 
 ## Give dense logs more space
 
-Open a log and leave a few results visible. Choose **Tools → Settings → Appearance** (or open Settings with **Ctrl+, / ⌘,**). Change **Log font size** to make the characters larger. Adjust the extra line spacing to separate adjacent records. Watch the same lines in the workspace as you adjust them.
+Open a log and leave a few results visible. Choose **Tools → Settings → Log reading** (or open Settings with **Ctrl+, / ⌘,**). Change **Log font size** to make the characters larger. Adjust the extra line spacing to separate adjacent records. Watch the four sample lines at the top of the page. Highlights & annotations uses the same lines to preview log-level colors, search and quick-find matches, and selections.
 
 ![Reading example showing the same two records with tighter and wider line spacing](images/line-spacing.svg)
 
@@ -14,16 +14,15 @@ Valid changes apply across windows and save automatically. Close Settings with *
 
 | I want to… | Category |
 | --- | --- |
-| Change language, path display, close confirmation, wheel behavior or word boundaries | **General** |
-| Set a team server address and test the connection | **Network**. Use **Save and test** to connect. [Cloud filters](Cloud-Filters.md) |
-| Change theme, log font, size, line spacing, line numbers or search control size | **Appearance** |
-| Color log levels or change selection, keyword and label colors | **Highlight**. [Highlighting guide](Marks-and-Highlighting.md) |
-| Use case sensitivity or regex, or change the maximum number of results per file | **Search**. Set the limit to **0** for unlimited matches. |
-| Find a recent file or manage temporary results and previous searches | **History** |
-| Inspect the state database and file-index cache or free space | **Storage** |
-| Record, clear or reset a key binding | **Shortcuts**. Conflicting combinations are flagged. [Shortcut reference](Keyboard-Shortcuts.md) |
-| Export or clear application diagnostics, choose an icon, or enable the Windows Explorer file menu | **Advanced** |
-| Check the version and build information | **About** |
+| Choose the language, theme or app icon, adjust file and tab behavior, reduce motion, or enable the Windows file menu | **General** |
+| Adjust log fonts, spacing, colors, line numbers, separators, scrolling or double-click word boundaries | **Log reading** |
+| Edit color labels, selections, match styles and log-level rule groups | **Highlights & annotations**. [Highlighting guide](Marks-and-Highlighting.md) |
+| Set matching options, per-file limits, match highlighting or search control sizes | **Search**. A limit of **0** allows all matches. |
+| Record, clear or reset a key binding | **Shortcuts**. [Shortcut reference](Keyboard-Shortcuts.md) |
+| Find recent files, manage temporary results and search history, or inspect and clear the index cache | **History & storage** |
+| Change the team server address or user name and test the connection | **Cloud connection**. Choose **Save and test** to connect. [Cloud filters](Cloud-Filters.md) |
+| Export or clear application logs, show frame timings or record a trace | **Diagnostics & performance** |
+| Check the version, build information, libraries and licenses | **About** |
 
 ## Starting values
 

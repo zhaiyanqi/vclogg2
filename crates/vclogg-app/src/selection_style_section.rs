@@ -1,5 +1,4 @@
 use crate::{
-    selectable_log_text::{LogText, SelectableLogText, TextSelectionCache},
     selection_style::{
         SelectionBorder, SelectionRadius, SelectionStyles, SelectionThemeStyle, SelectionWeight,
     },
@@ -19,7 +18,7 @@ use gpui_kit::component::{
 use gpui_kit::{
     AppContext as _, Context, Entity, Hsla, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, Rgba, ScrollHandle, SharedString, StatefulInteractiveElement as _,
-    Styled as _, StyledText, Subscription, Window, div, prelude::FluentBuilder as _, px,
+    Styled as _, Subscription, Window, div, prelude::FluentBuilder as _, px,
 };
 
 #[derive(Clone, Copy)]
@@ -66,7 +65,6 @@ pub(crate) struct SelectionStyleSection {
     preview_inactive: bool,
     controls: [ThemeControls; 2],
     scroll: ScrollHandle,
-    preview_selections: TextSelectionCache<usize>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -121,7 +119,6 @@ impl SelectionStyleSection {
             preview_inactive: false,
             controls,
             scroll: ScrollHandle::new(),
-            preview_selections: TextSelectionCache::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -453,143 +450,16 @@ impl SelectionStyleSection {
             .child(inactive)
     }
 
-    fn render_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = ui_theme::palette_for_mode(if self.dark {
-            ThemeMode::Dark
-        } else {
-            ThemeMode::Light
-        });
-        let resolved = self
-            .draft
-            .theme(self.dark)
-            .resolve(self.dark, !self.preview_inactive);
-        let samples = [
-            crate::tr!("普通日志：连接已建立", "Normal log: connected").to_string(),
-            crate::tr!(
-                "ERROR  日志着色与连续选中行",
-                "ERROR  Log coloring and selected rows"
-            )
-            .to_string(),
-            crate::tr!(
-                "INFO  搜索命中与连续选中行",
-                "INFO  Search match and selected rows"
-            )
-            .to_string(),
-            crate::tr!(
-                "选中文字：中文 text sample | 未选中",
-                "Selected text: text sample | unselected"
-            )
-            .to_string(),
-        ];
-        let example_level = crate::color_labels::resolve_log_level_rules(
-            &crate::color_labels::default_log_level_rules(),
-        )
-        .matching_style("ERROR");
-        let rows = samples
-            .into_iter()
-            .enumerate()
-            .map(|(index, sample)| {
-                let text = LogText::new(sample.into());
-                let len = text.display().len();
-                let range = if index == 3 {
-                    let start = text
-                        .display()
-                        .find("中文")
-                        .or_else(|| text.display().find("text sample"))
-                        .unwrap_or(0);
-                    start..text.display().find(" | ").unwrap_or(len)
-                } else {
-                    0..0
-                };
-                let highlights = if index == 2 || index == 3 {
-                    let range = if index == 2 {
-                        0..4
-                    } else {
-                        let start = text.display().find("text").unwrap_or(0);
-                        start..start + 4
-                    };
-                    vec![(
-                        range,
-                        gpui_kit::HighlightStyle {
-                            color: Some(colors.search_match_foreground),
-                            background_color: Some(colors.search_match),
-                            ..Default::default()
-                        },
-                    )]
-                } else {
-                    Vec::new()
-                };
-                let selected = index == 1 || index == 2;
-                let highlights = resolved.row_highlights(selected, highlights);
-                let selection = self.preview_selections.handle(index, &text, window, cx);
-                let styled =
-                    StyledText::new(text.display().clone()).with_highlights(highlights.clone());
-                let preview = SelectableLogText::new(
-                    selection,
-                    index as u64,
-                    text,
-                    styled,
-                    resolved.text.background,
-                )
-                .selection_style(resolved.text, highlights)
-                .preview_range(range);
-                div()
-                    .relative()
-                    .flex_none()
-                    .px_3()
-                    .py_1()
-                    .overflow_hidden()
-                    .when(index == 1, |row| {
-                        row.when_some(example_level, |row, style| {
-                            row.bg(style.background).text_color(style.foreground)
-                        })
-                    })
-                    .when(selected, |row| {
-                        row.when_some(resolved.row_foreground, |row, color| row.text_color(color))
-                            .child(resolved.row_overlay(index == 1, index == 2, cx))
-                    })
-                    .child(preview)
-            })
-            .collect::<Vec<_>>();
-        v_flex()
-            .flex_none()
-            .gap_2()
-            .child(
-                h_flex()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_sm()
-                            .child(crate::tr!("示例预览", "Preview")),
-                    )
-                    .child(
-                        Switch::new("selection-preview-inactive")
-                            .small()
-                            .label(crate::tr!("模拟失去焦点", "Preview unfocused"))
-                            .checked(self.preview_inactive)
-                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                this.preview_inactive = *checked;
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .child(
-                v_flex()
-                    .overflow_hidden()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .bg(colors.log_background)
-                    .text_color(colors.log_text)
-                    .text_sm()
-                    .children(rows),
-            )
+    pub(crate) fn editing_dark(&self) -> bool {
+        self.dark
+    }
+    pub(crate) fn preview_inactive(&self) -> bool {
+        self.preview_inactive
     }
 }
 
 impl Render for SelectionStyleSection {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let scroll = &self.scroll;
         let fields = self.render_fields(cx);
         let fields = h_flex()
@@ -664,6 +534,15 @@ impl Render for SelectionStyleSection {
                     ),
             )
             .child(fields)
-            .child(self.render_preview(window, cx))
+            .child(
+                Switch::new("selection-preview-inactive")
+                    .small()
+                    .label(crate::tr!("模拟失去焦点", "Preview unfocused"))
+                    .checked(self.preview_inactive)
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.preview_inactive = *checked;
+                        cx.notify();
+                    })),
+            )
     }
 }

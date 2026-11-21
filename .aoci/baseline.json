@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-11-21T03:44:04Z",
-  "updated_at": "2026-11-21T04:14:18Z",
+  "updated_at": "2026-11-21T04:40:21Z",
   "files": {
     ".agents/skills/gpui-kit-design-guides/SKILL.md": {
       "role": "index",
@@ -197,9 +197,9 @@
     },
     ".agents/skills/vclogg-trace/SKILL.md": {
       "role": "index",
-      "sha256": "93775c4c64d20221e3474aba260b9d3ff0e5fd37226a5237b7efe9d82ec8d1a0",
-      "size": 11690,
-      "normalized_sha256": "93775c4c64d20221e3474aba260b9d3ff0e5fd37226a5237b7efe9d82ec8d1a0"
+      "sha256": "a1a9606073fb4ed0a705b91c3ef63a4eccaf80dd3a4f094b9ebe4d8e2e2eb535",
+      "size": 11699,
+      "normalized_sha256": "a1a9606073fb4ed0a705b91c3ef63a4eccaf80dd3a4f094b9ebe4d8e2e2eb535"
     },
     ".gitattributes": {
       "role": "index",
@@ -645,9 +645,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "bf03c9fac961e533d0d6f1e72d80b225931d8251d476a7c931f2ecc7839099dd",
-      "size": 112100,
-      "normalized_sha256": "bf03c9fac961e533d0d6f1e72d80b225931d8251d476a7c931f2ecc7839099dd"
+      "sha256": "db3933899aa13dc0999ccafd01e2f26dffe905517779632812af705ddbd5b0c5",
+      "size": 113360,
+      "normalized_sha256": "db3933899aa13dc0999ccafd01e2f26dffe905517779632812af705ddbd5b0c5"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -880,9 +880,9 @@
     },
     "crates/vclogg-app/src/app_assets.rs": {
       "role": "index",
-      "sha256": "c944e842fea2f66931b48f17dd2f49bd1d0109bc479557cecf39a7435e52fa42",
-      "size": 3593,
-      "normalized_sha256": "c944e842fea2f66931b48f17dd2f49bd1d0109bc479557cecf39a7435e52fa42"
+      "sha256": "12fdc5981d030e6305182d04d9517fa09ce88a9641a0715cfcd435ddf7807fd6",
+      "size": 3724,
+      "normalized_sha256": "12fdc5981d030e6305182d04d9517fa09ce88a9641a0715cfcd435ddf7807fd6"
     },
     "crates/vclogg-app/src/app_icon.rs": {
       "role": "index",
@@ -928,9 +928,9 @@
     },
     "crates/vclogg-app/src/color_labels_dialog.rs": {
       "role": "index",
-      "sha256": "8779633231e9abd6ff73105e01c16375da1c12efdbd044a66a34b574ec54d8b4",
-      "size": 48193,
-      "normalized_sha256": "8779633231e9abd6ff73105e01c16375da1c12efdbd044a66a34b574ec54d8b4"
+      "sha256": "b21edfe6a1352d1d6b75e797f65f711553a3545392b51c240f2b0892e8d0321e",
+      "size": 49692,
+      "normalized_sha256": "b21edfe6a1352d1d6b75e797f65f711553a3545392b51c240f2b0892e8d0321e"
     },
     "crates/vclogg-app/src/color_labels_dialog/groups.rs": {
       "role": "index",
@@ -994,9 +994,9 @@
     },
     "crates/vclogg-app/src/keyword_match_style_section.rs": {
       "role": "index",
-      "sha256": "e2409efaa27c33198a92a6308c4683884a9c16dfea8ea1ef70971c9f26017d30",
-      "size": 12279,
-      "normalized_sha256": "e2409efaa27c33198a92a6308c4683884a9c16dfea8ea1ef70971c9f26017d30"
+      "sha256": "4539466e711773bab86d55b617a0984e02123faa210f60786cd6ec08c3c1a259",
+      "size": 10678,
+      "normalized_sha256": "4539466e711773bab86d55b617a0984e02123faa210f60786cd6ec08c3c1a259"
     },
     "crates/vclogg-app/src/log_coloring.rs": {
       "role": "index",
@@ -1144,15 +1144,21 @@
     },
     "crates/vclogg-app/src/selection_style_section.rs": {
       "role": "index",
-      "sha256": "4fc1edaf4539a7230f25301b8979ef9b95aa460a996ccb436dfbe6a35a17cb69",
-      "size": 27070,
-      "normalized_sha256": "4fc1edaf4539a7230f25301b8979ef9b95aa460a996ccb436dfbe6a35a17cb69"
+      "sha256": "a7481c83a0751c22f3cbfcf242894b8cce15b586dde2213a01da696d0ae549df",
+      "size": 22060,
+      "normalized_sha256": "a7481c83a0751c22f3cbfcf242894b8cce15b586dde2213a01da696d0ae549df"
     },
     "crates/vclogg-app/src/settings_dialog.rs": {
       "role": "index",
-      "sha256": "697fa72302350bb74322879bac60b2d95fce1d7df5207d1888ddf19bb1ceb0c2",
-      "size": 198410,
-      "normalized_sha256": "697fa72302350bb74322879bac60b2d95fce1d7df5207d1888ddf19bb1ceb0c2"
+      "sha256": "ff0b53d55e96fe692e472b1611ec52e4916bae9f45c301d52d0c432335ac7ec2",
+      "size": 186214,
+      "normalized_sha256": "ff0b53d55e96fe692e472b1611ec52e4916bae9f45c301d52d0c432335ac7ec2"
+    },
+    "crates/vclogg-app/src/settings_dialog/preview.rs": {
+      "role": "index",
+      "sha256": "3698667ba8b96729215149dfa9b0ca3fa26c39c8673d0e57abda293cb0b17b85",
+      "size": 8604,
+      "normalized_sha256": "3698667ba8b96729215149dfa9b0ca3fa26c39c8673d0e57abda293cb0b17b85"
     },
     "crates/vclogg-app/src/single_instance.rs": {
       "role": "index",
@@ -1468,9 +1474,9 @@
     },
     "crates/vclogg-app/src/workspace/settings_window.rs": {
       "role": "index",
-      "sha256": "1140caee902ef7efabfa664fb733b941bdc8194c9565b8bcccc25a1d4c4e0080",
-      "size": 32642,
-      "normalized_sha256": "1140caee902ef7efabfa664fb733b941bdc8194c9565b8bcccc25a1d4c4e0080"
+      "sha256": "bcc2ed7e8bbbf704248fd2d715aa415d2cceb75a09ff9c399a87f796804fb22b",
+      "size": 32630,
+      "normalized_sha256": "bcc2ed7e8bbbf704248fd2d715aa415d2cceb75a09ff9c399a87f796804fb22b"
     },
     "crates/vclogg-app/src/workspace/settings_window/macos.rs": {
       "role": "index",
@@ -2516,15 +2522,15 @@
     },
     "wiki/en/Building.md": {
       "role": "index",
-      "sha256": "dc736ce78bdb07ebe1c7f2b59078377bfe92345610d7cfe54c8f4d15c9614580",
-      "size": 11969,
-      "normalized_sha256": "dc736ce78bdb07ebe1c7f2b59078377bfe92345610d7cfe54c8f4d15c9614580"
+      "sha256": "e98218001c99902201f1f3cc6e813c3dbddddc98a2e10240a6a529956c8b2818",
+      "size": 12003,
+      "normalized_sha256": "e98218001c99902201f1f3cc6e813c3dbddddc98a2e10240a6a529956c8b2818"
     },
     "wiki/en/Cloud-Filters.md": {
       "role": "index",
-      "sha256": "542022862644904ca23211b127eec4fee2dcb210e9638a95ba72d562d437785d",
-      "size": 5037,
-      "normalized_sha256": "542022862644904ca23211b127eec4fee2dcb210e9638a95ba72d562d437785d"
+      "sha256": "2b3e7ba8e9206b6c37638d0f21d6aaf4ad4a2859028450bc42d3f8c010ab8151",
+      "size": 5046,
+      "normalized_sha256": "2b3e7ba8e9206b6c37638d0f21d6aaf4ad4a2859028450bc42d3f8c010ab8151"
     },
     "wiki/en/Code-Signing-Policy.md": {
       "role": "index",
@@ -2612,15 +2618,15 @@
     },
     "wiki/en/Marks-and-Highlighting.md": {
       "role": "index",
-      "sha256": "3da227e5ed80f8b809c4b177bbbce322e3abe466d8bcfbd3ef9810977c726420",
-      "size": 2280,
-      "normalized_sha256": "3da227e5ed80f8b809c4b177bbbce322e3abe466d8bcfbd3ef9810977c726420"
+      "sha256": "97d9b6a544f27ca28b92a4617798c9974101d7ea7dfc8ddbc3c831a2dd7431ce",
+      "size": 2325,
+      "normalized_sha256": "97d9b6a544f27ca28b92a4617798c9974101d7ea7dfc8ddbc3c831a2dd7431ce"
     },
     "wiki/en/Opening-Files.md": {
       "role": "index",
-      "sha256": "71939b506cdc0609e70bf5dc6ece18994d160a49918594bda5aaf520c26a6520",
-      "size": 2541,
-      "normalized_sha256": "71939b506cdc0609e70bf5dc6ece18994d160a49918594bda5aaf520c26a6520"
+      "sha256": "d135f54bd81379021b4a292bf72528f25e4865618b35bb5a9db0c202a7c7cff0",
+      "size": 2540,
+      "normalized_sha256": "d135f54bd81379021b4a292bf72528f25e4865618b35bb5a9db0c202a7c7cff0"
     },
     "wiki/en/Privacy-Notice.md": {
       "role": "index",
@@ -2660,15 +2666,15 @@
     },
     "wiki/en/Search-and-Filters.md": {
       "role": "index",
-      "sha256": "d8861555f73a91dd4ca50173651cc6d9989aacfcd7e751a6ab6efc7beafd3b29",
-      "size": 5648,
-      "normalized_sha256": "d8861555f73a91dd4ca50173651cc6d9989aacfcd7e751a6ab6efc7beafd3b29"
+      "sha256": "f2364e86b31330c9a91d19bbb50432fec6b5b3a28cddbb6c4d415113c38084dc",
+      "size": 5658,
+      "normalized_sha256": "f2364e86b31330c9a91d19bbb50432fec6b5b3a28cddbb6c4d415113c38084dc"
     },
     "wiki/en/Settings.md": {
       "role": "index",
-      "sha256": "b795c23301987424b5b6b7af739bb02a173535d43a79f4f338762546feee270f",
-      "size": 2871,
-      "normalized_sha256": "b795c23301987424b5b6b7af739bb02a173535d43a79f4f338762546feee270f"
+      "sha256": "8388bbe674e9000543d9501cafe6e7a97208973bbd8899d677be60fa0444d19c",
+      "size": 3023,
+      "normalized_sha256": "8388bbe674e9000543d9501cafe6e7a97208973bbd8899d677be60fa0444d19c"
     },
     "wiki/en/Technology-Stack.md": {
       "role": "index",
@@ -2678,9 +2684,9 @@
     },
     "wiki/en/Troubleshooting.md": {
       "role": "index",
-      "sha256": "08bddf439cbf9353d931f532a6baba1ec58fcdc91eaab491ae002d7c86ea91b0",
-      "size": 5624,
-      "normalized_sha256": "08bddf439cbf9353d931f532a6baba1ec58fcdc91eaab491ae002d7c86ea91b0"
+      "sha256": "ca38a9ce6b849c5c9459f14b90aad25d9529e9a685b0d1657f8bd812a9cd95cd",
+      "size": 5641,
+      "normalized_sha256": "ca38a9ce6b849c5c9459f14b90aad25d9529e9a685b0d1657f8bd812a9cd95cd"
     },
     "wiki/en/UI-Acceptance.md": {
       "role": "index",
@@ -2690,9 +2696,9 @@
     },
     "wiki/en/UI-Layout.md": {
       "role": "index",
-      "sha256": "ee0d92c8789062b789482227878c9fa3146c7ec40d147817cd72b544468b174d",
-      "size": 9490,
-      "normalized_sha256": "ee0d92c8789062b789482227878c9fa3146c7ec40d147817cd72b544468b174d"
+      "sha256": "3c773c883cd8721c837d94688c5b72671c750844629b125338814b82392f44d3",
+      "size": 9855,
+      "normalized_sha256": "3c773c883cd8721c837d94688c5b72671c750844629b125338814b82392f44d3"
     },
     "wiki/en/User-Guide.md": {
       "role": "index",
@@ -2792,15 +2798,15 @@
     },
     "wiki/zh-CN/Building.md": {
       "role": "index",
-      "sha256": "c5ba0a59bee739d4a89773ad1db35a9262d52d4d03b29e06dbe0557bad569d1f",
-      "size": 15323,
-      "normalized_sha256": "c5ba0a59bee739d4a89773ad1db35a9262d52d4d03b29e06dbe0557bad569d1f"
+      "sha256": "b25c68d9e700f15321b1ddd63e2760b5fdc2b2109c1087809c6d824a5cb4ad1d",
+      "size": 15341,
+      "normalized_sha256": "b25c68d9e700f15321b1ddd63e2760b5fdc2b2109c1087809c6d824a5cb4ad1d"
     },
     "wiki/zh-CN/Cloud-Filters.md": {
       "role": "index",
-      "sha256": "817455b3c30cf231aaa17d888e74ccb5feb531a7d5710a7a4ed211e1bccdc91f",
-      "size": 4712,
-      "normalized_sha256": "817455b3c30cf231aaa17d888e74ccb5feb531a7d5710a7a4ed211e1bccdc91f"
+      "sha256": "3259030628dd323d96e7dcf8177280671a6c5176fb2d1aba914b55664076f83c",
+      "size": 4718,
+      "normalized_sha256": "3259030628dd323d96e7dcf8177280671a6c5176fb2d1aba914b55664076f83c"
     },
     "wiki/zh-CN/Code-Signing-Policy.md": {
       "role": "index",
@@ -2888,15 +2894,15 @@
     },
     "wiki/zh-CN/Marks-and-Highlighting.md": {
       "role": "index",
-      "sha256": "579a9fee8fd7242a3b934610bb3355defc206c5c4b3274bd88b82a97ebd6933c",
-      "size": 2256,
-      "normalized_sha256": "579a9fee8fd7242a3b934610bb3355defc206c5c4b3274bd88b82a97ebd6933c"
+      "sha256": "0d851b527c0b88bbcb75cd3ea078c6ce7fb44495b15e724a5f518de28c2672ae",
+      "size": 2283,
+      "normalized_sha256": "0d851b527c0b88bbcb75cd3ea078c6ce7fb44495b15e724a5f518de28c2672ae"
     },
     "wiki/zh-CN/Opening-Files.md": {
       "role": "index",
-      "sha256": "3f083794494e2e590d56665ae911270778bd9f675fc071dc39c68573a361a36e",
+      "sha256": "c0dd9d5edaa11ce1e77cd855bcb88c9054e25653ba096af31b44664c4a0d6b4c",
       "size": 2525,
-      "normalized_sha256": "3f083794494e2e590d56665ae911270778bd9f675fc071dc39c68573a361a36e"
+      "normalized_sha256": "c0dd9d5edaa11ce1e77cd855bcb88c9054e25653ba096af31b44664c4a0d6b4c"
     },
     "wiki/zh-CN/Privacy-Notice.md": {
       "role": "index",
@@ -2936,15 +2942,15 @@
     },
     "wiki/zh-CN/Search-and-Filters.md": {
       "role": "index",
-      "sha256": "2ba68b7324e0bbf7d734fa38a64af7c837d54aa1ac5960e70f76276039970e76",
-      "size": 5456,
-      "normalized_sha256": "2ba68b7324e0bbf7d734fa38a64af7c837d54aa1ac5960e70f76276039970e76"
+      "sha256": "60b69b00ed5bd39675345768366f89267acf2ea4e3c1bd7e8745f731e186bc5b",
+      "size": 5465,
+      "normalized_sha256": "60b69b00ed5bd39675345768366f89267acf2ea4e3c1bd7e8745f731e186bc5b"
     },
     "wiki/zh-CN/Settings.md": {
       "role": "index",
-      "sha256": "81dea9294899d70298c97a0aa4789526fd0035c722796bb3fa14ab3a591b8225",
-      "size": 2674,
-      "normalized_sha256": "81dea9294899d70298c97a0aa4789526fd0035c722796bb3fa14ab3a591b8225"
+      "sha256": "76db719c9f297f4d2606ff50e3069067a6940959d56c4e7d8b76cafd6c25be7e",
+      "size": 2836,
+      "normalized_sha256": "76db719c9f297f4d2606ff50e3069067a6940959d56c4e7d8b76cafd6c25be7e"
     },
     "wiki/zh-CN/Technology-Stack.md": {
       "role": "index",
@@ -2954,9 +2960,9 @@
     },
     "wiki/zh-CN/Troubleshooting.md": {
       "role": "index",
-      "sha256": "8dbe192f9c9d8ba9db50a96409600f9ed8a769d407b1301e8c8ea24010afdd97",
-      "size": 6270,
-      "normalized_sha256": "8dbe192f9c9d8ba9db50a96409600f9ed8a769d407b1301e8c8ea24010afdd97"
+      "sha256": "57d790680f81caed1f94f35005ebb7dad211400162dd3b058cf85f97d38573c2",
+      "size": 6279,
+      "normalized_sha256": "57d790680f81caed1f94f35005ebb7dad211400162dd3b058cf85f97d38573c2"
     },
     "wiki/zh-CN/UI-Acceptance.md": {
       "role": "index",
@@ -2966,9 +2972,9 @@
     },
     "wiki/zh-CN/UI-Layout.md": {
       "role": "index",
-      "sha256": "d32a8cc5e4b15b56daaf66558702d134043119bdffea81426d7c0a522341e31c",
-      "size": 8804,
-      "normalized_sha256": "d32a8cc5e4b15b56daaf66558702d134043119bdffea81426d7c0a522341e31c"
+      "sha256": "b52d25e60d69bfa752bb7ca8a21657f54171aa6d09b68cd6ab8b4e3e132af723",
+      "size": 9161,
+      "normalized_sha256": "b52d25e60d69bfa752bb7ca8a21657f54171aa6d09b68cd6ab8b4e3e132af723"
     },
     "wiki/zh-CN/User-Guide.md": {
       "role": "index",

@@ -21,7 +21,7 @@ description: 解析 VCLogg2 导出的 Perfetto / Chrome Trace JSON，识别 GPUI
 
 ## 取得稳定快照
 
-手动录制在“设置 → 高级 → 性能录制”，支持开始、停止、打开目录及保存失败后重试。冷启动命令供用户执行；仅在明确获准启动时才代为运行已有可执行文件：
+手动录制在“设置 → 诊断与性能 → 性能录制”，支持开始、停止、打开目录及保存失败后重试。冷启动命令供用户执行；仅在明确获准启动时才代为运行已有可执行文件：
 
 ```sh
 ./target/release/vclogg2 --trace-startup --trace-duration 15

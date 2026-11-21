@@ -173,8 +173,47 @@ impl ColorLabelsDialog {
         self.highlight_log_levels
     }
 
-    pub(crate) fn set_log_coloring_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        self.highlight_log_levels = enabled;
+    pub(crate) fn preview_styles(
+        &self,
+        editing: bool,
+        cx: &gpui_kit::App,
+    ) -> crate::settings_dialog::preview::PreviewStyles {
+        let selection = self.selection_style.read(cx);
+        let matches = self.keyword_match.read(cx);
+        let dark = match (editing, self.active_section) {
+            (true, LogColoringSection::SelectionStyle) => selection.editing_dark(),
+            (true, LogColoringSection::KeywordMatch) => matches.editing_dark(),
+            _ => crate::ui_theme::is_dark(cx),
+        };
+        let levels = self
+            .groups
+            .iter()
+            .find(|group| group.id == self.active_group_id)
+            .filter(|_| self.highlight_log_levels)
+            .map(|group| group.resolved.clone());
+        let label = self.label_rows.first().and_then(|row| {
+            Some(HighlightStyle {
+                color: Some(row.text_color.read(cx).value()?),
+                background_color: Some(row.background_color.read(cx).value()?),
+                ..Default::default()
+            })
+        });
+        crate::settings_dialog::preview::PreviewStyles {
+            dark,
+            levels,
+            label,
+            selection: selection.draft().theme(dark).resolve(
+                dark,
+                !(editing
+                    && self.active_section == LogColoringSection::SelectionStyle
+                    && selection.preview_inactive()),
+            ),
+            matches: matches.draft(),
+        }
+    }
+
+    pub(crate) fn show_match_styles(&mut self, cx: &mut Context<Self>) {
+        self.active_section = LogColoringSection::KeywordMatch;
         cx.notify();
     }
 

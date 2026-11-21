@@ -5,13 +5,12 @@ use gpui_kit::component::{
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     h_flex,
     scroll::{Scrollbar, ScrollbarMode},
-    theme::ThemeMode,
     v_flex,
 };
 use gpui_kit::{
     AppContext as _, Context, Entity, Hsla, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, Rgba, ScrollHandle, StatefulInteractiveElement as _, Styled as _,
-    StyledText, Subscription, Window, div,
+    Subscription, Window, div,
 };
 
 use crate::{keyword_match_style::KeywordMatchStyles, ui_theme};
@@ -185,42 +184,8 @@ impl KeywordMatchStyleSection {
             )
     }
 
-    fn render_preview(&self, cx: &Context<Self>) -> impl IntoElement {
-        let palette = ui_theme::palette_for_mode(if self.dark {
-            ThemeMode::Dark
-        } else {
-            ThemeMode::Light
-        });
-        v_flex()
-            .flex_none()
-            .gap_2()
-            .child(div().text_sm().child(crate::tr!("预览", "Preview")))
-            .child(
-                v_flex()
-                    .gap_2()
-                    .p_3()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .bg(palette.log_background)
-                    .text_color(palette.log_text)
-                    .text_sm()
-                    .children([false, true].map(|quick_find| {
-                        let prefix = if quick_find {
-                            crate::tr!("页内查找：", "Quick find: ")
-                        } else {
-                            crate::tr!("搜索匹配：", "Search matches: ")
-                        };
-                        let keyword = crate::tr!("命中关键词", "matched keyword");
-                        let text = format!("{prefix}{keyword} — log message");
-                        StyledText::new(text).with_highlights([(
-                            prefix.len()..prefix.len() + keyword.len(),
-                            self.draft
-                                .style(self.dark, quick_find)
-                                .resolve(self.dark, quick_find),
-                        )])
-                    })),
-            )
+    pub(crate) fn editing_dark(&self) -> bool {
+        self.dark
     }
 }
 
@@ -301,6 +266,5 @@ impl Render for KeywordMatchStyleSection {
                         ),
                     ),
             )
-            .child(self.render_preview(cx))
     }
 }

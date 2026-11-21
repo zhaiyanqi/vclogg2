@@ -12,7 +12,7 @@ Click a source or result row and press **M**. Switch results to **Marks only** t
 
 ## Give a word a color
 
-Double-click `timeout` in the log to select the word, then press **Ctrl+D / ⌘D** to cycle its color label. The file remembers the text rule. With no text selected, the command uses the nonempty text of the selected rows. Change the palette in **Settings → Highlight → Color labels**.
+Double-click `timeout` in the log to select the word, then press **Ctrl+D / ⌘D** to cycle its color label. The file remembers the text rule. With no text selected, the command uses the nonempty text of the selected rows. Change the palette in **Settings → Highlights & annotations → Color labels**.
 
 ## Leave a note for your next session
 
@@ -20,8 +20,8 @@ Select one source row, press **N**, type **Check peer** and choose **Add**. The 
 
 ## Color matches and log levels automatically
 
-- **Search hits.** Enable **Highlight → Highlight search matches**. In **Settings → Highlight → Search matches**, choose how main-search and quick-find matches look.
-- **Log levels.** Open **Settings → Highlight → Log coloring**, choose a group suited to the log format and choose **Use this group** if it is not already active. Turn on **Enable coloring**. Rules can style the whole line or just the matched keyword. Presets include Android Logcat, Java / Spring, Python and Nginx errors.
+- **Search hits.** Enable **Highlight → Highlight search matches**. In **Settings → Highlights & annotations → Search matches**, choose how main-search and quick-find matches look.
+- **Log levels.** Open **Settings → Highlights & annotations → Log coloring**, choose a group suited to the log format and choose **Use this group** if it is not already active. Turn on **Enable coloring**. Rules can style the whole line or just the matched keyword. Presets include Android Logcat, Java / Spring, Python and Nginx errors.
 - **Selection.** The **Selection style** tab controls how selected text and rows look. Use the source line number and the mark column to identify a row even if you change the colors.
 
 [Try this on the sample log](Getting-Started.md) · [Choose a result mode](Search-and-Filters.md)

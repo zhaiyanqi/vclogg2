@@ -28,6 +28,6 @@ Only looking for one phrase somewhere on disk? Select **Directory** in the searc
 | A file open deep in a directory tree | Click its name or a folder in the toolbar path to reveal it in the left file tree. |
 | Text copied from a ticket | **File → Open clipboard as temporary file…** opens the text in an editable temporary document. [Search a ticket snippet](Editing.md#search-a-snippet-copied-from-a-ticket) |
 
-On Windows, **Tools → Settings → Advanced → File context menu** adds **使用 vclogg 打开** for the current user. On Windows 11, look under **Show more options** in Explorer.
+On Windows, **Tools → Settings → General → File context menu** adds **使用 vclogg 打开** for the current user. On Windows 11, look under **Show more options** in Explorer.
 
 If the file is still growing, leave its tab active in the foreground window. **View → Follow end** keeps the newest lines in view. [Watch a new line arrive](Live-Logs.md#watch-one-line-arrive)

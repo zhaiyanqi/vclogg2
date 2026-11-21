@@ -40,17 +40,19 @@ SettingsWindow [A094] — shared native window / 进程唯一原生窗口
 ├─ Sidebar [A309] — categories / 分类
 │  ├─ Search [A310] — 设置搜索
 │  └─ Navigation [A311]
-│     ├─ General [A312] — 常规
-│     ├─ Network [A389] — 网络
-│     ├─ Appearance [A313] — 外观
-│     ├─ Highlight [A801] — 高亮
+│     ├─ General [A312] — 通用
+│     ├─ Log reading [A313] — 日志阅读
+│     ├─ Highlights & annotations [A801] — 高亮与标注
 │     ├─ Search [A314] — 搜索
-│     ├─ History [A802] — 历史
-│     ├─ Storage [A317] — 存储
 │     ├─ Shortcuts [A318] — 快捷键
-│     ├─ Advanced [A316] — 高级
+│     ├─ History & storage [A802] — 历史与存储
+│     ├─ Cloud connection [A389] — 云端连接
+│     ├─ Diagnostics & performance [A316] — 诊断与性能
 │     └─ About [A395] — 关于
 ├─ Details [A319] — category content / 分类内容
+│  ├─ Log preview [A824] — shared by reading and highlights / 日志阅读和高亮共用实时样例
+│  ├─ Match styles [A825] — from Search to the match editor / 从搜索跳到匹配样式
+│  └─ Index cache [A317] — within History & storage / 历史与存储内的分页
 └─ Actions [A553] — restore defaults / 恢复默认设置，保存失败时可重试
 ```
 
@@ -81,7 +83,7 @@ A806/A807 用于已实现的显式编辑器，后续移动时保留编号。源�
 
 A601 同时保留在日志行的“文字标记”子菜单内；无文字标记、文档已失效、正在打开文件或状态库不可用时禁用。
 
-性能录制位于“设置 → 高级”，沿用既有编号：
+性能录制位于“设置 → 诊断与性能”，沿用既有编号：
 
 ```text
 性能录制 [A808] — 应用级 Recorder，关闭设置仍持续录制及保存
