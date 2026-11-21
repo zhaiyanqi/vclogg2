@@ -128,7 +128,7 @@ open_log.rs[RO6M]: F:为外部打开请求记录带序号和阶段耗时的诊�
 path_identity.rs[CD7M]: F:统一路径比较、映射键、去重以及目录会话的词法规范化。 | R:code:crates/vclogg-data/src/path_codec.rs | A:path_match_key、paths_match、normalized_path_match_key | S:Windows 只折叠 UTF-16 的 ASCII 大写字母，其他平台保留原路径比较。
 pending_tasks.rs[RW5S]: F:持有未完成的前台任务并在其结束时释放句柄。 | R:- | A:PendingTasks::push、pop、take_all、clear | S:任务完成回调只保留容器弱引用，移除句柄后先释放可变借用再析构。
 predefined_filters.rs[DB7L]: F:维护预定义过滤器身份、版本快照、导入和云端跟踪关系。 | R:code:crates/vclogg-app/src/cloud_filters.rs | A:FilterBranchId、FilterSnapshot、PredefinedFilter | S:名称和内容不参与身份；同一服务的跟踪引用按规范化 URL 替换。
-predefined_filters_dialog.rs[AU7L]: F:承载本地及云端预定义过滤器的编辑、导入导出和冲突处理。 | R:code:crates/vclogg-app/src/predefined_filters.rs,code:crates/vclogg-app/src/predefined_filters_dialog/cloud_edit.rs,code:crates/vclogg-app/src/cloud_filters.rs | A:PredefinedFiltersDialog、PredefinedFiltersDialogEvent | S:离线缓存导入保留冲突项，并将冲突送交单独处理。
+predefined_filters_dialog.rs[AU7L]: F:管理预定义过滤器的本地编辑、云端目录、分享、修订与冲突处理，云端页脚提供使用指南 | R:code:crates/vclogg-app/src/predefined_filters.rs,code:crates/vclogg-app/src/predefined_filters_dialog/cloud_edit.rs,code:crates/vclogg-app/src/cloud_filters.rs | A:PredefinedFiltersDialog、PredefinedFiltersDialogEvent | S:离线目录可导入缓存修订，字段冲突交给独立二级页面裁决
 rename_tab_dialog.rs[AU4T]: F:收集标签显示名并提示空白名称校验错误。 | R:- | A:RenameTabDialog::title | S:只改变标签标题，磁盘文件名保持原状。
 result_export.rs[AB7L]: F:按压缩行集流式导出本地或跨文件结果，并支持跨文件时间戳归并与临时文件。 | R:code:crates/vclogg-app/src/workspace/result_export_flow.rs,code:crates/vclogg-core/src/lib.rs | A:save、save_to_unique_temp、save_timestamp_merged_to_unique_temp | S:同目录暂存写完后才替换目标；覆盖源文件时先释放该文件的读取句柄。
 row_tag_dialog.rs[AU5L]: F:编辑行标记文本和外观，使用日志行预览调整标记位置。 | R:code:crates/vclogg-app/src/log_tag_layer.rs,code:crates/vclogg-app/src/selectable_log_text.rs | A:RowTagDialog、RowTagDialogEvent | S:-
@@ -138,7 +138,7 @@ search_context.rs[PD7L]: F:序列化搜索范围、查询标签、行选择、�
 selectable_log_text.rs[LU7L]: F:为虚拟日志行映射源文本与显示文本，注册和缓存文本选择参与者。 | R:code:crates/vclogg-app/src/selection_style.rs,code:crates/vclogg-app/src/virtual_log_lines.rs | A:LogText、SelectableLogText、TextSelectionCache | S:制表符只在排版时展开，源字节坐标仍用于匹配；缓存淘汰单独记录使用顺序。
 selection_style.rs[DU5M]: F:将明暗主题的行与文本选区偏好解析为可绘制的颜色、边框和字体样式。 | R:code:crates/vclogg-app/src/ui_theme.rs | A:SelectionStyles::resolve | S:持久化值与 GPUI 颜色和像素类型分离。
 selection_style_section.rs[AU5L]: F:按整行、文字及失焦状态组织选区样式，支持主题切换、逐项重置和搜索定位 | R:code:crates/vclogg-app/src/selection_style.rs,code:crates/vclogg-app/src/settings_dialog/layout.rs,code:crates/vclogg-app/src/settings_dialog/search.rs | A:SelectionStyleSection、locate、preview_inactive | S:搜索边框或淡化的条件属性可暂时展示对应行而不修改父设置
-settings_dialog.rs[AU7L]: F:编排九类设置的分组表单、导航和子编辑器，持有控件与自动保存草稿，协调搜索定位和共享预览 | R:code:crates/vclogg-app/src/settings_dialog/layout.rs,code:crates/vclogg-app/src/settings_dialog/search.rs,code:crates/vclogg-app/src/settings_dialog/preview.rs,code:crates/vclogg-app/src/workspace/settings_window.rs | A:SettingsDialog、SettingsCategory | S:快捷键、高亮及历史管理各自负责滚动；命中嵌套属性时须同步选中子页，预览位于详情滚动区域之外
+settings_dialog.rs[AU7L]: F:组织九类设置及其自动保存草稿、搜索定位和共享预览，在云端连接页测试会话并提供配置指南 | R:code:crates/vclogg-app/src/settings_dialog/layout.rs,code:crates/vclogg-app/src/settings_dialog/search.rs,code:crates/vclogg-app/src/settings_dialog/preview.rs,code:crates/vclogg-app/src/workspace/settings_window.rs | A:SettingsDialog、SettingsCategory | S:快捷键、高亮及历史管理各自负责滚动；定位嵌套项须切换子页，预览在详情滚动区外
 single_instance.rs[IN8L]: F:仲裁进程主实例并用本机 IPC 向已有窗口转发外部打开请求。 | R:code:crates/vclogg-app/src/main.rs,code:crates/vclogg-app/src/open_log.rs | A:acquire_or_forward、PrimaryInstance::start_listener、OpenRequest | S:Unix 套接字按用户目录身份区分；Windows 使用命名管道。
 state_store.rs[ID8L]: F:适配偏好、路径历史、标记与文件会话的应用模型和持久化记录，传递初次打开的换行值 | R:code:crates/vclogg-data/src/state_repository.rs,code:crates/vclogg-app/src/tab_resume.rs | A:StateStore、FileSessionState、AppSettings | S:并发保存后行标签基线取本窗口实际显示值，防止将另一窗口新增的标签视为本地删除
 system_fonts.rs[IU4T]: F:借用平台文本后端，为设置提供排序去重的系统字体列表 | R:code:crates/vclogg-app/src/settings_dialog.rs | A:SystemFonts::available_families | S:隐藏空名和点开头的字体，不添加 GPUI 的回退别名
@@ -376,7 +376,7 @@ Architecture.md[SG8T]: F:英文说明桌面与服务器分层、工作区、索�
 Archive.md[SC5T]: F:介绍旧 Wiki 的导入来源、36 篇原始页面与资源以及双语现行文档的维护位置 | R:code:wiki/archive/README.md,code:wiki/archive/manifest.json | A:- | S:历史记录保留原语言并排除于已发布手册和搜索索引
 Build-and-Release.md[SV7T]: F:介绍桌面及服务端发行流程、包名、签名、发布说明与桌面更新清单的兼容约定 | R:code:scripts/package-release.ps1,code:scripts/generate-update-manifest.py,code:.github/workflows/release-build.yml | A:- | S:文中称桌面包附带 ripgrep，但三个现行桌面打包脚本均未复制该工具；核验包内容应查脚本
 Building.md[SV7S]: F:介绍桌面三平台与可选服务的构建环境、验证层级，以及从诊断页或启动参数采集和解释性能记录的方法 | R:code:scripts/build-debug.sh,code:scripts/run-performance-debug.ps1 | A:英文源码构建指南 | S:帧叠层 MAX 只统计当前窗口最近最多一千次 Draw 的经过时间
-Cloud-Filters.md[SB6T]: F:用支付超时规则示范配置并测试服务器连接、下载过滤器、发布修订以及解决逐字段冲突 | R:code:wiki/en/Filter-Branch-Acceptance.md,code:wiki/en/Data-and-Privacy.md | A:英文过滤器协作教程 | S:本地解决冲突后另行发布，连接要求客户端和服务端注册方式兼容
+Cloud-Filters.md[SB6T]: F:英文讲解过滤器同步、Windows 与 Linux 服务端启动、客户端连接及下载、发布和合并操作 | R:code:server/config.example.yaml,code:wiki/en/Filter-Branch-Acceptance.md | A:connect、use-filters 章节锚点 | S:桌面注册无签名，关闭服务端签名校验仅限隔离试用；合并后的修改仍需显式提交
 Code-Signing-Policy.md[SS5T]: F:公布 Windows 安装程序和便携程序的签名范围、验证入口及拟用 SignPath 的审批职责 | R:code:wiki/en/Privacy-Notice.md,code:wiki/en/Build-and-Release.md | A:- | S:SignPath 为计划，签名状态以各发行文件为准
 Contributing.md[SC6T]: F:向贡献者说明分层、双语文档及提交格式、验证分类、兼容补丁和不得提交的私有资料 | R:code:RULES.md,code:.gitmessage,code:scripts/check-architecture.sh | A:- | S:check.sh 包含编译分析；验收报告需区分静态检查、构建、测试与窗口验收
 Data-and-Privacy.md[SS6T]: F:列明各平台数据目录、日志与诊断留存、会话隐私、备份清理及手动更新检查的数据行为 | R:code:wiki/en/Editing.md,code:wiki/en/Privacy-Notice.md | A:- | S:备份前退出共用数据根的进程，不能只复制活动 SQLite 主文件；云端会话文件无额外加密
@@ -397,14 +397,14 @@ Privacy-Notice.md[SS6T]: F:向用户披露日志读写、本地诊断、更新�
 Project-Overview.md[SG5T]: F:概述本地大日志阅读器的主要功能、发行平台、桌面分层及独立可选服务 | R:code:wiki/en/Architecture.md,code:wiki/en/Implementation-Status.md | A:英文项目概况 | S:-
 Result-Export.md[SU6T]: F:说明保存完整结果、新建临时标签和按时间跨文件合并的操作与排序 | R:code:wiki/en/examples/incident/gateway.txt,code:wiki/en/examples/incident/payments.txt | A:英文结果导出指南 | S:识别行首月日时间和一至六位小数，续行继承时间；同时间按文件顺序再按源行排序。
 Row-Tags.md[SU5T]: F:说明如何新增、复用、拖动、编辑和删除源行旁的文本标签 | R:code:wiki/en/Marks-and-Highlighting.md | A:英文行标签指南 | S:移除文字标签保留边栏标记与复用历史；源行内容不匹配时既有标签可被暂时隐藏。
-SUMMARY.md[SL5T]: F:组织英文 mdBook 从首次调查、搜索与标注到开发参考的章节顺序及嵌套关系 | R:code:wiki/en/book.toml,code:wiki/en/Home.md | A:英文手册目录 | S:-
+SUMMARY.md[SL5T]: F:排列英文手册的入门、日志操作、云端同步、设置及开发参考，声明 mdBook 的章节层级 | R:code:wiki/en/book.toml,code:wiki/en/Home.md | A:英文 mdBook 目录 | S:-
 Search-Performance.md[SP6T]: F:说明并行搜索的读数、结果压缩、重复查询缓存和性能验证边界 | R:code:crates/vclogg-core/src/search/cache.rs,code:wiki/en/Live-Logs.md | A:英文搜索性能参考 | S:缓存有 16 项与 8 MiB 双限且命中仍验证源；结果截断按源序而非并行完成序。
 Search-and-Filters.md[SU6T]: F:借助示例解释三种搜索范围、独立标签、结果模式与每文件上限，并说明搜索历史的管理位置 | R:code:wiki/en/examples/checkout.txt,code:wiki/en/Result-Export.md | A:英文搜索教程 | S:同一窗口一次执行一个搜索任务；每文件上限为零表示不限
 Settings.md[SC5T]: F:英文演示设置搜索定位、共享日志预览与新文件默认换行，列出九类偏好及起始值 | R:code:wiki/en/Keyboard-Shortcuts.md,code:wiki/en/Marks-and-Highlighting.md | A:英文设置指南 | S:首次打开才取默认换行；再次打开恢复该文件最后使用的状态
 Technology-Stack.md[SG5T]: F:映射桌面、独立服务和文档构建所用技术与组件职责，记录兼容依赖 | R:code:Cargo.toml,code:rust-toolchain.toml | A:英文技术栈参考 | S:应用目录名与 Cargo 包选择器不同，构建选用 vclogg2。
 Troubleshooting.md[SR5T]: F:借五行日志排查搜索结果、启动更新、服务器连接和平台构建问题，并列出反馈所需信息 | R:code:wiki/en/examples/checkout.txt,code:wiki/en/Search-and-Filters.md | A:英文故障排查指南 | S:-
 UI-Acceptance.md[SQ5T]: F:列出虚拟行、搜索、标注、刷新、编辑及多窗口状态的手工验收场景 | R:code:wiki/en/Archive.md | A:英文 UI 验收清单 | S:场景清单不是已执行结果，实测需另记提交、平台及观察值。
-UI-Layout.md[SU6S]: F:以稳定编号登记工作区与窗口的控件树，说明九类设置的分组、搜索命中外观和共享预览位置 | R:code:wiki/zh-CN/UI-Layout.md,code:wiki/en/Archive.md | A:英文控件层级 | S:保留停用编号，同类列表实例共用语义身份
+UI-Layout.md[SU6S]: F:用稳定编号记录工作区、弹层和设置窗口的层级，定位云端设置与过滤器页脚的文档入口 | R:code:wiki/zh-CN/UI-Layout.md,code:wiki/en/Archive.md | A:英文 UI 布局登记表 | S:编号指向语义控件，退役编号保留，重复列表实例共用编号
 User-Guide.md[SU4T]: F:将跨服务追踪、持续追加、复用团队过滤器及剪贴板调查连接到相应操作教程 | R:code:wiki/en/Result-Export.md,code:wiki/en/Live-Logs.md | A:英文常见调查入口 | S:-
 book.toml[FL4T]: F:配置英文 mdBook 源目录、站点路径及页面编辑链接 | R:code:wiki/en/SUMMARY.md | A:/vclogg2/wiki/en/ | S:缺失页面不自动创建。
 
@@ -451,7 +451,7 @@ Architecture.md[SG7T]: F:说明桌面三层和独立服务的职责、SQLite 持
 Archive.md[SG4T]: F:交代 GitHub Wiki 迁移来源、校验清单、历史资料边界与双语发布渠道 | R:code:wiki/archive/manifest.json,code:wiki/archive/README.md | A:中文归档说明 | S:原文不纳入站点或搜索索引，当前指南以主仓库双语 Markdown 为源。
 Build-and-Release.md[SV6M]: F:说明桌面与服务端的发布产物、签名、打包、发布动作及客户端更新清单 | R:code:scripts/publish-github-release.sh,code:scripts/generate-update-manifest.py | A:中文交付说明 | S:本地化发布说明按 Release 语言区拆分，缺少译文时提示原文页，兼容字段保留给旧客户端。
 Building.md[SV6M]: F:说明三平台源码构建与隔离调试环境，记录诊断与性能设置及冷启动命令的录制、存储和分析流程 | R:code:scripts/build-debug.sh,code:scripts/run-performance-debug.ps1,code:rust-toolchain.toml | A:中文源码构建指南 | S:各平台共用锁文件；跟踪区间包含等待，不能将嵌套时长累加为 CPU 时间
-Cloud-Filters.md[SU6T]: F:以团队规则演示测试云端连接、下载与发布过滤器及逐字段合并修订 | R:code:crates/vclogg-app/src/cloud_filters.rs,code:wiki/zh-CN/Filter-Branch-Acceptance.md | A:中文云端过滤器教程 | S:合并只更新本机，发布需另行提交；客户端注册协议必须兼容服务端
+Cloud-Filters.md[SU6T]: F:说明过滤器同步范围，演示下载和启动服务、设置连接及在本机使用、分享与合并团队规则 | R:code:server/config.example.yaml,code:wiki/zh-CN/Filter-Branch-Acceptance.md | A:connect、use-filters 章节锚点 | S:服务默认校验签名，桌面端注册无签名；合并仅更新本机，发布须另行提交
 Code-Signing-Policy.md[SS5T]: F:说明 Windows 正式发行物的签名范围、验证方法与计划中的 SignPath 审批角色 | R:code:wiki/zh-CN/Privacy-Notice.md | A:中文代码签名政策 | S:签名状态以每版实际文件为准，计划中的签名流程不能代替产物核验。
 Contributing.md[SG5T]: F:说明贡献的架构分工、双语文档与提交模板、验证层级和本地材料边界 | R:code:RULES.md,code:wiki/zh-CN/Architecture.md | A:中文贡献指南 | S:仅报告实际执行的验证，含 Clippy 的检查与纯静态差异检查分别记录。
 Data-and-Privacy.md[SS5T]: F:说明源日志、会话、索引、诊断及云端会话文件的存储位置和清理方式。 | R:code:wiki/zh-CN/Privacy-Notice.md,code:wiki/zh-CN/Editing.md | A:数据与隐私指南 | S:备份时需考虑 SQLite WAL 与主库的一致性。
@@ -472,19 +472,19 @@ Privacy-Notice.md[SS5T]: F:披露日志处理、本地诊断、手动版本请�
 Project-Overview.md[SG5T]: F:概述桌面日志查看器、三层 Rust 工作区、可选云端服务和发行平台。 | R:code:wiki/zh-CN/Implementation-Status.md,code:wiki/zh-CN/Technology-Stack.md | A:项目概况 | S:-
 Result-Export.md[SB5T]: F:演示按文件导出已完成的结果，以及用两个服务日志练习按时间归并。 | R:code:wiki/zh-CN/Search-and-Filters.md,code:crates/vclogg-app/src/result_export.rs | A:结果导出和时间合并教程 | S:合并保留各文件行序；导出范围受搜索上限约束且不含界面装饰。
 Row-Tags.md[SU4T]: F:演示给源行添加、复用、移动和移除文字标记，区分备注、圆点及名称历史。 | R:code:wiki/zh-CN/Marks-and-Highlighting.md | A:行标记操作指南 | S:-
-SUMMARY.md[SL5T]: F:定义中文 mdBook 的导航层级和章节阅读顺序。 | R:code:wiki/zh-CN/book.toml,code:wiki/zh-CN/Home.md | A:mdBook 目录 | S:-
+SUMMARY.md[SL5T]: F:组织中文 mdBook 的分组与章节顺序，将云端连接和过滤器同步列于过滤器与个人设置下 | R:code:wiki/zh-CN/book.toml,code:wiki/zh-CN/Home.md | A:中文手册导航 | S:-
 Search-Performance.md[SP5T]: F:说明源行压缩、并行顺序、重复查询缓存和解码对搜索性能与测量的影响。 | R:code:crates/vclogg-core/src/search.rs,code:crates/vclogg-core/src/search/cache.rs | A:搜索性能与验证说明 | S:缓存命中仍需验证源，不能据此假设零磁盘读取。
 Search-and-Filters.md[SB5T]: F:用日志示例演示三种搜索范围、查询语法、结果上限、标记组合及从历史与存储管理查询 | R:code:wiki/zh-CN/Getting-Started.md,code:wiki/zh-CN/Result-Export.md,code:wiki/zh-CN/Search-Performance.md | A:中文搜索与过滤教程 | S:上限按每个文件生效，调整后需重新提交搜索才能改变导出的结果
 Settings.md[SU4T]: F:按任务介绍九类设置、搜索定位和实时预览，说明阅读初始值、文件换行恢复及自动保存 | R:code:wiki/zh-CN/Marks-and-Highlighting.md,code:wiki/zh-CN/Keyboard-Shortcuts.md | A:个人设置指南 | S:新文件默认换行初始关闭；已有会话恢复文件自己的状态
 Technology-Stack.md[SG5T]: F:映射 Rust、GPUI、并行搜索、编码与存储依赖到各层，并说明工作区包名。 | R:code:Cargo.toml,code:wiki/zh-CN/Project-Overview.md | A:技术栈与依赖关系 | S:桌面 crate 目录名是 vclogg-app，Cargo 包选择使用 vclogg2。
 Troubleshooting.md[SR5T]: F:按已知行号核对搜索结果，指导排查启动、更新和构建问题，并从诊断与性能页收集日志或跟踪 | R:code:wiki/zh-CN/Getting-Started.md,code:wiki/zh-CN/Building.md | A:故障排查与反馈说明 | S:-
 UI-Acceptance.md[SQ4T]: F:列出日志、搜索、编辑、跨窗、平台与恢复的手动 UI 验收场景。 | R:code:wiki/zh-CN/Implementation-Status.md,code:wiki/zh-CN/UI-Layout.md | A:UI 验收清单 | S:-
-UI-Layout.md[SU6S]: F:记录工作区与窗口的中文控件树，列出九类设置的层级、控件对齐、搜索标记和固定预览 | R:code:crates/vclogg-app/src/settings_dialog.rs,code:crates/vclogg-app/src/settings_dialog/layout.rs,code:wiki/zh-CN/Interface.md | A:中文控件布局树 | S:重排时沿用语义编号，停用控件编号继续保留
+UI-Layout.md[SU6S]: F:维护工作区及窗口的中文控件树、设置分组与交互说明，登记两个云端指南链接的位置 | R:code:crates/vclogg-app/src/settings_dialog.rs,code:crates/vclogg-app/src/predefined_filters_dialog.rs,code:wiki/zh-CN/Interface.md | A:中文 UI 布局与稳定编号 | S:控件重排保留原编号，已停用编号不可复用
 User-Guide.md[SB4T]: F:按跨服务请求、实时跟随、过滤器复用和剪贴板场景索引常用流程。 | R:code:wiki/zh-CN/Result-Export.md,code:wiki/zh-CN/Live-Logs.md,code:wiki/zh-CN/Editing.md | A:场景式使用指南 | S:-
 book.toml[FL4T]: F:指定中文版 mdBook 的源目录、站点路径和仓库编辑链接。 | R:code:wiki/zh-CN/SUMMARY.md | A:mdBook 配置 | S:禁止自动创建缺失章节。
 
 ===/<repository>/crates/vclogg-app/src/settings_dialog/===
-layout.rs[CU5S]: F:组合设置页的标题、说明、分组底色、行间分隔和尾部控件，绘制带数值的滑块与可定位设置行 | R:code:crates/vclogg-app/src/settings_dialog/search.rs | A:section、group_surface、slider、SettingsDialog::setting_row | S:行以搜索键绑定锚点并常驻预留左边线，命中时只改变边线颜色与底色
+layout.rs[CU5S]: F:组合设置分组、可搜索行及滑块，并为设置和过滤器编辑器提供支持键盘激活的外部链接 | R:code:crates/vclogg-app/src/settings_dialog/search.rs | A:external_link、section、group_surface、slider、SettingsDialog::setting_row | S:设置行按搜索键绑定滚动锚点，始终预留高亮边线
 preview.rs[AU5M]: F:把阅读与着色草稿投影到统一预览框的四行日志样例，呈现字号、间距、行号、选择与匹配样式 | R:code:crates/vclogg-app/src/settings_dialog.rs,code:crates/vclogg-app/src/color_labels_dialog.rs,code:crates/vclogg-app/src/selectable_log_text.rs | A:PreviewStyles、render_log_preview | S:两页共用样例绘制路径，选区示例采用被动绘制
 reading.rs[AU6M]: F:将字体排版、行号、日志配色、滚动和选词选项组合为五组可定位的阅读设置 | R:code:crates/vclogg-app/src/settings_dialog.rs,code:crates/vclogg-app/src/settings_dialog/layout.rs | A:SettingsDialog::render_reading | S:条件子项可因搜索命中展开；渲染沿用对话框持有的控件实体和草稿通知
 search.rs[AU6L]: F:检索双语设置名称、分类与别名，管理命中项的滚动锚点和左侧强调标记 | R:code:crates/vclogg-app/src/settings_dialog.rs,code:crates/vclogg-app/src/settings_dialog/layout.rs,code:crates/vclogg-app/src/selection_style_section.rs,code:crates/vclogg-app/src/keyword_match_style_section.rs | A:SearchOption、results、OptionLocation | S:锚点绑定实际滚动容器，定位保留输入焦点；普通设置行可直接取得同一锚点

@@ -2481,28 +2481,16 @@ impl SettingsDialog {
                 ),
                 DescriptionList::new().small().columns(1).item(
                     crate::tr!("仓库地址", "Repository URL"),
-                    Link::new("settings-about-github-link")
-                        .href(GITHUB_REPOSITORY_URL)
-                        .open_with(|href, _, _, cx| cx.open_url(href))
+                    layout::external_link(
+                        "settings-about-github-link",
+                        GITHUB_REPOSITORY_URL,
+                        GITHUB_REPOSITORY_URL,
+                        cx,
+                    )
                         .accessibility_label(crate::tr!(
                             "在浏览器中打开 VCLogg2 GitHub 仓库",
                             "Open the VCLogg2 GitHub repository in a browser",
                         ))
-                        .px_1()
-                        .rounded(cx.theme().radius)
-                        .border_1()
-                        .border_color(cx.theme().ring.opacity(0.))
-                        .text_color(cx.theme().link)
-                        .text_decoration_1()
-                        .text_decoration_color(cx.theme().link.opacity(0.5))
-                        .hover(|link| {
-                            link.text_color(cx.theme().link.opacity(0.8))
-                                .text_decoration_color(cx.theme().link)
-                        })
-                        .active(|link| link.text_color(cx.theme().link.opacity(0.6)))
-                        .focus_visible(|link| link.border_color(cx.theme().ring))
-                        .cursor_pointer()
-                        .child(GITHUB_REPOSITORY_URL)
                         .into_any_element(),
                     1,
                 ),
@@ -2854,6 +2842,15 @@ impl SettingsDialog {
             cx,
         )
         .id("settings-network-section")
+        .child(h_flex().child(layout::external_link(
+            "A830",
+            crate::tr!(
+                "https://zhaiyanqi.github.io/vclogg2/wiki/zh-CN/Cloud-Filters.html#connect",
+                "https://zhaiyanqi.github.io/vclogg2/wiki/en/Cloud-Filters.html#connect",
+            ),
+            crate::tr!("云端连接指南", "Cloud connection guide"),
+            cx,
+        )))
         .into_any_element()
     }
 

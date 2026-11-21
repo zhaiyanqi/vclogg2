@@ -21,7 +21,7 @@
 
 # Filters and preferences
 
-- [Use and share cloud filters](Cloud-Filters.md)
+- [Cloud connection and filter sync](Cloud-Filters.md)
 - [Adjust the workspace](Settings.md)
 - [Keyboard shortcuts](Keyboard-Shortcuts.md)
 - [Mouse, selection and focus](Interaction.md)

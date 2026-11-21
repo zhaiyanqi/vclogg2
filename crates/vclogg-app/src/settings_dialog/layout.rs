@@ -1,6 +1,33 @@
 //! Shared presentation for settings groups and their searchable rows.
 use super::*;
 
+pub(crate) fn external_link(
+    id: &'static str,
+    url: &'static str,
+    label: &'static str,
+    cx: &gpui_kit::App,
+) -> Link {
+    Link::new(id)
+        .href(url)
+        .open_with(|href, _, _, cx| cx.open_url(href))
+        .accessibility_label(label)
+        .px_1()
+        .rounded(cx.theme().radius)
+        .border_1()
+        .border_color(cx.theme().ring.opacity(0.))
+        .text_color(cx.theme().link)
+        .text_decoration_1()
+        .text_decoration_color(cx.theme().link.opacity(0.5))
+        .hover(|link| {
+            link.text_color(cx.theme().link.opacity(0.8))
+                .text_decoration_color(cx.theme().link)
+        })
+        .active(|link| link.text_color(cx.theme().link.opacity(0.6)))
+        .focus_visible(|link| link.border_color(cx.theme().ring))
+        .cursor_pointer()
+        .child(label)
+}
+
 pub(crate) fn group_surface(cx: &gpui_kit::App) -> gpui_kit::Div {
     v_flex()
         .bg(cx.theme().group_box)

@@ -5391,15 +5391,26 @@ impl PredefinedFiltersDialog {
                             ))
                     })
                     .when(self.active_tab == DialogTab::Cloud, |footer| {
-                        footer.child(crate::dialog_focus::dialog_cancel_action(
-                            "predefined-filter-dialog-close-action",
-                            Button::new("predefined-filter-dialog-close")
-                                .large()
-                                .outline()
-                                .w_24()
-                                .label(crate::tr!("关闭", "Close")),
-                            cx,
-                        ))
+                        footer
+                            .justify_between()
+                            .child(crate::settings_dialog::layout::external_link(
+                                "A831",
+                                crate::tr!(
+                                    "https://zhaiyanqi.github.io/vclogg2/wiki/zh-CN/Cloud-Filters.html#use-filters",
+                                    "https://zhaiyanqi.github.io/vclogg2/wiki/en/Cloud-Filters.html#use-filters",
+                                ),
+                                crate::tr!("云端过滤器使用指南", "Cloud filter guide"),
+                                cx,
+                            ))
+                            .child(crate::dialog_focus::dialog_cancel_action(
+                                "predefined-filter-dialog-close-action",
+                                Button::new("predefined-filter-dialog-close")
+                                    .large()
+                                    .outline()
+                                    .w_24()
+                                    .label(crate::tr!("关闭", "Close")),
+                                cx,
+                            ))
                     }),
             )
     }

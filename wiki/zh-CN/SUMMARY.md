@@ -21,7 +21,7 @@
 
 # 过滤器与个人设置
 
-- [下载与分享在线过滤器](Cloud-Filters.md)
+- [云端连接与过滤器同步](Cloud-Filters.md)
 - [设置与个性化](Settings.md)
 - [快捷键速查](Keyboard-Shortcuts.md)
 - [鼠标、选区与焦点](Interaction.md)
