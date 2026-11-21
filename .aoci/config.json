@@ -345,6 +345,30 @@
   "automation": {
     "mode": "auto"
   },
+  "database_sources": [
+    {
+      "source_id": "desktop",
+      "engine": "sqlite",
+      "path": ".local/aoci-schema/desktop.sqlite",
+      "namespaces": [
+        "main"
+      ],
+      "connect_timeout_seconds": 10,
+      "query_timeout_seconds": 30,
+      "enabled": false
+    },
+    {
+      "source_id": "server",
+      "engine": "sqlite",
+      "path": ".local/aoci-schema/server.sqlite",
+      "namespaces": [
+        "main"
+      ],
+      "connect_timeout_seconds": 10,
+      "query_timeout_seconds": 30,
+      "enabled": false
+    }
+  ],
   "ai": {
     "enabled": false,
     "provider": "openai-compatible",

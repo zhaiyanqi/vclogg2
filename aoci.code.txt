@@ -285,6 +285,7 @@ package-release.ps1[OV7S]: F:构建 Windows 便携 ZIP、Inno Setup 安装包与
 package-server-release.mjs[OV7S]: F:构建内嵌管理台和免 CGO 的 Windows/Linux amd64 服务端，输出发行归档与 SHA256 清单 | R:code:server/config.example.yaml,code:server/package.json,code:server/internal/config/config.go | A:--version，--output-dir，--client-key-file | S:可选公钥与标识必须成对；锁定前端依赖并检查类型，两平台打包成功后才从临时目录发布
 package-server-release.ps1[OV5T]: F:为 Windows 提供服务端打包入口，定位 Node 并将参数转交共享 Node 实现 | R:code:scripts/package-server-release.mjs | A:Version，OutputDirectory，ClientKeyFile，Help | S:PATH 无 node.exe 时也检查 npm 与 pnpm 启动器关联的运行时
 package-server-release.sh[OV4T]: F:检查 Node 可执行文件后，将参数转交给跨平台服务端发布打包器 | R:code:scripts/package-server-release.mjs | A:package-server-release.sh | S:-
+prepare-aoci-databases.py[XD5T]: F:从桌面端和服务端的建库 SQL 重建仅含结构的本地 SQLite 文件，供 AOCI 采集 | R:code:crates/vclogg-data/src/state_repository.rs,code:server/internal/store/store.go | A:python3 scripts/prepare-aoci-databases.py | S:从全新安装的 SQL 取结构，单独补入桌面固定文件索引与服务端迁移表；清空种子记录并逐库检查完整性后替换。
 publish-github-release.sh[OV7S]: F:校验现有发布标签并推送至项目远端，触发桌面与服务端发布工作流 | R:code:scripts/resolve-build-version.sh,code:scripts/check.sh | A:publish-github-release.sh <TAG> | S:工作树须干净，标签必须指向与远端 main 相同的当前提交，且远端尚无同名标签；只推送指定标签。
 resolve-build-version.sh[XV6T]: F:解析可用于构建的语义版本并输出无 v 前缀的版本号 | R:- | A:resolve-build-version.sh [--tag v<semver>] | S:显式标签优先于环境值，然后尝试 HEAD 精确标签，再退回带提交哈希的开发版本或 0.0.0。
 run-debug.ps1[XV4T]: F:以完整 Rust 回溯和锁定依赖运行桌面端调试构建，传出 Cargo 退出码 | R:- | A:run-debug.ps1 | S:-

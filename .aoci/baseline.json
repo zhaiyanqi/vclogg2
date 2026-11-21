@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-11-21T03:44:04Z",
-  "updated_at": "2026-11-21T04:01:22Z",
+  "updated_at": "2026-11-21T04:14:18Z",
   "files": {
     ".agents/skills/gpui-kit-design-guides/SKILL.md": {
       "role": "index",
@@ -645,9 +645,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "9d459eef2a78577965eece7d19621fe79ef9b93cb9f8e61a0af5d6bdf0b88808",
-      "size": 111679,
-      "normalized_sha256": "9d459eef2a78577965eece7d19621fe79ef9b93cb9f8e61a0af5d6bdf0b88808"
+      "sha256": "bf03c9fac961e533d0d6f1e72d80b225931d8251d476a7c931f2ecc7839099dd",
+      "size": 112100,
+      "normalized_sha256": "bf03c9fac961e533d0d6f1e72d80b225931d8251d476a7c931f2ecc7839099dd"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -1893,6 +1893,12 @@
       "sha256": "e3c3900e61f1bbbf520d809198aac3329d2d1bbba3f7876a9685a3fb5aba23f2",
       "size": 272,
       "normalized_sha256": "e3c3900e61f1bbbf520d809198aac3329d2d1bbba3f7876a9685a3fb5aba23f2"
+    },
+    "scripts/prepare-aoci-databases.py": {
+      "role": "index",
+      "sha256": "afbf3e5a660ffc6610f6a874e8940bc39810b79c364af47c7dc9889a78169220",
+      "size": 2552,
+      "normalized_sha256": "afbf3e5a660ffc6610f6a874e8940bc39810b79c364af47c7dc9889a78169220"
     },
     "scripts/publish-github-release.sh": {
       "role": "index",
