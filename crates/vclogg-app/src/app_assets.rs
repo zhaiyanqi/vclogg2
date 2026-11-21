@@ -66,6 +66,7 @@ gpui_kit::assets::icon_assets!(
         Keyboard,
         Database,
         Cloud,
+        CircleQuestionMark,
         Activity
     ]
 );

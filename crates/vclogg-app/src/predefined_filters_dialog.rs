@@ -5393,13 +5393,13 @@ impl PredefinedFiltersDialog {
                     .when(self.active_tab == DialogTab::Cloud, |footer| {
                         footer
                             .justify_between()
-                            .child(crate::settings_dialog::layout::external_link(
+                            .child(crate::settings_dialog::layout::help_link(
                                 "A831",
                                 crate::tr!(
                                     "https://zhaiyanqi.github.io/vclogg2/wiki/zh-CN/Cloud-Filters.html#use-filters",
                                     "https://zhaiyanqi.github.io/vclogg2/wiki/en/Cloud-Filters.html#use-filters",
                                 ),
-                                crate::tr!("云端过滤器使用指南", "Cloud filter guide"),
+                                crate::tr!("在浏览器中查看云端过滤器使用指南", "Open the cloud filter guide in a browser"),
                                 cx,
                             ))
                             .child(crate::dialog_focus::dialog_cancel_action(

@@ -2842,15 +2842,6 @@ impl SettingsDialog {
             cx,
         )
         .id("settings-network-section")
-        .child(h_flex().child(layout::external_link(
-            "A830",
-            crate::tr!(
-                "https://zhaiyanqi.github.io/vclogg2/wiki/zh-CN/Cloud-Filters.html#connect",
-                "https://zhaiyanqi.github.io/vclogg2/wiki/en/Cloud-Filters.html#connect",
-            ),
-            crate::tr!("云端连接指南", "Cloud connection guide"),
-            cx,
-        )))
         .into_any_element()
     }
 
@@ -3186,7 +3177,20 @@ impl Render for SettingsDialog {
                     .when(has_matches && active_category.shows_log_preview(), |pane| {
                         pane.child(self.render_log_preview(window, cx))
                     })
-                    .child(details),
+                    .child(details)
+                    .when(has_matches && active_category == SettingsCategory::Network, |pane| {
+                        pane.child(
+                            h_flex().flex_none().justify_end().px_4().child(layout::help_link(
+                                "A830",
+                                crate::tr!(
+                                    "https://zhaiyanqi.github.io/vclogg2/wiki/zh-CN/Cloud-Filters.html#connect",
+                                    "https://zhaiyanqi.github.io/vclogg2/wiki/en/Cloud-Filters.html#connect",
+                                ),
+                                crate::tr!("在浏览器中查看云端连接指南", "Open the cloud connection guide in a browser"),
+                                cx,
+                            )),
+                        )
+                    }),
             )
     }
 }

@@ -28,6 +28,40 @@ pub(crate) fn external_link(
         .child(label)
 }
 
+pub(crate) fn help_link(
+    id: &'static str,
+    url: &'static str,
+    label: &'static str,
+    cx: &gpui_kit::App,
+) -> Link {
+    Link::new(id)
+        .href(url)
+        .open_with(|href, _, _, cx| cx.open_url(href))
+        .accessibility_label(label)
+        .tooltip(move |window, cx| {
+            gpui_kit::component::tooltip::Tooltip::new(label).build(window, cx)
+        })
+        .flex()
+        .flex_none()
+        .size_7()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .border_1()
+        .border_color(cx.theme().transparent)
+        .text_color(cx.theme().muted_foreground)
+        .hover(|link| {
+            link.bg(cx.theme().accent)
+                .text_color(cx.theme().accent_foreground)
+        })
+        .active(|link| link.bg(cx.theme().secondary))
+        .focus_visible(|link| link.border_color(cx.theme().ring))
+        .cursor_pointer()
+        .child(
+            gpui_kit::component::Icon::new(gpui_kit::assets::IconName::CircleQuestionMark).size_4(),
+        )
+}
+
 pub(crate) fn group_surface(cx: &gpui_kit::App) -> gpui_kit::Div {
     v_flex()
         .bg(cx.theme().group_box)

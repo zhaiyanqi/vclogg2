@@ -36,7 +36,7 @@ AppShell [A001] — Root / Workspace
 └─ Root overlays [A041] — dialogs and notifications / 弹窗与通知
    └─ Predefined filters [A198]
       └─ Cloud filters footer — available with or without a connection
-         └─ Cloud filter guide [A831] — opens the usage steps in a browser
+         └─ Filter help [A831] — circled question mark at bottom left, opposite Close. Opens the usage guide
 
 SettingsWindow [A094] — shared native window / 进程唯一原生窗口
 ├─ TitleBar [A800] — native close/resize / 原生关闭与缩放
@@ -76,7 +76,7 @@ SettingsWindow [A094] — shared native window / 进程唯一原生窗口
 │  ├─ History & storage details — files, temporary results, search history, and index cache [A317]
 │  ├─ Cloud connection details — server address, user name, and connection status
 │  │  ├─ Test connection [A393] — requests a session from the configured server
-│  │  └─ Cloud connection guide [A830] — opens the Wiki setup steps in a browser
+│  │  └─ Connection help [A830] — circled question mark at bottom right, outside the scrolling form. Opens the setup guide
 │  ├─ Diagnostics details — application log, rendering performance, and performance recording
 │  └─ About details — version and build, technology stack, open-source libraries, repository link, author and licenses
 └─ Actions [A553] — restore defaults / 恢复默认设置，保存失败时可重试

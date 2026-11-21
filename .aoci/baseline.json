@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-11-21T03:44:04Z",
-  "updated_at": "2026-11-21T06:28:54Z",
+  "updated_at": "2026-11-21T06:52:47Z",
   "files": {
     ".agents/skills/gpui-kit-design-guides/SKILL.md": {
       "role": "index",
@@ -645,9 +645,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "36c9eb729a29fe6aaeab433462c81e8e0b345e8422f1558e03eb9a5550521553",
-      "size": 115124,
-      "normalized_sha256": "36c9eb729a29fe6aaeab433462c81e8e0b345e8422f1558e03eb9a5550521553"
+      "sha256": "294bdcc96b2abd9bb58fe7af54a2fd6aee2fe88c9077ea18a3af3f64d96e36c4",
+      "size": 115157,
+      "normalized_sha256": "294bdcc96b2abd9bb58fe7af54a2fd6aee2fe88c9077ea18a3af3f64d96e36c4"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -880,9 +880,9 @@
     },
     "crates/vclogg-app/src/app_assets.rs": {
       "role": "index",
-      "sha256": "12fdc5981d030e6305182d04d9517fa09ce88a9641a0715cfcd435ddf7807fd6",
-      "size": 3724,
-      "normalized_sha256": "12fdc5981d030e6305182d04d9517fa09ce88a9641a0715cfcd435ddf7807fd6"
+      "sha256": "ad9bfd49c02f1318d9421ebb952152ad17feb0210e4e414919bab976e5e8f8d7",
+      "size": 3752,
+      "normalized_sha256": "ad9bfd49c02f1318d9421ebb952152ad17feb0210e4e414919bab976e5e8f8d7"
     },
     "crates/vclogg-app/src/app_icon.rs": {
       "role": "index",
@@ -1084,9 +1084,9 @@
     },
     "crates/vclogg-app/src/predefined_filters_dialog.rs": {
       "role": "index",
-      "sha256": "2995f2ad068d70d53543023a2c72ea283e7c8a1a668a00f7077f7d14aafb6eac",
-      "size": 265044,
-      "normalized_sha256": "2995f2ad068d70d53543023a2c72ea283e7c8a1a668a00f7077f7d14aafb6eac"
+      "sha256": "ecaef95339b8475f69e93e2d924a90ecb96de80381da30a4efc8e65197f3e065",
+      "size": 265083,
+      "normalized_sha256": "ecaef95339b8475f69e93e2d924a90ecb96de80381da30a4efc8e65197f3e065"
     },
     "crates/vclogg-app/src/predefined_filters_dialog/cloud_edit.rs": {
       "role": "index",
@@ -1150,15 +1150,15 @@
     },
     "crates/vclogg-app/src/settings_dialog.rs": {
       "role": "index",
-      "sha256": "ce47e39b48a4c388403c6979e10137a7fbb2f22742017e8830ebf6dfedc1ba54",
-      "size": 138643,
-      "normalized_sha256": "ce47e39b48a4c388403c6979e10137a7fbb2f22742017e8830ebf6dfedc1ba54"
+      "sha256": "2b67c6ea5c8f62b7af04075c519db1a27bfb157bfc95c108f470271df7a27614",
+      "size": 139069,
+      "normalized_sha256": "2b67c6ea5c8f62b7af04075c519db1a27bfb157bfc95c108f470271df7a27614"
     },
     "crates/vclogg-app/src/settings_dialog/layout.rs": {
       "role": "index",
-      "sha256": "baaa680b5bbbbfedccf5c7d47397fc2cdff9bdb33edb1566c2097ef0e4b30b81",
-      "size": 3929,
-      "normalized_sha256": "baaa680b5bbbbfedccf5c7d47397fc2cdff9bdb33edb1566c2097ef0e4b30b81"
+      "sha256": "84dc5c53ed589142c3f54b4e48a1b0a6675ceb12874c52ea8fb46a1fb509e063",
+      "size": 4968,
+      "normalized_sha256": "84dc5c53ed589142c3f54b4e48a1b0a6675ceb12874c52ea8fb46a1fb509e063"
     },
     "crates/vclogg-app/src/settings_dialog/preview.rs": {
       "role": "index",
@@ -2714,9 +2714,9 @@
     },
     "wiki/en/UI-Layout.md": {
       "role": "index",
-      "sha256": "bf95b555d767e5da01ad14fe982ad9df8400e731bebf35cde34ff4ca40c7833f",
-      "size": 12331,
-      "normalized_sha256": "bf95b555d767e5da01ad14fe982ad9df8400e731bebf35cde34ff4ca40c7833f"
+      "sha256": "e5d3a1982cd702bd4a2edc071cfe09ed238ab09805f6c218c271367d28c2e237",
+      "size": 12407,
+      "normalized_sha256": "e5d3a1982cd702bd4a2edc071cfe09ed238ab09805f6c218c271367d28c2e237"
     },
     "wiki/en/User-Guide.md": {
       "role": "index",
@@ -2990,9 +2990,9 @@
     },
     "wiki/zh-CN/UI-Layout.md": {
       "role": "index",
-      "sha256": "b263ab550c19007ab74445ffc9a3e75eab2a4e747042583fa7db1d9655564f53",
-      "size": 11424,
-      "normalized_sha256": "b263ab550c19007ab74445ffc9a3e75eab2a4e747042583fa7db1d9655564f53"
+      "sha256": "5e7182fdc51efe50740414a37e88d336961c4866d3ac09a16e7d776cb40e97f8",
+      "size": 11493,
+      "normalized_sha256": "5e7182fdc51efe50740414a37e88d336961c4866d3ac09a16e7d776cb40e97f8"
     },
     "wiki/zh-CN/User-Guide.md": {
       "role": "index",
