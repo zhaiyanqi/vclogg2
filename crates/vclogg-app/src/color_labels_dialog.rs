@@ -567,7 +567,7 @@ impl ColorLabelsDialog {
                             .gap_1()
                             .child(
                                 div()
-                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                    .text_sm().font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                     .child(crate::tr!("日志级别规则", "Log-level rules")),
                             ),
                     )
@@ -601,13 +601,10 @@ impl ColorLabelsDialog {
             .child(div().id("log-coloring-table-horizontal").relative().flex_1().min_h_0().min_w_0()
                 .overflow_x_scroll().track_scroll(&self.groups[self.selected_group].horizontal_scroll)
                 .child(
-                v_flex().min_w(rems(42.)).h_full()
+                crate::settings_dialog::layout::group_surface(cx).min_w(rems(42.)).h_full()
                     .flex_1()
                     .min_h_0()
                     .overflow_hidden()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
                     .child(
                         h_flex()
                             .flex_none()
@@ -842,7 +839,7 @@ impl ColorLabelsDialog {
                             .gap_1()
                             .child(
                                 div()
-                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                    .text_sm().font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                     .child(crate::tr!("颜色标签", "Color labels")),
                             )
                             .child(
@@ -867,13 +864,7 @@ impl ColorLabelsDialog {
                     ),
             )
             .child(
-                v_flex()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
+                crate::settings_dialog::layout::group_surface(cx).flex_1().min_h_0().overflow_hidden()
                     .child(
                         h_flex()
                             .flex_none()

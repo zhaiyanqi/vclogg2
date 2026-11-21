@@ -51,6 +51,7 @@ SettingsWindow [A094] — shared native window / 进程唯一原生窗口
 │     ├─ Diagnostics & performance [A316] — 诊断与性能
 │     └─ About [A395] — 关于
 ├─ Details [A319] — category content / 分类内容
+│  ├─ General details — language, theme, application icon, files and tabs, and the Windows file context menu
 │  ├─ Log preview [A824] — shared by reading and highlights / 日志阅读和高亮共用实时样例
 │  ├─ Log reading details — each group shares a surface; values align at the trailing edge
 │  │  ├─ Typography — font, size and line spacing
@@ -62,16 +63,22 @@ SettingsWindow [A094] — shared native window / 进程唯一原生窗口
 │  │  │  └─ Show horizontal scrollbar [A826] — shared with the View menu
 │  │  └─ Double-click word selection
 │  │     └─ Word-boundary characters [A252]
+│  ├─ Highlight details — tabs for color labels, selection style, search matches, and log coloring
 │  ├─ Search details
 │  │  ├─ Query matching [A249] — case and regex switches
 │  │  ├─ Results and highlighting [A827] — per-file limit and match highlighting
 │  │  │  └─ Match styles [A825] — opens the shared editor
 │  │  └─ Search bar appearance [A556] — shared height and separate toolbar/field font sizes
 │  ├─ Shortcut list [A156] — files and windows, search and find, reading and annotation
-│  ├─ Test connection [A393] — requests a session from the configured server
-│  └─ Index cache [A317] — within History & storage / 历史与存储内的分页
+│  ├─ History & storage details — files, temporary results, search history, and index cache [A317]
+│  ├─ Cloud connection details — server address, user name, and connection status
+│  │  └─ Test connection [A393] — requests a session from the configured server
+│  ├─ Diagnostics details — application log, rendering performance, and performance recording
+│  └─ About details — version and build, technology stack, open-source libraries, repository link, author and licenses
 └─ Actions [A553] — restore defaults / 恢复默认设置，保存失败时可重试
 ```
+
+All nine categories use the same group headings and surfaces. Standard preference rows put the label and description on the left and the control on the right. A tinted background and leading accent mark the located option. The shared log preview stays above the scrolling reading and highlight details.
 
 Autosave replaced the settings footer’s Cancel [A554] and Save [A555] buttons. Their historical IDs remain reserved.
 

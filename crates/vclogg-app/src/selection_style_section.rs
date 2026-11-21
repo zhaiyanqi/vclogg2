@@ -1,3 +1,4 @@
+use crate::settings_dialog::layout::section;
 use crate::{
     selection_style::{
         SelectionBorder, SelectionRadius, SelectionStyles, SelectionThemeStyle, SelectionWeight,
@@ -18,7 +19,7 @@ use gpui_kit::component::{
 use gpui_kit::{
     AppContext as _, Context, Entity, Hsla, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, Rgba, ScrollHandle, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Window, div, prelude::FluentBuilder as _, px,
+    Styled as _, Subscription, Window, div, prelude::FluentBuilder as _,
 };
 
 #[derive(Clone, Copy)]
@@ -204,29 +205,15 @@ impl SelectionStyleSection {
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         let row = h_flex()
+            .px_3()
+            .py_2()
+            .min_h_10()
             .flex_none()
             .gap_3()
             .child(div().w_32().flex_none().text_sm().child(label.into()))
             .child(div().min_w_0().flex_1().child(control))
             .child(self.reset_button(setting, cx));
         self.location.mark(setting.id(), row, cx)
-    }
-
-    fn group(title: SharedString, description: SharedString, cx: &gpui_kit::App) -> gpui_kit::Div {
-        v_flex()
-            .gap_1()
-            .flex_none()
-            .child(
-                div()
-                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                    .child(title),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(description),
-            )
     }
 
     fn color_field(
@@ -380,82 +367,132 @@ impl SelectionStyleSection {
 
     fn render_fields(&self, cx: &mut Context<Self>) -> gpui_kit::Div {
         let style = self.draft.theme(self.dark);
-        let rows = v_flex()
-            .gap_3()
-            .child(Self::group(
-                crate::tr!("整行选择", "Selected rows").into(),
-                crate::tr!(
-                    "单击或多选日志行时的外观；连续行共用一个外框。",
-                    "Appearance when selecting log rows. Adjacent rows share one outline."
-                )
-                .into(),
-                cx,
-            ))
-            .child(self.color_field(
+
+        let mut rows = vec![
+            self.color_field(
                 0,
                 crate::tr!("背景色", "Background").into(),
                 Setting::RowBackground,
                 cx,
-            ))
-            .child(self.field(
+            )
+            .into_any_element(),
+            self.field(
                 crate::tr!("文字颜色", "Text color"),
                 self.foreground_control(true, cx),
                 Setting::RowForeground,
                 cx,
-            ))
-            .child(self.field(
+            )
+            .into_any_element(),
+            self.field(
                 crate::tr!("边框", "Border"),
                 self.choices(Setting::Border, cx),
                 Setting::Border,
                 cx,
-            ))
-            .when(
-                style.row_border != SelectionBorder::None
-                    || self.location.is("border-color")
-                    || self.location.is("weight"),
-                |rows| {
-                    rows.child(self.color_field(
-                        1,
-                        crate::tr!("边框颜色", "Border color").into(),
-                        Setting::BorderColor,
-                        cx,
-                    ))
-                    .child(self.field(
-                        crate::tr!("边框粗细", "Border weight"),
-                        self.choices(Setting::Weight, cx),
-                        Setting::Weight,
-                        cx,
-                    ))
-                },
             )
-            .child(self.field(
+            .into_any_element(),
+        ];
+        if style.row_border != SelectionBorder::None
+            || self.location.is("border-color")
+            || self.location.is("weight")
+        {
+            rows.extend([
+                self.color_field(
+                    1,
+                    crate::tr!("边框颜色", "Border color").into(),
+                    Setting::BorderColor,
+                    cx,
+                )
+                .into_any_element(),
+                self.field(
+                    crate::tr!("边框粗细", "Border weight"),
+                    self.choices(Setting::Weight, cx),
+                    Setting::Weight,
+                    cx,
+                )
+                .into_any_element(),
+            ]);
+        }
+        rows.push(
+            self.field(
                 crate::tr!("圆角", "Corners"),
                 self.choices(Setting::Radius, cx),
                 Setting::Radius,
                 cx,
-            ));
-        let text = v_flex().gap_3()
-            .child(Self::group(crate::tr!("文字选择", "Selected text").into(), crate::tr!("拖选或双击选词时的外观；保留原色可继续显示搜索和标签颜色。", "Appearance when dragging over text or selecting a word. Original colors preserve search and label colors.").into(), cx))
-            .child(self.color_field(2, crate::tr!("背景色", "Background").into(), Setting::TextBackground, cx))
-            .child(self.field(crate::tr!("文字颜色", "Text color"), self.foreground_control(false, cx), Setting::TextForeground, cx))
-            .child(self.field(crate::tr!("下划线", "Underline"), Switch::new("selection-underline").small().checked(style.text_underline)
-                .on_click(cx.listener(|this, checked: &bool, _, cx| { this.draft.theme_mut(this.dark).text_underline = *checked; cx.notify(); })), Setting::Underline, cx));
-        let inactive = v_flex().gap_3()
-            .child(Self::group(crate::tr!("失去焦点", "Unfocused selection").into(), crate::tr!("切换到其他区域或窗口时淡化选区，选中内容仍然保留。", "Dim selections when another region or window gains focus. The selection is retained.").into(), cx))
-            .child(self.field(crate::tr!("淡化选区", "Dim selection"), Switch::new("selection-dim-inactive").small().checked(style.dim_inactive)
-                .on_click(cx.listener(|this, checked: &bool, _, cx| { this.draft.theme_mut(this.dark).dim_inactive = *checked; cx.notify(); })), Setting::DimInactive, cx))
-            .when(style.dim_inactive || self.location.is("inactive-opacity"), |fields| fields.child(self.field(crate::tr!("保留强度", "Remaining opacity"), h_flex().gap_3()
-                .child(Slider::new(&self.controls[usize::from(self.dark)].opacity).flex_1())
-                .child(format!("{}%", style.inactive_opacity)), Setting::InactiveOpacity, cx)));
+            )
+            .into_any_element(),
+        );
+        let mut inactive = vec![
+            self.field(
+                crate::tr!("淡化选区", "Dim selection"),
+                Switch::new("selection-dim-inactive")
+                    .small()
+                    .checked(style.dim_inactive)
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.draft.theme_mut(this.dark).dim_inactive = *checked;
+                        cx.notify();
+                    })),
+                Setting::DimInactive,
+                cx,
+            )
+            .into_any_element(),
+        ];
+        if style.dim_inactive || self.location.is("inactive-opacity") {
+            inactive.push(
+                self.field(
+                    crate::tr!("保留强度", "Remaining opacity"),
+                    h_flex()
+                        .gap_3()
+                        .child(Slider::new(&self.controls[usize::from(self.dark)].opacity).flex_1())
+                        .child(format!("{}%", style.inactive_opacity)),
+                    Setting::InactiveOpacity,
+                    cx,
+                )
+                .into_any_element(),
+            );
+        }
         v_flex()
-            .gap_5()
-            .px_1()
-            .py_1()
-            .child(rows)
-            .child(div().h(px(1.)).bg(cx.theme().border))
-            .child(text)
-            .child(div().h(px(1.)).bg(cx.theme().border))
-            .child(inactive)
+            .gap_6()
+            .p_1()
+            .child(section(crate::tr!("整行选择", "Selected rows"), Some(crate::tr!(
+                "单击或多选日志行时的外观；连续行共用一个外框。",
+                "Appearance when selecting log rows. Adjacent rows share one outline.",
+            ).to_owned()), rows, cx))
+            .child(section(
+                crate::tr!("文字选择", "Selected text"),
+                Some(crate::tr!(
+                    "拖选或双击选词时的外观；保留原色可继续显示搜索和标签颜色。",
+                    "Appearance when dragging over text or selecting a word. Original colors preserve search and label colors.",
+                ).to_owned()),
+                [
+                    self.color_field(2, crate::tr!("背景色", "Background").into(), Setting::TextBackground, cx)
+                        .into_any_element(),
+                    self.field(
+                        crate::tr!("文字颜色", "Text color"),
+                        self.foreground_control(false, cx),
+                        Setting::TextForeground,
+                        cx,
+                    )
+                    .into_any_element(),
+                    self.field(
+                        crate::tr!("下划线", "Underline"),
+                        Switch::new("selection-underline")
+                            .small()
+                            .checked(style.text_underline)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.draft.theme_mut(this.dark).text_underline = *checked;
+                                cx.notify();
+                            })),
+                        Setting::Underline,
+                        cx,
+                    )
+                    .into_any_element(),
+                ],
+                cx,
+            ))
+            .child(section(crate::tr!("失去焦点", "Unfocused selection"), Some(crate::tr!(
+                "切换到其他区域或窗口时淡化选区，选中内容仍然保留。",
+                "Dim selections when another region or window gains focus. The selection is retained.",
+            ).to_owned()), inactive, cx))
     }
 
     pub(crate) fn locate(&mut self, key: Option<&'static str>, cx: &mut Context<Self>) {

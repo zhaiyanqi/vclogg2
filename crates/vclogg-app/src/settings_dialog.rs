@@ -115,8 +115,10 @@ fn theme_preference_description(preference: ThemePreference) -> &'static str {
     }
 }
 
+pub(crate) mod layout;
 pub(crate) mod preview;
 mod reading;
+use layout::{section, slider};
 pub(crate) mod search;
 use search::SearchOption;
 
@@ -583,61 +585,42 @@ impl SettingsDialog {
     }
 
     fn render_search_size_settings(&self, cx: &gpui_kit::App) -> impl IntoElement {
-        let slider_row = |label: &'static str, slider: &Entity<SliderState>| {
-            h_flex()
-                .items_center()
-                .justify_between()
-                .gap_4()
-                .child(label)
-                .child(
-                    h_flex()
-                        .w_56()
-                        .gap_3()
-                        .child(Slider::new(slider).flex_1())
-                        .child(div().w_10().text_right().text_sm().child(format!(
-                            "{}px",
-                            slider.read(cx).value().start().round() as u16
-                        ))),
+        section(
+            crate::tr!("搜索栏外观", "Search bar appearance"),
+            Some(
+                crate::tr!(
+                    "字号较大时，控件会自动增高。",
+                    "Controls grow to fit larger text."
                 )
-        };
-        preference_section(crate::tr!("搜索栏外观", "Search bar appearance"), cx)
-            .id("settings-search-toolbar-section")
-            .child(self.location.mark(
-                "height",
-                slider_row(
+                .to_owned(),
+            ),
+            [
+                self.setting_row(
+                    "height",
                     crate::tr!("共用控件高度", "Shared control height"),
-                    &self.search_toolbar_height,
-                ),
-                cx,
-            ))
-            .child(self.location.mark(
-                "toolbar-font",
-                slider_row(
-                    crate::tr!("工具栏字号", "Toolbar text size"),
-                    &self.search_toolbar_font_size,
-                ),
-                cx,
-            ))
-            .child(
-                self.location.mark(
-                    "input-font",
-                    slider_row(
-                        crate::tr!("输入框字号", "Search field text size"),
-                        &self.search_input_font_size,
-                    )
-                    .id("settings-search-input-section"),
+                    None,
+                    slider(&self.search_toolbar_height, "px", cx),
                     cx,
                 ),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(crate::tr!(
-                        "字号较大时，控件会自动增高。",
-                        "Controls grow to fit larger text."
-                    )),
-            )
+                self.setting_row(
+                    "toolbar-font",
+                    crate::tr!("工具栏字号", "Toolbar text size"),
+                    None,
+                    slider(&self.search_toolbar_font_size, "px", cx),
+                    cx,
+                ),
+                self.setting_row(
+                    "input-font",
+                    crate::tr!("输入框字号", "Search field text size"),
+                    None,
+                    slider(&self.search_input_font_size, "px", cx)
+                        .id("settings-search-input-section"),
+                    cx,
+                ),
+            ],
+            cx,
+        )
+        .id("settings-search-toolbar-section")
     }
 
     fn current_log_color_theme(cx: &gpui_kit::App) -> LogColorTheme {
@@ -1285,31 +1268,16 @@ impl SettingsDialog {
     }
 
     fn render_performance_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex()
-            .id("settings-performance-section")
-            .justify_between()
-            .items_center()
-            .gap_4()
-            .p_3()
-            .rounded(cx.theme().radius)
-            .border_1()
-            .border_color(cx.theme().border)
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_0p5()
-                    .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(
-                        crate::tr!("性能叠加层", "Performance overlay"),
-                    ))
-                    .child(div().text_sm().text_color(cx.theme().muted_foreground).child(
-                        crate::tr!(
-                            "在窗口右上角显示绘制耗时、P99、P90、最大耗时和累计帧数，帮助观察卡顿。",
-                            "Show draw time, P99, P90, maximum draw time, and frame count in the top-right corner to help spot stutters."
-                        ),
-                    )),
-            )
-            .child(
+        section(
+            crate::tr!("绘制性能", "Rendering performance"),
+            None,
+            [self.setting_row(
+                "overlay",
+                crate::tr!("性能叠加层", "Performance overlay"),
+                Some(crate::tr!(
+                    "在窗口右上角显示绘制耗时、P99、P90、最大耗时和累计帧数，帮助观察卡顿。",
+                    "Show draw time, P99, P90, maximum draw time, and frame count in the top-right corner to help spot stutters.",
+                )),
                 Switch::new("settings-performance-overlay")
                     .small()
                     .checked(self.draft.show_performance_overlay)
@@ -1318,7 +1286,11 @@ impl SettingsDialog {
                         this.draft.show_performance_overlay = *checked;
                         Self::draft_changed(cx);
                     })),
-            )
+                cx,
+            )],
+            cx,
+        )
+        .id("settings-performance-section")
     }
 
     pub fn settings(&self, cx: &gpui_kit::App) -> Result<AppSettings, String> {
@@ -1985,21 +1957,17 @@ impl SettingsDialog {
             .items_start()
             .justify_between()
             .gap_4()
-            .px_2()
+            .px_3()
             .py_2()
             .child(
                 v_flex()
                     .min_w_0()
                     .flex_1()
                     .gap_0p5()
+                    .child(div().text_sm().child(action.label()))
                     .child(
                         div()
-                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                            .child(action.label()),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
+                            .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(action.description()),
                     ),
@@ -2077,10 +2045,13 @@ impl SettingsDialog {
             .child(
                 h_flex()
                     .flex_none()
+                    .flex_wrap()
                     .gap_2()
-                    .border_b_1()
+                    .p_1()
+                    .rounded(cx.theme().radius)
+                    .border_1()
                     .border_color(cx.theme().border)
-                    .pb_2()
+                    .bg(cx.theme().group_box)
                     .children(
                         [
                             (
@@ -2306,7 +2277,7 @@ impl SettingsDialog {
                     .w_full()
                     .flex_1()
                     .min_h_0()
-                    .rounded(cx.theme().radius_lg)
+                    .rounded(cx.theme().radius)
                     .border_1()
                     .border_color(cx.theme().border)
                     .bg(cx.theme().group_box)
@@ -2321,43 +2292,58 @@ impl SettingsDialog {
     }
 
     fn render_icon_settings(&self, cx: &mut Context<Self>) -> AnyElement {
-        v_flex()
-            .id("settings-application-icon-section")
-            .gap_3()
-            .p_3()
-            .rounded(cx.theme().radius)
-            .border_1()
-            .border_color(cx.theme().border)
-            .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("应用图标", "Application icon")))
-            .child(div().text_sm().text_color(cx.theme().muted_foreground).child(crate::tr!(
+        let icons = RadioGroup::horizontal("settings-application-icon")
+            .selected_index(Some(self.draft.app_icon.index()))
+            .children(AppIcon::ALL.into_iter().map(|icon| {
+                Radio::new((
+                    gpui_kit::ElementId::from("application-icon"),
+                    icon.storage_value(),
+                ))
+                .label(icon.label())
+                .small()
+                .flex_1()
+                .min_w_0()
+                .p_2()
+                .border_1()
+                .border_color(if self.draft.app_icon == icon {
+                    cx.theme().primary
+                } else {
+                    cx.theme().border
+                })
+                .child(img(icon.image()).size_12().object_fit(ObjectFit::Contain))
+            }))
+            .on_click(cx.listener(|this, ix, _, cx| {
+                if let Some(icon) = AppIcon::ALL.get(*ix) {
+                    this.draft.app_icon = *icon;
+                    Self::draft_changed(cx);
+                }
+            }));
+
+        section(
+            crate::tr!("应用图标", "Application icon"),
+            Some(crate::tr!(
                 "选择后立即生效，下次启动继续使用。",
-                "Your choice applies immediately and is kept for the next launch."
-            )))
-            .child(
-                RadioGroup::horizontal("settings-application-icon")
-                    .selected_index(Some(self.draft.app_icon.index()))
-                    .children(AppIcon::ALL.into_iter().map(|icon| {
-                        Radio::new((gpui_kit::ElementId::from("application-icon"), icon.storage_value()))
-                            .label(icon.label())
-                            .small()
-                            .w_56()
-                            .p_2()
-                            .border_1()
-                            .border_color(if self.draft.app_icon == icon { cx.theme().primary } else { cx.theme().border })
-                            .child(img(icon.image()).size_16().object_fit(ObjectFit::Contain))
-                    }))
-                    .on_click(cx.listener(|this, ix, _, cx| {
-                        if let Some(icon) = AppIcon::ALL.get(*ix) {
-                            this.draft.app_icon = *icon;
-                            Self::draft_changed(cx);
-                        }
-                    })),
-            )
-            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(crate::tr!(
-                "更改运行中的应用图标；安装包、文件管理器和已固定快捷方式仍使用默认图标。Linux 桌面需运行安装器，显示效果取决于桌面环境。",
-                "Changes the running app icon. Packages, file managers, and pinned shortcuts keep the default. Linux desktop icons require the installer and depend on the desktop environment."
-            )))
-            .into_any_element()
+                "Your choice applies immediately and is kept for the next launch.",
+            ).to_owned()),
+            [div()
+                .px_3()
+                .py_2()
+                .child(
+                    v_flex().gap_2().child(icons).child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(crate::tr!(
+                                "更改运行中的应用图标；安装包、文件管理器和已固定快捷方式仍使用默认图标。Linux 桌面需运行安装器，显示效果取决于桌面环境。",
+                                "Changes the running app icon. Packages, file managers, and pinned shortcuts keep the default. Linux desktop icons require the installer and depend on the desktop environment.",
+                            )),
+                    ),
+                )
+                .into_any_element()],
+            cx,
+        )
+        .id("settings-application-icon-section")
+        .into_any_element()
     }
 
     fn render_about(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -2554,208 +2540,161 @@ fn about_section(
     content: impl IntoElement,
     cx: &mut Context<SettingsDialog>,
 ) -> AnyElement {
-    v_flex()
-        .id(id)
-        .gap_3()
-        .child(
-            v_flex()
-                .gap_1()
-                .child(
-                    div()
-                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                        .child(title),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(description),
-                ),
-        )
-        .child(content)
-        .into_any_element()
+    section(
+        title,
+        Some(description.to_owned()),
+        [div().px_3().py_2().child(content).into_any_element()],
+        cx,
+    )
+    .id(id)
+    .into_any_element()
 }
 
-fn preference_section(title: &'static str, cx: &gpui_kit::App) -> gpui_kit::Div {
-    v_flex()
-        .gap_3()
-        .p_3()
-        .rounded(cx.theme().radius)
-        .border_1()
-        .border_color(cx.theme().border)
-        .child(
-            div()
-                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                .child(title),
-        )
-}
 impl SettingsDialog {
     fn render_general(&self, cx: &mut Context<Self>) -> AnyElement {
+        let languages = RadioGroup::horizontal("settings-language")
+            .selected_index(Some(self.draft.language.select_index()))
+            .children(Language::ALL.into_iter().map(|language| {
+                Radio::new(format!("settings-language-{}", language.database_value()))
+                    .small()
+                    .label(language.native_name())
+            }))
+            .on_click(cx.listener(|this, selected_index: &usize, _, cx| {
+                if let Some(language) = Language::ALL.get(*selected_index).copied() {
+                    this.draft.language = language;
+                    SettingsDialog::draft_changed(cx);
+                }
+            }));
+        let themes = RadioGroup::vertical("settings-theme-preference")
+            .selected_index(Some(self.draft.theme_preference.select_index()))
+            .children(ThemePreference::ALL.into_iter().map(|preference| {
+                Radio::new(format!("settings-theme-{}", preference.database_value()))
+                    .small()
+                    .label(theme_preference_label(preference))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(theme_preference_description(preference)),
+                    )
+            }))
+            .on_click(cx.listener(|this, selected_index: &usize, _, cx| {
+                if let Some(preference) = ThemePreference::ALL.get(*selected_index).copied() {
+                    this.draft.theme_preference = preference;
+                    SettingsDialog::draft_changed(cx);
+                }
+            }));
+        let motion = Switch::new("settings-reduce-motion")
+            .small()
+            .checked(self.draft.reduce_motion)
+            .tooltip(crate::tr!("减少动态效果", "Reduce motion"))
+            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                this.draft.reduce_motion = *checked;
+                SettingsDialog::draft_changed(cx);
+            }));
+        let full_path = Switch::new("settings-show-full-path")
+            .small()
+            .checked(self.draft.show_full_path)
+            .tooltip(crate::tr!("显示完整路径", "Show full path"))
+            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                this.draft.show_full_path = *checked;
+                SettingsDialog::draft_changed(cx);
+            }));
+        let close_tab = Switch::new("settings-confirm-close-tab")
+            .small()
+            .checked(self.draft.confirm_close_tab)
+            .tooltip(crate::tr!(
+                "关闭日志标签前确认",
+                "Confirm before closing log tabs"
+            ))
+            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                this.draft.confirm_close_tab = *checked;
+                SettingsDialog::draft_changed(cx);
+            }));
+        let paste = Switch::new("settings-confirm-clipboard-paste")
+            .small()
+            .checked(self.draft.confirm_clipboard_paste)
+            .tooltip(crate::tr!("粘贴时确认", "Confirm clipboard paste"))
+            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                this.draft.confirm_clipboard_paste = *checked;
+                SettingsDialog::draft_changed(cx);
+            }));
+
         let content = v_flex()
-                    .gap_5()
-                    .child(self.location.mark("language", v_flex()
-                            .id("settings-language-section")
-                            .gap_3()
-                            .p_3()
-                            .rounded(cx.theme().radius)
-                            .border_1()
-                            .border_color(cx.theme().border)
-                            .child(
-                                v_flex()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                            .child(crate::tr!("语言", "Language")),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(if cfg!(target_os = "macos") {
-                                                crate::tr!(
-                                                    "应用界面立即切换，系统窗口菜单在下次启动时切换。",
-                                                    "The app language changes immediately. Native window menus change on the next launch.",
-                                                )
-                                            } else {
-                                                crate::tr!(
-                                                    "选择应用界面使用的语言。",
-                                                    "Choose the language used by the application interface.",
-                                                )
-                                            }),
-                                    ),
+            .gap_6()
+            .pb_4()
+            .child(
+                section(
+                    crate::tr!("语言", "Language"),
+                    Some(
+                        (if cfg!(target_os = "macos") {
+                            crate::tr!(
+                                "应用界面立即切换，系统窗口菜单在下次启动时切换。",
+                                "The app language changes immediately. Native window menus change on the next launch.",
                             )
-                            .child(
-                                RadioGroup::vertical("settings-language")
-                                    .selected_index(Some(self.draft.language.select_index()))
-                                    .children(Language::ALL.into_iter().map(|language| {
-                                        Radio::new(format!(
-                                            "settings-language-{}",
-                                            language.database_value()
-                                        ))
-                                        .small()
-                                        .label(language.native_name())
-                                    }))
-                                    .on_click(cx.listener(
-                                        |this, selected_index: &usize, _, cx| {
-                                            if let Some(language) =
-                                                Language::ALL.get(*selected_index).copied()
-                                            {
-                                                this.draft.language = language;
-                                                SettingsDialog::draft_changed(cx);
-                                            }
-                                        },
-                                    )),
-                            ), cx))
-            .child(preference_section(crate::tr!("界面主题", "Interface theme"), cx)
-                .id("settings-theme-section")
-                    .child(self.location.mark("theme", RadioGroup::vertical("settings-theme-preference")
-                            .selected_index(Some(self.draft.theme_preference.select_index()))
-                            .children(ThemePreference::ALL.into_iter().map(|preference| {
-                                Radio::new(format!(
-                                    "settings-theme-{}",
-                                    preference.database_value()
-                                ))
-                                .small()
-                                .label(theme_preference_label(preference))
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(theme_preference_description(preference)),
-                                )
-                            }))
-                            .on_click(cx.listener(|this, selected_index: &usize, _, cx| {
-                                if let Some(preference) =
-                                    ThemePreference::ALL.get(*selected_index).copied()
-                                {
-                                    this.draft.theme_preference = preference;
-                                    SettingsDialog::draft_changed(cx);
-                                }
-                            })), cx))
-                    .child(self.location.mark("motion", h_flex()
-                            .justify_between()
-                            .gap_4()
-                            .child(div().text_sm().child(crate::tr!("减少动态效果", "Reduce motion")))
-                            .child(
-                                Switch::new("settings-reduce-motion")
-                                    .small()
-                                    .checked(self.draft.reduce_motion)
-                                    .tooltip(crate::tr!("减少动态效果", "Reduce motion"))
-                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                        this.draft.reduce_motion = *checked;
-                                        SettingsDialog::draft_changed(cx);
-                                    })),
-                            ), cx)))
-            .child(self.location.mark("icon", self.render_icon_settings(cx), cx))
-            .child(preference_section(crate::tr!("文件与标签", "Files & tabs"), cx)
-                .id("settings-files-section")
-                    .child(self.location.mark("full-path", h_flex()
-                            .justify_between()
-                            .gap_4()
-                            .child(div().text_sm().child(crate::tr!("在文件工具栏显示完整路径", "Show full path in the file toolbar")))
-                            .child(
-                                Switch::new("settings-show-full-path")
-                                    .small()
-                                    .checked(self.draft.show_full_path)
-                                    .tooltip(crate::tr!("显示完整路径", "Show full path"))
-                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                        this.draft.show_full_path = *checked;
-                                        SettingsDialog::draft_changed(cx);
-                                    })),
-                            ), cx))
-                    .child(self.location.mark("close-tab", h_flex()
-                            .justify_between()
-                            .gap_4()
-                            .child(div().text_sm().child(crate::tr!("关闭日志标签前确认", "Confirm before closing log tabs")))
-                            .child(
-                                Switch::new("settings-confirm-close-tab")
-                                    .small()
-                                    .checked(self.draft.confirm_close_tab)
-                                    .tooltip(crate::tr!("关闭日志标签前确认", "Confirm before closing log tabs"))
-                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                        this.draft.confirm_close_tab = *checked;
-                                        SettingsDialog::draft_changed(cx);
-                                    })),
-                            ), cx))
-                    .child(self.location.mark("paste", h_flex()
-                            .justify_between()
-                            .gap_4()
-                            .child(div().text_sm().child(crate::tr!("粘贴时确认", "Confirm clipboard paste")))
-                            .child(
-                                Switch::new("settings-confirm-clipboard-paste")
-                                    .small()
-                                    .checked(self.draft.confirm_clipboard_paste)
-                                    .tooltip(crate::tr!("粘贴时确认", "Confirm clipboard paste"))
-                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                        this.draft.confirm_clipboard_paste = *checked;
-                                        SettingsDialog::draft_changed(cx);
-                                    })),
-                            ), cx))
-                    .child(self.location.mark("directory", v_flex()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                    .child(crate::tr!("打开目录命令", "Open-folder command")),
+                        } else {
+                            crate::tr!(
+                                "选择应用界面使用的语言。",
+                                "Choose the language used by the application interface.",
                             )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(
-                                        crate::tr!(
-                                            "留空使用系统默认程序；支持 {directory} 与 {path} 占位符，未使用时自动追加目录。",
-                                            "Leave empty to use the system default. Supports {directory} and {path}; the folder is appended when neither placeholder is used.",
-                                        ),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .id("settings-open-directory-command")
-                                    .w_full()
-                                    .child(Input::new(&self.open_directory_command).w_full()),
-                            ), cx)));
+                        })
+                        .to_string(),
+                    ),
+                    [div()
+                        .px_3()
+                        .py_2()
+                        .child(self.location.mark("language", languages, cx))
+                        .into_any_element()],
+                    cx,
+                )
+                .id("settings-language-section"),
+            )
+            .child(
+                section(
+                    crate::tr!("界面主题", "Interface theme"),
+                    None,
+                    [
+                        div()
+                            .px_3()
+                            .py_2()
+                            .child(self.location.mark("theme", themes, cx))
+                            .into_any_element(),
+                        self.setting_row("motion", crate::tr!("减少动态效果", "Reduce motion"), None, motion, cx),
+                    ],
+                    cx,
+                )
+                .id("settings-theme-section"),
+            )
+            .child(
+                self.location
+                    .mark("icon", self.render_icon_settings(cx), cx),
+            )
+            .child(
+                section(
+                    crate::tr!("文件与标签", "Files & tabs"),
+                    None,
+                    [
+                        self.setting_row("full-path", crate::tr!("在文件工具栏显示完整路径", "Show full path in the file toolbar"), None, full_path, cx),
+                        self.setting_row("close-tab", crate::tr!("关闭日志标签前确认", "Confirm before closing log tabs"), None, close_tab, cx),
+                        self.setting_row("paste", crate::tr!("粘贴时确认", "Confirm clipboard paste"), None, paste, cx),
+                        self.setting_row(
+                            "directory",
+                            crate::tr!("打开目录命令", "Open-folder command"),
+                            Some(crate::tr!(
+                                "留空使用系统默认程序；支持 {directory} 与 {path} 占位符，未使用时自动追加目录。",
+                                "Leave empty to use the system default. Supports {directory} and {path}; the folder is appended when neither placeholder is used.",
+                            )),
+                            div()
+                                .id("settings-open-directory-command")
+                                .w_48()
+                                .child(Input::new(&self.open_directory_command).w_full()),
+                            cx,
+                        ),
+                    ],
+                    cx,
+                )
+                .id("settings-files-section"),
+            );
         #[cfg(windows)]
         let content = content.child(self.location.mark(
             "explorer",
@@ -2766,90 +2705,85 @@ impl SettingsDialog {
     }
 
     fn render_search_options(&self, cx: &mut Context<Self>) -> AnyElement {
+        let case = Switch::new("settings-default-case-sensitive")
+            .small()
+            .checked(self.draft.default_case_sensitive)
+            .tooltip(crate::tr!("区分大小写", "Case-sensitive"))
+            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                this.draft.default_case_sensitive = *checked;
+                SettingsDialog::draft_changed(cx);
+            }));
+        let regex = Switch::new("settings-default-use-regex")
+            .small()
+            .checked(self.draft.default_use_regex)
+            .tooltip(crate::tr!("使用正则表达式", "Use regular expressions"))
+            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                this.draft.default_use_regex = *checked;
+                SettingsDialog::draft_changed(cx);
+            }));
+        let highlights = Switch::new("settings-highlight-matches")
+            .small()
+            .checked(self.draft.highlight_matches)
+            .tooltip(crate::tr!(
+                "高亮已提交搜索的匹配文字",
+                "Highlight matches from submitted searches",
+            ))
+            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                this.draft.highlight_matches = *checked;
+                SettingsDialog::draft_changed(cx);
+            }));
+        let styles = Button::new("settings-open-match-styles")
+            .small()
+            .ghost()
+            .label(crate::tr!("匹配样式…", "Match styles…"))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.select_category(SettingsCategory::Highlight, window, cx);
+                if let Some(editor) = &this.highlight_editor {
+                    editor.update(cx, |editor, cx| editor.show_match_styles(cx));
+                }
+            }));
+
         v_flex()
-            .gap_5()
+            .gap_6()
+            .pb_4()
             .child(
-                preference_section(crate::tr!("查询匹配", "Query matching"), cx).id("settings-search-section")
-                    .child(self.location.mark("case", h_flex()
-                            .justify_between()
-                            .gap_4()
-                            .child(div().text_sm().child(crate::tr!("区分大小写", "Case-sensitive")))
-                            .child(
-                                Switch::new("settings-default-case-sensitive")
-                                    .small()
-                                    .checked(self.draft.default_case_sensitive)
-                                    .tooltip(crate::tr!("区分大小写", "Case-sensitive"))
-                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                        this.draft.default_case_sensitive = *checked;
-                                        SettingsDialog::draft_changed(cx);
-                                    })),
-                            ), cx))
-                    .child(self.location.mark("regex", h_flex()
-                            .justify_between()
-                            .gap_4()
-                            .child(div().text_sm().child(crate::tr!("使用正则表达式", "Use regular expressions")))
-                            .child(
-                                Switch::new("settings-default-use-regex")
-                                    .small()
-                                    .checked(self.draft.default_use_regex)
-                                    .tooltip(crate::tr!("使用正则表达式", "Use regular expressions"))
-                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                        this.draft.default_use_regex = *checked;
-                                        SettingsDialog::draft_changed(cx);
-                                    })),
-                            ), cx))
+                section(
+                    crate::tr!("查询匹配", "Query matching"),
+                    None,
+                    [
+                        self.setting_row("case", crate::tr!("区分大小写", "Case-sensitive"), None, case, cx),
+                        self.setting_row("regex", crate::tr!("使用正则表达式", "Use regular expressions"), None, regex, cx),
+                    ],
+                    cx,
+                )
+                .id("settings-search-section"),
             )
-            .child(preference_section(crate::tr!("结果与高亮", "Results and highlighting"), cx)
-                    .child(self.location.mark("limit", h_flex()
-                            .justify_between()
-                            .gap_4()
-                            .child(
-                                v_flex()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                            .child(crate::tr!("每个文件的结果上限", "Result limit per file")),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(crate::tr!("设为 0 表示不限制；每个参与文件独立应用上限。", "Set to 0 for no limit. The limit is applied separately to each participating file.")),
-                                    ),
-                            )
-                            .child(
-                                NumberInput::new(&self.max_search_results)
-                                    .small()
-                                    .w_56(),
-                            ), cx))
-                    .child(self.location.mark("hits", h_flex()
-                            .justify_between()
-                            .gap_4()
-                            .child(div().text_sm().child(crate::tr!("高亮已提交搜索的匹配文字", "Highlight matches from submitted searches")))
-                            .child(
-                                Switch::new("settings-highlight-matches")
-                                    .small()
-                                    .checked(self.draft.highlight_matches)
-                                    .tooltip(crate::tr!("高亮已提交搜索的匹配文字", "Highlight matches from submitted searches"))
-                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                        this.draft.highlight_matches = *checked;
-                                        SettingsDialog::draft_changed(cx);
-                                    })),
-                            ), cx))
-            .child(
-                Button::new("settings-open-match-styles")
-                    .small()
-                    .ghost()
-                    .label(crate::tr!("匹配样式…", "Match styles…"))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.select_category(SettingsCategory::Highlight, window, cx);
-                        if let Some(editor) = &this.highlight_editor {
-                            editor.update(cx, |editor, cx| editor.show_match_styles(cx));
-                        }
-                    })),
-            )
-            )
+            .child(section(
+                crate::tr!("结果与高亮", "Results and highlighting"),
+                None,
+                [
+                    self.setting_row(
+                        "limit",
+                        crate::tr!("每个文件的结果上限", "Result limit per file"),
+                        Some(crate::tr!(
+                            "设为 0 表示不限制；每个参与文件独立应用上限。",
+                            "Set to 0 for no limit. The limit is applied separately to each participating file.",
+                        )),
+                        NumberInput::new(&self.max_search_results).small().w_48(),
+                        cx,
+                    ),
+                    self.setting_row("hits", crate::tr!(
+                        "高亮已提交搜索的匹配文字",
+                        "Highlight matches from submitted searches",
+                    ), None, highlights, cx),
+                    div()
+                        .px_3()
+                        .py_2()
+                        .child(h_flex().justify_end().child(styles))
+                        .into_any_element(),
+                ],
+                cx,
+            ))
             .child(self.render_search_size_settings(cx))
             .into_any_element()
     }
@@ -2861,130 +2795,66 @@ impl SettingsDialog {
             NetworkStatusKind::Success => cx.theme().success,
             NetworkStatusKind::Error => cx.theme().danger,
         };
-        v_flex()
-            .id("settings-network-section")
-            .gap_4()
-            .p_3()
-            .rounded(cx.theme().radius)
-            .border_1()
-            .border_color(cx.theme().border)
-            .child(
-                v_flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .font_weight(
-                                gpui_kit::FontWeight::SEMIBOLD,
-                            )
-                            .child(crate::tr!("远程服务", "Remote service")),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(
-                                cx.theme()
-                                    .muted_foreground,
-                            )
-                            .child(
-                                crate::tr!("地址和用户名自动保存。测试连接会联系服务器并获取会话 Cookie。", "The address and user name are saved automatically. Testing contacts the server and obtains a session cookie."),
-                            ),
-                    ),
-            )
-            .child(self.location.mark("server", v_flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(
-                                gpui_kit::FontWeight::SEMIBOLD,
-                            )
-                            .child(crate::tr!("服务器地址", "Server address")),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(
-                                cx.theme()
-                                    .muted_foreground,
-                            )
-                            .child(
-                                crate::tr!("支持 HTTP 或 HTTPS；建议远程服务使用 HTTPS。", "Supports HTTP or HTTPS. HTTPS is recommended for remote services."),
-                            ),
-                    )
-                    .child(
-                        Input::new(
-                            &self.network_server_url,
-                        ).id("settings-network-server")
-                        .w_full()
-                        .content_type(
-                            InputContentType::Url,
-                        )
-                        .accessibility_id("A391")
-                        .aria_label(crate::tr!("云端服务器地址", "Cloud server address"))
-                        .disabled(network_busy),
-                    ), cx))
-            .child(self.location.mark("name", v_flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(
-                                gpui_kit::FontWeight::SEMIBOLD,
-                            )
-                            .child(crate::tr!("用户名", "User name")),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(
-                                cx.theme()
-                                    .muted_foreground,
-                            )
-                            .child(
-                                crate::tr!("可填写工号或昵称，不校验身份真实性，最多 64 个字符。", "Enter an employee ID or nickname, up to 64 characters. Identity is not verified."),
-                            ),
-                    )
-                    .child(
-                        Input::new(
-                            &self.network_display_name,
-                        )
-                        .w_full()
-                        .content_type(
-                            InputContentType::Username,
-                        )
-                        .accessibility_id("A392")
-                        .aria_label(crate::tr!("云端用户名", "Cloud user name"))
-                        .disabled(network_busy),
-                    ), cx))
-            .child(
-                h_flex()
-                    .justify_end()
-                    .child(self.location.mark("connection", Button::new(
-                            "settings-network-connect",
-                        )
-                        .small()
-                        .primary()
-                        .label(crate::tr!("测试连接", "Test connection"))
-                        .loading(network_busy)
-                        .disabled(network_busy)
-                        .accessibility_id("A393")
-                        .on_click(cx.listener(
-                            |this, _, window, cx| {
-                                this.connect_network(
-                                    window, cx,
-                                )
-                            },
-                        )), cx)),
-            )
-            .child(
+        let address = Input::new(&self.network_server_url)
+            .id("settings-network-server")
+            .w_48()
+            .content_type(InputContentType::Url)
+            .accessibility_id("A391")
+            .aria_label(crate::tr!("云端服务器地址", "Cloud server address"))
+            .disabled(network_busy);
+        let name = Input::new(&self.network_display_name)
+            .w_48()
+            .content_type(InputContentType::Username)
+            .accessibility_id("A392")
+            .aria_label(crate::tr!("云端用户名", "Cloud user name"))
+            .disabled(network_busy);
+        let test_connection = Button::new("settings-network-connect")
+            .small()
+            .primary()
+            .label(crate::tr!("测试连接", "Test connection"))
+            .loading(network_busy)
+            .disabled(network_busy)
+            .accessibility_id("A393")
+            .on_click(cx.listener(|this, _, window, cx| this.connect_network(window, cx)));
+
+        section(
+            crate::tr!("远程服务", "Remote service"),
+            Some(crate::tr!(
+                "地址和用户名自动保存。测试连接会联系服务器并获取会话 Cookie。",
+                "The address and user name are saved automatically. Testing contacts the server and obtains a session cookie.",
+            ).to_owned()),
+            [
+                self.setting_row("server", crate::tr!("服务器地址", "Server address"), Some(crate::tr!(
+                    "支持 HTTP 或 HTTPS；建议远程服务使用 HTTPS。",
+                    "Supports HTTP or HTTPS. HTTPS is recommended for remote services.",
+                )), address, cx),
+                self.setting_row("name", crate::tr!("用户名", "User name"), Some(crate::tr!(
+                    "可填写工号或昵称，不校验身份真实性，最多 64 个字符。",
+                    "Enter an employee ID or nickname, up to 64 characters. Identity is not verified.",
+                )), name, cx),
                 div()
-                    .id("settings-network-status")
-                    .text_sm()
-                    .text_color(network_status_color)
+                    .px_3()
+                    .py_2()
                     .child(
-                        self.network_status.clone(),
-                    ),
-            ).into_any_element()
+                        h_flex()
+                            .gap_3()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .id("settings-network-status")
+                                    .text_sm()
+                                    .text_color(network_status_color)
+                                    .child(self.network_status.clone()),
+                            )
+                            .child(self.location.mark("connection", test_connection, cx)),
+                    )
+                    .into_any_element(),
+            ],
+            cx,
+        )
+        .id("settings-network-section")
+        .into_any_element()
     }
 
     fn render_cache(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -3014,159 +2884,140 @@ impl SettingsDialog {
             || crate::tr!("不可用", "Unavailable").to_string(),
             |path| path.display().to_string(),
         );
-        v_flex()
-            .id("settings-index-cache-section")
-            .gap_2()
-            .p_3()
-            .rounded(cx.theme().radius)
-            .border_1()
-            .border_color(cx.theme().border)
+        let open_folder = Button::new("settings-open-index-cache")
+            .small()
+            .ghost()
+            .label(crate::tr!("打开文件夹", "Open folder"))
+            .disabled(self.cache_busy || !cache_available)
+            .on_click(cx.listener(|this, _, _, cx| this.open_cache_directory(cx)));
+        let clean_cache = Button::new("settings-clear-index-cache")
+            .small()
+            .ghost()
+            .label(crate::tr!("清理缓存", "Clean cache"))
+            .loading(self.cache_busy)
+            .disabled(self.cache_busy || cache_empty || !cache_available)
+            .on_click(cx.listener(|this, _, _, cx| this.clear_cache(cx)));
+
+        section(
+            crate::tr!("索引缓存", "Index cache"),
+            Some(crate::tr!(
+                "用于加快再次打开同一代文件；清理后会在需要时安全重建。",
+                "Speeds up reopening the same file generation and is rebuilt safely when needed after cleanup.",
+            ).to_owned()),
+            [div()
+                .px_3()
+                .py_2()
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(
+                            h_flex()
+                                .justify_between()
+                                .gap_4()
+                                .child(
+                                    v_flex().min_w_0().gap_0p5().child(cache_summary).child(
+                                        div()
+                                            .truncate()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(cache_path),
+                                    ),
+                                )
+                                .child(h_flex().gap_2().child(open_folder).child(clean_cache)),
+                        )
+                        .when_some(self.cache_status.clone(), |this, status| {
+                            this.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(status),
+                            )
+                        }),
+                )
+                .into_any_element()],
+            cx,
+        )
+        .id("settings-index-cache-section")
+        .into_any_element()
+    }
+
+    fn render_diagnostics(&self, cx: &mut Context<Self>) -> AnyElement {
+        let log_entries = app_log::entry_count();
+        let clear = Button::new("settings-clear-application-log")
+            .small()
+            .outline()
+            .label(crate::tr!("清理日志", "Clear logs"))
+            .tooltip(crate::tr!(
+                "清理应用诊断缓冲和磁盘记录；不删除已导出的文件。",
+                "Clear buffered and stored application diagnostics. Exported files are kept.",
+            ))
+            .loading(self.log_clear_task.is_some())
+            .disabled(self.log_export_task.is_some() || self.log_clear_task.is_some())
+            .on_click(cx.listener(|this, _, _, cx| this.clear_application_log(cx)));
+        let export = Button::new("settings-export-application-log")
+            .small()
+            .outline()
+            .label(crate::tr!("导出日志…", "Export log…"))
+            .loading(self.log_export_task.is_some())
+            .disabled(self.log_export_task.is_some() || self.log_clear_task.is_some())
+            .on_click(cx.listener(|this, _, window, cx| this.export_application_log(window, cx)));
+
+        let level = self.setting_row(
+            "app-log",
+            crate::tr!("最低记录等级", "Minimum log level"),
+            Some(crate::tr!(
+                "按所选最低等级打印并保留最近的诊断记录；关闭后不打印也不收集新日志。",
+                "Print and retain recent diagnostics at or above the selected level. Off stops both printing and collection.",
+            )),
+            div().w_48().child(Select::new(&self.app_log_level).small()), cx,
+        );
+        let count = crate::tr_args!(
+            "当前缓冲区有 {log_entries} 条日志",
+            "{log_entries} log entries are currently buffered",
+        );
+        let actions = v_flex()
+            .px_3()
+            .py_2()
+            .gap_1()
             .child(
-                v_flex()
-                    .gap_0p5()
-                    .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("索引缓存", "Index cache")))
+                h_flex()
+                    .gap_3()
+                    .justify_between()
                     .child(
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child(crate::tr!("用于加快再次打开同一代文件；清理后会在需要时安全重建。", "Speeds up reopening the same file generation and is rebuilt safely when needed after cleanup.")),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .justify_between()
-                    .gap_4()
-                    .child(
-                        v_flex()
-                            .min_w_0()
-                            .gap_0p5()
-                            .child(cache_summary)
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(cache_path),
-                            ),
+                            .child(count),
                     )
                     .child(
                         h_flex()
                             .gap_2()
-                            .child(
-                                Button::new("settings-open-index-cache")
-                                    .small()
-                                    .ghost()
-                                    .label(crate::tr!("打开文件夹", "Open folder"))
-                                    .disabled(self.cache_busy || !cache_available)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.open_cache_directory(cx)
-                                    })),
-                            )
-                            .child(
-                                Button::new("settings-clear-index-cache")
-                                    .small()
-                                    .ghost()
-                                    .label(crate::tr!("清理缓存", "Clean cache"))
-                                    .loading(self.cache_busy)
-                                    .disabled(self.cache_busy || cache_empty || !cache_available)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.clear_cache(cx)
-                                    })),
-                            ),
+                            .flex_none()
+                            .child(self.location.mark("log-clear", clear, cx))
+                            .child(self.location.mark("log-export", export, cx)),
                     ),
             )
-            .when_some(self.cache_status.clone(), |this, status| {
-                this.child(
+            .when_some(self.log_status.clone(), |row, status| {
+                row.child(
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .child(status),
                 )
-            }).into_any_element()
-    }
-
-    fn render_diagnostics(&self, cx: &mut Context<Self>) -> AnyElement {
-        let log_entries = app_log::entry_count();
-        v_flex().gap_5()
+            });
+        v_flex()
+            .gap_6()
+            .pb_4()
             .child(
-                v_flex()
-                    .id("settings-application-log-section")
-                    .gap_3()
-                    .p_3()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .child(self.location.mark("app-log", h_flex()
-                            .justify_between()
-                            .gap_4()
-                            .child(
-                                v_flex()
-                                    .gap_0p5()
-                                    .child(
-                                        div()
-                                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                            .child(crate::tr!("应用日志", "Application log")),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(
-                                                crate::tr!("按所选最低等级打印并保留最近的诊断记录；关闭后不打印也不收集新日志。", "Print and retain recent diagnostics at or above the selected level. Off stops both printing and collection."),
-                                            ),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .w_40()
-                                    .child(Select::new(&self.app_log_level).small()),
-                            ), cx))
-                    .child(
-                        h_flex()
-                            .justify_between()
-                            .gap_4()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(crate::tr_args!(
-                                        "当前缓冲区有 {log_entries} 条日志",
-                                        "{log_entries} log entries are currently buffered",
-                                    )),
-                            )
-                            .child(
-                                h_flex().gap_2().flex_shrink_0()
-                                .child(self.location.mark("log-clear", Button::new("settings-clear-application-log")
-                                        .small()
-                                        .outline()
-                                        .label(crate::tr!("清理日志", "Clear logs"))
-                                        .tooltip(crate::tr!("清理应用诊断缓冲和磁盘记录；不删除已导出的文件。", "Clear buffered and stored application diagnostics. Exported files are kept."))
-                                        .loading(self.log_clear_task.is_some())
-                                        .disabled(self.log_export_task.is_some() || self.log_clear_task.is_some())
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.clear_application_log(cx)
-                                        })), cx))
-                                .child(self.location.mark("log-export", Button::new("settings-export-application-log")
-                                    .small()
-                                    .outline()
-                                    .label(crate::tr!("导出日志…", "Export log…"))
-                                    .loading(self.log_export_task.is_some())
-                                    .disabled(self.log_export_task.is_some() || self.log_clear_task.is_some())
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.export_application_log(window, cx)
-                                    })), cx))
-                            ),
-                    )
-                    .when_some(self.log_status.clone(), |section, status| {
-                        section.child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(status),
-                        )
-                    }),
+                section(
+                    crate::tr!("应用日志", "Application log"),
+                    None,
+                    [level, actions.into_any_element()],
+                    cx,
+                )
+                .id("settings-application-log-section"),
             )
-            .child(self.location.mark("overlay", self.render_performance_settings(cx).into_any_element(), cx))
+            .child(self.render_performance_settings(cx))
             .child(self.location.mark("trace", self.trace_recorder.clone(), cx))
             .into_any_element()
     }
@@ -3197,11 +3048,12 @@ impl SettingsDialog {
                     .min_h_0()
                     .overflow_y_scroll()
                     .when(!self.search_hits.is_empty(), |list| list.track_scroll(&self.detail_scroll))
-                    .gap_3()
+                    .gap_6().pb_4()
                     .children(ShortcutAction::groups().into_iter().map(|(title, actions)| {
-                        preference_section(title, cx).children(actions.iter().map(|&action| {
+                        let rows = actions.iter().map(|&action| {
                             self.location.mark(&format!("key-{}", action.id()), self.render_shortcut_row(action, conflicts.get(&action).map(String::as_str), cx), cx)
-                        }))
+                        }).collect::<Vec<_>>();
+                        section(title, None, rows, cx)
                     })),
             ).into_any_element()
     }
@@ -3329,9 +3181,7 @@ impl Render for SettingsDialog {
                             div()
                                 .px_4()
                                 .pt_3()
-                                .when(active_category == SettingsCategory::Reading, |title| {
-                                    title.text_lg()
-                                })
+                                .text_lg()
                                 .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                 .child(active_category.label()),
                         )

@@ -108,6 +108,9 @@ impl KeywordMatchStyleSection {
             (color.a * 100.).round() as u8
         );
         let row = h_flex()
+            .px_3()
+            .py_2()
+            .min_h_10()
             .gap_3()
             .w_full()
             .child(div().flex_1().text_sm().child(if background {
@@ -149,50 +152,53 @@ impl KeywordMatchStyleSection {
 
     fn render_group(&self, quick_find: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let style = self.draft.style(self.dark, quick_find);
-        v_flex()
-            .flex_none()
-            .gap_3()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                    .child(if quick_find {
-                        crate::tr!("页内查找", "Quick find")
-                    } else {
-                        crate::tr!("搜索匹配", "Search matches")
-                    }),
-            )
-            .child(self.render_color(quick_find, false, cx))
-            .child(self.render_color(quick_find, true, cx))
-            .child(
-                h_flex().gap_4().children(
-                    [
-                        ("bold", crate::tr!("加粗", "Bold"), style.bold),
-                        ("italic", crate::tr!("斜体", "Italic"), style.italic),
-                        (
-                            "underline",
-                            crate::tr!("下划线", "Underline"),
-                            style.underline,
-                        ),
-                    ]
-                    .map(|(id, label, checked)| {
-                        let checkbox = Checkbox::new(format!("keyword-{quick_find}-{id}"))
-                            .label(label)
-                            .checked(checked)
-                            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
-                                let style = this.draft.style_mut(this.dark, quick_find);
-                                match id {
-                                    "bold" => style.bold = *checked,
-                                    "italic" => style.italic = *checked,
-                                    _ => style.underline = *checked,
-                                }
-                                cx.notify();
-                            }));
-                        let prefix = if quick_find { "quick" } else { "match" };
-                        self.location.mark(&format!("{prefix}-{id}"), checkbox, cx)
-                    }),
-                ),
-            )
+        let title = if quick_find {
+            crate::tr!("页内查找", "Quick find")
+        } else {
+            crate::tr!("搜索匹配", "Search matches")
+        };
+        crate::settings_dialog::layout::section(
+            title,
+            None,
+            [
+                self.render_color(quick_find, false, cx).into_any_element(),
+                self.render_color(quick_find, true, cx).into_any_element(),
+                h_flex()
+                    .px_3()
+                    .py_2()
+                    .min_h_10()
+                    .gap_4()
+                    .children(
+                        [
+                            ("bold", crate::tr!("加粗", "Bold"), style.bold),
+                            ("italic", crate::tr!("斜体", "Italic"), style.italic),
+                            (
+                                "underline",
+                                crate::tr!("下划线", "Underline"),
+                                style.underline,
+                            ),
+                        ]
+                        .map(|(id, label, checked)| {
+                            let checkbox = Checkbox::new(format!("keyword-{quick_find}-{id}"))
+                                .label(label)
+                                .checked(checked)
+                                .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                                    let style = this.draft.style_mut(this.dark, quick_find);
+                                    match id {
+                                        "bold" => style.bold = *checked,
+                                        "italic" => style.italic = *checked,
+                                        _ => style.underline = *checked,
+                                    }
+                                    cx.notify();
+                                }));
+                            let prefix = if quick_find { "quick" } else { "match" };
+                            self.location.mark(&format!("{prefix}-{id}"), checkbox, cx)
+                        }),
+                    )
+                    .into_any_element(),
+            ],
+            cx,
+        )
     }
 
     pub(crate) fn locate(&mut self, key: Option<&'static str>, cx: &mut Context<Self>) {

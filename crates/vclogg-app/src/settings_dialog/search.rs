@@ -689,10 +689,9 @@ impl OptionLocation {
         div()
             .id("settings-located-option")
             .anchor_scroll(self.anchor.clone())
-            .rounded(cx.theme().radius)
-            .border_1()
-            .border_color(cx.theme().ring)
-            .bg(cx.theme().accent.opacity(0.35))
+            .border_l_2()
+            .border_color(cx.theme().primary)
+            .bg(cx.theme().accent.opacity(0.4))
             .child(control)
             .into_any_element()
     }

@@ -1,101 +1,6 @@
-//! The reading page owns its layout; the dialog owns the live draft and controls.
 use super::*;
 
-fn section(
-    title: &'static str,
-    note: Option<String>,
-    rows: impl IntoIterator<Item = AnyElement>,
-    cx: &gpui_kit::App,
-) -> gpui_kit::Div {
-    let mut surface = v_flex()
-        .bg(cx.theme().group_box)
-        .text_color(cx.theme().group_box_foreground)
-        .rounded(cx.theme().radius)
-        .border_1()
-        .border_color(cx.theme().border);
-    for (index, row) in rows.into_iter().enumerate() {
-        if index > 0 {
-            surface = surface.child(div().mx_3().h_px().flex_none().bg(cx.theme().border));
-        }
-        surface = surface.child(row);
-    }
-    v_flex()
-        .flex_none()
-        .gap_2()
-        .child(
-            div()
-                .text_sm()
-                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                .child(title),
-        )
-        .when_some(note, |group, note| {
-            group.child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(note),
-            )
-        })
-        .child(surface)
-}
-
-fn slider(state: &Entity<SliderState>, unit: &str, cx: &gpui_kit::App) -> gpui_kit::Div {
-    let value = state.read(cx).value().start().round() as u16;
-    h_flex()
-        .gap_2()
-        .w_48()
-        .child(Slider::new(state).flex_1())
-        .child(
-            div()
-                .w_12()
-                .text_right()
-                .text_sm()
-                .child(format!("{value}{unit}")),
-        )
-}
-
 impl SettingsDialog {
-    fn reading_row(
-        &self,
-        key: &'static str,
-        title: &'static str,
-        description: Option<&'static str>,
-        control: impl IntoElement,
-        cx: &gpui_kit::App,
-    ) -> AnyElement {
-        h_flex()
-            .id(key)
-            .anchor_scroll(self.location.anchor_for(key))
-            .items_center()
-            .gap_3()
-            .px_3()
-            .py_2()
-            .min_h_10()
-            .border_l_2()
-            .border_color(cx.theme().transparent)
-            .when(self.location.is(key), |row| {
-                row.border_color(cx.theme().primary)
-                    .bg(cx.theme().accent.opacity(0.4))
-            })
-            .child(
-                v_flex()
-                    .min_w_0()
-                    .flex_1()
-                    .gap_1()
-                    .child(div().text_sm().child(title))
-                    .when_some(description, |label, description| {
-                        label.child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(description),
-                        )
-                    }),
-            )
-            .child(h_flex().flex_none().justify_end().child(control))
-            .into_any_element()
-    }
-
     pub(super) fn render_reading(&self, cx: &mut Context<Self>) -> AnyElement {
         v_flex()
             .gap_6()
@@ -107,7 +12,7 @@ impl SettingsDialog {
             .child(section(
                 crate::tr!("双击选词", "Double-click word selection"),
                 None,
-                [self.reading_row(
+                [self.setting_row(
                     "words",
                     crate::tr!("分词边界字符", "Word-boundary characters"),
                     Some(crate::tr!(
@@ -145,7 +50,7 @@ impl SettingsDialog {
             crate::tr!("排版", "Typography"),
             None,
             [
-                self.reading_row(
+                self.setting_row(
                     "font",
                     crate::tr!("日志字体", "Log font"),
                     Some(crate::tr!(
@@ -155,7 +60,7 @@ impl SettingsDialog {
                     font,
                     cx,
                 ),
-                self.reading_row(
+                self.setting_row(
                     "size",
                     crate::tr!("日志字号", "Log font size"),
                     Some(crate::tr!(
@@ -165,7 +70,7 @@ impl SettingsDialog {
                     slider(&self.font_size, " px", cx),
                     cx,
                 ),
-                self.reading_row(
+                self.setting_row(
                     "spacing",
                     crate::tr!("日志行距", "Log line spacing"),
                     Some(crate::tr!(
@@ -175,7 +80,7 @@ impl SettingsDialog {
                     slider(&self.line_spacing, " px", cx),
                     cx,
                 ),
-                self.reading_row(
+                self.setting_row(
                     "wrap",
                     wrap,
                     Some(crate::tr!(
@@ -202,7 +107,7 @@ impl SettingsDialog {
         let numbers = crate::tr!("显示行号", "Show line numbers");
         let enabled = self.draft.default_show_line_numbers;
         let mut rows = vec![
-            self.reading_row(
+            self.setting_row(
                 "numbers",
                 numbers,
                 Some(crate::tr!(
@@ -225,7 +130,7 @@ impl SettingsDialog {
                 .into_iter()
                 .any(|key| self.location.is(key))
         {
-            rows.push(self.reading_row(
+            rows.push(self.setting_row(
                 "number-width",
                 crate::tr!("行号栏宽度", "Line-number column width"),
                 None,
@@ -234,7 +139,7 @@ impl SettingsDialog {
             ));
             let ink = crate::tr!("行号文字颜色", "Line-number text color");
             let bg = crate::tr!("行号背景色", "Line-number background");
-            rows.push(self.reading_row(
+            rows.push(self.setting_row(
                 "number-ink",
                 ink,
                 None,
@@ -248,7 +153,7 @@ impl SettingsDialog {
                 ),
                 cx,
             ));
-            rows.push(self.reading_row(
+            rows.push(self.setting_row(
                 "number-bg",
                 bg,
                 None,
@@ -264,7 +169,7 @@ impl SettingsDialog {
             ));
             let separators = crate::tr!("显示行号行间分隔线", "Show line-number separators");
             rows.push(
-                self.reading_row(
+                self.setting_row(
                     "number-lines",
                     separators,
                     None,
@@ -283,7 +188,7 @@ impl SettingsDialog {
         }
         let separators = crate::tr!("日志分隔线", "Log separators");
         rows.push(
-            self.reading_row(
+            self.setting_row(
                 "row-lines",
                 separators,
                 Some(crate::tr!(
@@ -366,7 +271,7 @@ impl SettingsDialog {
                 theme_name
             )),
             [
-                self.reading_row(
+                self.setting_row(
                     "log-ink",
                     text,
                     None,
@@ -380,7 +285,7 @@ impl SettingsDialog {
                     ),
                     cx,
                 ),
-                self.reading_row(
+                self.setting_row(
                     "log-bg",
                     bg,
                     None,
@@ -405,7 +310,7 @@ impl SettingsDialog {
         let horizontal = crate::tr!("显示横向滚动条", "Show horizontal scrollbar");
         let by_line = crate::tr!("按完整日志行滚动", "Scroll by complete log lines");
         let mut rows = vec![
-            self.reading_row(
+            self.setting_row(
                 "horizontal",
                 horizontal,
                 None,
@@ -419,7 +324,7 @@ impl SettingsDialog {
                     })),
                 cx,
             ),
-            self.reading_row(
+            self.setting_row(
                 "line-scroll",
                 by_line,
                 None,
@@ -438,7 +343,7 @@ impl SettingsDialog {
             || self.location.is("scroll-count")
             || self.location.is("wrap-scroll")
         {
-            rows.push(self.reading_row(
+            rows.push(self.setting_row(
                 "scroll-count",
                 crate::tr!("每次滚动行数", "Lines per scroll"),
                 Some(crate::tr!(
@@ -453,7 +358,7 @@ impl SettingsDialog {
                 "Scroll by complete log lines while wrapping"
             );
             rows.push(
-                self.reading_row(
+                self.setting_row(
                     "wrap-scroll",
                     wrap,
                     None,
@@ -473,7 +378,7 @@ impl SettingsDialog {
             || !self.draft.scroll_by_line_when_word_wrap
             || self.location.is("pixel")
         {
-            rows.push(self.reading_row(
+            rows.push(self.setting_row(
                 "pixel",
                 crate::tr!("像素滚动距离", "Pixel scroll distance"),
                 Some(crate::tr!(

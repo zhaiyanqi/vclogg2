@@ -94,36 +94,74 @@ impl ContextMenuSettings {
 
 impl Render for ContextMenuSettings {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
-            .id("settings-windows-context-menu-section")
-            .gap_2().p_3().rounded(cx.theme().radius)
-            .border_1().border_color(cx.theme().border)
-            .child(h_flex().justify_between().gap_4()
-                .child(v_flex().flex_1().min_w_0().gap_0p5()
-                    .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                        .child(crate::tr!("文件右键菜单", "File context menu")))
-                    .child(div().text_sm().text_color(cx.theme().muted_foreground)
-                        .child(crate::tr!(
-                            "在文件右键菜单中添加“使用 vclogg 打开”，仅对当前用户生效。Windows 11 中可在“显示更多选项”中找到。",
-                            "Add “使用 vclogg 打开” (Open with vclogg) to the file context menu for the current user. On Windows 11, look under Show more options."
-                        ))))
-                .child(Switch::new("settings-windows-context-menu")
-                    .small().checked(self.enabled.unwrap_or(false))
-                    .disabled(self.busy || self.enabled.is_none())
-                    .accessibility_label(crate::tr!("文件右键菜单", "File context menu"))
-                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                        this.update_registration(Some(*checked), cx);
-                    }))))
-            .when(self.busy, |view| view.child(div().text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child(crate::tr!("正在更新右键菜单状态…", "Updating context menu status…"))))
-            .when_some(self.error.clone(), |view, error| view.child(
-                h_flex().gap_2()
-                    .child(div().flex_1().min_w_0().text_sm().text_color(cx.theme().danger).child(error))
-                    .child(Button::new("settings-context-menu-retry").small()
-                        .label(crate::tr!("重新读取", "Reload status"))
-                        .on_click(cx.listener(|this, _, _, cx| this.update_registration(None, cx))))
-            ))
+        let control = Switch::new("settings-windows-context-menu")
+            .small()
+            .checked(self.enabled.unwrap_or(false))
+            .disabled(self.busy || self.enabled.is_none())
+            .accessibility_label(crate::tr!("文件右键菜单", "File context menu"))
+            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                this.update_registration(Some(*checked), cx);
+            }));
+        let row =
+            v_flex()
+                .px_3()
+                .py_2()
+                .gap_2()
+                .child(
+                    h_flex()
+                        .gap_3()
+                        .min_h_10()
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_sm()
+                                .child(crate::tr!("使用 vclogg 打开", "Open with vclogg")),
+                        )
+                        .child(control),
+                )
+                .when(self.busy, |view| {
+                    view.child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(crate::tr!(
+                                "正在更新右键菜单状态…",
+                                "Updating context menu status…"
+                            )),
+                    )
+                })
+                .when_some(self.error.clone(), |view, error| {
+                    view.child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_sm()
+                                    .text_color(cx.theme().danger)
+                                    .child(error),
+                            )
+                            .child(
+                                Button::new("settings-context-menu-retry")
+                                    .small()
+                                    .label(crate::tr!("重新读取", "Reload status"))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.update_registration(None, cx)
+                                    })),
+                            ),
+                    )
+                });
+        crate::settings_dialog::layout::section(
+            crate::tr!("文件右键菜单", "File context menu"),
+            Some(crate::tr!(
+                "在文件右键菜单中添加“使用 vclogg 打开”，仅对当前用户生效。Windows 11 中可在“显示更多选项”中找到。",
+                "Add “使用 vclogg 打开” (Open with vclogg) to the file context menu for the current user. On Windows 11, look under Show more options.",
+            ).to_owned()),
+            [row.into_any_element()],
+            cx,
+        )
+        .id("settings-windows-context-menu-section")
     }
 }
 

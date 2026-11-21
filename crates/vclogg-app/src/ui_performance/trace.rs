@@ -570,31 +570,93 @@ impl Render for Recorder {
         let write_error = capture
             .as_ref()
             .and_then(|data| data.write_error.lock().ok().and_then(|error| error.clone()));
-        v_flex().gap_2().p_3().border_1().border_color(cx.theme().border).rounded(cx.theme().radius)
-            .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("性能录制", "Performance recording")))
-            .child(div().text_sm().text_color(cx.theme().muted_foreground).child(crate::tr!(
+        crate::settings_dialog::layout::section(
+            crate::tr!("性能录制", "Performance recording"),
+            Some(crate::tr!(
                 "录制期间持续写入缓存目录，停止时仅写完剩余事件。异常退出后已写入的事件仍可用 Perfetto 打开。最多记录 20 万条事件。",
-                "Events are written to the cache folder while recording. Stopping drains remaining events. Perfetto can open written events after a crash. Up to 200,000 events are recorded."
-            )))
-            .child(h_flex().gap_2().flex_wrap()
-                .child(Button::new("trace-start").small().outline().label(crate::tr!("开始录制", "Start recording"))
-                    .disabled(is_recording() || busy || self.recording.is_some() || self.ready.is_some())
-                    .on_click(cx.listener(|this, _, _, cx| this.start(cx))))
-                .child(Button::new("trace-stop-export").small().outline().label(crate::tr!("停止录制", "Stop recording"))
-                    .disabled(busy || self.recording.is_none())
-                    .on_click(cx.listener(|this, _, _, cx| this.stop_and_save(cx))))
-                .child(Button::new("trace-export-retry").small().outline().label(crate::tr!("重试保存", "Retry save"))
-                    .disabled(busy || self.ready.is_none())
-                    .on_click(cx.listener(|this, _, _, cx| this.retry_save(cx))))
-                .child(Button::new("trace-discard").small().ghost().label(crate::tr!("放弃重试", "Dismiss retry"))
-                    .disabled(busy || self.ready.is_none())
-                    .on_click(cx.listener(|this, _, _, cx| { this.ready = None; this.status = None; cx.notify(); })))
-                .child(Button::new("trace-open-directory").small().outline().label(crate::tr!("打开目录", "Open folder"))
-                .disabled(self.directory_task.is_some()).on_click(cx.listener(|this, _, _, cx| this.open_directory(cx)))))
-            .children(write_error
-                .map(|error| div().text_sm().text_color(cx.theme().danger).child(crate::tr_args!("写入失败，将自动重试：{error}", "Write failed; retrying automatically: {error}"))))
-            .children(capture.map(|data| div().text_sm().text_color(cx.theme().muted_foreground).child(data.path.display().to_string())))
-            .children(self.status.clone().map(|status| div().text_sm().child(status)))
+                "Events are written to the cache folder while recording. Stopping drains remaining events. Perfetto can open written events after a crash. Up to 200,000 events are recorded.",
+            ).to_owned()),
+            [v_flex()
+                .px_3()
+                .py_2()
+                .gap_2()
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .flex_wrap()
+                        .child(
+                            Button::new("trace-start")
+                                .small()
+                                .outline()
+                                .label(crate::tr!("开始录制", "Start recording"))
+                                .disabled(
+                                    is_recording()
+                                        || busy
+                                        || self.recording.is_some()
+                                        || self.ready.is_some(),
+                                )
+                                .on_click(cx.listener(|this, _, _, cx| this.start(cx))),
+                        )
+                        .child(
+                            Button::new("trace-stop-export")
+                                .small()
+                                .outline()
+                                .label(crate::tr!("停止录制", "Stop recording"))
+                                .disabled(busy || self.recording.is_none())
+                                .on_click(cx.listener(|this, _, _, cx| this.stop_and_save(cx))),
+                        )
+                        .child(
+                            Button::new("trace-export-retry")
+                                .small()
+                                .outline()
+                                .label(crate::tr!("重试保存", "Retry save"))
+                                .disabled(busy || self.ready.is_none())
+                                .on_click(cx.listener(|this, _, _, cx| this.retry_save(cx))),
+                        )
+                        .child(
+                            Button::new("trace-discard")
+                                .small()
+                                .ghost()
+                                .label(crate::tr!("放弃重试", "Dismiss retry"))
+                                .disabled(busy || self.ready.is_none())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.ready = None;
+                                    this.status = None;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("trace-open-directory")
+                                .small()
+                                .outline()
+                                .label(crate::tr!("打开目录", "Open folder"))
+                                .disabled(self.directory_task.is_some())
+                                .on_click(cx.listener(|this, _, _, cx| this.open_directory(cx))),
+                        ),
+                )
+                .children(write_error.map(|error| {
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(crate::tr_args!(
+                            "写入失败，将自动重试：{error}",
+                            "Write failed; retrying automatically: {error}"
+                        ))
+                }))
+                .children(capture.map(|data| {
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(data.path.display().to_string())
+                }))
+                .children(
+                    self.status
+                        .clone()
+                        .map(|status| div().text_sm().child(status)),
+                )
+                .into_any_element()],
+            cx,
+        )
     }
 }
 

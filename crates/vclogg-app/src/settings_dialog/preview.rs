@@ -194,29 +194,21 @@ impl SettingsDialog {
                     .child(cell)
             })
             .collect::<Vec<_>>();
-        let reading = self.active_category == SettingsCategory::Reading;
         v_flex()
             .id("settings-log-preview")
             .mx_4()
             .flex_none()
-            .when(reading, |panel| {
-                panel
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .overflow_hidden()
-            })
-            .when(!reading, |panel| panel.gap_1())
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .overflow_hidden()
             .child(
                 div()
-                    .when(reading, |header| {
-                        header
-                            .px_3()
-                            .py_1()
-                            .bg(cx.theme().group_box)
-                            .border_b_1()
-                            .border_color(cx.theme().border)
-                    })
+                    .px_3()
+                    .py_1()
+                    .bg(cx.theme().group_box)
+                    .border_b_1()
+                    .border_color(cx.theme().border)
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .child(crate::tr!("日志预览", "Log preview")),
@@ -226,12 +218,6 @@ impl SettingsDialog {
                     .id("settings-preview-lines")
                     .max_h(rems(9.))
                     .overflow_y_scrollbar()
-                    .when(!reading, |lines| {
-                        lines
-                            .rounded(cx.theme().radius)
-                            .border_1()
-                            .border_color(cx.theme().border)
-                    })
                     .font_family(font)
                     .text_size(px(f32::from(size)))
                     .text_color(text_color)
