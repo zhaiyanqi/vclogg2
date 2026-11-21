@@ -1,7 +1,7 @@
 #AOCI-ROOT-MANIFEST: 1
 #Format-Version: cognition-volumes/v1
 #Locale: zh-CN
-#Project: vclogg2
-#Global-Invariants: -
+#Project: VCLogg2 是基于 Rust 与 GPUI Kit 的跨平台大文件日志查看器，支持按需读取、跨文件搜索、增量刷新、源行标注与结果导出；可选的独立 Go 服务提供云端过滤器协作和管理后台。
+#Global-Invariants: 桌面 app 负责编排与界面，core 负责文件索引和搜索，data 负责 SQLite 与缓存生命周期，core 和 data 均不依赖 GPUI。搜索结果、标注和跳转以文档及源行为身份，虚拟列表位置可随投影改变。浏览、搜索和标注保留源文件，写回须由显式编辑保存或导出触发。本地日志排查可离线使用。
 #Volume: id=meta kind=meta path=aoci.meta.txt format=meta-v1 depends=- state=enabled
 #Volume: id=code kind=code path=aoci.code.txt format=object-fras-v2 depends=meta state=enabled
