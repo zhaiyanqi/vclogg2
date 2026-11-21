@@ -216,22 +216,22 @@ impl SettingsCategory {
                 "常规 语言 中文 英文 主题 浅色 深色 跟随系统 应用图标 减少动态效果 文件工具栏 完整路径 关闭日志标签前确认 粘贴时确认 打开目录命令 文件右键菜单 language chinese english theme icon reduce motion full path file toolbar close tab paste confirm open folder command windows explorer context menu"
             }
             Self::Reading => {
-                "外观 日志字体 字号 行距 正文文字颜色 日志文字颜色 日志背景色 显示行号 行号栏宽度 行号文字颜色 行号背景色 行号行间分隔线 日志分隔线 整行滚动 每次滚动行数 自动换行 鼠标滚轮 像素滚动距离 双击选词 分词边界字符 log font size line spacing number width text background color separator scrolling wheel pixel distance wrap word boundary"
+                "外观 日志字体 字号 行距 正文文字颜色 日志文字颜色 日志背景色 显示行号 行号栏宽度 行号文字颜色 行号背景色 行号行间分隔线 日志分隔线 整行滚动 每次滚动行数 排版 自动换行 横向滚动条 水平滚动条 horizontal scrollbar 鼠标滚轮 像素滚动距离 双击选词 分词边界字符 log font size line spacing number width text background color separator scrolling wheel pixel distance wrap word boundary"
             }
             Self::Highlight => {
                 "高亮 颜色标签 选中样式 搜索匹配 页内查找 日志级别着色 分组 关键词 正则 选区 失去焦点 字形 边框 highlights color labels selected rows text selection match style quick find log level coloring group rule regex"
             }
             Self::Search => {
-                "区分大小写 使用正则表达式 最大搜索结果数 高亮已提交搜索的匹配文字 搜索工具栏 搜索输入框 控件高度 文字大小 case sensitive regex regular expressions maximum search results highlight matches toolbar field input control height font size"
+                "搜索栏外观 查询匹配 结果与高亮 共用控件高度 工具栏字号 输入框字号 每个文件的结果上限 区分大小写 使用正则表达式 最大搜索结果数 高亮已提交搜索的匹配文字 搜索工具栏 搜索输入框 控件高度 文字大小 case sensitive regex regular expressions maximum search results result limit per file query matching results and highlighting search bar appearance shared control height toolbar field input text font size"
             }
             Self::Shortcuts => {
-                "打开文件 聚焦搜索框 快速查找 关闭当前标签 打开设置 切换区分大小写 跳到日志底部 轮换颜色标签 切换自动换行 新增文字标记 进入编辑模式 按键绑定 冲突 keyboard shortcut keymap conflicts open file focus find close tab jump color label wrap text mark edit"
+                "文件与窗口 搜索与查找 阅读与标注 files and windows search and find reading annotation 打开文件 聚焦搜索框 快速查找 关闭当前标签 打开设置 切换区分大小写 跳到日志底部 轮换颜色标签 切换自动换行 新增文字标记 进入编辑模式 按键绑定 冲突 keyboard shortcut keymap conflicts open file focus find close tab jump color label wrap text mark edit"
             }
             Self::History => {
                 "文件记录 临时搜索结果 搜索历史 筛选 删除 清空 索引缓存 占用空间 打开文件夹 清理缓存 file entries temporary results search history filter delete clear index cache size folder cleanup"
             }
             Self::Network => {
-                "网络 远程服务 服务器地址 用户名 工号 昵称 保存并测试 连接 cookie http https network remote server address user name save test connect"
+                "网络 远程服务 服务器地址 用户名 工号 昵称 测试连接 保存并测试 连接 cookie http https network remote server address user name save test connect"
             }
             Self::Diagnostics => {
                 "高级 应用日志 日志等级 清理 导出 诊断 性能叠加层 帧耗时 性能录制 打开目录 重试保存 perfetto trace recording performance overlay frame time fps application log level clear export off error warn info debug"
@@ -277,19 +277,34 @@ enum ShortcutAction {
 }
 
 impl ShortcutAction {
-    const ALL: [Self; 11] = [
-        Self::OpenFile,
-        Self::FocusSearch,
-        Self::QuickFind,
-        Self::CloseTab,
-        Self::OpenSettings,
-        Self::ToggleCase,
-        Self::JumpBottom,
-        Self::CycleColorLabel,
-        Self::ToggleWordWrap,
-        Self::AddTextMark,
-        Self::EnterEditMode,
-    ];
+    fn groups() -> [(&'static str, &'static [Self]); 3] {
+        [
+            (
+                crate::tr!("文件与窗口", "Files and windows"),
+                &[Self::OpenFile, Self::CloseTab, Self::OpenSettings],
+            ),
+            (
+                crate::tr!("搜索与查找", "Search and find"),
+                &[Self::FocusSearch, Self::QuickFind, Self::ToggleCase],
+            ),
+            (
+                crate::tr!("阅读与标注", "Reading and annotation"),
+                &[
+                    Self::JumpBottom,
+                    Self::ToggleWordWrap,
+                    Self::CycleColorLabel,
+                    Self::AddTextMark,
+                    Self::EnterEditMode,
+                ],
+            ),
+        ]
+    }
+
+    fn all() -> impl Iterator<Item = Self> {
+        Self::groups()
+            .into_iter()
+            .flat_map(|(_, actions)| actions.iter().copied())
+    }
 
     fn id(self) -> &'static str {
         match self {
@@ -518,6 +533,18 @@ impl SettingsDialog {
         }
     }
 
+    pub(crate) fn sync_scrollbar_from_menu(
+        &mut self,
+        previous: bool,
+        current: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.draft.show_horizontal_scrollbar == previous {
+            self.draft.show_horizontal_scrollbar = current;
+            cx.notify();
+        }
+    }
+
     fn draft_changed(cx: &mut Context<Self>) {
         cx.emit(SettingsDialogEvent::DraftChanged);
         cx.notify();
@@ -544,7 +571,7 @@ impl SettingsDialog {
         Self::draft_changed(cx);
     }
 
-    fn render_search_size_settings(&self, cx: &gpui_kit::App) -> Vec<AnyElement> {
+    fn render_search_size_settings(&self, cx: &gpui_kit::App) -> impl IntoElement {
         let slider_row = |label: &'static str, slider: &Entity<SliderState>| {
             h_flex()
                 .items_center()
@@ -562,46 +589,32 @@ impl SettingsDialog {
                         ))),
                 )
         };
-        [
-            (
-                "settings-search-toolbar-section",
-                crate::tr!("搜索工具栏", "Search toolbar"),
-                crate::tr!(
-                    "统一调整搜索控件高度，以及按钮、下拉框和结果状态的文字大小",
-                    "Sets the height of all search controls and the text size of buttons, selectors, and result status"
-                ),
-                Some(&self.search_toolbar_height),
+        preference_section(crate::tr!("搜索栏外观", "Search bar appearance"), cx)
+            .id("settings-search-toolbar-section")
+            .child(slider_row(
+                crate::tr!("共用控件高度", "Shared control height"),
+                &self.search_toolbar_height,
+            ))
+            .child(slider_row(
+                crate::tr!("工具栏字号", "Toolbar text size"),
                 &self.search_toolbar_font_size,
-            ),
-            (
-                "settings-search-input-section",
-                crate::tr!("搜索输入框", "Search field"),
-                crate::tr!(
-                    "单独调整文字大小；高度跟随搜索工具栏，文字较大时统一加高",
-                    "Sets the field text size; all search controls share the toolbar height and grow together to fit larger text"
-                ),
-                None,
-                &self.search_input_font_size,
-            ),
-        ]
-        .into_iter()
-        .map(|(id, title, description, height, font_size)| {
-            v_flex()
-                .id(id)
-                .gap_3()
-                .p_3()
-                .rounded(cx.theme().radius)
-                .border_1()
-                .border_color(cx.theme().border)
-                .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(title))
-                .child(div().text_sm().text_color(cx.theme().muted_foreground).child(description))
-                .when_some(height, |section, height| {
-                    section.child(slider_row(crate::tr!("控件高度", "Control height"), height))
-                })
-                .child(slider_row(crate::tr!("文字大小", "Text size"), font_size))
-                .into_any_element()
-        })
-        .collect()
+            ))
+            .child(
+                slider_row(
+                    crate::tr!("输入框字号", "Search field text size"),
+                    &self.search_input_font_size,
+                )
+                .id("settings-search-input-section"),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(crate::tr!(
+                        "字号较大时，控件会自动增高。",
+                        "Controls grow to fit larger text."
+                    )),
+            )
     }
 
     fn current_log_color_theme(cx: &gpui_kit::App) -> LogColorTheme {
@@ -644,7 +657,7 @@ impl SettingsDialog {
         let mut subscriptions = Vec::new();
         let settings_search = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder(crate::tr!("搜索设置…", "Search settings…"))
+                .placeholder(crate::tr!("筛选设置分类…", "Filter categories…"))
                 .default_value("")
         });
         let default_server_url = cloud_client
@@ -1040,7 +1053,7 @@ impl SettingsDialog {
             }),
         );
 
-        for action in ShortcutAction::ALL {
+        for action in ShortcutAction::all() {
             let input = cx.new(|cx| {
                 InputState::new(window, cx)
                     .placeholder(crate::tr!("未设置", "Not set"))
@@ -1416,7 +1429,7 @@ impl SettingsDialog {
             settings.word_boundary_characters = previous.word_boundary_characters.clone();
         }
         let mut shortcut_error = None;
-        for action in ShortcutAction::ALL {
+        for action in ShortcutAction::all() {
             let value = self.shortcut_value(action, cx);
             if !value.is_empty() && crate::actions::shortcut_to_key_binding(&value).is_none() {
                 shortcut_error.get_or_insert_with(|| {
@@ -1660,7 +1673,7 @@ impl SettingsDialog {
 
     fn conflicts(&self, cx: &gpui_kit::App) -> HashMap<ShortcutAction, String> {
         let mut by_value: HashMap<String, Vec<ShortcutAction>> = HashMap::new();
-        for action in ShortcutAction::ALL {
+        for action in ShortcutAction::all() {
             let value = self.shortcut_value(action, cx);
             if !value.is_empty() {
                 by_value
@@ -2516,6 +2529,19 @@ fn about_section(
         .into_any_element()
 }
 
+fn preference_section(title: &'static str, cx: &gpui_kit::App) -> gpui_kit::Div {
+    v_flex()
+        .gap_3()
+        .p_3()
+        .rounded(cx.theme().radius)
+        .border_1()
+        .border_color(cx.theme().border)
+        .child(
+            div()
+                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                .child(title),
+        )
+}
 impl SettingsDialog {
     fn render_general(&self, cx: &mut Context<Self>) -> AnyElement {
         let content = v_flex()
@@ -2542,8 +2568,8 @@ impl SettingsDialog {
                                             .text_color(cx.theme().muted_foreground)
                                             .child(if cfg!(target_os = "macos") {
                                                 crate::tr!(
-                                                    "应用界面即时预览；保存并重启后，系统窗口菜单也会使用所选语言。",
-                                                    "Preview the app language immediately. Save and restart to also change native window menus.",
+                                                    "应用界面立即切换，系统窗口菜单在下次启动时切换。",
+                                                    "The app language changes immediately. Native window menus change on the next launch.",
                                                 )
                                             } else {
                                                 crate::tr!(
@@ -2576,29 +2602,53 @@ impl SettingsDialog {
                                     )),
                             ),
                     )
+            .child(preference_section(crate::tr!("界面主题", "Interface theme"), cx)
+                .id("settings-theme-section")
                     .child(
-                        v_flex()
-                    .id("settings-files-section")
-                    .gap_3()
-                    .p_3()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                    .child(crate::tr!("文件与标签", "Files & tabs")),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(crate::tr!("控制路径显示、粘贴确认和标签关闭确认。", "Controls path display and confirmations for clipboard paste and closing tabs.")),
-                            ),
+                        RadioGroup::vertical("settings-theme-preference")
+                            .selected_index(Some(self.draft.theme_preference.select_index()))
+                            .children(ThemePreference::ALL.into_iter().map(|preference| {
+                                Radio::new(format!(
+                                    "settings-theme-{}",
+                                    preference.database_value()
+                                ))
+                                .small()
+                                .label(theme_preference_label(preference))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(theme_preference_description(preference)),
+                                )
+                            }))
+                            .on_click(cx.listener(|this, selected_index: &usize, _, cx| {
+                                if let Some(preference) =
+                                    ThemePreference::ALL.get(*selected_index).copied()
+                                {
+                                    this.draft.theme_preference = preference;
+                                    SettingsDialog::draft_changed(cx);
+                                }
+                            })),
                     )
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .gap_4()
+                            .child(div().text_sm().child(crate::tr!("减少动态效果", "Reduce motion")))
+                            .child(
+                                Switch::new("settings-reduce-motion")
+                                    .small()
+                                    .checked(self.draft.reduce_motion)
+                                    .tooltip(crate::tr!("减少动态效果", "Reduce motion"))
+                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                        this.draft.reduce_motion = *checked;
+                                        SettingsDialog::draft_changed(cx);
+                                    })),
+                            ),
+                    ))
+            .child(self.render_icon_settings(cx))
+            .child(preference_section(crate::tr!("文件与标签", "Files & tabs"), cx)
+                .id("settings-files-section")
                     .child(
                         h_flex()
                             .justify_between()
@@ -2672,113 +2722,27 @@ impl SettingsDialog {
                                     .w_full()
                                     .child(Input::new(&self.open_directory_command).w_full()),
                             ),
-                    ),
-            ).child(v_flex()
-                    .id("settings-theme-section")
-                    .gap_3()
-                    .p_3()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("界面主题", "Interface theme")))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(crate::tr!("更改会自动保存并同步到所有窗口。", "Changes are saved automatically and synchronized to every window.")),
-                            ),
-                    )
-                    .child(
-                        RadioGroup::vertical("settings-theme-preference")
-                            .selected_index(Some(self.draft.theme_preference.select_index()))
-                            .children(ThemePreference::ALL.into_iter().map(|preference| {
-                                Radio::new(format!(
-                                    "settings-theme-{}",
-                                    preference.database_value()
-                                ))
-                                .small()
-                                .label(theme_preference_label(preference))
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(theme_preference_description(preference)),
-                                )
-                            }))
-                            .on_click(cx.listener(|this, selected_index: &usize, _, cx| {
-                                if let Some(preference) =
-                                    ThemePreference::ALL.get(*selected_index).copied()
-                                {
-                                    this.draft.theme_preference = preference;
-                                    SettingsDialog::draft_changed(cx);
-                                }
-                            })),
-                    )
-                    .child(
-                        h_flex()
-                            .justify_between()
-                            .gap_4()
-                            .child(div().text_sm().child(crate::tr!("减少动态效果", "Reduce motion")))
-                            .child(
-                                Switch::new("settings-reduce-motion")
-                                    .small()
-                                    .checked(self.draft.reduce_motion)
-                                    .tooltip(crate::tr!("减少动态效果", "Reduce motion"))
-                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                        this.draft.reduce_motion = *checked;
-                                        SettingsDialog::draft_changed(cx);
-                                    })),
-                            ),
-                    ))
-            .child(self.render_icon_settings(cx));
+                    ));
         #[cfg(windows)]
         let content = content.child(self.windows_context_menu.clone());
         content.into_any_element()
     }
 
     fn render_reading(&self, cx: &mut Context<Self>) -> AnyElement {
+        v_flex()
+            .gap_5()
+            .child(self.render_typography(cx))
+            .child(self.render_line_numbers(cx))
+            .child(self.render_log_colors(cx))
+            .child(self.render_scrolling(cx))
+            .child(self.render_word_selection(cx))
+            .into_any_element()
+    }
+
+    fn render_typography(&self, cx: &mut Context<Self>) -> AnyElement {
         let font_size = self.font_size.read(cx).value().start().round() as u16;
         let line_spacing = self.line_spacing.read(cx).value().start().round() as u16;
-        let line_number_width = self.line_number_width.read(cx).value().start().round() as u16;
-        let line_number_text_color = self
-            .line_number_text_color
-            .read(cx)
-            .value()
-            .map(|color| color.alpha(1.).to_hex());
-        let line_number_background_color = self
-            .line_number_background_color
-            .read(cx)
-            .value()
-            .map(|color| color.alpha(1.).to_hex());
-        let log_color_theme = Self::current_log_color_theme(cx);
-        let (log_text_picker, log_background_picker, log_text_custom, log_background_custom) = {
-            let colors = self.log_colors(log_color_theme);
-            (
-                colors.text.clone(),
-                colors.background.clone(),
-                colors.text_custom,
-                colors.background_custom,
-            )
-        };
-        let log_text_color = log_text_picker
-            .read(cx)
-            .value()
-            .map(|color| color.alpha(1.).to_hex());
-        let log_background_color = log_background_picker
-            .read(cx)
-            .value()
-            .map(|color| color.alpha(1.).to_hex());
-        let log_color_theme_label = match log_color_theme {
-            LogColorTheme::Light => crate::tr!("晨雾浅色", "Morning mist"),
-            LogColorTheme::Dark => crate::tr!("深海夜色", "Deep sea"),
-        };
-        let scroll_percent = self.scroll_percent.read(cx).value().start().round() as u16;
-        let scroll_lines = self.scroll_lines.read(cx).value().start().round() as u16;
-        v_flex().gap_5()
-            .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("排版", "Typography")))
+        preference_section(crate::tr!("排版", "Typography"), cx)
             .child(
                 h_flex()
                     .justify_between()
@@ -2865,8 +2829,22 @@ impl SettingsDialog {
                             ),
                     ),
             )
+            .into_any_element()
+    }
 
-            .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("行号与分隔线", "Line numbers and separators")))
+    fn render_line_numbers(&self, cx: &mut Context<Self>) -> AnyElement {
+        let line_number_width = self.line_number_width.read(cx).value().start().round() as u16;
+        let line_number_text_color = self
+            .line_number_text_color
+            .read(cx)
+            .value()
+            .map(|color| color.alpha(1.).to_hex());
+        let line_number_background_color = self
+            .line_number_background_color
+            .read(cx)
+            .value()
+            .map(|color| color.alpha(1.).to_hex());
+        preference_section(crate::tr!("行号与分隔线", "Line numbers and separators"), cx)
             .child(
                 h_flex()
                     .justify_between()
@@ -2893,6 +2871,7 @@ impl SettingsDialog {
                             })),
                     ),
             )
+            .when(self.draft.default_show_line_numbers, |section| section
             .child(
                 h_flex()
                     .justify_between()
@@ -3055,6 +3034,7 @@ impl SettingsDialog {
                             ),
                     ),
             )
+            )
             .child(
                 h_flex()
                     .justify_between()
@@ -3081,179 +3061,191 @@ impl SettingsDialog {
                             })),
                     ),
             )
+            .into_any_element()
+    }
+
+    fn render_log_colors(&self, cx: &mut Context<Self>) -> AnyElement {
+        let log_color_theme = Self::current_log_color_theme(cx);
+        let (log_text_picker, log_background_picker, log_text_custom, log_background_custom) = {
+            let colors = self.log_colors(log_color_theme);
+            (
+                colors.text.clone(),
+                colors.background.clone(),
+                colors.text_custom,
+                colors.background_custom,
+            )
+        };
+        let log_text_color = log_text_picker
+            .read(cx)
+            .value()
+            .map(|color| color.alpha(1.).to_hex());
+        let log_background_color = log_background_picker
+            .read(cx)
+            .value()
+            .map(|color| color.alpha(1.).to_hex());
+        let log_color_theme_label = match log_color_theme {
+            LogColorTheme::Light => crate::tr!("晨雾浅色", "Morning mist"),
+            LogColorTheme::Dark => crate::tr!("深海夜色", "Deep sea"),
+        };
+        v_flex()
+            .id("settings-log-colors-section")
+            .gap_3()
+            .p_3()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
             .child(
                 v_flex()
-                    .id("settings-log-colors-section")
-                    .gap_3()
-                    .p_3()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
+                    .gap_1()
+                    .child(
+                        div()
+                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                            .child(crate::tr!("日志配色", "Log colors")),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(crate::tr_args!(
+                                "正在编辑“{}”；浅色与深色主题分别保存。",
+                                "Editing “{}”; light and dark colors are saved separately.",
+                                log_color_theme_label,
+                            )),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .justify_between()
+                    .gap_4()
                     .child(
                         v_flex()
                             .gap_1()
                             .child(
                                 div()
                                     .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                    .child(crate::tr!("日志配色", "Log colors")),
+                                    .child(crate::tr!("日志文字颜色", "Log text color")),
                             )
                             .child(
                                 div()
                                     .text_sm()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(crate::tr_args!(
-                                        "正在编辑“{}”；浅色与深色主题分别保存。",
-                                        "Editing “{}”; light and dark colors are saved separately.",
-                                        log_color_theme_label,
+                                    .child(crate::tr!(
+                                        "应用于日志正文及所有搜索结果日志行",
+                                        "Applies to log text and log rows in all search results",
                                     )),
                             ),
                     )
                     .child(
                         h_flex()
-                            .justify_between()
-                            .gap_4()
+                            .w_72()
+                            .justify_end()
+                            .gap_2()
                             .child(
-                                v_flex()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                            .child(crate::tr!("日志文字颜色", "Log text color")),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(crate::tr!(
-                                                "应用于日志正文及所有搜索结果日志行",
-                                                "Applies to log text and log rows in all search results",
-                                            )),
-                                    ),
+                                div()
+                                    .min_w_20()
+                                    .text_right()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(if log_text_custom {
+                                        log_text_color.clone().unwrap_or_else(|| {
+                                            crate::tr!("未选择", "Not selected").to_string()
+                                        })
+                                    } else {
+                                        crate::tr!("主题默认", "Theme default").to_string()
+                                    }),
                             )
                             .child(
-                                h_flex()
-                                    .w_72()
-                                    .justify_end()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .min_w_20()
-                                            .text_right()
-                                            .text_sm()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(if log_text_custom {
-                                                log_text_color.clone().unwrap_or_else(|| {
-                                                    crate::tr!("未选择", "Not selected").to_string()
-                                                })
-                                            } else {
-                                                crate::tr!("主题默认", "Theme default").to_string()
-                                            }),
-                                    )
-                                    .child(
-                                        ColorPicker::new(&log_text_picker)
-                                            .small()
-                                            .label(crate::tr!(
-                                                "日志文字颜色",
-                                                "Log text color",
-                                            )),
-                                    )
-                                    .child(
-                                        Button::new("settings-reset-log-text-color")
-                                            .small()
-                                            .ghost()
-                                            .label(crate::tr!("恢复默认", "Restore default"))
-                                            .disabled(!log_text_custom)
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.reset_log_text_color(window, cx)
-                                            })),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .justify_between()
-                            .gap_4()
-                            .child(
-                                v_flex()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                            .child(crate::tr!("日志背景色", "Log background")),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(crate::tr!(
-                                                "应用于日志列表、单文件结果和全局搜索结果",
-                                                "Applies to the log, file results, and global results",
-                                            )),
-                                    ),
+                                ColorPicker::new(&log_text_picker)
+                                    .small()
+                                    .label(crate::tr!("日志文字颜色", "Log text color",)),
                             )
                             .child(
-                                h_flex()
-                                    .w_72()
-                                    .justify_end()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .min_w_20()
-                                            .text_right()
-                                            .text_sm()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(if log_background_custom {
-                                                log_background_color.clone().unwrap_or_else(|| {
-                                                    crate::tr!("未选择", "Not selected").to_string()
-                                                })
-                                            } else {
-                                                crate::tr!("主题默认", "Theme default").to_string()
-                                            }),
-                                    )
-                                    .child(
-                                        ColorPicker::new(&log_background_picker)
-                                            .small()
-                                            .label(crate::tr!(
-                                                "日志背景色",
-                                                "Log background",
-                                            )),
-                                    )
-                                    .child(
-                                        Button::new("settings-reset-log-background-color")
-                                            .small()
-                                            .ghost()
-                                            .label(crate::tr!("恢复默认", "Restore default"))
-                                            .disabled(!log_background_custom)
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.reset_log_background_color(window, cx)
-                                            })),
-                                    ),
+                                Button::new("settings-reset-log-text-color")
+                                    .small()
+                                    .ghost()
+                                    .label(crate::tr!("恢复默认", "Restore default"))
+                                    .disabled(!log_text_custom)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.reset_log_text_color(window, cx)
+                                    })),
                             ),
                     ),
             )
             .child(
-                v_flex()
-                    .id("settings-scroll-section")
-                    .gap_3()
-                    .p_3()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
+                h_flex()
+                    .justify_between()
+                    .gap_4()
                     .child(
                         v_flex()
                             .gap_1()
                             .child(
                                 div()
                                     .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                    .child(crate::tr!("滚动与选词", "Scrolling & word selection")),
+                                    .child(crate::tr!("日志背景色", "Log background")),
                             )
                             .child(
                                 div()
                                     .text_sm()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(crate::tr!("控制正文、当前结果和全局结果的鼠标滚轮行为。", "Controls mouse-wheel behavior in the log, current results, and global results.")),
+                                    .child(crate::tr!(
+                                        "应用于日志列表、单文件结果和全局搜索结果",
+                                        "Applies to the log, file results, and global results",
+                                    )),
                             ),
                     )
+                    .child(
+                        h_flex()
+                            .w_72()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .min_w_20()
+                                    .text_right()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(if log_background_custom {
+                                        log_background_color.clone().unwrap_or_else(|| {
+                                            crate::tr!("未选择", "Not selected").to_string()
+                                        })
+                                    } else {
+                                        crate::tr!("主题默认", "Theme default").to_string()
+                                    }),
+                            )
+                            .child(
+                                ColorPicker::new(&log_background_picker)
+                                    .small()
+                                    .label(crate::tr!("日志背景色", "Log background",)),
+                            )
+                            .child(
+                                Button::new("settings-reset-log-background-color")
+                                    .small()
+                                    .ghost()
+                                    .label(crate::tr!("恢复默认", "Restore default"))
+                                    .disabled(!log_background_custom)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.reset_log_background_color(window, cx)
+                                    })),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_scrolling(&self, cx: &mut Context<Self>) -> AnyElement {
+        let scroll_percent = self.scroll_percent.read(cx).value().start().round() as u16;
+        let scroll_lines = self.scroll_lines.read(cx).value().start().round() as u16;
+        preference_section(crate::tr!("滚动", "Scrolling"), cx)
+                    .id("settings-scroll-section")
+                    .child(h_flex().justify_between().gap_4()
+                        .child(crate::tr!("显示横向滚动条", "Show horizontal scrollbar"))
+                        .child(Switch::new("settings-horizontal-scrollbar").small()
+                            .accessibility_label(crate::tr!("显示横向滚动条", "Show horizontal scrollbar"))
+                            .checked(self.draft.show_horizontal_scrollbar)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.draft.show_horizontal_scrollbar = *checked;
+                                Self::draft_changed(cx);
+                            }))))
                     .child(
                         h_flex()
                             .justify_between()
@@ -3325,6 +3317,7 @@ impl SettingsDialog {
                                     ),
                             )
                     })
+            .when(!self.draft.scroll_by_line || !self.draft.scroll_by_line_when_word_wrap, |section| section
                     .child(
                         h_flex()
                             .justify_between()
@@ -3341,7 +3334,7 @@ impl SettingsDialog {
                                         div()
                                             .text_sm()
                                             .text_color(cx.theme().muted_foreground)
-                                            .child(crate::tr!("按设备原始输入的 1%–400% 调节像素滚动距离。", "Adjust pixel scrolling from 1% to 400% of the device’s raw input.")),
+                                            .child(crate::tr!("使用像素滚动时，按设备输入的 1%–400% 调节距离。", "Scales the distance in pixel scrolling mode from 1% to 400% of the device input.")),
                                     ),
                             )
                             .child(
@@ -3358,6 +3351,12 @@ impl SettingsDialog {
                                     ),
                             ),
                     )
+            )
+            .into_any_element()
+    }
+
+    fn render_word_selection(&self, cx: &mut Context<Self>) -> AnyElement {
+        preference_section(crate::tr!("双击选词", "Double-click word selection"), cx)
                     .child(
                         h_flex()
                             .justify_between()
@@ -3383,8 +3382,7 @@ impl SettingsDialog {
                                     .w_72()
                                     .child(Input::new(&self.word_boundary_characters).id("settings-word-boundary-input").w_full()),
                             ),
-                    ),
-            )
+                    )
             .into_any_element()
     }
 
@@ -3392,28 +3390,7 @@ impl SettingsDialog {
         v_flex()
             .gap_5()
             .child(
-                v_flex()
-                    .id("settings-search-section")
-                    .gap_3()
-                    .p_3()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                    .child(crate::tr!("搜索", "Search")),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(crate::tr!("控制所有窗口共享的搜索选项、结果保留与高亮。", "Controls search options, result limits, and highlighting shared by all windows.")),
-                            ),
-                    )
+                preference_section(crate::tr!("查询匹配", "Query matching"), cx).id("settings-search-section")
                     .child(
                         h_flex()
                             .justify_between()
@@ -3446,6 +3423,8 @@ impl SettingsDialog {
                                     })),
                             ),
                     )
+            )
+            .child(preference_section(crate::tr!("结果与高亮", "Results and highlighting"), cx)
                     .child(
                         h_flex()
                             .justify_between()
@@ -3456,7 +3435,7 @@ impl SettingsDialog {
                                     .child(
                                         div()
                                             .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                            .child(crate::tr!("最大搜索结果数", "Maximum search results")),
+                                            .child(crate::tr!("每个文件的结果上限", "Result limit per file")),
                                     )
                                     .child(
                                         div()
@@ -3486,7 +3465,7 @@ impl SettingsDialog {
                                         SettingsDialog::draft_changed(cx);
                                     })),
                             ),
-                    ))
+                    )
             .child(
                 Button::new("settings-open-match-styles")
                     .small()
@@ -3499,7 +3478,8 @@ impl SettingsDialog {
                         }
                     })),
             )
-            .children(self.render_search_size_settings(cx))
+            )
+            .child(self.render_search_size_settings(cx))
             .into_any_element()
     }
 
@@ -3535,7 +3515,7 @@ impl SettingsDialog {
                                     .muted_foreground,
                             )
                             .child(
-                                crate::tr!("服务器 Cookie 仅用于按需访问云端接口，不会建立或保持长连接。", "The server cookie is used only when accessing cloud APIs and does not create or maintain a persistent connection."),
+                                crate::tr!("地址和用户名自动保存。测试连接会联系服务器并获取会话 Cookie。", "The address and user name are saved automatically. Testing contacts the server and obtains a session cookie."),
                             ),
                     ),
             )
@@ -3618,7 +3598,7 @@ impl SettingsDialog {
                         )
                         .small()
                         .primary()
-                        .label(crate::tr!("保存并测试", "Save and test"))
+                        .label(crate::tr!("测试连接", "Test connection"))
                         .loading(network_busy)
                         .disabled(network_busy)
                         .accessibility_id("A393")
@@ -3742,7 +3722,7 @@ impl SettingsDialog {
 
     fn render_diagnostics(&self, cx: &mut Context<Self>) -> AnyElement {
         let log_entries = app_log::entry_count();
-        v_flex().gap_5().child(self.render_performance_settings(cx)).child(self.trace_recorder.clone())
+        v_flex().gap_5()
             .child(
                 v_flex()
                     .id("settings-application-log-section")
@@ -3827,6 +3807,8 @@ impl SettingsDialog {
                         )
                     }),
             )
+            .child(self.render_performance_settings(cx))
+            .child(self.trace_recorder.clone())
             .into_any_element()
     }
 
@@ -3841,7 +3823,6 @@ impl SettingsDialog {
             .child(
                 v_flex()
                     .gap_0p5()
-                    .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(crate::tr!("快捷键", "Shortcuts")))
                     .child(
                         div()
                             .text_sm()
@@ -3856,15 +3837,11 @@ impl SettingsDialog {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .children(ShortcutAction::ALL.into_iter().map(|action| {
-                        self.render_shortcut_row(
-                            action,
-                            conflicts.get(&action).map(String::as_str),
-                            cx,
-                        )
+                    .gap_3()
+                    .children(ShortcutAction::groups().into_iter().map(|(title, actions)| {
+                        preference_section(title, cx).children(actions.iter().map(|&action| {
+                            self.render_shortcut_row(action, conflicts.get(&action).map(String::as_str), cx)
+                        }))
                     })),
             ).into_any_element()
     }
@@ -3915,7 +3892,7 @@ impl Render for SettingsDialog {
         } else {
             div()
                 .text_color(cx.theme().muted_foreground)
-                .child(crate::tr!("未找到匹配的设置", "No matching settings"))
+                .child(crate::tr!("没有匹配的设置分类", "No matching categories"))
                 .into_any_element()
         };
         let owns_scroll = matches!(

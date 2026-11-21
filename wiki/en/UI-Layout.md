@@ -51,7 +51,18 @@ SettingsWindow [A094] — shared native window / 进程唯一原生窗口
 │     └─ About [A395] — 关于
 ├─ Details [A319] — category content / 分类内容
 │  ├─ Log preview [A824] — shared by reading and highlights / 日志阅读和高亮共用实时样例
-│  ├─ Match styles [A825] — from Search to the match editor / 从搜索跳到匹配样式
+│  ├─ Log reading details — typography, line numbers, log colors, scrolling, word selection
+│  │  ├─ Show line numbers [A095] — reveals column width, colors and column separators
+│  │  ├─ Scrolling [A240] — line and pixel options follow the chosen wheel mode
+│  │  │  └─ Show horizontal scrollbar [A826] — shared with the View menu
+│  │  └─ Word-boundary characters [A252] — double-click word selection
+│  ├─ Search details
+│  │  ├─ Query matching [A249] — case and regex switches
+│  │  ├─ Results and highlighting [A827] — per-file limit and match highlighting
+│  │  │  └─ Match styles [A825] — opens the shared editor
+│  │  └─ Search bar appearance [A556] — shared height and separate toolbar/field font sizes
+│  ├─ Shortcut list [A156] — files and windows, search and find, reading and annotation
+│  ├─ Test connection [A393] — requests a session from the configured server
 │  └─ Index cache [A317] — within History & storage / 历史与存储内的分页
 └─ Actions [A553] — restore defaults / 恢复默认设置，保存失败时可重试
 ```

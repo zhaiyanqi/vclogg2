@@ -199,7 +199,18 @@ impl SettingsWindow {
                 }
             },
         );
-        let observer = cx.observe(&workspace, |_, _, cx| cx.notify());
+        let observer = cx.observe(&workspace, |this, owner, cx| {
+            let current = owner.read(cx).app_settings.show_horizontal_scrollbar;
+            let previous = this.last_draft.show_horizontal_scrollbar;
+            if current != previous {
+                this.settings.update(cx, |settings, cx| {
+                    settings.sync_scrollbar_from_menu(previous, current, cx)
+                });
+                this.last_draft.show_horizontal_scrollbar = current;
+                this.saved_draft.show_horizontal_scrollbar = current;
+            }
+            cx.notify();
+        });
         let weak = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
             weak.update(cx, |this, cx| {

@@ -14,7 +14,7 @@ A predefined filter gives a query a name. For example, a team might call `retry|
 
 ## Download a teammate’s rule
 
-1. Ask your team for its compatible filter server address. In **Tools → Settings → Cloud connection**, enter **Server address** and **User name**. Choose **Save and test** and check the connection status.
+1. Ask your team for its compatible filter server address. In **Tools → Settings → Cloud connection**, enter **Server address** and **User name**. Choose **Test connection** and check the connection status.
 2. Open **Tools → Predefined filters… → Cloud filters**. Search by name, keyword, note or sharer. Open an entry to see its match value and revision.
 3. Choose **Download locally**, or select several entries and choose **Download/update selected**. In **Local filters**, check that the rule is available. Return to the log and check the rule in **Filters** to use it.
 

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-11-21T03:44:04Z",
-  "updated_at": "2026-11-21T04:40:21Z",
+  "updated_at": "2026-11-21T05:22:13Z",
   "files": {
     ".agents/skills/gpui-kit-design-guides/SKILL.md": {
       "role": "index",
@@ -645,9 +645,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "db3933899aa13dc0999ccafd01e2f26dffe905517779632812af705ddbd5b0c5",
-      "size": 113360,
-      "normalized_sha256": "db3933899aa13dc0999ccafd01e2f26dffe905517779632812af705ddbd5b0c5"
+      "sha256": "40bb3f56bf600178724229ab7671eb0c47adf3077cd37bf58bd6aa203f27d301",
+      "size": 113399,
+      "normalized_sha256": "40bb3f56bf600178724229ab7671eb0c47adf3077cd37bf58bd6aa203f27d301"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -1150,9 +1150,9 @@
     },
     "crates/vclogg-app/src/settings_dialog.rs": {
       "role": "index",
-      "sha256": "ff0b53d55e96fe692e472b1611ec52e4916bae9f45c301d52d0c432335ac7ec2",
-      "size": 186214,
-      "normalized_sha256": "ff0b53d55e96fe692e472b1611ec52e4916bae9f45c301d52d0c432335ac7ec2"
+      "sha256": "b6428197e2d061c1f755481027fc45c57c554828c37e64e1ba549c938907badb",
+      "size": 183518,
+      "normalized_sha256": "b6428197e2d061c1f755481027fc45c57c554828c37e64e1ba549c938907badb"
     },
     "crates/vclogg-app/src/settings_dialog/preview.rs": {
       "role": "index",
@@ -1474,9 +1474,9 @@
     },
     "crates/vclogg-app/src/workspace/settings_window.rs": {
       "role": "index",
-      "sha256": "bcc2ed7e8bbbf704248fd2d715aa415d2cceb75a09ff9c399a87f796804fb22b",
-      "size": 32630,
-      "normalized_sha256": "bcc2ed7e8bbbf704248fd2d715aa415d2cceb75a09ff9c399a87f796804fb22b"
+      "sha256": "1f4b1e7dd294d1255baec9dfae7486e667479be78b55e092453db0b59e0fe4ff",
+      "size": 33158,
+      "normalized_sha256": "1f4b1e7dd294d1255baec9dfae7486e667479be78b55e092453db0b59e0fe4ff"
     },
     "crates/vclogg-app/src/workspace/settings_window/macos.rs": {
       "role": "index",
@@ -2528,9 +2528,9 @@
     },
     "wiki/en/Cloud-Filters.md": {
       "role": "index",
-      "sha256": "2b3e7ba8e9206b6c37638d0f21d6aaf4ad4a2859028450bc42d3f8c010ab8151",
-      "size": 5046,
-      "normalized_sha256": "2b3e7ba8e9206b6c37638d0f21d6aaf4ad4a2859028450bc42d3f8c010ab8151"
+      "sha256": "c78a38aae9da5ad63ad706c5d9524d6e0cea3c02c62fad976c4baac164966545",
+      "size": 5048,
+      "normalized_sha256": "c78a38aae9da5ad63ad706c5d9524d6e0cea3c02c62fad976c4baac164966545"
     },
     "wiki/en/Code-Signing-Policy.md": {
       "role": "index",
@@ -2672,9 +2672,9 @@
     },
     "wiki/en/Settings.md": {
       "role": "index",
-      "sha256": "8388bbe674e9000543d9501cafe6e7a97208973bbd8899d677be60fa0444d19c",
-      "size": 3023,
-      "normalized_sha256": "8388bbe674e9000543d9501cafe6e7a97208973bbd8899d677be60fa0444d19c"
+      "sha256": "4bc5beabc80f0b394d1053dabb4fab7dc8c67b4e2f142b4c84960eb4787d7f43",
+      "size": 3324,
+      "normalized_sha256": "4bc5beabc80f0b394d1053dabb4fab7dc8c67b4e2f142b4c84960eb4787d7f43"
     },
     "wiki/en/Technology-Stack.md": {
       "role": "index",
@@ -2696,9 +2696,9 @@
     },
     "wiki/en/UI-Layout.md": {
       "role": "index",
-      "sha256": "3c773c883cd8721c837d94688c5b72671c750844629b125338814b82392f44d3",
-      "size": 9855,
-      "normalized_sha256": "3c773c883cd8721c837d94688c5b72671c750844629b125338814b82392f44d3"
+      "sha256": "d2c35306dbcf24b8a042d371f2d1235c7e5134026b8fcc2de86a2a8f05ecee65",
+      "size": 10748,
+      "normalized_sha256": "d2c35306dbcf24b8a042d371f2d1235c7e5134026b8fcc2de86a2a8f05ecee65"
     },
     "wiki/en/User-Guide.md": {
       "role": "index",
@@ -2804,9 +2804,9 @@
     },
     "wiki/zh-CN/Cloud-Filters.md": {
       "role": "index",
-      "sha256": "3259030628dd323d96e7dcf8177280671a6c5176fb2d1aba914b55664076f83c",
-      "size": 4718,
-      "normalized_sha256": "3259030628dd323d96e7dcf8177280671a6c5176fb2d1aba914b55664076f83c"
+      "sha256": "9a75d77f1116bdef18cfb593c5e50396bff0710a1f54837413d35ef82c06f26b",
+      "size": 4715,
+      "normalized_sha256": "9a75d77f1116bdef18cfb593c5e50396bff0710a1f54837413d35ef82c06f26b"
     },
     "wiki/zh-CN/Code-Signing-Policy.md": {
       "role": "index",
@@ -2948,9 +2948,9 @@
     },
     "wiki/zh-CN/Settings.md": {
       "role": "index",
-      "sha256": "76db719c9f297f4d2606ff50e3069067a6940959d56c4e7d8b76cafd6c25be7e",
-      "size": 2836,
-      "normalized_sha256": "76db719c9f297f4d2606ff50e3069067a6940959d56c4e7d8b76cafd6c25be7e"
+      "sha256": "76d9b612b52ea8c67b2262a06230be2aa7992d3a80d24344c7e3ec759914e70a",
+      "size": 3132,
+      "normalized_sha256": "76d9b612b52ea8c67b2262a06230be2aa7992d3a80d24344c7e3ec759914e70a"
     },
     "wiki/zh-CN/Technology-Stack.md": {
       "role": "index",
@@ -2972,9 +2972,9 @@
     },
     "wiki/zh-CN/UI-Layout.md": {
       "role": "index",
-      "sha256": "b52d25e60d69bfa752bb7ca8a21657f54171aa6d09b68cd6ab8b4e3e132af723",
-      "size": 9161,
-      "normalized_sha256": "b52d25e60d69bfa752bb7ca8a21657f54171aa6d09b68cd6ab8b4e3e132af723"
+      "sha256": "317dd5719d1d839bd266a147d5e23a6e187d0db8daac17b1f70c4c8f5466735a",
+      "size": 9997,
+      "normalized_sha256": "317dd5719d1d839bd266a147d5e23a6e187d0db8daac17b1f70c4c8f5466735a"
     },
     "wiki/zh-CN/User-Guide.md": {
       "role": "index",

@@ -20,9 +20,11 @@ Valid changes apply across windows and save automatically. Close Settings with *
 | Set matching options, per-file limits, match highlighting or search control sizes | **Search**. A limit of **0** allows all matches. |
 | Record, clear or reset a key binding | **Shortcuts**. [Shortcut reference](Keyboard-Shortcuts.md) |
 | Find recent files, manage temporary results and search history, or inspect and clear the index cache | **History & storage** |
-| Change the team server address or user name and test the connection | **Cloud connection**. Choose **Save and test** to connect. [Cloud filters](Cloud-Filters.md) |
+| Change the team server address or user name and test the connection | **Cloud connection**. Choose **Test connection** to connect. [Cloud filters](Cloud-Filters.md) |
 | Export or clear application logs, show frame timings or record a trace | **Diagnostics & performance** |
 | Check the version, build information, libraries and licenses | **About** |
+
+Enable **Show line numbers** to adjust their width, colors and separators. Turning it off preserves those values. **Pixel scroll distance** also applies to wrapped lines when scrolling by whole lines is enabled only for unwrapped text.
 
 ## Starting values
 
@@ -30,4 +32,4 @@ A new configuration uses Chinese and the light theme. Log text defaults to Conso
 
 Search starts with case and regex off, match highlighting on and log-level coloring off. The toolbar and search field share a default control height of 30 px. Their font sizes can be set independently, and the controls grow to fit larger text.
 
-**View → Horizontal scrollbar** controls scrollbar visibility across windows. Horizontal wheel navigation still works with it hidden. The notification switch is also in **View**. Messages from the current run remain available in the notification panel.
+**Log reading → Scrolling → Show horizontal scrollbar** and **View → Horizontal scrollbar** control the same preference across windows. Horizontal wheel navigation still works with it hidden. The notification switch is also in **View**. Messages from the current run remain available in the notification panel.

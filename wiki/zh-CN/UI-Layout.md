@@ -51,7 +51,18 @@ SettingsWindow [A094] — shared native window / 进程唯一原生窗口
 │     └─ About [A395] — 关于
 ├─ Details [A319] — category content / 分类内容
 │  ├─ Log preview [A824] — shared by reading and highlights / 日志阅读和高亮共用实时样例
-│  ├─ Match styles [A825] — from Search to the match editor / 从搜索跳到匹配样式
+│  ├─ 日志阅读详情 — 排版、行号与分隔线、日志配色、滚动、双击选词
+│  │  ├─ 显示行号 [A095] — 打开后展开列宽、配色及行号分隔线
+│  │  ├─ 滚动 [A240] — 按适用模式显示整行和像素选项
+│  │  │  └─ 显示横向滚动条 [A826] — 与视图菜单共用
+│  │  └─ 分词边界字符 [A252] — 用于双击选词
+│  ├─ 搜索详情
+│  │  ├─ 查询匹配 [A249] — 区分大小写、正则表达式
+│  │  ├─ 结果与高亮 [A827] — 每文件上限、匹配文字高亮
+│  │  │  └─ 匹配样式 [A825] — 打开共享编辑器
+│  │  └─ 搜索栏外观 [A556] — 共用高度，分别设置工具栏及输入框字号
+│  ├─ 快捷键列表 [A156] — 文件与窗口、搜索与查找、阅读与标注
+│  ├─ 测试连接 [A393] — 使用配置的地址和用户名请求会话
 │  └─ Index cache [A317] — within History & storage / 历史与存储内的分页
 └─ Actions [A553] — restore defaults / 恢复默认设置，保存失败时可重试
 ```
