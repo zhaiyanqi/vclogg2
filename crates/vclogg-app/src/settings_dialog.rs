@@ -3159,7 +3159,7 @@ impl Render for SettingsDialog {
             .child(
                 Sidebar::new("settings-category-sidebar")
                     .w_48()
-                    .bg(cx.theme().sidebar)
+                    .bg(cx.theme().background)
                     .collapsible(false)
                     .collapsed(false)
                     .header(
